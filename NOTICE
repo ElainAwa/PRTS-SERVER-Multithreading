@@ -1,0 +1,16 @@
+PRTS — Multithreaded Minecraft server core
+Copyright (C) 2026 PRTS contributors (ElainAwa and contributors)
+
+This product is a derivative work based on Arclight / Luminara:
+
+  * Arclight  — Copyright (C) IzzelAliz and contributors — GPL-3.0
+                https://github.com/IzzelAliz/Arclight
+  * Luminara  — https://github.com/CraftAmethyst/Luminara
+
+Upstream code remains under its original copyright and license. Modifications,
+new components and the combined work are distributed under GPL-3.0
+(see LICENSE). Third-party components and their licenses are listed in
+THIRD-PARTY.md.
+
+Every distributed binary of this project is accompanied by complete
+corresponding source code, available in this repository and its tags.

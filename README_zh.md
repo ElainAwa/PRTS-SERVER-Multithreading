@@ -2,7 +2,7 @@
 
 **[English](./README.md) · [中文文档](./README_zh.md)**
 
-> PRTS 是 [Arclight](https://github.com/IzzelAliz/Arclight) → [Luminara](https://github.com/CraftAmethyst/Luminara) 的 fork，本分支 `1.21.1-Multithreading` 为多线程并行引擎开发分支。
+> PRTS 是面向 Minecraft 1.21.1 的**独立多线程服务端核心**，以 GPL-3.0 发布，属于基于 [Arclight](https://github.com/IzzelAliz/Arclight) → [Luminara](https://github.com/CraftAmethyst/Luminara) 的**衍生作品**；上游代码保留其原始版权与许可，详见 LICENSE / THIRD-PARTY.md / NOTICE。
 
 > ⚠ 本项目当前全部为 vibecoding 开发，开发人员不足，项目推进缓慢。有兴趣参与多线程服务端开发请联系：QQ 3031917948 / Telegram [t.me/Mon3trQAQ](https://t.me/Mon3trQAQ)
 
@@ -122,7 +122,7 @@ barrier-timeout-ms: 120000     # barrier 卡死超时（毫秒）
 
 **部署**：复制 `build/libs/PRTS-neoforge-1.21.1-*-Multithreading.jar` 到服务端根目录，启动。
 
-**下载**：[GitHub Releases](https://github.com/ElainAwa/PRTS-SERVER/releases)
+**下载**：[GitHub Releases](https://github.com/ElainAwa/PRTS-SERVER-Multithreading/releases)
 
 ## 未来计划
 

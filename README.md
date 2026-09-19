@@ -2,7 +2,7 @@
 
 **[中文文档](./README_zh.md) · [English](./README.md)**
 
-> PRTS is a fork of [Arclight](https://github.com/IzzelAliz/Arclight) → [Luminara](https://github.com/CraftAmethyst/Luminara). This branch `1.21.1-Multithreading` is the multi-threaded parallel engine development track.
+> PRTS is an independent multithreaded server core for Minecraft 1.21.1, distributed under GPL-3.0 as a **derivative work** based on [Arclight](https://github.com/IzzelAliz/Arclight) → [Luminara](https://github.com/CraftAmethyst/Luminara). Upstream code keeps its original copyright and license — see LICENSE, THIRD-PARTY.md and NOTICE.
 
 > ⚠ This project is currently developed entirely via vibecoding. With a small team, progress is slow. If you're interested in joining multi-threaded server development, contact: QQ 3031917948 / Telegram [t.me/Mon3trQAQ](https://t.me/Mon3trQAQ)
 
@@ -122,7 +122,7 @@ The generated file is the full reference: every key has a bilingual one-line com
 
 **Deploy**: Copy `build/libs/PRTS-neoforge-1.21.1-*-Multithreading.jar` to the server root and start the server.
 
-**Download**: [GitHub Releases](https://github.com/ElainAwa/PRTS-SERVER/releases)
+**Download**: [GitHub Releases](https://github.com/ElainAwa/PRTS-SERVER-Multithreading/releases)
 
 ## Future Plans
 
