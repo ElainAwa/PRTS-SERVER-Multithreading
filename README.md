@@ -2,6 +2,8 @@
 
 **[中文文档](./README_zh.md) · [English](./README.md)**
 
+>The mixin files in the current server-side common are quite messy, and there are quite a few bugs in the current architecture. So updates on this branch will slow down for now. We're currently planning to refactor the server and look for a potential new architecture. If you want to join the development, please contact me. Thanks!
+
 > PRTS is an independent multithreaded server core for Minecraft 1.21.1, distributed under GPL-3.0 as a **derivative work** based on [Arclight](https://github.com/IzzelAliz/Arclight) → [Luminara](https://github.com/CraftAmethyst/Luminara). Upstream code keeps its original copyright and license — see LICENSE, THIRD-PARTY.md and NOTICE.
 
 > ⚠ This project is currently developed entirely via vibecoding. With a small team, progress is slow. If you're interested in joining multi-threaded server development, contact: QQ 3031917948 / Telegram [t.me/Mon3trQAQ](https://t.me/Mon3trQAQ)
