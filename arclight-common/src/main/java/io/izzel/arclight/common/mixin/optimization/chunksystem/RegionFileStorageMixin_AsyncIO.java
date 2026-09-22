@@ -66,6 +66,29 @@ public abstract class RegionFileStorageMixin_AsyncIO {
         return pool;
     }
 
+    /**
+     * GAP-1 A 段（磁盘 IO／区域文件扇区）服务时间（M4 插桩 · 默认关）。
+     * 口径：{@code RegionFileStorage.read} 调用边界（含 NBT 读取，与 B 段在调用层前后相继、不重叠；
+     * 边界为近似口径，未核实）。异步 IO 开启时该边界 = 提交 + 等待 + 池内读盘；池内重入不经过本方法，
+     * 因此不会与 {@code luminara$asyncRead} 的既有 {@code regionRead} 计数互相叠加成双份。
+     */
+    @Inject(method = "read", at = @At("HEAD"))
+    private void prts$stageABegin(ChunkPos pos, CallbackInfoReturnable<CompoundTag> cir) {
+        if (!io.izzel.arclight.common.compat.prts.PRTSFeaturesConfig.chunkStepTelemetryEnabled) {
+            return;
+        }
+        io.izzel.arclight.common.optimization.chunksystem.ChunkStageTiming.begin(
+                io.izzel.arclight.common.optimization.chunksystem.ChunkStageTiming.A);
+    }
+
+    @Inject(method = "read", at = @At("RETURN"))
+    private void prts$stageAEnd(ChunkPos pos, CallbackInfoReturnable<CompoundTag> cir) {
+        if (!io.izzel.arclight.common.compat.prts.PRTSFeaturesConfig.chunkStepTelemetryEnabled) {
+            return;
+        }
+        io.izzel.arclight.common.optimization.chunksystem.ChunkStageTiming.endAndRecord(pos.toLong());
+    }
+
     @Inject(method = "read", at = @At("HEAD"), cancellable = true)
     private void luminara$asyncRead(ChunkPos pos, CallbackInfoReturnable<CompoundTag> cir) throws IOException {
         if (!ServerCoreConfig.features().asyncChunkIoEnabled()) {

@@ -47,6 +47,8 @@ public class PRTSFeatures {
         MenuBroadcastStats.tick(serverTick);
         EventBridgeStats.tick(serverTick);
         EventShortcircuitStats.tick(serverTick);
+        // GAP-4 周期线程普查（M4 插桩；默认关，节流在 ModThreadCensus 内）
+        io.izzel.arclight.common.optimization.eventbridge.EventAttributionStats.tick(serverTick);
     }
 
     public static void stop() {

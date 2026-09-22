@@ -41,6 +41,9 @@ import io.izzel.arclight.common.optimization.light.LightChainDiag;
 import io.izzel.arclight.common.optimization.ownership.ClassAffinityLedger;
 import io.izzel.arclight.common.optimization.ownership.ThreadPolicy;
 import io.izzel.arclight.common.optimization.pathfinding.VillagerPathBudget;
+import io.izzel.arclight.common.optimization.chunksystem.ChunkStageTiming;
+import io.izzel.arclight.common.optimization.eventbridge.EventAttributionStats;
+import io.izzel.arclight.common.optimization.ownership.HostApiAttribution;
 
 /**
  * /servercore 根命令（移植自 ServerCore ServerCoreCommand）。
@@ -57,6 +60,10 @@ public class ServerCoreCommands {
         node.then(reloadConfig());
         node.then(settings());
         node.then(crossref());
+        // GAP 遥测探针读数（M4 插桩）：只新增子命令，既有子命令/输出格式不动
+        node.then(eventAttr());
+        node.then(topApi());
+        node.then(eventStorm());
 
         if (ServerCoreConfig.commands().statusCommandEnabled()) {
             node.then(literal("status").executes(ctx -> getStatus(ctx.getSource())));
@@ -119,6 +126,58 @@ public class ServerCoreCommands {
             return Command.SINGLE_SUCCESS;
         }));
         return cmd;
+    }
+
+    /**
+     * GAP-4 读数：三桶栈采样 + per-mod 监听器时间 + 模组自有线程归属。
+     * 口径见 {@code EventAttributionStats}／{@code ModThreadCensus} 类注释（四桶只作派生展示，
+     * {@code unclassified = 100 − 三桶和} 为残差，FIND-g05/S-6）。
+     */
+    private static LiteralArgumentBuilder<CommandSourceStack> eventAttr() {
+        var cmd = literal("eventattr").requires(Permission.require("command.config", 2));
+        cmd.executes(ctx -> sendReport(ctx.getSource(), "EventAttribution (GAP-4)",
+                EventAttributionStats.statusText(10)));
+        cmd.then(argument("count", integer(1, 50))
+                .executes(ctx -> sendReport(ctx.getSource(), "EventAttribution (GAP-4)",
+                        EventAttributionStats.statusText(getInteger(ctx, "count")))));
+        return cmd;
+    }
+
+    /**
+     * GAP-5 读数：宿主 API 调用频次 + 调用者归因（自 {@code sample-every} 采样）。
+     * {@code self} 占比属 spark 口径，本探针显式打 {@code self=na}（不得冒充）。
+     */
+    private static LiteralArgumentBuilder<CommandSourceStack> topApi() {
+        var cmd = literal("topapi").requires(Permission.require("command.config", 2));
+        cmd.executes(ctx -> sendReport(ctx.getSource(), "HostApiAttribution (GAP-5)",
+                HostApiAttribution.statusText(20)));
+        cmd.then(argument("count", integer(1, 100))
+                .executes(ctx -> sendReport(ctx.getSource(), "HostApiAttribution (GAP-5)",
+                        HostApiAttribution.statusText(getInteger(ctx, "count")))));
+        return cmd;
+    }
+
+    /** GAP-6 读数：模组级风暴生成者 Top-N（复用 GAP-4 的 per-mod 归因）。 */
+    private static LiteralArgumentBuilder<CommandSourceStack> eventStorm() {
+        var cmd = literal("eventstorm").requires(Permission.require("command.config", 2));
+        cmd.executes(ctx -> sendReport(ctx.getSource(), "EventStorm (GAP-6)",
+                EventAttributionStats.stormText(20)));
+        cmd.then(argument("count", integer(1, 100))
+                .executes(ctx -> sendReport(ctx.getSource(), "EventStorm (GAP-6)",
+                        EventAttributionStats.stormText(getInteger(ctx, "count")))));
+        return cmd;
+    }
+
+    private static int sendReport(CommandSourceStack source, String title, String body) {
+        source.sendSuccess(() -> Component.literal("=== " + title + " ===\n" + body), false);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    /** FIND-g03 探针生效面：每个新键一行 {@code <key>=<value>}，关闭也打 {@code =false}。 */
+    private static String probeText() {
+        return ChunkStageTiming.probeText()
+                + " " + EventAttributionStats.probeText()
+                + " " + HostApiAttribution.probeText();
     }
 
     private static int getCrossRef(CommandSourceStack source, int limit) {
@@ -223,6 +282,18 @@ public class ServerCoreCommands {
 
             component.append(Formatter.parse("\n<dark_gray>» <c:#primary>EntityPolicy: <c:#secondary>%s".formatted(
                     EntityAffinity.statusText()
+            ), source.getServer()));
+
+            // ===== GAP 遥测探针（M4 插桩）：只新增行，既有行格式一律不动 =====
+            if (PRTSFeaturesConfig.chunkStepTelemetryEnabled) {
+                component.append(Formatter.parse("\n<dark_gray>» <c:#primary>ChunkStages: <c:#secondary>%s".formatted(
+                        ChunkStageTiming.statusText()
+                ), source.getServer()));
+            }
+
+            // FIND-g03：探针生效面（关闭也打 =false，用于区分「开关关」与「jar 没换」）
+            component.append(Formatter.parse("\n<dark_gray>» <c:#primary>Probe: <c:#secondary>%s".formatted(
+                    probeText()
             ), source.getServer()));
             return component;
         }, false);

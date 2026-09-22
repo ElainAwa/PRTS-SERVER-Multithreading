@@ -343,6 +343,23 @@ public class PRTSFeaturesConfig {
     /** World.random 跨线程检测模式：warn=限流日志，throw=抛异常。 */
     public static String worldgenRandomCheck;
 
+    // GAP 遥测探针（M4 插桩 · 独立分支 feat/gap-telemetry · 全部默认 false，零语义变更）。
+    // 与既有计数器/既有 status 行格式解耦：新读数一律走新增行（ChunkStages/Probe）或新增子命令
+    // （eventattr / topapi / eventstorm）。默认关闭 => 只留一次 volatile 读，探针开销仅在同臂
+    // 「开/关」对照窗口内存在。
+    /** GAP-1 分阶段计时：A–F 六段服务时间（纳秒分辨率）+ A 臂端到端（FIND-g02）。 */
+    public static boolean chunkStepTelemetryEnabled;
+    /** GAP-1 等待分栏：queue/lock/barrier 与六段服务时间分栏（服务时间不得混入等待）。 */
+    public static boolean chunkStepTelemetryWaitSplitEnabled;
+    /** GAP-4 事件监听器 per-mod 归因：按 (事件类, 归属) 聚合 nanos/count（GAP-6 复用）。 */
+    public static boolean eventListenerAttributionEnabled;
+    /** GAP-4 周期线程普查：Thread.getAllStackTraces() 快照 + 三桶栈采样（不碰线程创建路径）。 */
+    public static boolean modThreadCensusEnabled;
+    /** GAP-5 宿主 API 调用者归因：按 (api, caller) 计数（主线程口径可单列）。 */
+    public static boolean hostApiAttributionEnabled;
+    /** GAP-5 采样步长：每 N 次调用做一次 StackWalker 归因；0 = 关闭该探针（FIND-g08）。 */
+    public static int hostApiAttributionSampleEvery = 64;
+
     // Entity spatial index - EntitySection 内懒 4×4×4 子格索引（默认开，2026-08-16 真机 A/B 验证）。
     // 加速纯空间 AABB 查询（getEntities(AABB)）与 typed 查询（getEntitiesOfClass 等，二期：
     // vanilla 类列表按覆盖格子预筛，顺序/语义与原版逐位一致）；玩家交互路径不动；
@@ -685,6 +702,25 @@ public class PRTSFeaturesConfig {
         // >1 会并发反序列化触发 POI rehash AIOOBE，强制收敛为 1（ChunkSystemScheduler 注释）
         chunkDeserializeThreads = Math.min(1, Math.max(1, config.getInt("parallel.chunk-deserialize-threads", 1)));
         worldgenRandomCheck = config.getString("parallel.worldgen-random-check", "warn");
+        // GAP 遥测探针（M4）：全部默认 false；.sample-every 为 int，0 = 关闭（无真假语义，FIND-g08）。
+        chunkStepTelemetryEnabled = config.getBoolean("parallel.chunk-step-telemetry.enabled", false);
+        chunkStepTelemetryWaitSplitEnabled = config.getBoolean("parallel.chunk-step-telemetry.wait-split.enabled", false);
+        eventListenerAttributionEnabled = config.getBoolean("parallel.event-listener-attribution.enabled", false);
+        modThreadCensusEnabled = config.getBoolean("parallel.mod-thread-census.enabled", false);
+        hostApiAttributionEnabled = config.getBoolean("parallel.hostapi-attribution.enabled", false);
+        hostApiAttributionSampleEvery = config.getInt("parallel.hostapi-attribution.sample-every", 64);
+        if (hostApiAttributionSampleEvery < 0) {
+            hostApiAttributionSampleEvery = 0;
+        }
+        // 探针本体不读配置（热路径零解析）：启动期把开关推给各自的统计类。
+        io.izzel.arclight.common.optimization.chunksystem.ChunkStageTiming.ENABLED = chunkStepTelemetryEnabled;
+        io.izzel.arclight.common.optimization.chunksystem.ChunkStageTiming.WAIT_SPLIT_ENABLED = chunkStepTelemetryWaitSplitEnabled;
+        io.izzel.arclight.common.optimization.eventbridge.EventAttributionStats.setEnabled(eventListenerAttributionEnabled);
+        io.izzel.arclight.common.optimization.eventbridge.ModThreadCensus.setEnabled(modThreadCensusEnabled);
+        io.izzel.arclight.common.optimization.ownership.HostApiAttribution.setEnabled(hostApiAttributionEnabled, hostApiAttributionSampleEvery);
+        LOGGER.info("parallel gap-telemetry probes chunkStages={} waitSplit={} eventAttr={} threadCensus={} hostApi={} hostApiSampleEvery={}",
+                chunkStepTelemetryEnabled, chunkStepTelemetryWaitSplitEnabled, eventListenerAttributionEnabled,
+                modThreadCensusEnabled, hostApiAttributionEnabled, hostApiAttributionSampleEvery);
         entitySpatialIndexEnabled = config.getBoolean("entity-spatial-index.enabled", true);
         entitySpatialIndexMinSectionSize = config.getInt("entity-spatial-index.min-section-size", 16);
         if (entitySpatialIndexMinSectionSize < 4) entitySpatialIndexMinSectionSize = 4;
@@ -1168,6 +1204,20 @@ public class PRTSFeaturesConfig {
                   chunk-system-fail-fast-guards: true # main-thread boundary fail-fast guards (only with chunk-system-enabled)
                   chunk-async-io-enabled: true       # IO deserialization off main thread (only with chunk-system-enabled)
                   worldgen-random-check: warn        # World.random cross-thread detection: warn/throw/off (only with chunk-system-enabled)
+                  # GAP telemetry probes (M4 instrumentation on feat/gap-telemetry; all default off, read-only counters,
+                  # zero semantics change). Output goes to NEW lines/subcommands only: "ChunkStages:"/"Probe:" in
+                  # /servercore status and "servercore eventattr|topapi|eventstorm".
+                  chunk-step-telemetry:
+                    enabled: false                 # GAP-1: A-F six-segment service time (ns resolution) + arm-A end-to-end
+                    wait-split:
+                      enabled: false               # GAP-1: split queue/lock/barrier waiting from service time
+                  event-listener-attribution:
+                    enabled: false                 # GAP-4: per-(event class, owner) listener attribution (GAP-6 reuses it)
+                  mod-thread-census:
+                    enabled: false                 # GAP-4: periodic thread census (mod-owned threads + 3-bucket stack samples)
+                  hostapi-attribution:
+                    enabled: false                 # GAP-5: host API caller attribution
+                    sample-every: 64               # GAP-5: one StackWalker attribution every N calls; 0 = disable probe
                   region-count: 4                    # region count (2/4/8/16; stripe width auto-expands at 16)
                   region-auto-scale: true            # auto-adjust region count by load
                   region-scale-interval-seconds: 300   # scale eval period
@@ -1408,6 +1458,19 @@ public class PRTSFeaturesConfig {
                   chunk-system-fail-fast-guards: true  # 主线程边界快速失败守卫
                   chunk-async-io-enabled: true  # IO 反序列化移出主线程
                   worldgen-random-check: warn  # 世界生成随机数跨线程检测：warn/throw/off
+                  # GAP 遥测探针（M4 插桩，独立分支 feat/gap-telemetry；默认全关，纯只读计数，零语义变更）
+                  # 读数只走新增行/新增子命令：status 的 "ChunkStages:"/"Probe:" 与 "servercore eventattr|topapi|eventstorm"
+                  chunk-step-telemetry:   # GAP-1 分阶段计时
+                    enabled: false  # A–F 六段服务时间（纳秒分辨率）+ A 臂端到端（FIND-g02）
+                    wait-split:   # 等待分栏
+                      enabled: false  # queue/lock/barrier 与六段服务时间分栏
+                  event-listener-attribution:   # GAP-4 事件监听器 per-mod 归因（GAP-6 复用）
+                    enabled: false  # 按（事件类, 归属）聚合 nanos/count
+                  mod-thread-census:   # GAP-4 周期线程普查
+                    enabled: false  # 模组自有线程归属 + 三桶栈采样（不碰线程创建路径）
+                  hostapi-attribution:   # GAP-5 宿主 API 调用者归因
+                    enabled: false  # 按（api, caller）计数，主线程口径可单列
+                    sample-every: 64  # 每 N 次调用做一次 StackWalker 归因；0 = 关闭该探针
                   region-count: 4  # 区域数（2/4/8/16）
                   region-auto-scale: true  # 按负载自动调整区域数
                   region-scale-interval-seconds: 300  # 缩放评估周期（秒）
