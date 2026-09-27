@@ -27,14 +27,26 @@ jobs:
       - name: Cache Gradle User Files
         uses: actions/cache@v4
         with:
-          path: ~/.gradle
-          key: ${{ runner.os }}-gradle-user-home
+          path: ~/.gradle/caches
+          key: ${{ runner.os }}-gradle-user-home-${{ hashFiles('gradle/libs.versions.toml') }}-v2
+          restore-keys: |
+            ${{ runner.os }}-gradle-user-home-
 
       - name: Cache Gradle Files
         uses: actions/cache@v4
         with:
           path: ./.gradle
-          key: ${{ runner.os }}-gradle-file
+          key: ${{ runner.os }}-gradle-file-${{ hashFiles('gradle/libs.versions.toml') }}-v2
+          restore-keys: |
+            ${{ runner.os }}-gradle-file-
+
+      - name: Drop incomplete loom mapping caches
+        run: |
+          if [ -d "$HOME/.gradle/caches/fabric-loom" ]; then
+            find "$HOME/.gradle/caches/fabric-loom" -maxdepth 2 -type d -name "loom.mappings*" | while read -r d; do
+              if [ ! -f "$d/mappings-srg.tiny" ]; then echo "removing incomplete: $d"; rm -rf "$d"; fi
+            done
+          fi
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
