@@ -6,7 +6,5 @@
  * subtree, together with its mixin configuration, without touching anything the kernel owns.</p>
  *
  * <p>Ships no implementation in this round.</p>
- *
- * <p>See docs/PRTS-CONVENTIONS.md, C-003.</p>
  */
 package io.izzel.arclight.common.prts.optional.servercore;

@@ -116,7 +116,7 @@ rootProject.ext.subProjects.each { Project p ->
         // NESTED ANNOTATION. 0.17.2+mixin.0.8.7 is the newest fabric fork that still declares
         // "At at()", i.e. it reproduces the upstream release bytecode shape without any
         // MixinExtras patching: ANNOTATION>0 and LIST==0 after compileJava.
-        // Verified by javap on the cached jars; see team/基座核查/12-工具链对齐.md
+        // Verified by javap on the cached jars.
         // The version itself lives in exactly one place -- gradle/libs.versions.toml
         // [versions] mixin-compile. Never inline a literal mixin version here again.
         // loom is 1.9-SNAPSHOT -> resolved build 1.9.436 (loom jar MANIFEST Implementation-Version).

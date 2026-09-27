@@ -10,7 +10,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Single entry point for the PRTS configuration layout (docs/PRTS-CONVENTIONS.md, C-004).
+ * Single entry point for the PRTS configuration layout.
  *
  * <pre>
  * &lt;server root&gt;/prts-config/
@@ -45,7 +45,7 @@ public final class PrtsConfigManager {
 
     private static final String HEADER =
         "# PRTS configuration. Generated on first start; an existing file is never overwritten.\n"
-            + "# Reload with /prts reload (no restart). See docs/PRTS-CONVENTIONS.md, C-004.\n"
+            + "# Reload with /prts reload (no restart).\n"
             + "# Settings that belong to a kernel seam (scheduling, tick loop, chunk pipeline,\n"
             + "# entity queries, lighting, networking, world lifecycle, storage) belong in kernel.yml\n"
             + "# only.\n";

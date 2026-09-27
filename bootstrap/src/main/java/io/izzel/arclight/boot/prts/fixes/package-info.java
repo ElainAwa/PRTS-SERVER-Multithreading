@@ -3,7 +3,7 @@
  * PRTS category: fixes, bootstrap module.
  *
  * <p>The bootstrap module does not depend on arclight-common, so its PRTS-owned code lives in
- * {@code io.izzel.arclight.boot.prts.<category>.**}; categories and switches follow
- * docs/PRTS-CONVENTIONS.md, C-003.</p>
+ * {@code io.izzel.arclight.boot.prts.<category>.**}. Categories and switches mirror the ones of
+ * {@code io.izzel.arclight.common.prts}.</p>
  */
 package io.izzel.arclight.boot.prts.fixes;

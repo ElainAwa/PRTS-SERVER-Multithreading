@@ -4,7 +4,7 @@ package io.izzel.arclight.common.prts;
 import io.izzel.arclight.common.prts.config.PrtsConfigManager;
 
 /**
- * Resolves the master switch of a PRTS category (docs/PRTS-CONVENTIONS.md, C-003 and C-004).
+ * Resolves the master switch of a PRTS category.
  *
  * <p>Resolution order, so a category can be disabled even before the configuration directory has
  * been read (mixin plugins run that early):</p>

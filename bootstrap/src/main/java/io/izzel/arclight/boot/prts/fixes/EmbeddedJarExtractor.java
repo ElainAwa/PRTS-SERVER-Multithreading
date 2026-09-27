@@ -23,7 +23,7 @@ import java.nio.file.StandardCopyOption;
  * their content differs, and a stale cache entry then silently shadows the freshly built jar until
  * {@code .arclight} is deleted by hand. Comparing content removes that manual step.</p>
  *
- * <p>PRTS category: fixes (docs/PRTS-CONVENTIONS.md, C-003).</p>
+ * <p>PRTS category: fixes.</p>
  */
 public final class EmbeddedJarExtractor {
 

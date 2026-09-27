@@ -2,8 +2,7 @@ Please read this [wiki section](https://wiki.izzel.io/s/arclight-docs/doc/contri
 
 ## Code comment policy
 
-These rules are enforced by `.github/scripts/comment-lint.sh`, which runs as the
-`Comment hygiene (hard gate)` step of the build workflow. Run it locally before every commit.
+These rules are enforced by the `Comment hygiene (hard gate)` step of the build workflow.
 
 ### A. Language and shape
 
@@ -75,6 +74,6 @@ constraint instead of pointing at an unpublished document.
 
 ### Scope
 
-Upstream Arclight sources that predate this policy are grandfathered through
-`.github/scripts/comment-lint-baseline.txt`. The gate therefore fails on any **new** violation;
-adding a baseline entry is a reviewed act and must be justified in the pull request.
+Upstream Arclight sources that predate this policy are grandfathered through a baseline kept
+outside the published tree. The gate therefore fails on any **new** violation; extending that
+baseline is a reviewed act and must be justified in the pull request.

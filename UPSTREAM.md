@@ -1,14 +1,14 @@
-# Upstream policy (Arclight / Luminara)
+# Upstream policy (Arclight)
 
-> PRTS is an independent project. Arclight / Luminara are treated as **reference
-> implementations**, not as a branch we continuously merge from.
+> PRTS is an independent project. Arclight is treated as a **reference
+> implementation**, not as a branch we continuously merge from.
 
 ## Remote layout
 
 | remote | purpose | allowed operations |
 |---|---|---|
 | origin | this repository | normal development |
-| upstream | https://github.com/IzzelAliz/Arclight (and Luminara) | fetch / diff / read only — never merge, never push |
+| upstream | https://github.com/IzzelAliz/Arclight | fetch / diff / read only — never merge, never push |
 
 ## Porting windows (instead of continuous merging)
 
@@ -41,4 +41,4 @@ vanilla / NeoForge only) when any of the following holds:
 
 | date | window | upstream ref | ported | unmergeable | cost | decision |
 |---|---|---|---|---|---|---|
-| 2026-09-17 | initial import check | Arclight/Luminara @ current | n/a | n/a | 0 | reference-only, no merge |
+| 2026-09-17 | initial import check | Arclight @ current | n/a | n/a | 0 | reference-only, no merge |
