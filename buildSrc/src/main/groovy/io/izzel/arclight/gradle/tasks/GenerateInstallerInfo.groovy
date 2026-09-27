@@ -1,5 +1,6 @@
 package io.izzel.arclight.gradle.tasks
 
+
 import groovy.json.JsonOutput
 import io.izzel.arclight.gradle.Utils
 import org.gradle.api.DefaultTask
@@ -7,6 +8,7 @@ import org.gradle.api.artifacts.Configuration
 import org.gradle.api.artifacts.DependencyArtifact
 import org.gradle.api.tasks.Classpath
 import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.TaskAction
 
 import java.nio.file.Files
@@ -43,7 +45,7 @@ class GenerateInstallerInfo extends DefaultTask {
         this.minecraftVersion = minecraftVersion
     }
 
-    @Input
+    @Internal
     String getForgeVersion() {
         return forgeVersion
     }
@@ -119,9 +121,9 @@ class GenerateInstallerInfo extends DefaultTask {
             }
             return arts.collectEntries { [(it.toString()): ret.get(it.toString())] }
         }
-        def installerUrl = "https://files.minecraftforge.net/maven/net/minecraftforge/forge/$minecraftVersion-$forgeVersion/forge-$minecraftVersion-$forgeVersion-installer.jar"
-        def tmpInstaller = Files.createTempFile("installer", "jar")
-        Utils.download(installerUrl, tmpInstaller.toFile())
+        def installerUrl = forgeVersion ? "https://files.minecraftforge.net/maven/net/minecraftforge/forge/$minecraftVersion-$forgeVersion/forge-$minecraftVersion-$forgeVersion-installer.jar" : null
+        def tmpInstaller = forgeVersion ? Files.createTempFile("installer", "jar") : null
+        if (forgeVersion) Utils.download(installerUrl, tmpInstaller.toFile())
         def neoforgeUrl = "https://maven.neoforged.net/releases/net/neoforged/neoforge/$neoforgeVersion/neoforge-$neoforgeVersion-installer.jar"
         def tmpNeoforge = Files.createTempFile("neoforge", "jar")
         Utils.download(neoforgeUrl, tmpNeoforge.toFile())
@@ -132,7 +134,7 @@ class GenerateInstallerInfo extends DefaultTask {
                 installer  : [
                         minecraft       : minecraftVersion,
                         forge           : forgeVersion,
-                        forgeHash       : Utils.sha1(tmpInstaller.toFile()),
+                        forgeHash       : forgeVersion ? Utils.sha1(tmpInstaller.toFile()) : null,
                         neoforge        : neoforgeVersion,
                         neoforgeHash    : Utils.sha1(tmpNeoforge.toFile()),
                         fabricLoader    : fabricLoaderVersion,
