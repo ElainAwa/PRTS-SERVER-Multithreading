@@ -82,7 +82,7 @@ class ProcessMappingTask implements Runnable {
         }
 
         def srg = MappingSet.create()
-        LoomGradleExtension.get(project).srgProvider.mergedMojangRaw.toFile().withReader {
+        LoomGradleExtension.get(project).neoForgeProvider.mergedMojangRaw.toFile().withReader {
             def data = it.lines().filter { String s -> !(s.startsWith('\t\t') || s.startsWith('tsrg2')) }.collect(Collectors.joining('\n'))
             new TSrgReader(new StringReader(data.toString())).read(srg)
         }
