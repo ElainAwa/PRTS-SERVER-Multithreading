@@ -46,9 +46,9 @@ public final class PrtsConfigManager {
     private static final String HEADER =
         "# PRTS configuration. Generated on first start; an existing file is never overwritten.\n"
             + "# Reload with /prts reload (no restart). See docs/PRTS-CONVENTIONS.md, C-004.\n"
-            + "# Settings that belong to a new-kernel seam (tick loop, chunk pipeline, entity query,\n"
-            + "# lighting, network, world lifecycle, TickPlan/JobGraph, arena, N1-N6, ladder, WP-*,\n"
-            + "# I/O) must only ever be written in kernel.yml.\n";
+            + "# Settings that belong to a kernel seam (scheduling, tick loop, chunk pipeline,\n"
+            + "# entity queries, lighting, networking, world lifecycle, storage) belong in kernel.yml\n"
+            + "# only.\n";
 
     private static final Map<String, Entry> ENTRIES = new LinkedHashMap<>();
 

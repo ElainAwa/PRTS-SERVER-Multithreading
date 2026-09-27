@@ -53,6 +53,26 @@ These rules are enforced by `.github/scripts/comment-lint.sh`, which runs as the
   (opening brace on the same line).
 - Member order: static constants, fields, constructors, public, protected, private.
 
+### G. Comments must be self-contained
+
+Anything that is not part of this repository must not be referenced from a code comment: a reader
+who only has this repository has to understand the comment.
+
+The gate rejects, **inside comment lines only**:
+
+- paths that are not published here — internal working directories, absolute paths of a build
+  machine, Windows drive paths;
+- internal document identifiers and section numbers of unpublished documents;
+- internal code names for work streams, wait points, counters or experiment axes;
+- the former project name of this fork: attribution belongs in `NOTICE`/`THIRD-PARTY.md`, not in
+  comments.
+
+Allowed: the upstream project name and its commit sha (required for GPL attribution), public URLs,
+and ordinary technical vocabulary (mixin, tick loop, chunk system, SRG, Javadoc, ...).
+
+When background is needed, write one self-contained English sentence stating the reason or the
+constraint instead of pointing at an unpublished document.
+
 ### Scope
 
 Upstream Arclight sources that predate this policy are grandfathered through

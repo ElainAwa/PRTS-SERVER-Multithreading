@@ -2,11 +2,10 @@
 /**
  * PRTS category: performance work.
  *
- * <p>Only optimizations that do not land on a new-kernel seam (tick loop, chunk pipeline, entity</p>
- *
- * <p>query/tracking, lighting, network, world lifecycle, TickPlan/JobGraph, arena/segment, N1-N6,</p>
- *
- * <p>degradation ladder, WP-*, I/O and serialization) belong here; everything else is kernel work.</p>
+ * <p>Only optimizations that do not land on a kernel seam belong here: tick loop, chunk pipeline,
+ * entity queries and tracking, lighting, networking, world lifecycle, commit ordering and
+ * planning, arena and segments, observation counters, degradation ladder, wait points, and I/O or
+ * serialization are kernel work.</p>
  *
  * <p>See docs/PRTS-CONVENTIONS.md, C-003.</p>
  */

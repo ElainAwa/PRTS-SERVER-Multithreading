@@ -2,9 +2,10 @@
 /**
  * PRTS category: optional ServerCore layer.
  *
- * <p>Opt-in (disabled by default) and free of kernel coupling.</p>
+ * <p>Opt-in (disabled by default) and free of kernel coupling: it must be possible to delete this
+ * subtree, together with its mixin configuration, without touching anything the kernel owns.</p>
  *
- * <p>Ships no implementation in this round; see team/基座核查/14-可执行移植筛选.md for the assessment.</p>
+ * <p>Ships no implementation in this round.</p>
  *
  * <p>See docs/PRTS-CONVENTIONS.md, C-003.</p>
  */
