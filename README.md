@@ -1,47 +1,34 @@
-# Arclight
+# PRTS Server
 
-A Bukkit server implementation on common mod loaders.
+A Minecraft server distribution for **1.21.1** built on **NeoForge 21.1.250**, supporting Bukkit/Spigot plugins and NeoForge/Fabric mods side by side.
 
-[![Downloads count](https://img.shields.io/github/downloads/IzzelAliz/Arclight/total?style=flat-square)](https://arclight.izzel.io/)  ![License](https://img.shields.io/github/license/IzzelAliz/Arclight?style=flat-square)
+> Status: new-kernel base line, version `0.1.0-SNAPSHOT`.
 
-![Logo](.github/arclightlogo.jpg)
+## Requirements
 
-## Download
+- Java 21
+- A NeoForge 21.1.250 dedicated server environment (the launcher installs/uses the matching libraries)
 
-Downloads are available at [https://arclight.izzel.io](https://arclight.izzel.io).
+## Build
 
-Versions list and support status: [Discussions thread](https://github.com/IzzelAliz/Arclight/discussions/1575)
+```bash
+./gradlew collect          # full build; the server jar lands in bootstrap/build/libs/
+```
 
-## Installing
+## Run
 
-* Download the jar.  
-* Launch with command `java -jar arclight.jar nogui`. 
-  * The `nogui` argument will disable the server control panel.
+```bash
+java -Xms1G -Xmx4G -jar PRTS-neoforge-1.21.1-0.1.0-SNAPSHOT.jar -nogui
+```
 
-Read our document for more information.
+- Bukkit/Spigot plugins go to `plugins/`
+- NeoForge/Fabric mods go to `mods/`
 
-## Support
+## Links
 
-Read the [document](https://wiki.izzel.io/s/arclight-docs).  
-Something is not working? Report any problems [here](https://github.com/IzzelAliz/Arclight/issues/new/choose)!.  
-Questions and discussions [here](https://github.com/IzzelAliz/Arclight/discussions).  
-
-Discord Server: https://discord.gg/ZvTY5SC  
-QQ Group Chat: 3556966
+- Repository: https://github.com/ElainAwa/PRTS-SERVER-Multithreading
+- Releases: https://github.com/ElainAwa/PRTS-SERVER-Multithreading/releases
 
 ## License
 
-This project is licensed under [GPL v3](LICENSE).
-
-## Sponsor
-
-[![](.github/bisecthosting.webp)](https://bisecthosting.com/arclight)
-
-Get 25% off hosting server with promocode **arclight** at [BisectHosting](https://bisecthosting.com/arclight).
-
-[![](https://www.yourkit.com/images/yklogo.png)](https://www.yourkit.com)
-
-YourKit supports open source projects with innovative and intelligent tools for monitoring and profiling Java and .NET
-applications. YourKit is the creator of <a href="https://www.yourkit.com/java/profiler/">YourKit Java Profiler</a>,
-<a href="https://www.yourkit.com/.net/profiler/">YourKit .NET Profiler</a>,
-and <a href="https://www.yourkit.com/youmonitor/">YourKit YouMonitor</a>.
+GPL-3.0. See `LICENSE`. Attribution and third-party notices: `NOTICE`, `THIRD-PARTY.md`, `UPSTREAM.md`.
