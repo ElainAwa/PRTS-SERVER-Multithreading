@@ -118,8 +118,12 @@ rootProject.ext.subProjects.each { Project p ->
         // "At at()", i.e. it reproduces the upstream release bytecode shape without any
         // MixinExtras patching: ANNOTATION>0 and LIST==0 after compileJava.
         // Verified by javap on the cached jars; see team/基座核查/12-工具链对齐.md
+        // The version itself lives in exactly one place -- gradle/libs.versions.toml
+        // [versions] mixin-compile. Never inline a literal mixin version here again.
+        // loom is 1.9-SNAPSHOT -> resolved build 1.9.436 (loom jar MANIFEST Implementation-Version).
+        def mixinCompileCoordinate = libs.mixin.compile.get().toString()
         configurations.configureEach {
-            resolutionStrategy.force 'net.fabricmc:sponge-mixin:0.17.2+mixin.0.8.7'
+            resolutionStrategy.force mixinCompileCoordinate
         }
 
         dependencies {

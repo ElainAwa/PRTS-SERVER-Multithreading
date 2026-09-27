@@ -19,7 +19,13 @@ cadixdev-at = '0.1.0-rc1'
 cadixdev-mercury = '0.1.4.17'
 special-source = '1.11.5'
 
+# mixin -- two families, both pinned on purpose and never floating:
+#   org.spongepowered:mixin   = RUNTIME mixin baked into the universal/bootstrap jar
+#   net.fabricmc:sponge-mixin = COMPILE-time Mixin API + annotation processor (injected by loom)
+# 0.17.2+mixin.0.8.7 is the newest fabric fork that still declares `At at()`; 0.17.4 switched to
+# At[] and makes javac emit a LIST-form @Redirect#at that runtime mixin 0.8.5 cannot read.
 mixin = '0.8.5'
+mixin-compile = '0.17.2+mixin.0.8.7'
 
 # arclight
 arclight-api = '1.7.3'
@@ -99,6 +105,8 @@ configurate-hocon = { module = 'org.spongepowered:configurate-hocon', version.re
 
 # bootstrap
 sponge-mixin = { module = 'org.spongepowered:mixin', version.ref = 'mixin' }
+# compile-time half of the pin; consumed by the resolutionStrategy.force in build.gradle
+mixin-compile = { module = 'net.fabricmc:sponge-mixin', version.ref = 'mixin-compile' }
 
 [bundles]
 asm = ['asm-commons', 'asm-tree', 'asm-util']
