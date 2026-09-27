@@ -52,7 +52,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build
-        run: ./gradlew build collect --no-daemon --stacktrace
+        run: ./gradlew cleanBuild build collect --no-daemon --stacktrace
 
       - name: Toolchain invariant - @Redirect.at must be a nested annotation
         run: |
