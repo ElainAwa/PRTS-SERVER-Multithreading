@@ -14,7 +14,11 @@
     "mixins.arclight.core.json",
     "mixins.arclight.bukkit.json",
     "mixins.arclight.vanilla.json",
-    "mixins.arclight.impl.optimization.json"
+    "mixins.arclight.impl.optimization.json",
+    "prts-fixes.mixins.json",
+    "prts-modsupport.mixins.json",
+    "prts-performance.mixins.json",
+    "prts-optional-servercore.mixins.json"
   ],
   "depends": {
     "fabricloader": ">=0.16",

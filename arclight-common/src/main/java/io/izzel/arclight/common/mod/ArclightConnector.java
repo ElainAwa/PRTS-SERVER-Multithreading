@@ -24,5 +24,12 @@ public class ArclightConnector implements IMixinConnector {
         LOGGER.info("mixin-load.core");
         Mixins.addConfiguration("mixins.arclight.impl.optimization.json");
         LOGGER.info("mixin-load.optimization");
+        // PRTS-owned categories: registered one by one so a whole category can be dropped
+        // (or handed to the new kernel) without touching the upstream configurations.
+        Mixins.addConfiguration("prts-fixes.mixins.json");
+        Mixins.addConfiguration("prts-modsupport.mixins.json");
+        Mixins.addConfiguration("prts-performance.mixins.json");
+        Mixins.addConfiguration("prts-optional-servercore.mixins.json");
+        LOGGER.info("mixin-load.prts");
     }
 }

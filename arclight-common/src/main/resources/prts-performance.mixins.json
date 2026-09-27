@@ -1,0 +1,14 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "io.izzel.arclight.common.prts.performance",
+  "target": "@env(DEFAULT)",
+  "setSourceFile": true,
+  "plugin": "io.izzel.arclight.common.prts.PrtsMixinPlugin",
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+  ]
+}
