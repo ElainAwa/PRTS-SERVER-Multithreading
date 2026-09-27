@@ -2,7 +2,21 @@
 
 基于 **NeoForge 21.1.250** 的 **Minecraft 1.21.1** 服务端，同时支持 Bukkit/Spigot 插件与 NeoForge/Fabric 模组。
 
-> 状态：新内核基座线，版本 `0.1.0-SNAPSHOT`。
+## 本分支说明（`base/new-kernel`）
+
+本分支是**下一代 PRTS 服务端内核（新调度内核）的基座**，刻意保持干净最小：
+
+- **干净的上游基座**，功能性改动只有 PRTS 品牌与日志/横幅着色；
+- **单一固定构建工具链**，保证产出的字节码形态稳定（编译期 Mixin 注解处理器是**有意 pin 死**的，见 `gradle/libs.versions.toml`）；
+- **尚无内核代码**：新调度内核将从这里开始开发。
+
+平台：**NeoForge**（主）与 **Fabric**；本线**不支持 Forge**。
+
+其它分支：
+
+- `legacy/old-framework` —— 上一代多线程框架线，保留作参考与历史。
+
+状态：`0.1.0-SNAPSHOT`，开发中，不保证稳定。
 
 ## 环境要求
 

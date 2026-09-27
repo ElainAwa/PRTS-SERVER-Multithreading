@@ -1,13 +1,27 @@
 # PRTS Server
 
-A Minecraft server distribution for **1.21.1** built on **NeoForge 21.1.250**, supporting Bukkit/Spigot plugins and NeoForge/Fabric mods side by side.
+A Minecraft server for **1.21.1** built on **NeoForge 21.1.250**, running Bukkit/Spigot plugins and NeoForge/Fabric mods side by side.
 
-> Status: new-kernel base line, version `0.1.0-SNAPSHOT`.
+## About this branch (`base/new-kernel`)
+
+This branch is the **starting point for the next-generation PRTS server kernel**. It is deliberately kept minimal and clean:
+
+- a **clean upstream base** with PRTS branding and console coloring as the only functional changes;
+- a **single pinned build toolchain**, so the produced bytecode is deterministic (the compile-time Mixin annotation processor is pinned on purpose — see `gradle/libs.versions.toml`);
+- **no kernel code yet**: the new scheduling kernel is developed on top of this branch from here on.
+
+Platforms: **NeoForge** (primary) and **Fabric**. **Forge is not supported** on this line.
+
+Other branches:
+
+- `legacy/old-framework` — the previous multithreading framework line, kept for reference and history.
+
+Status: `0.1.0-SNAPSHOT` — work in progress, no stability guarantees.
 
 ## Requirements
 
 - Java 21
-- A NeoForge 21.1.250 dedicated server environment (the launcher installs/uses the matching libraries)
+- A NeoForge 21.1.250 dedicated server environment (the launcher uses the matching libraries)
 
 ## Build
 
