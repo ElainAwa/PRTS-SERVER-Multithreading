@@ -19,7 +19,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *   fixes.yml                  correctness fixes
  *   modsupport.yml             mod interoperability
  *   performance.yml            performance (never carries kernel-seam settings)
- *   optional/servercore.yml    optional layer, disabled by default
+ *   optional/servercore.yml    optional journal layer, disabled by default
  *   kernel.yml                 placeholder for the new kernel, disabled by default
  * </pre>
  *
@@ -88,7 +88,9 @@ public final class PrtsConfigManager {
         ENTRIES.put(PERFORMANCE, new Entry("performance.yml", true,
             "# Performance work that does not land on a new-kernel seam."));
         ENTRIES.put(OPTIONAL_SERVERCORE, new Entry("optional/servercore.yml", false,
-            "# Optional ServerCore layer: opt-in, mutually exclusive with an external ServerCore."));
+            "# Optional ServerCore layer: opt-in, mutually exclusive with an external ServerCore.\n"
+                + "# Reserved for the reliable chunk-save journal only. Chunk pipeline, entity tracking\n"
+                + "# and networking stay with the kernel and are never configured here."));
         ENTRIES.put(KERNEL, new Entry("kernel.yml", false,
             "# Reserved for the new kernel."));
     }

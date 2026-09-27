@@ -25,7 +25,7 @@ public final class PrtsSwitches {
     public static final String MODSUPPORT = PrtsConfigManager.MODSUPPORT;
     /** Category of performance work that does not land on a new-kernel seam. */
     public static final String PERFORMANCE = PrtsConfigManager.PERFORMANCE;
-    /** Optional ServerCore layer; opt-in and free of kernel coupling. */
+    /** Optional ServerCore layer; opt-in, journal-only and free of kernel coupling. */
     public static final String OPTIONAL_SERVERCORE = PrtsConfigManager.OPTIONAL_SERVERCORE;
     /** Placeholder category reserved for the new kernel. */
     public static final String KERNEL = PrtsConfigManager.KERNEL;
