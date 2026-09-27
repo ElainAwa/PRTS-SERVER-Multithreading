@@ -105,6 +105,23 @@ rootProject.ext.subProjects.each { Project p ->
             }
         }
 
+        // ---- toolchain pin: keep compiled @Redirect/@ModifyArg/@ModifyVariable "at" in the
+        // single-@At (AnnotationNode) form that upstream releases ship. ------------------
+        //
+        // WHY THIS EXACT VERSION: architectury-loom 1.9.x puts
+        // net.fabricmc:sponge-mixin:0.17.4+mixin.0.8.7 on compileClasspath/annotationProcessor.
+        // In 0.17.4 the annotation declarations became repeatable arrays
+        // (Redirect#at() returns org.spongepowered.asm.mixin.injection.At[]), so javac writes
+        // an ARRAY value for "at" into every @Redirect -> the class file carries a LIST where
+        // the runtime (org.spongepowered:mixin 0.8.5, shipped in the universal jar) expects a
+        // NESTED ANNOTATION. 0.17.2+mixin.0.8.7 is the newest fabric fork that still declares
+        // "At at()", i.e. it reproduces the upstream release bytecode shape without any
+        // MixinExtras patching: ANNOTATION>0 and LIST==0 after compileJava.
+        // Verified by javap on the cached jars; see team/基座核查/12-工具链对齐.md
+        configurations.configureEach {
+            resolutionStrategy.force 'net.fabricmc:sponge-mixin:0.17.2+mixin.0.8.7'
+        }
+
         dependencies {
             minecraft libs.minecraft
             mappings loom.layered() {
