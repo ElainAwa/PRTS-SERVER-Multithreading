@@ -19,9 +19,9 @@ public class CrashReportMixin {
 
     @Inject(method = "<init>", at = @At("RETURN"))
     private void arclight$additional(String string, Throwable throwable, CallbackInfo ci) {
-        this.systemReport.setDetail("Arclight Release", ArclightVersion.current()::getReleaseName);
+        this.systemReport.setDetail("PRTS Release", ArclightVersion.current()::getReleaseName);
         if (ArclightServer.isInitialized()) {
-            this.systemReport.setDetail("Arclight", new CraftCrashReport());
+            this.systemReport.setDetail("PRTS", new CraftCrashReport());
         } else {
             this.systemReport.setDetail("Arclight", "The crash happens before the server initialization.");
         }

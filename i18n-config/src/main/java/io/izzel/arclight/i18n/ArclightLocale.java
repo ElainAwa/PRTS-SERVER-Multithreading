@@ -66,11 +66,67 @@ public class ArclightLocale {
     }
 
     public static void info(String path, Object... args) {
-        System.out.println(instance.format(path, args));
+        System.out.println(colorize(instance.format(path, args)));
     }
 
     public static void error(String path, Object... args) {
-        System.err.println(instance.format(path, args));
+        System.err.println(colorize(instance.format(path, args)));
+    }
+
+    /**
+     * Convert Minecraft section-sign color codes (§x) into ANSI escape sequences so that
+     * banner/version lines printed directly to System.out (which bypasses the log4j Console
+     * appender and its minecraftFormatting converter) are still colored in any ANSI-capable
+     * terminal. Matches the §→ANSI mapping used by TerminalConsoleAppender's minecraftFormatting.
+     */
+    public static String colorize(String s) {
+        if (s == null) return null;
+        int idx = s.indexOf('\u00A7');
+        if (idx < 0) return s;
+        StringBuilder sb = new StringBuilder(s.length() + 24);
+        int i = 0;
+        while (i < s.length()) {
+            char c = s.charAt(i);
+            if (c == '\u00A7' && i + 1 < s.length()) {
+                String ansi = toAnsi(Character.toLowerCase(s.charAt(i + 1)));
+                if (ansi != null) {
+                    sb.append(ansi);
+                    i += 2;
+                    continue;
+                }
+            }
+            sb.append(c);
+            i++;
+        }
+        sb.append("\u001b[0m");
+        return sb.toString();
+    }
+
+    private static String toAnsi(char code) {
+        return switch (code) {
+            case '0' -> "\u001b[30m"; // black
+            case '1' -> "\u001b[34m"; // dark blue
+            case '2' -> "\u001b[32m"; // dark green
+            case '3' -> "\u001b[36m"; // dark aqua
+            case '4' -> "\u001b[31m"; // dark red
+            case '5' -> "\u001b[35m"; // dark purple
+            case '6' -> "\u001b[33m"; // gold
+            case '7' -> "\u001b[37m"; // gray
+            case '8' -> "\u001b[90m"; // dark gray
+            case '9' -> "\u001b[94m"; // blue
+            case 'a' -> "\u001b[92m"; // green
+            case 'b' -> "\u001b[96m"; // aqua
+            case 'c' -> "\u001b[91m"; // red
+            case 'd' -> "\u001b[95m"; // light purple
+            case 'e' -> "\u001b[93m"; // yellow
+            case 'f' -> "\u001b[97m"; // white
+            case 'l' -> "\u001b[1m";  // bold
+            case 'm' -> "\u001b[9m";  // strikethrough
+            case 'n' -> "\u001b[4m";  // underline
+            case 'o' -> "\u001b[3m";  // italic
+            case 'r' -> "\u001b[0m";  // reset
+            default -> null;          // §k (obfuscated) and unknown -> skip
+        };
     }
 
     public static ArclightLocale getInstance() {
