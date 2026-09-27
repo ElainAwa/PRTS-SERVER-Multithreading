@@ -18,8 +18,8 @@ import java.util.TreeSet;
 
 /**
  * The {@code /prts} command: {@code reload} re-reads {@code prts-config/**} without restarting the
- * process, {@code status} prints the configuration directory and the category switches that are in
- * effect.
+ * process, {@code status} prints the configuration directory, the category switches that are in
+ * effect, and every problem the last read found.
  *
  * <p>The readout stays inside what this layer owns: the configuration directory, the resolved
  * category switches and the state of their files. Observation counters belong to the scheduling
@@ -96,6 +96,7 @@ public final class PrtsCommand {
         List<String> lines = new ArrayList<>();
         lines.add("[PRTS] prts-config reloaded");
         lines.add(switches());
+        lines.addAll(problems());
         return lines;
     }
 
@@ -103,6 +104,7 @@ public final class PrtsCommand {
         List<String> lines = new ArrayList<>();
         lines.add("[PRTS] config directory: " + PrtsConfigManager.directory().toAbsolutePath());
         lines.add(switches());
+        lines.addAll(problems());
         return lines;
     }
 
@@ -122,6 +124,18 @@ public final class PrtsCommand {
             }
         }
         return builder.toString();
+    }
+
+    /**
+     * Renders the problems of the last configuration read, one line per category.
+     *
+     * @return the problem lines, empty when the last read was clean
+     */
+    private static List<String> problems() {
+        List<String> lines = new ArrayList<>();
+        PrtsConfigManager.problems().forEach((category, problem) ->
+            lines.add("[PRTS] config problem: " + category + ": " + problem));
+        return lines;
     }
 
     /**

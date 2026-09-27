@@ -5,8 +5,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -29,6 +31,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>Parsing is deliberately dependency-free: the files are written by this class and carry only
  * {@code version}, {@code enabled} and {@code features}, so no YAML library has to be present at
  * the very early point where the mixin categories are resolved.</p>
+ *
+ * <p>A file that is missing, unreadable, or carries an {@code enabled} value this class does not
+ * recognize never fails the start: the category falls back to its built-in default and the reason
+ * is recorded, so {@link #problems()} can show why an operator edit had no effect.</p>
  */
 public final class PrtsConfigManager {
 
@@ -43,6 +49,12 @@ public final class PrtsConfigManager {
     /** Placeholder category reserved for the new kernel; disabled by default. */
     public static final String KERNEL = "kernel";
 
+    /** Version of the generated file format; any other version is reported as a problem. */
+    private static final String VERSION = "1";
+
+    /** Value of {@code enabled} that defers to the built-in default of the category. */
+    private static final String AUTO = "auto";
+
     private static final String HEADER =
         "# PRTS configuration. Generated on first start; an existing file is never overwritten.\n"
             + "# Reload with /prts reload (no restart).\n"
@@ -53,6 +65,8 @@ public final class PrtsConfigManager {
     private static final Map<String, Entry> ENTRIES = new LinkedHashMap<>();
 
     private static final Map<String, Boolean> ENABLED = new ConcurrentHashMap<>();
+
+    private static final Map<String, String> PROBLEMS = new ConcurrentHashMap<>();
 
     private static volatile boolean loaded;
 
@@ -153,10 +167,22 @@ public final class PrtsConfigManager {
     /**
      * Returns the currently resolved switches.
      *
-     * @return an immutable snapshot keyed by category name
+     * @return an immutable, category-ordered snapshot
      */
     public static Map<String, Boolean> snapshot() {
-        return Map.copyOf(ENABLED);
+        return Collections.unmodifiableMap(new TreeMap<>(ENABLED));
+    }
+
+    /**
+     * Returns the problems found by the last read, keyed by category.
+     *
+     * <p>A problem is a report and not a failure: the affected category keeps its built-in default,
+     * which is how a broken file becomes visible instead of silently effective.</p>
+     *
+     * @return an immutable, category-ordered view; empty when the last read was clean
+     */
+    public static Map<String, String> problems() {
+        return Collections.unmodifiableMap(new TreeMap<>(PROBLEMS));
     }
 
     /**
@@ -168,41 +194,87 @@ public final class PrtsConfigManager {
     public static String defaults(Entry entry) {
         return HEADER
             + entry.comment() + "\n"
-            + "version: 1\n"
+            + "version: " + VERSION + "\n"
             + "enabled: " + entry.defaultEnabled() + "\n"
             + "features: {}\n";
     }
 
     private static void read() {
         ENABLED.clear();
+        PROBLEMS.clear();
         for (Map.Entry<String, Entry> entry : ENTRIES.entrySet()) {
-            ENABLED.put(entry.getKey(), read(entry.getValue()));
+            ENABLED.put(entry.getKey(), read(entry.getKey(), entry.getValue()));
         }
     }
 
-    private static boolean read(Entry entry) {
+    /**
+     * Reads one category file and records every problem it shows.
+     *
+     * @param category category name, used when a problem is recorded
+     * @param entry    the file to read
+     * @return the switch of the file, or the built-in default when the file cannot be trusted
+     */
+    private static boolean read(String category, Entry entry) {
         Path file = directory().resolve(entry.file());
         if (!Files.exists(file)) {
+            problem(category, "file is missing; the built-in default applies");
             return entry.defaultEnabled();
         }
+        String version = null;
+        String enabled = null;
         try {
             for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
                 String trimmed = line.trim();
-                if (trimmed.startsWith("#") || !trimmed.startsWith("enabled:")) {
+                if (trimmed.startsWith("#")) {
                     continue;
                 }
-                String value = trimmed.substring("enabled:".length()).trim();
-                if (value.startsWith("\"") || value.startsWith("'")) {
-                    value = value.substring(1, Math.max(1, value.length() - 1));
+                if (trimmed.startsWith("version:")) {
+                    version = unquote(trimmed.substring("version:".length()).trim());
+                } else if (trimmed.startsWith("enabled:")) {
+                    enabled = unquote(trimmed.substring("enabled:".length()).trim());
                 }
-                if ("auto".equalsIgnoreCase(value)) {
-                    return entry.defaultEnabled();
-                }
-                return !"false".equalsIgnoreCase(value) && !"off".equalsIgnoreCase(value);
             }
-        } catch (Throwable ignored) {
-            // an unreadable file falls back to the built-in default instead of guessing
+        } catch (Throwable failure) {
+            problem(category, "cannot be read (" + failure + "); the built-in default applies");
+            return entry.defaultEnabled();
         }
-        return entry.defaultEnabled();
+        if (version != null && !VERSION.equals(version)) {
+            problem(category, "declares version " + version + ", this build reads version " + VERSION);
+        }
+        if (enabled == null) {
+            problem(category, "no enabled key; the built-in default applies");
+            return entry.defaultEnabled();
+        }
+        if (AUTO.equalsIgnoreCase(enabled)) {
+            return entry.defaultEnabled();
+        }
+        Boolean parsed = parseEnabled(enabled);
+        if (parsed == null) {
+            problem(category, "unrecognized enabled value '" + enabled + "'; the built-in default applies");
+            return entry.defaultEnabled();
+        }
+        return parsed;
+    }
+
+    private static Boolean parseEnabled(String value) {
+        if ("true".equalsIgnoreCase(value) || "on".equalsIgnoreCase(value)) {
+            return Boolean.TRUE;
+        }
+        if ("false".equalsIgnoreCase(value) || "off".equalsIgnoreCase(value)) {
+            return Boolean.FALSE;
+        }
+        return null;
+    }
+
+    private static String unquote(String value) {
+        if (value.length() >= 2 && (value.charAt(0) == '"' || value.charAt(0) == '\'')
+            && value.charAt(value.length() - 1) == value.charAt(0)) {
+            return value.substring(1, value.length() - 1);
+        }
+        return value;
+    }
+
+    private static void problem(String category, String detail) {
+        PROBLEMS.merge(category, detail, (first, second) -> first + "; " + second);
     }
 }

@@ -30,6 +30,10 @@ public class ArclightConnector implements IMixinConnector {
         // without touching the upstream configurations. Configuration is read this early on
         // purpose: that is where the mixin plugins resolve their switches.
         PrtsConfigManager.ensureAndLoad();
+        // A category file that cannot be trusted falls back to its built-in default, so this warning
+        // is the only sign at startup that an operator edit had no effect.
+        PrtsConfigManager.problems().forEach((category, problem) ->
+            LOGGER.warn("prts-config: {}: {}", category, problem));
         Mixins.addConfiguration("prts-fixes.mixins.json");
         Mixins.addConfiguration("prts-modsupport.mixins.json");
         Mixins.addConfiguration("prts-performance.mixins.json");
