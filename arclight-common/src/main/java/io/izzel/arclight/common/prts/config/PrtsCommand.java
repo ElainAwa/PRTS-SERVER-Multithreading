@@ -25,6 +25,10 @@ import java.util.TreeSet;
  * category switches and the state of their files. Observation counters belong to the scheduling
  * kernel, so they are deliberately not reported here and no second source of numbers appears.</p>
  *
+ * <p>The dispatcher side requires permission level 2, which the console, the remote console and
+ * operators hold. The Bukkit view additionally declares and enforces the {@code prts.command}
+ * permission, so the command map side answers to a permission a plugin can grant.</p>
+ *
  * <p>A server command has to exist in both command worlds of this platform. The console and the
  * remote console parse the dispatcher the server owns, while players and plugins resolve commands
  * through the Bukkit command map; registering into only one of them leaves the command unreachable
@@ -38,10 +42,10 @@ public final class PrtsCommand {
 
     private static final String NAME = "prts";
 
-    /** Permission needed to run the command; the console and the remote console always hold it. */
+    /** Permission a plugin can grant; the console and the remote console always hold it. */
     private static final String PERMISSION = "prts.command";
 
-    /** Vanilla permission level for the dispatcher side, which has no permission registry. */
+    /** Vanilla permission level of the dispatcher side; the console and operators hold it. */
     private static final int PERMISSION_LEVEL = 2;
 
     private static final String USAGE = "usage: /prts reload | /prts status";
@@ -153,6 +157,9 @@ public final class PrtsCommand {
 
         @Override
         public boolean execute(CommandSender sender, String label, String[] args) {
+            if (!testPermission(sender)) {
+                return true;
+            }
             if (args.length == 1 && "reload".equalsIgnoreCase(args[0])) {
                 send(sender, reload());
             } else if (args.length == 1 && "status".equalsIgnoreCase(args[0])) {
