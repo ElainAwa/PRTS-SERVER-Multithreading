@@ -40,7 +40,7 @@ public final class PrtsSwitches {
      * @return {@code true} when the category should be applied
      */
     public static boolean enabled(String category) {
-        String property = System.getProperty("arclight.prts." + category);
+        String property = systemOverride(category);
         if (property != null) {
             return Boolean.parseBoolean(property);
         }
@@ -48,6 +48,20 @@ public final class PrtsSwitches {
             return PrtsConfigManager.isEnabled(category);
         } catch (Throwable ignored) {
             return defaultEnabled(category);
+        }
+    }
+
+    /**
+     * Returns the raw value of the system property that overrides a category, if one is set.
+     *
+     * @param category one of the category constants of this class
+     * @return the property value, or {@code null} when the file and the default decide
+     */
+    public static String systemOverride(String category) {
+        try {
+            return System.getProperty("arclight.prts." + category);
+        } catch (Throwable ignored) {
+            return null;
         }
     }
 

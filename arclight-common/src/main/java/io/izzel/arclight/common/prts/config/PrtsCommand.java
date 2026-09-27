@@ -12,15 +12,18 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.craftbukkit.v.CraftServer;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.TreeSet;
 
 /**
  * The {@code /prts} command: {@code reload} re-reads {@code prts-config/**} without restarting the
- * process, {@code status} prints the switches that are in effect.
+ * process, {@code status} prints the configuration directory and the category switches that are in
+ * effect.
  *
- * <p>The readout stays inside what this layer owns: the configuration directory and the resolved
- * category switches. Observation counters belong to the scheduling kernel, so they are deliberately
- * not reported here and no second source of numbers appears.</p>
+ * <p>The readout stays inside what this layer owns: the configuration directory, the resolved
+ * category switches and the state of their files. Observation counters belong to the scheduling
+ * kernel, so they are deliberately not reported here and no second source of numbers appears.</p>
  *
  * <p>A server command has to exist in both command worlds of this platform. The console and the
  * remote console parse the dispatcher the server owns, while players and plugins resolve commands
@@ -35,7 +38,13 @@ public final class PrtsCommand {
 
     private static final String NAME = "prts";
 
-    private static final String USAGE = "/prts reload | /prts status";
+    /** Permission needed to run the command; the console and the remote console always hold it. */
+    private static final String PERMISSION = "prts.command";
+
+    /** Vanilla permission level for the dispatcher side, which has no permission registry. */
+    private static final int PERMISSION_LEVEL = 2;
+
+    private static final String USAGE = "usage: /prts reload | /prts status";
 
     private PrtsCommand() {
     }
@@ -67,31 +76,57 @@ public final class PrtsCommand {
 
     private static LiteralArgumentBuilder<CommandSourceStack> node() {
         return Commands.literal(NAME)
-            .then(Commands.literal("reload").executes(context -> {
-                context.getSource().sendSuccess(() -> Component.literal(reload()), false);
-                return 1;
-            }))
-            .then(Commands.literal("status").executes(context -> {
-                context.getSource().sendSuccess(() -> Component.literal(status()), false);
-                return 1;
-            }));
+            .requires(source -> source.hasPermission(PERMISSION_LEVEL))
+            .executes(context -> reply(context.getSource(), List.of(USAGE)))
+            .then(Commands.literal("reload")
+                .executes(context -> reply(context.getSource(), reload())))
+            .then(Commands.literal("status")
+                .executes(context -> reply(context.getSource(), status())));
     }
 
-    private static String reload() {
+    private static int reply(CommandSourceStack source, List<String> lines) {
+        for (String line : lines) {
+            source.sendSuccess(() -> Component.literal(line), false);
+        }
+        return 1;
+    }
+
+    private static List<String> reload() {
         PrtsConfigManager.reload();
-        return "[PRTS] prts-config reloaded: " + PrtsConfigManager.snapshot();
+        List<String> lines = new ArrayList<>();
+        lines.add("[PRTS] prts-config reloaded");
+        lines.add(switches());
+        return lines;
     }
 
-    private static String status() {
-        StringBuilder builder = new StringBuilder("[PRTS] config directory: ")
-            .append(PrtsConfigManager.directory().toAbsolutePath());
-        PrtsConfigManager.entries().keySet().stream().sorted().forEach(category ->
-            builder.append("; ").append(category).append('=').append(PrtsSwitches.enabled(category)));
+    private static List<String> status() {
+        List<String> lines = new ArrayList<>();
+        lines.add("[PRTS] config directory: " + PrtsConfigManager.directory().toAbsolutePath());
+        lines.add(switches());
+        return lines;
+    }
+
+    /**
+     * Renders every category switch in a stable order, marking the ones a system property overrides.
+     *
+     * @return the single line that both command worlds print
+     */
+    private static String switches() {
+        StringBuilder builder = new StringBuilder("[PRTS] category switches:");
+        for (String category : new TreeSet<>(PrtsConfigManager.entries().keySet())) {
+            builder.append(' ').append(category).append('=').append(PrtsSwitches.enabled(category));
+            String override = PrtsSwitches.systemOverride(category);
+            if (override != null) {
+                builder.append(" (overridden by -Darclight.prts.").append(category).append('=')
+                    .append(override).append(')');
+            }
+        }
         return builder.toString();
     }
 
     /**
-     * Bukkit-side view of the same command, so the command map accepts the label.
+     * Bukkit-side view of the same command, so the command map accepts the label and checks the
+     * permission a plugin can grant.
      */
     private static final class BukkitView extends Command {
 
@@ -99,18 +134,25 @@ public final class PrtsCommand {
             super(NAME);
             setDescription("PRTS server administration");
             setUsage(USAGE);
+            setPermission(PERMISSION);
         }
 
         @Override
         public boolean execute(CommandSender sender, String label, String[] args) {
             if (args.length == 1 && "reload".equalsIgnoreCase(args[0])) {
-                sender.sendMessage(reload());
+                send(sender, reload());
             } else if (args.length == 1 && "status".equalsIgnoreCase(args[0])) {
-                sender.sendMessage(status());
+                send(sender, status());
             } else {
-                sender.sendMessage("usage: " + USAGE);
+                send(sender, List.of(USAGE));
             }
             return true;
+        }
+
+        private static void send(CommandSender sender, List<String> lines) {
+            for (String line : lines) {
+                sender.sendMessage(line);
+            }
         }
 
         @Override
