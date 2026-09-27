@@ -6,11 +6,11 @@ A Minecraft server for **1.21.1** built on **NeoForge 21.1.250**, running Bukkit
 
 ## About this branch (`base/new-kernel`)
 
-This branch is the **starting point for the next-generation PRTS server kernel**. It is deliberately kept minimal and clean:
+This branch is the **starting point for the next-generation PRTS server kernel — a multithreaded scheduling kernel**. It is deliberately kept minimal and clean:
 
 - a **clean upstream base** with PRTS branding and console coloring as the only functional changes;
 - a **single pinned build toolchain**, so the produced bytecode is deterministic (the compile-time Mixin annotation processor is pinned on purpose — see `gradle/libs.versions.toml`);
-- **no kernel code yet**: the new scheduling kernel is developed on top of this branch from here on.
+- **no kernel code yet**: the new **multithreaded** scheduling kernel is developed on top of this branch from here on.
 
 Platforms: **NeoForge** (primary) and **Fabric**. **Forge is not supported** on this line.
 
