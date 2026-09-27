@@ -1,0 +1,136 @@
+name: 🐞 Bug Report
+description: Report bugs by filling out this form
+labels: [ "Status: Triage" ]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Arclight is a hybrid server, and inevitably some issues exist.
+        If you encounter a problem, please report it to Arclight first, no disturb the mod/plugin authors!
+
+  - type: checkboxes
+    id: pre-requirements
+    attributes:
+      label: I have tried that...
+      description: Please confirm the following to avoid invalid feedback
+      options:
+        - label: I am using the latest [Arclight build](https://arclight.izzel.io/)
+          required: true
+        - label: I have read the [FAQ](https://wiki.izzel.io/s/arclight-docs/doc/faq-ApcZ25PXVT) and [Troubleshooting](https://wiki.izzel.io/s/arclight-docs/doc/troubleshooting-1Ay2vsmIrn), they didn't solve my issue
+          required: true
+        - label: I have searched existing Issues and found no duplicates
+          required: true
+        - label: The mods and/or plugins I use support my Minecraft version
+          required: true
+        - label: I have installed all required dependencies for the mods and/or plugins
+          required: true
+        - label: I have updated all mods and/or plugins to their latest versions
+          required: true
+        - label: |
+            This issue cannot be reproduced on a Spigot server  
+            (Mod-related issues are considered non-reproducible on Spigot)
+          required: true
+        - label: |
+            This issue cannot be reproduced on the Mod Loader server (Forge/NeoForge/Fabric)  
+            (Plugin-related issues are considered non-reproducible on mod loaders)
+          required: true
+
+  - type: input
+    id: minecraft-version
+    attributes:
+      label: Minecraft Version
+    validations:
+      required: true
+
+  - type: input
+    id: arclight-version
+    attributes:
+      label: Arclight Version
+      description: The version is printed when the Arclight server starts
+      placeholder: e.g. arclight-1.15.2-1.0.3-SNAPSHOT-9455d03
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: OS Version
+      description: OS version
+      placeholder: e.g. Windows 11 or Ubuntu 24.04 arm64 (if you're not using amd64, indicate please)
+    validations:
+      required: true
+
+  - type: textarea
+    id: java-version
+    attributes:
+      label: Java Version
+      description: Output of `java --version` in the command line
+      placeholder: |
+        openjdk 21.0.5 2024-10-15 LTS
+        OpenJDK Runtime Environment Temurin-21.0.5+11 (build 21.0.5+11-LTS)
+        OpenJDK 64-Bit Server VM Temurin-21.0.5+11 (build 21.0.5+11-LTS, mixed mode, sharing)
+    validations:
+      required: true
+
+  - type: textarea
+    id: related-mods
+    attributes:
+      label: Related Mods and/or Plugins (Name & Version)
+      description: |
+        Use the `/plugins` command to get the plugin list  
+        On Forge, use `/forge mods` to get the mod list  
+        On Fabric and NeoForge, the mod list is printed during server startup  
+        Excluding irrelevant mods/plugins helps resolve issues faster. If unrelated, leave blank
+      placeholder: |
+        Mods: 
+          Mod A (1.2)
+          Mod B (3.14)
+        
+        Plugins: 
+          Plugin A (2.3.3)
+          Plugin B (2.7)
+      render: raw
+    validations:
+      required: false
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Issue Description
+      description: |
+        Please describe the issue in as much detail as possible. If unsure how, consider:  
+        What happened?  
+        What should have happened?  
+        Have you tried to fix it? If so, how, and what was the result?
+      placeholder: Describe in detail why this is a bug...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to Reproduce
+      placeholder: |
+        1. Install ...
+        2. After joining the server ...
+        3. ...
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server Logs
+      description: |
+        The server logs are in the `logs/latest.log` file 
+        After shutting down your server, drag the file into the input box to upload  
+        Or upload it to an online paste site (e.g. [mclo.gs](https://mclo.gs/)) and paste the link below  
+        **Do not copy-paste the full log text directly**
+      placeholder: Link, or drag and drop the log file here
+
+  - type: input
+    id: pack-to-reproduce
+    attributes:
+      label: The Server Pack for Reproduce
+      description: |
+        If you have too many mods and plugins, package your server and upload it to a file host for developers to test  
+        If it is a modpack, you can also paste the original modpack thread link here

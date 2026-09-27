@@ -1,0 +1,47 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "io.izzel.arclight.common.mixin.vanilla",
+  "target": "@env(DEFAULT)",
+  "setSourceFile": true,
+  "plugin": "io.izzel.arclight.common.mod.ArclightMixinPlugin",
+  "injectors": {
+    "maxShiftBy": 2,
+    "defaultRequire": 1
+  },
+  "overwrites": {
+    "conformVisibility": true,
+    "requireAnnotations": false
+  },
+  "mixinPriority": 555,
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "server.Main_ServerShutdownThreadMixin_Vanilla",
+    "server.dedicated.DedicatedServer_ServerInputThreadMixin_Vanilla",
+    "server.dedicated.DedicatedServerMixin_Vanilla",
+    "server.level.ServerPlayerGameModeMixin",
+    "server.level.ServerPlayerMixin_Vanilla",
+    "world.effect.PoisonMobEffectMixin_Vanilla",
+    "world.entity.EntityMixin_Vanilla",
+    "world.entity.LivingEntityMixin_Vanilla",
+    "world.entity.animal.FoxMixin_Vanilla",
+    "world.entity.animal.MushroomCowMixin_Vanilla",
+    "world.entity.animal.SheepMixin_Vanilla",
+    "world.entity.animal.SnowGolemMixin_Vanilla",
+    "world.entity.animal.WolfMixin_Vanilla",
+    "world.entity.animal.frog.TadpoleMixin_Vanilla",
+    "world.entity.monster.BoggedMixin_Vanilla",
+    "world.entity.monster.ZombieMixin_Vanilla",
+    "world.entity.player.PlayerMixin_Vanilla",
+    "world.item.BucketItemMixin_Vanilla",
+    "world.item.ItemStackMixin_Vanilla",
+    "world.item.MilkBucketItemMixin_Vanilla",
+    "world.level.LevelMixin_Vanilla",
+    "world.level.block.BlockMixin_Vanilla",
+    "world.level.block.CropBlockMixin_Vanilla",
+    "world.level.block.RedStoneOreBlockMixin_Vanilla",
+    "world.level.block.TntBlockMixin_Vanilla",
+    "world.level.block.entity.AbstractFurnaceBlockEntityMixin_Vanilla",
+    "world.level.levelgen.structure.templatesystem.StructureTemplateMixin_Vanilla"
+  ]
+}

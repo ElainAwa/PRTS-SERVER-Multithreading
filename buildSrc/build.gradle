@@ -1,0 +1,32 @@
+plugins {
+    id 'groovy'
+    id 'maven-publish'
+}
+
+repositories {
+    mavenCentral()
+    maven {
+        name = 'Forge Maven'
+        url = 'https://maven.minecraftforge.net/'
+    }
+    maven { url "https://maven.architectury.dev/" }
+    maven { url "https://maven.fabricmc.net/" }
+}
+
+dependencies {
+    compileOnly(libs.lombok)
+    annotationProcessor(libs.lombok)
+
+    implementation gradleApi()
+    implementation localGroovy()
+
+    implementation libs.bundles.asm
+    implementation libs.commons.io
+
+    implementation libs.loom
+    implementation libs.bundles.lorenz
+    implementation libs.mercury
+    implementation libs.at
+
+    implementation(libs.specialsource) { transitive false }
+}

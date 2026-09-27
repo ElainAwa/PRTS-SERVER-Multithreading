@@ -1,0 +1,87 @@
+plugins {
+    id 'architectury-plugin'
+    id 'com.gradleup.shadow'
+}
+
+architectury {
+    platformSetupLoomIde()
+    neoForge()
+}
+
+loom {
+    neoForge {
+    }
+}
+
+dependencies {
+    neoForge libs.neoforge
+
+    implementation libs.izzel.tools
+    implementation libs.arclight.api
+    implementation libs.mixin.tools
+
+    implementation(libs.bundles.spigot.shade) { transitive = false }
+    shadowBundle(libs.bundles.spigot.shade) { transitive = false }
+    implementation rootProject.ext.generatedSpigot
+    shadowBundle rootProject.ext.generatedSpigot
+
+    // XXX: for compiling (arclight-api): NeoForgeArclightServer#registerForgeEvent
+    compileOnly("net.minecraftforge:eventbus:4.0.0") { transitive = false }
+
+    implementation(project(':i18n-config')) { transitive = false }
+
+    common(project(path: ':arclight-common', configuration: 'namedElements')) { transitive = false }
+    shadowBundle(project(path: ':arclight-common', configuration: 'transformProductionNeoForge')) { transitive = false }
+}
+
+tasks.register('neoforgeMappings', Copy) {
+    destinationDir = file('build/neoforge_mappings')
+    from(arclight.mappingsConfiguration.bukkitToNeoForge) {
+        rename { name -> 'bukkit_srg.srg' }
+    }
+    from(arclight.mappingsConfiguration.bukkitToNeoForge) {
+        rename { name -> 'bukkit_moj.srg'}
+    }
+    from arclight.mappingsConfiguration.bukkitToForgeInheritance
+}
+
+project.sourceSets.main.output.dir file('build/neoforge_mappings'), builtBy: tasks.neoforgeMappings
+
+processResources {
+    def ver = "${project.version}+$gitHash"
+    inputs.property 'version', ver
+
+    filesMatching('META-INF/neoforge.mods.toml') {
+        expand 'version': ver
+    }
+}
+
+shadowJar {
+    exclude 'fabric.mod.json'
+    exclude 'architectury.common.json'
+
+    configurations = [project.configurations.shadowBundle]
+    archiveClassifier = 'dev-shadow'
+}
+
+remapJar {
+    inputFile.set shadowJar.archiveFile
+    dependsOn shadowJar
+    atAccessWideners.add(loom.accessWidenerPath.get().asFile.getName())
+}
+
+tasks.register('srgJar', Jar) {
+    from(tasks.remapJar.outputs.files.collect { it.isDirectory() ? it : zipTree(it) }) {
+        include 'io/izzel/**'
+        exclude 'io/izzel/arclight/common/mixin/**'
+        exclude 'io/izzel/arclight/forge/mixin/**'
+    }
+    archiveClassifier.set('srg')
+    dependsOn remapJar
+}
+
+sourcesJar {
+    def commonSources = rootProject.ext.commonProject.sourcesJar
+    dependsOn commonSources
+    from commonSources.archiveFile.map { zipTree(it) }
+}

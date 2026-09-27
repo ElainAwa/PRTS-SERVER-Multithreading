@@ -1,0 +1,173 @@
+import io.izzel.arclight.gradle.ArclightGradlePlugin
+import io.izzel.arclight.gradle.tasks.UploadFilesTask
+
+plugins {
+    id 'architectury-plugin' version '3.4-SNAPSHOT' apply false
+    id 'dev.architectury.loom' apply false  // version: gradle/libs.versions.toml
+    id 'com.gradleup.shadow' version '8.3.+' apply false
+}
+
+allprojects {
+    apply plugin: 'java'
+
+    group 'io.izzel.arclight'
+    version '1.0.2-SNAPSHOT'
+
+    def getGitHash = { ->
+        def stdout = new ByteArrayOutputStream()
+        exec {
+            commandLine 'git', 'rev-parse', '--short', 'HEAD'
+            standardOutput = stdout
+        }
+        return stdout.toString().trim()
+    }
+
+    ext {
+        versionName = 'feudal-kings'
+        gitHash = getGitHash()
+        supportedPlatforms = ['forge', 'neoforge', 'fabric']
+        commonProject = project(':arclight-common')
+        forgeProject = project(':arclight-forge')
+        fabricProject = project(':arclight-fabric')
+        neoForgeProject = project(':arclight-neoforge')
+        platformProjects = [ext.forgeProject, ext.fabricProject, ext.neoForgeProject]
+        subProjects = ext.platformProjects + [ext.commonProject]
+        generatedSpigot = "io.izzel.arclight.generated:spigot:${libs.versions.minecraft.get()}:deobf"
+    }
+
+    java {
+        toolchain {
+            languageVersion = JavaLanguageVersion.of(21)
+        }
+    }
+
+    repositories {
+        maven { url = 'https://repo.spongepowered.org/maven' }
+        maven { url = 'https://oss.sonatype.org/content/repositories/snapshots/' }
+        maven { url = 'https://hub.spigotmc.org/nexus/content/repositories/snapshots/' }
+        maven { url = 'https://maven.neoforged.net/releases' }
+        maven { url = 'https://files.minecraftforge.net/maven/' }
+        maven { url = 'https://maven.izzel.io/releases' }
+        mavenCentral()
+        mavenLocal()
+    }
+
+    dependencies {
+        compileOnly libs.lombok
+        annotationProcessor libs.lombok
+        compileOnly libs.jetbrains.annotations
+    }
+
+    tasks.register('cleanBuild') {
+        doFirst {
+            project.file("build/libs").deleteDir()
+        }
+    }
+}
+
+rootProject.ext.subProjects.each { Project p ->
+    configure(p) {
+        apply plugin: 'architectury-plugin'
+        apply plugin: 'dev.architectury.loom'
+        apply plugin: ArclightGradlePlugin
+
+        architectury {
+            minecraft = libs.versions.minecraft.get()
+        }
+
+        loom {
+            silentMojangMappingsLicense()
+        }
+
+        arclight {
+            mcVersion = libs.versions.minecraft.get()
+            bukkitVersion = libs.versions.bukkit.api.get()
+            spigotReversion = libs.versions.spigot.reversion.get()
+            accessTransformer = rootProject.ext.commonProject.file('bukkit.at')
+            extraMapping = rootProject.ext.commonProject.file('extra_mapping.tsrg')
+        }
+
+        configurations {
+            common {
+                canBeResolved = true
+                canBeConsumed = false
+            }
+
+            compileClasspath.extendsFrom common
+            runtimeClasspath.extendsFrom common
+            developmentForge.extendsFrom common
+            developmentFabric.extendsFrom common
+            developmentNeoForge.extendsFrom common
+
+            shadowBundle {
+                canBeResolved = true
+                canBeConsumed = false
+            }
+        }
+
+        dependencies {
+            minecraft libs.minecraft
+            mappings loom.layered() {
+                officialMojangMappings()
+                parchment("org.parchmentmc.data:parchment-${libs.versions.minecraft.get()}:${libs.versions.parchment.get()}@zip")
+            }
+        }
+
+        java {
+            withSourcesJar()
+        }
+    }
+}
+
+rootProject.ext.platformProjects.each { Project p ->
+    configure(p) {
+        apply plugin: 'dev.architectury.loom'
+        apply plugin: 'com.gradleup.shadow'
+
+        loom {
+            accessWidenerPath = getRootProject().ext.commonProject.loom.accessWidenerPath
+        }
+
+        jar {
+            manifest.attributes 'MixinConnector': 'io.izzel.arclight.common.mod.ArclightConnector'
+            manifest.attributes 'Implementation-Title': 'Arclight'
+            manifest.attributes 'Implementation-Version': "${p.name}-${libs.versions.minecraft.get()}-${project.version}+$gitHash"
+            manifest.attributes 'Implementation-Vendor': 'Arclight Team'
+            manifest.attributes 'Implementation-Timestamp': new Date().format("yyyy-MM-dd HH:mm:ss")
+        }
+
+        components.java {
+            withVariantsFromConfiguration(project.configurations.shadowRuntimeElements) {
+                skip()
+            }
+        }
+    }
+}
+
+jar.enabled = false
+
+tasks.register('collect', Copy) {
+    destinationDir = file('build/libs')
+    from project(':bootstrap').tasks.forgeJar.outputs
+    from project(':bootstrap').tasks.neoforgeJar.outputs
+    from project(':bootstrap').tasks.fabricJar.outputs
+}
+
+def gitBranch() {
+    def stdout = new ByteArrayOutputStream()
+    exec {
+        commandLine 'git', 'rev-parse', '--abbrev-ref', 'HEAD'
+        standardOutput = stdout
+    }
+    return stdout.toString().trim()
+}
+
+tasks.register('uploadFiles', UploadFilesTask) {
+    mcVersion.set libs.versions.minecraft
+    version.set "${project.version}-${project.ext.gitHash}"
+    snapshot.set project.version.toString().endsWith('-SNAPSHOT')
+    gitHash.set project.ext.gitHash
+    branch.set gitBranch()
+    inputs.files tasks.collect.outputs.files
+    dependsOn(tasks.collect)
+}

@@ -1,0 +1,39 @@
+plugins {
+    id 'architectury-plugin'
+}
+
+architectury {
+    common(rootProject.ext.supportedPlatforms)
+}
+
+loom {
+    accessWidenerPath = file('src/main/resources/arclight.accesswidener')
+}
+
+dependencies {
+    modImplementation libs.fabric.loader
+
+    compileOnly rootProject.ext.generatedSpigot
+
+    implementation libs.izzel.tools
+    implementation libs.arclight.api
+    implementation libs.mixin.tools
+    annotationProcessor(libs.mixin.tools) { transitive = false }
+
+    // spigot
+    implementation libs.spigot.api
+    implementation libs.jline
+    implementation libs.terminalconsoleappender
+    implementation libs.specialsource
+    implementation libs.log4j.jul
+    implementation libs.bungeecord.chat
+    implementation libs.mysql.connectorj
+    implementation libs.snakeyaml
+
+    implementation project(':i18n-config')
+}
+
+compileJava {
+    options.compilerArgs << '-XDignore.symbol.file' << '-XDenableSunApiLintControl'
+    options.encoding = 'UTF-8'
+}
