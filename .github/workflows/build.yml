@@ -3,12 +3,20 @@ name: build
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8 -Dorg.gradle.workers.max=2
     steps:
       - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -16,11 +24,23 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: Cache Gradle User Files
+        uses: actions/cache@v4
+        with:
+          path: ~/.gradle
+          key: ${{ runner.os }}-gradle-user-home
+
+      - name: Cache Gradle Files
+        uses: actions/cache@v4
+        with:
+          path: ./.gradle
+          key: ${{ runner.os }}-gradle-file
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
 
       - name: Build
-        run: ./gradlew collect --no-daemon --stacktrace
+        run: ./gradlew build collect --no-daemon --stacktrace
 
       - name: Toolchain invariant - @Redirect.at must be a nested annotation
         run: |
