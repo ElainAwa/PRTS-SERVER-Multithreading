@@ -32,6 +32,12 @@ jobs:
         key: ${{ runner.os }}-gradle-file
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
+    - name: Seed the loom srg mappings (cold-cache CI workaround)
+      run: |
+        D="$HOME/.gradle/caches/fabric-loom/1.21.1/loom.mappings.1_21_1.layered+hash.729445375-v2"
+        S=".github/loom-seed/loom.mappings.1_21_1.layered+hash.729445375-v2/mappings-srg.tiny"
+        if [ -f "$S" ] && [ ! -f "$D/mappings-srg.tiny" ]; then mkdir -p "$D"; cp "$S" "$D/mappings-srg.tiny"; echo "seeded: $D"; else echo "seed not needed"; fi
+
     - name: Build
       env:
         ARCLIGHT_FILES_TOKEN: ${{ secrets.ARCLIGHT_FILES_TOKEN }}
