@@ -1,6 +1,8 @@
 # PRTS Server
 
 A Minecraft server for **1.21.1** built on **NeoForge 21.1.250**, running Bukkit/Spigot plugins and NeoForge/Fabric mods side by side.
+> 中文版：[README_zh.md](README_zh.md)
+
 
 ## About this branch (`base/new-kernel`)
 

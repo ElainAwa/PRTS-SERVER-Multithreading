@@ -1,6 +1,8 @@
 # PRTS 服务端
 
 基于 **NeoForge 21.1.250** 的 **Minecraft 1.21.1** 服务端，同时支持 Bukkit/Spigot 插件与 NeoForge/Fabric 模组。
+> English: [README.md](README.md)
+
 
 ## 本分支说明（`base/new-kernel`）
 
