@@ -104,13 +104,13 @@ dependencies {
 
     gson libs.gson
 
-embedCommon libs.izzel.tools
-embedCommon libs.arclight.api
+    embedCommon libs.izzel.tools
+    embedCommon libs.arclight.api
 
-embedCommon 'commons-lang:commons-lang:2.6@jar'
-embedCommon(project(':i18n-config')) { transitive = false }
-embedFabric(libs.mixin.tools) { transitive = false }
-embedFabric(project(':installer')) { transitive = false }
+    embedCommon 'commons-lang:commons-lang:2.6@jar'
+    embedCommon(project(':i18n-config')) { transitive = false }
+    embedFabric(libs.mixin.tools) { transitive = false }
+    embedFabric(project(':installer')) { transitive = false }
 
 // TerminalConsoleAppender + jline + jansi must be in the bootstrap jar for NeoForge
 // so minecraftFormatting (§→ANSI) converter works at startup (banner, plugin colors).
