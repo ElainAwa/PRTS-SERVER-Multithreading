@@ -51,6 +51,12 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      - name: Warm up loom mappings (best effort, primes ~/.gradle/caches/fabric-loom)
+        run: |
+          ./gradlew :arclight-common:dependencies --no-daemon > /tmp/warmup.log 2>&1 || true
+          ls -la "$HOME/.gradle/caches/fabric-loom/1.21.1" 2>/dev/null || echo 'loom cache still empty'
+          find "$HOME/.gradle/caches/fabric-loom" -name 'mappings-srg.tiny' 2>/dev/null | head -3
+
       - name: Build
         run: ./gradlew cleanBuild build collect --no-daemon --stacktrace
 
