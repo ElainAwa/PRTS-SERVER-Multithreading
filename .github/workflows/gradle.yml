@@ -34,6 +34,9 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
+    - name: Comment hygiene (hard gate)
+      run: bash .github/scripts/comment-lint.sh
+
     - name: Build
       env:
         ARCLIGHT_FILES_TOKEN: ${{ secrets.ARCLIGHT_FILES_TOKEN }}
