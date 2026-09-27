@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.neoforge.prts.fixes;
 
-import io.izzel.arclight.common.prts.config.PrtsReloadCommand;
+import io.izzel.arclight.common.prts.config.PrtsCommand;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 
@@ -27,7 +27,7 @@ public final class PrtsCommandRegistration {
      */
     @SubscribeEvent
     public static void onRegisterCommands(RegisterCommandsEvent event) {
-        PrtsReloadCommand.register(event.getDispatcher());
-        PrtsReloadCommand.registerInCommandMap();
+        PrtsCommand.register(event.getDispatcher());
+        PrtsCommand.registerInCommandMap();
     }
 }
