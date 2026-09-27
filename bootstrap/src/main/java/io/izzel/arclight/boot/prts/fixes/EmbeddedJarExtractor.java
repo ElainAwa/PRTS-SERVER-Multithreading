@@ -1,10 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
- * Ported from PRTS-1.21.1, commit 5a5ee426ab2f6ccfa089de0b14612f8641832843
- * ("build: refresh embedded jars by content instead of version") and from CraftAmethyst/Luminara,
- * commit f3d21388737653a9ccd2be5f9b69f3d94c0cbd17 ("fix(bootstrap): refresh changed embedded
- * jars"). The two implementations were the same asset; they are merged into one here.
- * See THIRD-PARTY.md.
+ * Ported from two upstream implementations of the same asset, merged into one here:
+ * PRTS 1.21.1 commit 5a5ee426ab2f6ccfa089de0b14612f8641832843 ("refresh embedded jars by content
+ * instead of version") and commit f3d21388737653a9ccd2be5f9b69f3d94c0cbd17 from the FeudalKings
+ * fork of Arclight ("refresh changed embedded jars"). Attribution is recorded in NOTICE and
+ * THIRD-PARTY.md.
  */
 package io.izzel.arclight.boot.prts.fixes;
 
