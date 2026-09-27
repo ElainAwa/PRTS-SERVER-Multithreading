@@ -4,71 +4,48 @@
 name: Build
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: 
   push:
     branches:
       - '**'
 
 jobs:
   build:
+
     runs-on: ubuntu-latest
-    env:
-      GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8 -Dorg.gradle.workers.max=2
+
     steps:
-      - uses: actions/checkout@v4
+    - uses: actions/checkout@v2
+    - name: Set up JDK 21
+      uses: actions/setup-java@v1
+      with:
+        java-version: '21'
+    - name: Cache Gradle User Files
+      uses: actions/cache@v4
+      with:
+        path: ~/.gradle
+        key: ${{ runner.os }}-gradle-user-home
+    - name: Cache Gradle Files
+      uses: actions/cache@v4
+      with:
+        path: ./.gradle
+        key: ${{ runner.os }}-gradle-file
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+    - name: Build
+      env:
+        ARCLIGHT_FILES_TOKEN: ${{ secrets.ARCLIGHT_FILES_TOKEN }}
+      run: |
+        ./gradlew cleanBuild build collect --no-daemon --stacktrace
+    - name: Toolchain invariant - @Redirect.at must be a nested annotation
+      run: |
+        curl -fsSLo /tmp/asm.jar https://repo1.maven.org/maven2/org/ow2/asm/asm/9.7.1/asm-9.7.1.jar
+        java -cp /tmp/asm.jar .github/scripts/ScanAt.java arclight-common/build/classes/java/main | tee /tmp/scan.txt
+        grep -Eq "ANNOTATION=[1-9][0-9]* LIST=0" /tmp/scan.txt
 
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
-          df -h /
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - name: Cache Gradle User Files
-        uses: actions/cache@v4
-        with:
-          path: ~/.gradle
-          key: ${{ runner.os }}-gradle-user-home
-
-      - name: Cache Gradle Files
-        uses: actions/cache@v4
-        with:
-          path: ./.gradle
-          key: ${{ runner.os }}-gradle-file
-
-      - name: Drop incomplete loom mapping caches (self-heal)
-        run: |
-          if [ -d "$HOME/.gradle/caches/fabric-loom" ]; then
-            find "$HOME/.gradle/caches/fabric-loom" -maxdepth 2 -type d -name "loom.mappings*" | while read -r d; do
-              if [ ! -f "$d/mappings-srg.tiny" ]; then echo "removing incomplete: $d"; rm -rf "$d"; fi
-            done
-          fi
-
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
-
-      - name: Build
-        run: ./gradlew cleanBuild build collect --no-daemon --stacktrace
-
-      - name: Toolchain invariant - @Redirect.at must be a nested annotation
-        run: |
-          curl -fsSLo /tmp/asm.jar https://repo1.maven.org/maven2/org/ow2/asm/asm/9.7.1/asm-9.7.1.jar
-          java -cp /tmp/asm.jar .github/scripts/ScanAt.java arclight-common/build/classes/java/main | tee /tmp/scan.txt
-          grep -Eq "ANNOTATION=[1-9][0-9]* LIST=0" /tmp/scan.txt
-
-      - name: Manifest sanity (no -dirty, version carries the commit hash)
-        run: |
-          JAR=$(ls bootstrap/build/libs/PRTS-neoforge-*.jar | head -1)
-          unzip -p "$JAR" META-INF/MANIFEST.MF | tee /tmp/mf.txt
-          ! grep -qi -- "-dirty" /tmp/mf.txt
-          grep -Eq "Implementation-Version: PRTS-[0-9.]+[^ ]*-[0-9a-f]{7}" /tmp/mf.txt
-
-      - name: Upload server jar
-        uses: actions/upload-artifact@v4
-        with:
-          name: PRTS-server-jar
-          path: bootstrap/build/libs/PRTS-neoforge-*.jar
+    - name: Manifest sanity (no -dirty, version carries the commit hash)
+      run: |
+        JAR=$(ls bootstrap/build/libs/PRTS-neoforge-*.jar | head -1)
+        unzip -p "$JAR" META-INF/MANIFEST.MF | tee /tmp/mf.txt
+        ! grep -qi -- "-dirty" /tmp/mf.txt
+        grep -Eq "Implementation-Version: PRTS-[0-9.]+[^ ]*-[0-9a-f]{7}" /tmp/mf.txt
