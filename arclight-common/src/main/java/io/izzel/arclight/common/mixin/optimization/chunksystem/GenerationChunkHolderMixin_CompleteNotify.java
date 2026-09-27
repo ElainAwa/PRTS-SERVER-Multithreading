@@ -40,6 +40,22 @@ public abstract class GenerationChunkHolderMixin_CompleteNotify {
         io.izzel.arclight.common.optimization.chunksystem.ChunkSystemDriver.futureCleared();
     }
 
+    /**
+     * GAP-1 端到端终点（M4 插桩 · {@code parallel.chunk-step-telemetry.enabled} · 默认关）：
+     * {@code FULL} 步 future 完成即该区块端到端结束，与 {@code ChunkMap.applyStep} 的首次进入配对
+     * （QA FIND-g02：A 臂也要有端到端读数）。只读计数，不改 future 语义。
+     */
+    @Inject(method = "completeFuture", at = @At("RETURN"))
+    private void prts$stageE2eComplete(ChunkStatus status, ChunkAccess chunk, CallbackInfo ci) {
+        if (!io.izzel.arclight.common.compat.prts.PRTSFeaturesConfig.chunkStepTelemetryEnabled) {
+            return;
+        }
+        if (status != ChunkStatus.FULL) {
+            return;
+        }
+        io.izzel.arclight.common.optimization.chunksystem.ChunkStageTiming.e2eComplete(this.pos.toLong());
+    }
+
     @Inject(method = "completeFuture", at = @At("RETURN"))
     private void arclight$notifyChunkComplete(ChunkStatus status, ChunkAccess chunk, CallbackInfo ci) {
         if (status != ChunkStatus.FULL || !(chunk instanceof LevelChunk levelChunk) || !(levelChunk.level instanceof ServerLevel level)) {

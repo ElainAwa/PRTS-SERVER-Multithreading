@@ -75,6 +75,29 @@ public abstract class PlayerChunkSenderMixin_ChunkRate {
         }
     }
 
+    /**
+     * GAP-1 F 段（保存 + 网络发送：打包/压缩/加密，按玩家批量）服务时间
+     * （M4 插桩 · {@code parallel.chunk-step-telemetry.enabled} · 默认关）。
+     * 粒度是「一次 sendNextChunks 调用」，无单块坐标 ⇒ 不参与同区块端到端残差配对。
+     */
+    @Inject(method = "sendNextChunks", at = @At("HEAD"))
+    private void prts$stageFBegin(ServerPlayer player, CallbackInfo ci) {
+        if (!io.izzel.arclight.common.compat.prts.PRTSFeaturesConfig.chunkStepTelemetryEnabled) {
+            return;
+        }
+        io.izzel.arclight.common.optimization.chunksystem.ChunkStageTiming.begin(
+                io.izzel.arclight.common.optimization.chunksystem.ChunkStageTiming.F);
+    }
+
+    @Inject(method = "sendNextChunks", at = @At("RETURN"))
+    private void prts$stageFEnd(ServerPlayer player, CallbackInfo ci) {
+        if (!io.izzel.arclight.common.compat.prts.PRTSFeaturesConfig.chunkStepTelemetryEnabled) {
+            return;
+        }
+        io.izzel.arclight.common.optimization.chunksystem.ChunkStageTiming.endAndRecord(
+                io.izzel.arclight.common.optimization.chunksystem.ChunkStageTiming.NO_POS);
+    }
+
     @Inject(method = "sendNextChunks", at = @At("HEAD"))
     private void prts$sendTelemetry(ServerPlayer player, CallbackInfo ci) {
         long tick = player.serverLevel().getGameTime();

@@ -203,6 +203,9 @@
     "compat.create.KineticTopologyMixin_Create$KineticBlockEntityTopology",
     "compat.create.KineticTopologyMixin_Create$TorquePropagatorTopology",
     "compat.create.KineticTopologyMixin_Create$GeneratorTopology",
-    "compat.create.ChainDriveBlockMixin_GuardShapeUpdate"
+    "compat.create.ChainDriveBlockMixin_GuardShapeUpdate",
+    "chunksystem.ChunkStatusTasksMixin",
+    "eventbridge.RegisteredListenerMixin_EventAttribution",
+    "ownership.LevelMixin_HostApiAttribution"
   ]
 }

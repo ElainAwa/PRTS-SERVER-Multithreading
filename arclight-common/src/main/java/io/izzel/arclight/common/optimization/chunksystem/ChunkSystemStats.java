@@ -160,6 +160,7 @@ public final class ChunkSystemStats {
         EXECUTED.increment();
         EXEC_NANOS.add(execNanos);
         QUEUE_WAIT_NANOS.add(queueWaitNanos);
+        waitNanos("queue", queueWaitNanos);
         if (execNanos > lastExecMs * 1_000_000L) {
             lastExecMs = execNanos / 1_000_000L;
         }
@@ -207,6 +208,20 @@ public final class ChunkSystemStats {
     /** 锁等待全程（首次出队尝试 → 获得锁），含 listener 等待重试。 */
     public static void lockWait(long nanos) {
         bucket(LOCK_WAIT_BUCKETS, LOCK_WAIT_BOUNDS_MS, nanos);
+        waitNanos("lock", nanos);
+    }
+
+    /**
+     * GAP-1 等待分栏新增入口（M4 插桩 · 只新增方法，既有计数器字段与 status 行格式一律不动）：
+     * 把既有等待读数镜像进 {@link ChunkStageTiming} 的 queue/lock/barrier 桶，供新增行
+     * {@code ChunkStages: waitMs={...}} 使用。默认关（{@code parallel.chunk-step-telemetry.wait-split.enabled}）
+     * ⇒ 关闭时只有一次 volatile 读，不影响既有语义。
+     *
+     * <p>barrier 等待按 {@code RD/PLAN.md} @95 取既有 {@code Barrier} 行快照（本探针不出数），
+     * 因此 {@code "barrier"} 分支只作为对外入口保留。</p>
+     */
+    public static void waitNanos(String kind, long nanos) {
+        ChunkStageTiming.waitNanos(kind, nanos);
     }
 
     /** 任务端到端延迟（首次提交 → 最终完成）。 */

@@ -7,11 +7,19 @@ package io.izzel.arclight.common.mixin.optimization.chunksystem;
 
 import io.izzel.arclight.common.optimization.chunksystem.guards.ChunkIoEventCaptureBus;
 import net.neoforged.bus.api.IEventBus;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.ai.village.poi.PoiManager;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.chunk.ProtoChunk;
 import net.minecraft.world.level.chunk.storage.ChunkSerializer;
+import net.minecraft.world.level.chunk.storage.RegionStorageInfo;
 import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import io.izzel.arclight.common.optimization.eventbridge.EventBusStats;
 
 /**
@@ -36,5 +44,32 @@ public abstract class ChunkSerializerMixin_IoEventCapture {
                     target = "Lnet/neoforged/neoforge/common/NeoForge;EVENT_BUS:Lnet/neoforged/bus/api/IEventBus;"))
     private static IEventBus prts$captureBus() {
         return ChunkIoEventCaptureBus.wrapIfCapturing(net.neoforged.neoforge.common.NeoForge.EVENT_BUS);
+    }
+
+    /**
+     * GAP-1 B 段（解压 + 结构解析：{@code CompoundTag} → ProtoChunk）服务时间
+     * （M4 插桩 · {@code parallel.chunk-step-telemetry.enabled} · 默认关）。
+     * 与 A 段（{@code RegionFileStorage.read}）在调用层前后相继，不重叠；只读计时，零语义变更。
+     * 描述符取自 NeoForge 编译产物（NeoForge 为 {@code read} 补了 {@code RegionStorageInfo} 形参）。
+     */
+    @Inject(method = "read(Lnet/minecraft/server/level/ServerLevel;Lnet/minecraft/world/entity/ai/village/poi/PoiManager;Lnet/minecraft/world/level/chunk/storage/RegionStorageInfo;Lnet/minecraft/world/level/ChunkPos;Lnet/minecraft/nbt/CompoundTag;)Lnet/minecraft/world/level/chunk/ProtoChunk;",
+            at = @At("HEAD"))
+    private static void prts$stageBBegin(ServerLevel level, PoiManager poiManager, RegionStorageInfo info,
+                                         ChunkPos pos, CompoundTag tag, CallbackInfoReturnable<ProtoChunk> cir) {
+        if (!io.izzel.arclight.common.compat.prts.PRTSFeaturesConfig.chunkStepTelemetryEnabled) {
+            return;
+        }
+        io.izzel.arclight.common.optimization.chunksystem.ChunkStageTiming.begin(
+                io.izzel.arclight.common.optimization.chunksystem.ChunkStageTiming.B);
+    }
+
+    @Inject(method = "read(Lnet/minecraft/server/level/ServerLevel;Lnet/minecraft/world/entity/ai/village/poi/PoiManager;Lnet/minecraft/world/level/chunk/storage/RegionStorageInfo;Lnet/minecraft/world/level/ChunkPos;Lnet/minecraft/nbt/CompoundTag;)Lnet/minecraft/world/level/chunk/ProtoChunk;",
+            at = @At("RETURN"))
+    private static void prts$stageBEnd(ServerLevel level, PoiManager poiManager, RegionStorageInfo info,
+                                       ChunkPos pos, CompoundTag tag, CallbackInfoReturnable<ProtoChunk> cir) {
+        if (!io.izzel.arclight.common.compat.prts.PRTSFeaturesConfig.chunkStepTelemetryEnabled) {
+            return;
+        }
+        io.izzel.arclight.common.optimization.chunksystem.ChunkStageTiming.endAndRecord(pos.toLong());
     }
 }
