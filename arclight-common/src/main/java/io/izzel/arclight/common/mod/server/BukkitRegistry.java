@@ -92,13 +92,16 @@ public class BukkitRegistry {
         loadRecipeBookType();
         loadFluids();
         loadGameRules();
-        try {
-            for (var field : org.bukkit.Registry.class.getFields()) {
+        for (var field : org.bukkit.Registry.class.getFields()) {
+            try {
                 if (Modifier.isStatic(field.getModifiers()) && field.get(null) instanceof org.bukkit.Registry.SimpleRegistry<?> registry) {
                     ((SimpleRegistryBridge) (Object) registry).bridge$reload();
                 }
+            } catch (Throwable throwable) {
+                // One registry that refuses to reload must not leave the remaining ones stale, and a
+                // failure that is never reported leaves plugins reading an outdated registry.
+                ArclightServer.LOGGER.warn("Cannot reload Bukkit registry {}", field.getName(), throwable);
             }
-        } catch (Throwable ignored) {
         }
     }
 
