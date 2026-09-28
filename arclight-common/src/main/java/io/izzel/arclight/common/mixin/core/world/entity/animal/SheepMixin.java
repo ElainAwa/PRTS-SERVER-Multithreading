@@ -1,20 +1,12 @@
 package io.izzel.arclight.common.mixin.core.world.entity.animal;
 
-import net.minecraft.world.InteractionHand;
-import net.minecraft.world.InteractionResult;
-import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.item.ItemStack;
 import org.bukkit.Bukkit;
-import org.bukkit.craftbukkit.v.event.CraftEventFactory;
 import org.bukkit.entity.Sheep;
 import org.bukkit.event.entity.SheepRegrowWoolEvent;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
-import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
 
 @Mixin(net.minecraft.world.entity.animal.Sheep.class)
 public abstract class SheepMixin extends AnimalMixin {
@@ -30,11 +22,9 @@ public abstract class SheepMixin extends AnimalMixin {
         }
     }
 
-    // Forge: ShearsItem#interactLivingEntity
-    @Inject(method = "mobInteract", require = 0, cancellable = true, locals = LocalCapture.CAPTURE_FAILHARD, at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/animal/Sheep;shear(Lnet/minecraft/sounds/SoundSource;)V"))
-    private void arclight$onShear(Player player, InteractionHand hand, CallbackInfoReturnable<InteractionResult> cir, ItemStack stack) {
-        if (!CraftEventFactory.handlePlayerShearEntityEvent(player, (Entity) (Object) this, stack, hand)) {
-            cir.setReturnValue(InteractionResult.PASS);
-        }
-    }
+    // The shear event is not raised here any more. A platform that moved the shearing of a shearable
+    // entity out of the interaction into the shears item has no shear call left in mobInteract, so an
+    // injector anchored on that call would silently match nothing there; the event is raised by the
+    // mixin scoped to that platform and, for the shape that still shears inside the interaction, by
+    // the vanilla scoped one.
 }
