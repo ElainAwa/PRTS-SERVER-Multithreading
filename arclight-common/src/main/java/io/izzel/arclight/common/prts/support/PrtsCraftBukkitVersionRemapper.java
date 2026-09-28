@@ -18,14 +18,18 @@ import org.objectweb.asm.tree.*;
 import java.util.regex.Pattern;
 
 /**
- * Normalizes the version segment of the CraftBukkit package so that plugins compiled against
+ * Normalizes the release segment of the CraftBukkit package so that plugins compiled against
  * another server release still resolve the classes of this one.
  *
  * <p>A plugin refers to server internals through a package name that carries the release it was
- * built against. Only the release segment differs, so it is replaced with the one segment this
- * server uses, on class names, descriptors, signatures, annotations and string constants alike.
- * The reverse direction exists as well, for reflection that has to report the name a plugin
- * expects.</p>
+ * built against. Only the release segment differs, so it is replaced with the release this
+ * server actually ships, on class names, descriptors, signatures, annotations and string
+ * constants alike. The replacement has to be a package the runtime provides: a bytecode
+ * reference is resolved by the name written in the class file, so rewriting it to a
+ * release-free form leaves it pointing at a package that does not exist.</p>
+ *
+ * <p>Both the release-free form and any release are accepted on input. The reverse direction
+ * reports the release a plugin expects, for reflection that hands names back.</p>
  */
 public class PrtsCraftBukkitVersionRemapper implements PluginTransformer {
 
@@ -33,12 +37,15 @@ public class PrtsCraftBukkitVersionRemapper implements PluginTransformer {
         new PrtsCraftBukkitVersionRemapper();
     private static final Marker MARKER = MarkerManager.getMarker("CBREMAPPER");
 
+    // A release segment is either the release-free form used inside the server sources or a
+    // real CraftBukkit release such as v1_21_R1. Both are rewritten to what the server ships.
     private static final Pattern VERSION_PATTERN = Pattern.compile(
-        "v\\d+_\\d+_R\\d+"
+        "v(?:\\d+_\\d+_R\\d+)?"
     );
     private static final String CRAFTBUKKIT_PREFIX = "org/bukkit/craftbukkit/";
     private static final String CRAFTBUKKIT_DOT_PREFIX =
         "org.bukkit.craftbukkit.";
+    // The release-free form; accepted on input and used only for the reporting direction.
     private static final String GENERIC_VERSION = "v";
 
     public static String remapInternalName(String internalName) {
@@ -56,18 +63,19 @@ public class PrtsCraftBukkitVersionRemapper implements PluginTransformer {
         if (slashIndex == -1) {
             // No slash after prefix, entire string is version
             if (VERSION_PATTERN.matcher(afterPrefix).matches()) {
-                return CRAFTBUKKIT_PREFIX + GENERIC_VERSION;
+                String rewritten = withServerRelease(CRAFTBUKKIT_PREFIX, "");
+                return rewritten == null ? internalName : rewritten;
             }
             return internalName;
         }
 
         String versionPart = afterPrefix.substring(0, slashIndex);
         if (VERSION_PATTERN.matcher(versionPart).matches()) {
-            return (
-                CRAFTBUKKIT_PREFIX +
-                    GENERIC_VERSION +
-                    afterPrefix.substring(slashIndex)
+            String rewritten = withServerRelease(
+                CRAFTBUKKIT_PREFIX,
+                afterPrefix.substring(slashIndex)
             );
+            return rewritten == null ? internalName : rewritten;
         }
 
         return internalName;
@@ -93,18 +101,19 @@ public class PrtsCraftBukkitVersionRemapper implements PluginTransformer {
 
         if (dotIndex == -1) {
             if (VERSION_PATTERN.matcher(afterPrefix).matches()) {
-                return CRAFTBUKKIT_DOT_PREFIX + GENERIC_VERSION;
+                String rewritten = withServerRelease(CRAFTBUKKIT_DOT_PREFIX, "");
+                return rewritten == null ? binaryName : rewritten;
             }
             return binaryName;
         }
 
         String versionPart = afterPrefix.substring(0, dotIndex);
         if (VERSION_PATTERN.matcher(versionPart).matches()) {
-            return (
-                CRAFTBUKKIT_DOT_PREFIX +
-                    GENERIC_VERSION +
-                    afterPrefix.substring(dotIndex)
+            String rewritten = withServerRelease(
+                CRAFTBUKKIT_DOT_PREFIX,
+                afterPrefix.substring(dotIndex)
             );
+            return rewritten == null ? binaryName : rewritten;
         }
 
         return binaryName;
@@ -129,7 +138,10 @@ public class PrtsCraftBukkitVersionRemapper implements PluginTransformer {
             return internalName;
         }
 
-        String version = currentVersion();
+        String version = serverRelease();
+        if (version == null) {
+            return internalName;
+        }
         if (slashIndex == -1) {
             return CRAFTBUKKIT_PREFIX + version;
         }
@@ -156,7 +168,10 @@ public class PrtsCraftBukkitVersionRemapper implements PluginTransformer {
             return binaryName;
         }
 
-        String version = currentVersion();
+        String version = serverRelease();
+        if (version == null) {
+            return binaryName;
+        }
         if (dotIndex == -1) {
             return CRAFTBUKKIT_DOT_PREFIX + version;
         }
@@ -165,7 +180,18 @@ public class PrtsCraftBukkitVersionRemapper implements PluginTransformer {
         );
     }
 
-    private static String currentVersion() {
+    /**
+     * Prefixes the given tail with the release this server ships, or returns {@code null} while
+     * that release is still unknown, so callers keep the name they were given instead of
+     * pointing it at a package that may not exist.
+     */
+    private static String withServerRelease(String prefix, String tail) {
+        String release = serverRelease();
+        return release == null ? null : prefix + release + tail;
+    }
+
+    /** The release this server ships, or {@code null} before it has been announced. */
+    private static String serverRelease() {
         try {
             String current = ArclightVersion.current().packageName();
             if (current != null && !current.isBlank()) {
@@ -173,7 +199,7 @@ public class PrtsCraftBukkitVersionRemapper implements PluginTransformer {
             }
         } catch (Throwable ignored) {
         }
-        return GENERIC_VERSION;
+        return null;
     }
 
     private void remapAnnotations(java.util.List<AnnotationNode> annotations) {
