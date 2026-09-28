@@ -13,6 +13,7 @@ import net.minecraft.server.network.ServerPlayerConnection;
 import net.minecraft.world.entity.Entity;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Mutable;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -29,6 +30,12 @@ public abstract class ChunkMap_TrackedEntityMixin implements ChunkMap_TrackedEnt
     @Shadow @Final Entity entity;
     @Shadow SectionPos lastSectionPos;
     // @formatter:on
+
+    // The tracking range is final in vanilla, so a mod that adjusts it from a `@ModifyVariable`
+    // handler is rejected by the JVM (a final field cannot be assigned outside an initializer).
+    // Declaring the shadow mutable strips the final flag and lets such handlers apply; this class
+    // never writes the field itself, so the running server behaves exactly as before.
+    @Shadow @Final @Mutable private int range;
 
     @Inject(method = "<init>", at = @At("RETURN"))
     private void arclight$setTrackedPlayers(ChunkMap outer, Entity entity, int range, int updateFrequency, boolean sendVelocityUpdates, CallbackInfo ci) {
