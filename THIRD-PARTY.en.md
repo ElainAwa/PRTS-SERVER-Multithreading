@@ -28,6 +28,7 @@ constitutes the prominent notice required by GPL-3.0.
 | **ASM** (OW2) | Bytecode reading/writing | BSD-3-Clause |
 | **Fabric Loader / Fabric API** | Fabric platform support (retained, not part of the verified build) | Apache-2.0 |
 | **Bukkit / Spigot API** (SpigotMC) | Plugin API | GPL-3.0 |
+| **Paper API** (PaperMC) | Paper plugin API surface: the `org.bukkit.event.player.PlayerAttemptPickupItemEvent` event class and the `Server`/`Bukkit#getMinecraftVersion` and `HumanEntity#open*` method declarations (re-implemented under `prts/modsupport`; upstream: `paper-api` in <https://github.com/PaperMC/Paper>) | MIT (Paper as a whole is GPL-3.0; the authors of this part elected MIT in Paper's `LICENSE.md`) |
 | **TerminalConsoleAppender** (Mojang) | Console ANSI support | LGPL-2.1 |
 | **JLine** | Terminal handling | BSD-3-Clause |
 | **Jansi** (fusesource) | Windows terminal ANSI | Apache-2.0 |

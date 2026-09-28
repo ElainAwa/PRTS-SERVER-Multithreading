@@ -27,6 +27,7 @@
 | **ASM** (OW2) | 字节码读写 | BSD-3-Clause |
 | **Fabric Loader / Fabric API** | Fabric 平台支持（保留，未参与本次构建验证） | Apache-2.0 |
 | **Bukkit / Spigot API** (SpigotMC) | 插件 API | GPL-3.0 |
+| **Paper API** (PaperMC) | Paper 插件 API 兼容面：`org.bukkit.event.player.PlayerAttemptPickupItemEvent` 事件类，以及 `Server`/`Bukkit#getMinecraftVersion`、`HumanEntity#open*` 方法声明（本仓库在 `prts/modsupport` 中重新实现；上游：<https://github.com/PaperMC/Paper> 的 `paper-api`） | MIT（Paper 仓库整体为 GPL-3.0；这部分作者已按 Paper 的 `LICENSE.md` 选择 MIT） |
 | **TerminalConsoleAppender** (Mojang) | 控制台 ANSI 支持 | LGPL-2.1 |
 | **JLine** | 终端处理 | BSD-3-Clause |
 | **Jansi** (fusesource) | Windows 终端 ANSI | Apache-2.0 |
