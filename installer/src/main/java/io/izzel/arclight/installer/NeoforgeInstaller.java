@@ -66,11 +66,33 @@ public class NeoforgeInstaller {
                         method.invoke(null, (Object) new String[]{"--installServer", ".", "--debug"});
                     }
                 }
+                // The installer leaves its own launcher files behind. They are not used by this
+                // launcher, and run.sh / run.bat start the server without the layer, so they are
+                // removed once the installation has produced the argument files this launcher reads.
+                cleanupInstallerArtifacts(Paths.get("."), installInfo.installer.neoforge, System.out::println);
             }
             MinecraftProvider.handleFutures(System.out::println, array);
             pool.shutdownNow();
         }
         return classpath(path, installInfo);
+    }
+
+    static void cleanupInstallerArtifacts(Path serverDirectory, String neoforgeVersion, Consumer<String> logger) {
+        List<Path> artifacts = List.of(
+            serverDirectory.resolve("neoforge-" + neoforgeVersion + "-installer.jar"),
+            serverDirectory.resolve("run.bat"),
+            serverDirectory.resolve("run.sh"),
+            serverDirectory.resolve("user_jvm_args.txt"),
+            serverDirectory.resolve("installer_stripped.jar.log"),
+            serverDirectory.resolve(".arclight").resolve("installer_stripped.jar.log")
+        );
+        for (Path artifact : artifacts) {
+            try {
+                Files.deleteIfExists(artifact);
+            } catch (IOException e) {
+                logger.accept("Failed to delete installer artifact " + artifact + ": " + e.getMessage());
+            }
+        }
     }
 
     @SuppressWarnings("unchecked")
