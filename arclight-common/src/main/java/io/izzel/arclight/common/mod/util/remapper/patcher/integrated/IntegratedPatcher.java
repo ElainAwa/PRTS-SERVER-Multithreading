@@ -1,6 +1,7 @@
 package io.izzel.arclight.common.mod.util.remapper.patcher.integrated;
 
 import io.izzel.arclight.api.PluginPatcher;
+import io.izzel.arclight.common.prts.support.PrtsLuckPermsPatcher;
 import org.objectweb.asm.tree.ClassNode;
 
 import java.util.ArrayList;
@@ -22,6 +23,11 @@ public class IntegratedPatcher implements PluginPatcher {
         // Their naming mapping is behind the version, syncing manually
         SPECIFIC.put("com/sk89q/worldedit/bukkit/adapter/impl/v1_21/StaticRefraction", WorldEdit::handleStaticRefraction);
         SPECIFIC.put("com/sk89q/worldedit/bukkit/adapter/impl/v1_21/PaperweightAdapter", WorldEdit::handleBukkitAdapter);
+        // The table is private and offers no registration hook, so a plugin that needs its own
+        // rewrite can only be listed here. The list is part of the cache key below, which is what
+        // makes an added entry invalidate plugin classes that were cached before it existed.
+        SPECIFIC.put("me/lucko/luckperms/bukkit/inject/permissible/PermissibleInjector",
+            PrtsLuckPermsPatcher::handlePermissibleInjector);
     }
 
     @Override
@@ -32,7 +38,7 @@ public class IntegratedPatcher implements PluginPatcher {
             sb.append("version=").append(implVersion);
         }
         sb.append(" patchers=[");
-        sb.append("WorldEdit 1.21.1 4");
+        sb.append("WorldEdit 1.21.1 4, LuckPerms PermissibleInjector");
         sb.append("]");
         return sb.toString();
     }

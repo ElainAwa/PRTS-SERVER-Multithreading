@@ -31,9 +31,20 @@ dependencies {
     implementation libs.snakeyaml
 
     implementation project(':i18n-config')
+
+    // Plain JVM tests for the bytecode rewriters, which never touch the game class path.
+    // The coordinates are written out here on purpose: the version catalog is part of the digest
+    // that decides whether the generated Spigot artifacts have to be rebuilt.
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
 compileJava {
     options.compilerArgs << '-XDignore.symbol.file' << '-XDenableSunApiLintControl'
     options.encoding = 'UTF-8'
+}
+
+test {
+    useJUnitPlatform()
 }
