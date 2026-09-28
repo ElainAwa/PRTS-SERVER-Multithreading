@@ -636,55 +636,6 @@ public abstract class LivingEntityMixin extends EntityMixin implements LivingEnt
         return (CraftLivingEntity) internal$getBukkitEntity();
     }
 
-    /**
-     * @author IzzelAliz
-     * @reason
-     */
-    @Overwrite
-    private boolean checkTotemDeathProtection(DamageSource damageSourceIn) {
-        if (damageSourceIn.is(DamageTypeTags.BYPASSES_INVULNERABILITY)) {
-            return false;
-        } else {
-            net.minecraft.world.item.ItemStack itemstack = null;
-
-            net.minecraft.world.item.ItemStack itemstack1 = ItemStack.EMPTY;
-            org.bukkit.inventory.EquipmentSlot bukkitHand = null;
-            for (InteractionHand hand : InteractionHand.values()) {
-                itemstack1 = this.getItemInHand(hand);
-                if (itemstack1.is(Items.TOTEM_OF_UNDYING) && this.bridge$forge$onLivingUseTotem((LivingEntity) (Object) this, damageSourceIn, itemstack1, hand)) {
-                    itemstack = itemstack1.copy();
-                    bukkitHand = CraftEquipmentSlot.getHand(hand);
-                    // itemstack1.shrink(1);
-                    break;
-                }
-            }
-
-            EntityResurrectEvent event = new EntityResurrectEvent(this.getBukkitEntity(), bukkitHand);
-            event.setCancelled(itemstack == null);
-            Bukkit.getPluginManager().callEvent(event);
-
-            if (!event.isCancelled()) {
-                if (!itemstack1.isEmpty()) {
-                    itemstack1.shrink(1);
-                }
-                if (itemstack != null && (Object) this instanceof ServerPlayer serverplayerentity) {
-                    serverplayerentity.awardStat(Stats.ITEM_USED.get(Items.TOTEM_OF_UNDYING));
-                    CriteriaTriggers.USED_TOTEM.trigger(serverplayerentity, itemstack);
-                    this.gameEvent(GameEvent.ITEM_INTERACT_FINISH);
-                }
-
-                this.setHealth(1.0F);
-                this.removeAllEffects(EntityPotionEffectEvent.Cause.TOTEM);
-                this.addEffect(new MobEffectInstance(MobEffects.REGENERATION, 900, 1), EntityPotionEffectEvent.Cause.TOTEM);
-                bridge$pushEffectCause(EntityPotionEffectEvent.Cause.TOTEM);
-                this.addEffect(new MobEffectInstance(MobEffects.ABSORPTION, 100, 1), EntityPotionEffectEvent.Cause.TOTEM);
-                this.addEffect(new MobEffectInstance(MobEffects.FIRE_RESISTANCE, 800, 1), EntityPotionEffectEvent.Cause.TOTEM);
-                this.level().broadcastEntityEvent((Entity) (Object) this, (byte) 35);
-            }
-            return !event.isCancelled();
-        }
-    }
-
     @Inject(method = "createWitherRose", cancellable = true, locals = LocalCapture.CAPTURE_FAILHARD, at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/Level;addFreshEntity(Lnet/minecraft/world/entity/Entity;)Z"))
     private void arclight$witherRoseDrop(LivingEntity livingEntity, CallbackInfo ci, boolean flag, ItemEntity
         itemEntity) {

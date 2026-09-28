@@ -1,0 +1,15 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "io.izzel.arclight.common.prts.probe",
+  "target": "@env(DEFAULT)",
+  "setSourceFile": true,
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "compatibilityLevel": "JAVA_21",
+  "mixinPriority": 1000,
+  "mixins": [
+    "PrtsAnchorProbeMixin"
+  ]
+}

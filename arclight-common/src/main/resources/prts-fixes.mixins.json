@@ -5,6 +5,7 @@
   "target": "@env(DEFAULT)",
   "setSourceFile": true,
   "plugin": "io.izzel.arclight.common.prts.PrtsMixinPlugin",
+  "mixinPriority": 600,
   "injectors": {
     "defaultRequire": 1
   },
@@ -12,6 +13,7 @@
   "mixins": [
     "PrtsCraftEntityTypeGuardMixin",
     "PrtsRecipeGroupMixin",
-    "PrtsSyntheticLevelGameEventMixin"
+    "PrtsSyntheticLevelGameEventMixin",
+    "PrtsLivingEntityTotemMixin"
   ]
 }

@@ -15,6 +15,10 @@ dependencies {
 
     compileOnly rootProject.ext.generatedSpigot
 
+    // The NeoForge half of the totem death protection method cures effects by category, a type only
+    // that platform has. The class is filtered out before it is loaded on the other platform.
+    compileOnly "net.neoforged:neoforge:${libs.versions.neoforge.get()}:universal"
+
     implementation libs.izzel.tools
     implementation libs.arclight.api
     implementation libs.mixin.tools

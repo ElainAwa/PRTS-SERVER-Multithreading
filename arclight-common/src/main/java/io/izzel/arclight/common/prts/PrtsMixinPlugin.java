@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts;
 
+import io.izzel.arclight.common.mod.mixins.ShouldApplyProcessor;
 import io.izzel.arclight.common.prts.support.PrtsBukkitVersionPatcher;
 import org.objectweb.asm.tree.ClassNode;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigPlugin;
@@ -58,7 +59,10 @@ public class PrtsMixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
-        return PrtsSwitches.enabled(this.category);
+        // A category member that declares a platform is dropped on the other platform, the same way
+        // the shared configuration does it. The class is then never loaded, so a member may refer to
+        // a type only its own platform has.
+        return PrtsSwitches.enabled(this.category) && ShouldApplyProcessor.shouldApply(mixinClassName);
     }
 
     @Override
