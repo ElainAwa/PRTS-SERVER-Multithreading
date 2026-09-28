@@ -16,6 +16,8 @@
     "PrtsSyntheticLevelGameEventMixin",
     "PrtsCraftBlockBoneMealMixin",
     "PrtsCraftWorldGenerateTreeMixin",
+    "PrtsMushroomStructureGrowEventMixin",
+    "PrtsFungusStructureGrowEventMixin",
     "PrtsLivingEntityTotemMixin",
     "PrtsShearsItemShearEventMixin",
     "PrtsLevelStructureGrowCaptureMixin",

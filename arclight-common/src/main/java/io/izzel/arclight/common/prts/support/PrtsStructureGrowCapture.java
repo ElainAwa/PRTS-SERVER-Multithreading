@@ -34,6 +34,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
 
 /**
  * Dispatches {@link StructureGrowEvent} for a tree that a sapling grows.
@@ -95,18 +96,33 @@ public final class PrtsStructureGrowCapture {
      */
     public static boolean growWithEvent(TreeGrower grower, ServerLevel level, ChunkGenerator generator,
                                         BlockPos pos, BlockState state, RandomSource random) {
+        return growWithEvent(level, pos, null, () -> grower.growTree(level, generator, pos, state, random));
+    }
+
+    /**
+     * Grows the tree the given call builds with the block writes captured, and raises the event for
+     * them.
+     *
+     * @param species the Bukkit species when the caller knows which tree it is growing, or null to
+     *                take the feature the grower resolved
+     * @return what the call returned, so the caller keeps its own behaviour
+     */
+    public static boolean growWithEvent(ServerLevel level, BlockPos pos, TreeType species, BooleanSupplier grow) {
         List<org.bukkit.block.BlockState> blocks;
-        TreeType species;
         boolean grown = false;
         begin(level);
         try {
-            grown = grower.growTree(level, generator, pos, state, random);
+            grown = grow.getAsBoolean();
         } finally {
             blocks = new ArrayList<>(CAPTURED_BLOCKS.values());
-            species = resolveSpecies();
+            if (species == null) {
+                species = resolveSpecies();
+            }
             reset();
         }
-        if (!blocks.isEmpty()) {
+        if (grown && !blocks.isEmpty()) {
+            // Only a tree that was actually grown has blocks worth an event: a feature that failed
+            // puts back what it removed, and a list of restored blocks is not a tree.
             dispatch(level, pos, species, blocks);
         }
         return grown;
