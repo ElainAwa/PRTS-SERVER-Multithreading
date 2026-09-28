@@ -19,6 +19,9 @@
     "PrtsPaperHumanEntityApiMixin",
     "PrtsPaperServerApiMixin",
     "PrtsSimpleCommandMapMixin",
-    "PrtsTaczRespawnPacketMixin"
+    "PrtsTaczRespawnPacketMixin",
+    "PrtsSbwMotionSyncMixin",
+    "PrtsSbwParticleToolMixin",
+    "PrtsSbwMinecraftUtilMixin"
   ]
 }
