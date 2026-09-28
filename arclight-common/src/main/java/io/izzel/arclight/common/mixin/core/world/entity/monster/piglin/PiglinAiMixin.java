@@ -86,14 +86,6 @@ public abstract class PiglinAiMixin {
             || ((PiglinBridge) piglin).bridge$getAllowedBarterItems().contains(itemstack.getItem()));
     }
 
-    private static boolean customBarterItem(ItemStack itemstack, Piglin piglin) {
-        return ((PiglinBridge) piglin).bridge$getAllowedBarterItems().contains(itemstack.getItem());
-    }
-
-    @Decorate(method = "stopHoldingOffHandItem", require = 0, at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/monster/piglin/PiglinAi;isBarterCurrency(Lnet/minecraft/world/item/ItemStack;)Z"))
-    private static boolean arclight$customBarter(ItemStack stack, Piglin piglin) throws Throwable {
-        return (boolean) DecorationOps.callsite().invoke(stack) || customBarterItem(stack, piglin);
-    }
 
     @Decorate(method = "stopHoldingOffHandItem", at = @At(value = "INVOKE", ordinal = 0, target = "Lnet/minecraft/world/entity/monster/piglin/PiglinAi;throwItems(Lnet/minecraft/world/entity/monster/piglin/Piglin;Ljava/util/List;)V"))
     private static void arclight$barterEvent(Piglin piglin, List<ItemStack> items, @Local(ordinal = -1) ItemStack handheld) throws Throwable {
@@ -107,16 +99,6 @@ public abstract class PiglinAiMixin {
     @Decorate(method = "stopHoldingOffHandItem", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/monster/piglin/PiglinAi;isLovedItem(Lnet/minecraft/world/item/ItemStack;)Z"))
     private static boolean arclight$customLove(ItemStack stack, Piglin piglin) throws Throwable {
         return (boolean) DecorationOps.callsite().invoke(stack) || customLovedByPiglin(stack, piglin);
-    }
-
-    @Decorate(method = "wantsToPickup", require = 0, at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/monster/piglin/PiglinAi;isBarterCurrency(Lnet/minecraft/world/item/ItemStack;)Z"))
-    private static boolean arclight$customBanter2(ItemStack stack, Piglin piglin) throws Throwable {
-        return (boolean) DecorationOps.callsite().invoke(stack) || customBarterItem(stack, piglin);
-    }
-
-    @Decorate(method = "canAdmire", require = 0, at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/monster/piglin/PiglinAi;isBarterCurrency(Lnet/minecraft/world/item/ItemStack;)Z"))
-    private static boolean arclight$customBanter3(ItemStack stack, Piglin piglin) throws Throwable {
-        return (boolean) DecorationOps.callsite().invoke(stack) || customBarterItem(stack, piglin);
     }
 
     @Decorate(method = "isNotHoldingLovedItemInOffHand", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/monster/piglin/PiglinAi;isLovedItem(Lnet/minecraft/world/item/ItemStack;)Z"))

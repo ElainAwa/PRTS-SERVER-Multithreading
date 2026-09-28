@@ -32,6 +32,8 @@
     "world.entity.animal.frog.TadpoleMixin_Vanilla",
     "world.entity.monster.BoggedMixin_Vanilla",
     "world.entity.monster.ZombieMixin_Vanilla",
+    "world.entity.monster.piglin.PiglinAiMixin_Vanilla",
+    "world.entity.monster.piglin.PiglinMixin_Vanilla",
     "world.entity.player.PlayerMixin_Vanilla",
     "world.item.BucketItemMixin_Vanilla",
     "world.item.ItemStackMixin_Vanilla",
