@@ -63,8 +63,11 @@ public class ArclightCaptures {
      *
      * @see net.minecraft.server.level.ServerPlayerGameMode#destroyBlock(BlockPos)
      */
-    public static boolean isPrimaryEvent = false;
-    public static Stack<BlockBreakEventContext> blockBreakEventStack = new Stack<>();
+    // Both block-break slots are private on purpose: only this class may push a context or set the
+    // primary flag, so the stack stays balanced by construction and the state documented above
+    // keeps exactly one owner.
+    private static boolean isPrimaryEvent = false;
+    private static final Stack<BlockBreakEventContext> blockBreakEventStack = new Stack<>();
 
     public static void captureNextBlockBreakEventAsPrimaryEvent() {
         // fix #674, some mod will implement their own "destroyBlock(...)"
@@ -442,10 +445,6 @@ public class ArclightCaptures {
         } finally {
             deathPlayerInv = null;
         }
-    }
-
-    private static void recapture(String type) {
-        throw new IllegalStateException("Recapturing " + type);
     }
 
     public static class BlockBreakEventContext {
