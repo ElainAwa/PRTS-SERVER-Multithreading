@@ -1,6 +1,6 @@
 # PRTS 服务端
 
-基于 **NeoForge 21.1.250** 的 **Minecraft 1.21.1** 服务端，同时支持 Bukkit/Spigot 插件与 NeoForge/Fabric 模组。
+基于 **NeoForge 21.1.250** 的 **Minecraft 1.21.1** 服务端，同时支持 Bukkit/Spigot 插件与 NeoForge 模组。
 > English: [README.md](README.md)
 
 
@@ -12,7 +12,7 @@
 - **单一固定构建工具链**，保证产出的字节码形态稳定（编译期 Mixin 注解处理器是**有意 pin 死**的，见 `gradle/libs.versions.toml`）；
 - **尚无内核代码**：新的**多线程**调度内核将从这里开始开发。
 
-平台：**NeoForge**（主）与 **Fabric**；本线**不支持 Forge**。
+平台：**仅 NeoForge** —— 本线只支持并验证 NeoForge。`arclight-fabric` 模块保留在代码树中，但不属于本轮的设计、验证与行为对齐范围：Fabric 支持推迟到新内核在 NeoForge 上跑通之后再评估。本线**不支持 Forge**。
 
 其它分支：
 
@@ -38,7 +38,7 @@ java -Xms1G -Xmx4G -jar PRTS-neoforge-1.21.1-0.1.0-SNAPSHOT.jar -nogui
 ```
 
 - Bukkit/Spigot 插件放入 `plugins/`
-- NeoForge/Fabric 模组放入 `mods/`
+- NeoForge 模组放入 `mods/`
 
 ## 链接
 
