@@ -82,6 +82,6 @@
     "neoforge.items.RangedWrapperAccessor",
     "neoforge.items.SidedInvWrapperAccessor",
     "neoforge.items.VanillaInventoryCodeHooksMixin",
-    "optimization.general.activationrange.entity.ItemEntityMixin_ActivationRange_NeoForge",
+    "optimization.general.activationrange.entity.ItemEntityMixin_ActivationRange_NeoForge"
   ]
 }
