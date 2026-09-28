@@ -15,6 +15,9 @@
     "PrtsRecipeGroupMixin",
     "PrtsSyntheticLevelGameEventMixin",
     "PrtsLivingEntityTotemMixin",
-    "PrtsShearsItemShearEventMixin"
+    "PrtsShearsItemShearEventMixin",
+    "PrtsLevelStructureGrowCaptureMixin",
+    "PrtsSaplingStructureGrowEventMixin",
+    "PrtsTreeGrowerSpeciesMixin"
   ]
 }
