@@ -136,6 +136,8 @@ public abstract class MinecraftServerMixin extends ReentrantBlockableEventLoop<T
     private static final int TPS = 20;
     private static final int TICK_TIME = 1000000000 / TPS;
     private static final int SAMPLE_INTERVAL = 100;
+    // The activation range code in the patched server jar reads this public static field, so it has
+    // to keep its name and stay public even though this source tree reads the constant below.
     @TransformAccess(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC)
     private static int currentTick = (int) (System.currentTimeMillis() / 50);
     public final double[] recentTps = new double[3];

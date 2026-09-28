@@ -33,6 +33,10 @@ public class ArclightConstants {
 
     public static final Entity[] EMPTY_ENTITIES = new Entity[0];
 
-    public static int currentTick;
+    /**
+     * Server tick counter. The server thread writes it once per tick, and packet handling threads
+     * read it to rate limit a player action to a number of ticks, hence volatile.
+     */
+    public static volatile int currentTick;
 
 }
