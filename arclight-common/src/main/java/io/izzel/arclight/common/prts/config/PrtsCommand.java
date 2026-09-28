@@ -102,6 +102,7 @@ public final class PrtsCommand {
         lines.add("[PRTS] prts-config reloaded");
         lines.add(switches());
         lines.addAll(features());
+        lines.addAll(numbers());
         lines.addAll(upgrades());
         lines.addAll(problems());
         return lines;
@@ -112,6 +113,7 @@ public final class PrtsCommand {
         lines.add("[PRTS] config directory: " + PrtsConfigManager.directory().toAbsolutePath());
         lines.add(switches());
         lines.addAll(features());
+        lines.addAll(numbers());
         lines.addAll(upgrades());
         lines.addAll(problems());
         return lines;
@@ -152,6 +154,30 @@ public final class PrtsCommand {
             }
             StringBuilder builder = new StringBuilder("[PRTS] features:");
             features.forEach((name, value) ->
+                builder.append(' ').append(category).append('.').append(name).append('=').append(value));
+            lines.add(builder.toString());
+        }
+        return lines;
+    }
+
+    /**
+     * Renders the whole-number settings of every category that declares one.
+     *
+     * <p>Shown next to the switches for the same reason: an operator sees the value the running
+     * process resolved, so a typo that was clamped or ignored is visible here instead of only in
+     * the problem lines.</p>
+     *
+     * @return one line per category with declared settings, in category order
+     */
+    private static List<String> numbers() {
+        List<String> lines = new ArrayList<>();
+        for (String category : new TreeSet<>(PrtsConfigManager.entries().keySet())) {
+            Map<String, Integer> numbers = PrtsConfigManager.numbers(category);
+            if (numbers.isEmpty()) {
+                continue;
+            }
+            StringBuilder builder = new StringBuilder("[PRTS] settings:");
+            numbers.forEach((name, value) ->
                 builder.append(' ').append(category).append('.').append(name).append('=').append(value));
             lines.add(builder.toString());
         }

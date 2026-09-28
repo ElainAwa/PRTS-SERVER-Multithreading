@@ -70,6 +70,16 @@ public abstract class ChunkMapMixin implements ChunkMapBridge {
         return this.callbackExecutor;
     }
 
+    /**
+     * Exposes the loaded chunk holders to readers that must not create one, which is what the
+     * optional recovery journal asks for: it walks the chunks the server already keeps and takes
+     * the unsaved ones. The view is the map's own visible set, so it is read on the server thread.
+     */
+    @Override
+    public Iterable<ChunkHolder> bridge$getLoadedChunksIterable() {
+        return this.getChunks();
+    }
+
     @Override
     public ChunkHolder bridge$chunkHolderAt(long chunkPos) {
         return getUpdatingChunkIfPresent(chunkPos);

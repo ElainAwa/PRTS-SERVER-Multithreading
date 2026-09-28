@@ -10,5 +10,6 @@
   },
   "compatibilityLevel": "JAVA_21",
   "mixins": [
+    "ChunkJournalMixin_Recovery"
   ]
 }

@@ -16,6 +16,14 @@
  * <p>An external ServerCore installation replaces this layer; the two must not be enabled on the
  * same server.</p>
  *
- * <p>Ships no implementation in this round.</p>
+ * <p>The implementation lives one package up ({@code prts.optional.journal}): Mixin refuses to load
+ * any class inside the package tree a mixin configuration owns, so a class the handlers call cannot
+ * sit under this package.</p>
+ *
+ * <p>The member it ships is the recovery journal: {@code ChunkJournal} writes the unsaved
+ * chunks of a cycle ahead of the region files and replays them after an unclean exit, and
+ * {@link io.izzel.arclight.common.prts.optional.servercore.ChunkJournalMixin_Recovery} drives it
+ * from the tick loop, the world lifecycle and the shutdown path. Both are opt-in: the category is
+ * off by default and the journal switch inside it is off as well.</p>
  */
 package io.izzel.arclight.common.prts.optional.servercore;

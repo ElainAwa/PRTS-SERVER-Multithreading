@@ -86,6 +86,8 @@ public final class PrtsConfigManager {
 
     private static final Map<String, Map<String, Boolean>> FEATURES = new ConcurrentHashMap<>();
 
+    private static final Map<String, Map<String, Integer>> NUMBERS = new ConcurrentHashMap<>();
+
     private static final Map<String, String> PROBLEMS = new ConcurrentHashMap<>();
 
     private static final Map<String, String> UPGRADES = new ConcurrentHashMap<>();
@@ -98,9 +100,46 @@ public final class PrtsConfigManager {
      * @param file            path relative to {@code prts-config}
      * @param defaultEnabled  value used when the file is missing or unreadable
      * @param features        per-feature switches of the category and their built-in defaults
+     * @param numbers         per-feature whole numbers of the category and their accepted range
      * @param comment         human-readable purpose, written into the generated file
      */
-    public record Entry(String file, boolean defaultEnabled, Map<String, Boolean> features, String comment) {
+    public record Entry(String file, boolean defaultEnabled, Map<String, Boolean> features,
+                        Map<String, IntSetting> numbers, String comment) {
+
+        /**
+         * Describes a category whose settings are all switches.
+         *
+         * @param file           path relative to {@code prts-config}
+         * @param defaultEnabled value used when the file is missing or unreadable
+         * @param features       per-feature switches of the category and their built-in defaults
+         * @param comment        human-readable purpose, written into the generated file
+         */
+        public Entry(String file, boolean defaultEnabled, Map<String, Boolean> features, String comment) {
+            this(file, defaultEnabled, features, Map.of(), comment);
+        }
+    }
+
+    /**
+     * One whole-number setting of a category.
+     *
+     * <p>The range is part of the declaration because an operator edit can carry any text: a value
+     * outside the range is clamped to the closest accepted one and reported as a problem, so a typo
+     * cannot turn a flush interval into a stop-the-world stall or a zero-length cycle.</p>
+     *
+     * @param defaultValue value written into a generated file and used when the file has no entry
+     * @param min          lowest accepted value
+     * @param max          highest accepted value
+     */
+    public record IntSetting(int defaultValue, int min, int max) {
+
+        public IntSetting {
+            if (min > max) {
+                throw new IllegalArgumentException("empty range [" + min + ", " + max + "]");
+            }
+            if (defaultValue < min || defaultValue > max) {
+                throw new IllegalArgumentException("default " + defaultValue + " outside [" + min + ", " + max + "]");
+            }
+        }
     }
 
     static {
@@ -118,10 +157,16 @@ public final class PrtsConfigManager {
                 + "# default and a restart of the process is the supported way to reload."));
         ENTRIES.put(PERFORMANCE, new Entry("performance.yml", true, Map.of(),
             "# Performance work that does not land on a new-kernel seam."));
-        ENTRIES.put(OPTIONAL_SERVERCORE, new Entry("optional/servercore.yml", false, Map.of(),
+        ENTRIES.put(OPTIONAL_SERVERCORE, new Entry("optional/servercore.yml", false, journalFeatures(),
+            journalNumbers(),
             "# Optional ServerCore layer: opt-in, mutually exclusive with an external ServerCore.\n"
                 + "# Reserved for the reliable chunk-save journal only. Chunk pipeline, entity tracking\n"
-                + "# and networking stay with the kernel and are never configured here."));
+                + "# and networking stay with the kernel and are never configured here.\n"
+                + "# 'reliable-chunk-save: true' writes each flush cycle to a journal file before the\n"
+                + "# region files are touched, and replays it after an unclean exit; it needs the\n"
+                + "# category itself to be enabled as well.\n"
+                + "# 'journal-interval-seconds' is how often a cycle starts (at least 5 seconds),\n"
+                + "# 'journal-chunks-per-tick' caps how many chunks one tick serializes."));
         ENTRIES.put(KERNEL, new Entry("kernel.yml", false, Map.of(),
             "# Reserved for the new kernel."));
     }
@@ -141,6 +186,38 @@ public final class PrtsConfigManager {
         features.put("disable-bukkit-reload-command", false);
         features.put("guard-create-funnel-pickup", false);
         return features;
+    }
+
+    /**
+     * Declares the per-feature switches of the optional journal layer.
+     *
+     * <p>The layer is off by default and so is the journal itself: enabling the category applies the
+     * hooks, and enabling the feature is what makes them write a journal. Both are required, which
+     * keeps an operator from starting to journal just by flipping the category.</p>
+     *
+     * @return the feature defaults, in the order they are written into the file
+     */
+    private static Map<String, Boolean> journalFeatures() {
+        Map<String, Boolean> features = new LinkedHashMap<>();
+        features.put("reliable-chunk-save", false);
+        return features;
+    }
+
+    /**
+     * Declares the whole-number settings of the optional journal layer.
+     *
+     * <p>The interval floor is five seconds: a shorter cycle would journal more often than the
+     * region files are written and spend the saved work again. The per-tick cap is what keeps one
+     * tick from serializing an unbounded number of chunks (its upper bound only guards against a
+     * value that would make a single tick do the whole cycle and stall).</p>
+     *
+     * @return the setting declarations, in the order they are written into the file
+     */
+    private static Map<String, IntSetting> journalNumbers() {
+        Map<String, IntSetting> numbers = new LinkedHashMap<>();
+        numbers.put("journal-interval-seconds", new IntSetting(30, 5, 3600));
+        numbers.put("journal-chunks-per-tick", new IntSetting(50, 1, 4096));
+        return numbers;
     }
 
     private PrtsConfigManager() {
@@ -305,6 +382,32 @@ public final class PrtsConfigManager {
     }
 
     /**
+     * Resolves one per-feature switch of a category against its declaration.
+     *
+     * <p>The counterpart of {@link #number(String, String)} for switches: the declared default is
+     * the only place the default is written, so a caller does not have to repeat it and cannot
+     * drift away from the generated file.</p>
+     *
+     * @param category one of the category constants of this class
+     * @param name     feature name as declared by the category
+     * @return the value in effect
+     * @throws IllegalArgumentException when the category does not declare the name
+     */
+    public static boolean feature(String category, String name) {
+        Map<String, Boolean> features = FEATURES.get(category);
+        Boolean value = features == null ? null : features.get(name);
+        if (value != null) {
+            return value;
+        }
+        Entry entry = ENTRIES.get(category);
+        Boolean declared = entry == null ? null : entry.features().get(name);
+        if (declared == null) {
+            throw new IllegalArgumentException("category " + category + " declares no feature " + name);
+        }
+        return declared;
+    }
+
+    /**
      * Returns the per-feature switches of one category as they were last read.
      *
      * @param category one of the category constants of this class
@@ -313,6 +416,45 @@ public final class PrtsConfigManager {
     public static Map<String, Boolean> features(String category) {
         Map<String, Boolean> features = FEATURES.get(category);
         return features == null ? Map.of() : features;
+    }
+
+    /**
+     * Resolves one whole-number setting of a category.
+     *
+     * <p>The default is not repeated by the caller: the declaration in {@link #entries()} is the
+     * only place a default is written, and a category whose file was never read falls back to it.
+     * An operator edit outside the declared range was already clamped and reported by the last
+     * read, so what comes back here is always inside the range.</p>
+     *
+     * @param category one of the category constants of this class
+     * @param name     setting name as declared by the category
+     * @return the value in effect
+     * @throws IllegalArgumentException when the category does not declare the name, which is a
+     *         mistake in the code that reads it rather than an operator input
+     */
+    public static int number(String category, String name) {
+        Map<String, Integer> numbers = NUMBERS.get(category);
+        Integer value = numbers == null ? null : numbers.get(name);
+        if (value != null) {
+            return value;
+        }
+        Entry entry = ENTRIES.get(category);
+        IntSetting setting = entry == null ? null : entry.numbers().get(name);
+        if (setting == null) {
+            throw new IllegalArgumentException("category " + category + " declares no setting " + name);
+        }
+        return setting.defaultValue();
+    }
+
+    /**
+     * Returns the whole-number settings of one category as they were last read.
+     *
+     * @param category one of the category constants of this class
+     * @return an immutable view; empty when the category declares no setting
+     */
+    public static Map<String, Integer> numbers(String category) {
+        Map<String, Integer> numbers = NUMBERS.get(category);
+        return numbers == null ? Map.of() : numbers;
     }
 
     /**
@@ -326,12 +468,14 @@ public final class PrtsConfigManager {
             .append(entry.comment()).append('\n')
             .append("version: ").append(VERSION).append('\n')
             .append("enabled: ").append(entry.defaultEnabled()).append('\n');
-        if (entry.features().isEmpty()) {
+        if (entry.features().isEmpty() && entry.numbers().isEmpty()) {
             return builder.append("features: {}\n").toString();
         }
         builder.append("features:").append('\n');
         entry.features().forEach((name, value) ->
             builder.append("  ").append(name).append(": ").append(value).append('\n'));
+        entry.numbers().forEach((name, setting) ->
+            builder.append("  ").append(name).append(": ").append(setting.defaultValue()).append('\n'));
         return builder.toString();
     }
 
@@ -416,15 +560,16 @@ public final class PrtsConfigManager {
         }
 
         List<Edit> edits = new ArrayList<>();
+        Map<String, String> defaults = declaredEntries(entry);
         Integer featuresIndex = keys.get("features");
         if (featuresIndex == null) {
             appended.add("# added in v" + VERSION);
-            if (entry.features().isEmpty()) {
+            if (defaults.isEmpty()) {
                 appended.add("features: {}");
                 added++;
             } else {
                 appended.add("features:");
-                for (Map.Entry<String, Boolean> feature : entry.features().entrySet()) {
+                for (Map.Entry<String, String> feature : defaults.entrySet()) {
                     appended.add("  " + feature.getKey() + ": " + feature.getValue());
                     added++;
                 }
@@ -432,7 +577,7 @@ public final class PrtsConfigManager {
         } else {
             Set<String> present = featureNames(lines, featuresIndex);
             List<String> missing = new ArrayList<>();
-            for (Map.Entry<String, Boolean> feature : entry.features().entrySet()) {
+            for (Map.Entry<String, String> feature : defaults.entrySet()) {
                 if (present.contains(feature.getKey())) {
                     continue;
                 }
@@ -473,6 +618,23 @@ public final class PrtsConfigManager {
             changes.add("refreshed header");
         }
         return new Upgraded(upgraded, changes.isEmpty() ? "layout" : String.join(", ", changes));
+    }
+
+    /**
+     * Renders every setting a category declares, as name to default text.
+     *
+     * <p>Switches come first and whole numbers behind them, which is the order the generated file
+     * uses, so a key added by a later build lands in the same place whether the file was generated
+     * or upgraded.</p>
+     *
+     * @param entry the category to render
+     * @return setting name to the text of its default, in declaration order
+     */
+    private static Map<String, String> declaredEntries(Entry entry) {
+        Map<String, String> declared = new LinkedHashMap<>();
+        entry.features().forEach((name, value) -> declared.put(name, String.valueOf(value)));
+        entry.numbers().forEach((name, setting) -> declared.put(name, String.valueOf(setting.defaultValue())));
+        return declared;
     }
 
     /**
@@ -631,6 +793,7 @@ public final class PrtsConfigManager {
     private static void read() {
         ENABLED.clear();
         FEATURES.clear();
+        NUMBERS.clear();
         PROBLEMS.clear();
         for (Map.Entry<String, Entry> entry : ENTRIES.entrySet()) {
             ENABLED.put(entry.getKey(), read(entry.getKey(), entry.getValue()));
@@ -653,6 +816,7 @@ public final class PrtsConfigManager {
         String version = null;
         String enabled = null;
         Map<String, Boolean> features = new LinkedHashMap<>();
+        Map<String, Integer> numbers = new LinkedHashMap<>();
         try {
             boolean inFeatures = false;
             for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
@@ -662,7 +826,7 @@ public final class PrtsConfigManager {
                 }
                 if (line.charAt(0) == ' ' || line.charAt(0) == '\t') {
                     if (inFeatures) {
-                        readFeature(category, trimmed, features);
+                        readFeature(category, entry, trimmed, features, numbers);
                     }
                     continue;
                 }
@@ -681,12 +845,23 @@ public final class PrtsConfigManager {
         }
         Map<String, Boolean> resolved = new LinkedHashMap<>();
         entry.features().forEach((name, fallback) -> resolved.put(name, features.getOrDefault(name, fallback)));
+        Map<String, Integer> resolvedNumbers = new LinkedHashMap<>();
+        entry.numbers().forEach((name, setting) -> resolvedNumbers.put(name,
+            numbers.getOrDefault(name, setting.defaultValue())));
+        Set<String> declared = new LinkedHashSet<>(entry.features().keySet());
+        declared.addAll(entry.numbers().keySet());
         features.keySet().forEach(name -> {
-            if (!entry.features().containsKey(name)) {
+            if (!declared.contains(name)) {
+                problem(category, "unknown feature '" + name + "' is ignored");
+            }
+        });
+        numbers.keySet().forEach(name -> {
+            if (!declared.contains(name)) {
                 problem(category, "unknown feature '" + name + "' is ignored");
             }
         });
         FEATURES.put(category, Collections.unmodifiableMap(resolved));
+        NUMBERS.put(category, Collections.unmodifiableMap(resolvedNumbers));
         if (version != null && isNewerVersion(version)) {
             problem(category, "declares version " + version + ", this build writes version " + VERSION
                 + "; it was written by a newer build and is left as it is");
@@ -709,11 +884,19 @@ public final class PrtsConfigManager {
     /**
      * Reads one indented line of the {@code features} block.
      *
+     * <p>Which kind of value the line carries is decided by the declaration, not by its text: a
+     * name the category declares as a whole number is parsed as one, everything else as a switch.
+     * That keeps {@code true} from being read as a number and a number from being reported as an
+     * unrecognized switch.</p>
+     *
      * @param category category name, used when a problem is recorded
+     * @param entry    the category the file belongs to, which declares the names
      * @param trimmed  the line without surrounding blanks
-     * @param features collected values, written into
+     * @param features collected switches, written into
+     * @param numbers  collected whole numbers, written into
      */
-    private static void readFeature(String category, String trimmed, Map<String, Boolean> features) {
+    private static void readFeature(String category, Entry entry, String trimmed,
+                                    Map<String, Boolean> features, Map<String, Integer> numbers) {
         int colon = trimmed.indexOf(':');
         if (colon <= 0) {
             problem(category, "cannot read feature line '" + trimmed + "'");
@@ -721,6 +904,11 @@ public final class PrtsConfigManager {
         }
         String name = trimmed.substring(0, colon).trim();
         String raw = unquote(trimmed.substring(colon + 1).trim());
+        IntSetting setting = entry.numbers().get(name);
+        if (setting != null) {
+            readNumber(category, name, raw, setting, numbers);
+            return;
+        }
         Boolean value = parseEnabled(raw);
         if (value == null) {
             problem(category, "feature " + name + ": unrecognized value '" + raw
@@ -728,6 +916,34 @@ public final class PrtsConfigManager {
             return;
         }
         features.put(name, value);
+    }
+
+    /**
+     * Reads the value of one whole-number setting and records what is wrong with it.
+     *
+     * @param category category name, used when a problem is recorded
+     * @param name     setting name as declared by the category
+     * @param raw      the text the file carries
+     * @param setting  the declared range
+     * @param numbers  collected values, written into
+     */
+    private static void readNumber(String category, String name, String raw, IntSetting setting,
+                                   Map<String, Integer> numbers) {
+        int value;
+        try {
+            value = Integer.parseInt(raw);
+        } catch (NumberFormatException notANumber) {
+            problem(category, "setting " + name + ": '" + raw + "' is not a whole number; the default "
+                + setting.defaultValue() + " applies");
+            return;
+        }
+        if (value < setting.min() || value > setting.max()) {
+            int clamped = Math.max(setting.min(), Math.min(setting.max(), value));
+            problem(category, "setting " + name + ": " + value + " is outside [" + setting.min() + ", "
+                + setting.max() + "]; " + clamped + " applies");
+            value = clamped;
+        }
+        numbers.put(name, value);
     }
 
     private static Boolean parseEnabled(String value) {

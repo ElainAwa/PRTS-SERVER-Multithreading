@@ -13,6 +13,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -157,6 +158,32 @@ class PrtsConfigUpgradeTest {
         Map.Entry<String, Boolean> last = lastOf(appended(stale));
         assertTrue(upgraded.content().endsWith("  " + last.getKey() + ": " + last.getValue() + "\n\n"),
             "the blank line stays behind the block");
+    }
+
+    @Test
+    void anOlderJournalFileGainsItsNumberKeys() {
+        Entry entry = PrtsConfigManager.entries().get(PrtsConfigManager.OPTIONAL_SERVERCORE);
+        String stale = OLD_HEADER + """
+            version: 1
+            enabled: false
+            features: {}
+            """;
+
+        Upgraded upgraded = PrtsConfigManager.upgrade(entry, stale);
+
+        assertFalse(upgraded.content().contains("features: {}"), "a flow mapping became a block");
+        entry.features().forEach((name, value) -> assertTrue(
+            upgraded.content().contains("  " + name + ": " + value),
+            name + " is appended with the default of this build"));
+        entry.numbers().forEach((name, setting) -> assertTrue(
+            upgraded.content().contains("  " + name + ": " + setting.defaultValue()),
+            name + " is appended with the default of this build"));
+    }
+
+    @Test
+    void aDeclaredRangeRejectsADefaultOutsideIt() {
+        assertThrows(IllegalArgumentException.class, () -> new PrtsConfigManager.IntSetting(0, 5, 10));
+        assertThrows(IllegalArgumentException.class, () -> new PrtsConfigManager.IntSetting(5, 10, 5));
     }
 
     @Test
