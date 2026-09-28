@@ -68,6 +68,10 @@ public abstract class ArclightClassCache implements AutoCloseable {
             builder.append("spec=").append(SPEC_VERSION).append(", ");
             // The package attribute is absent when the server ships as a plain mod, which would
             // keep cached plugin classes alive across updates.
+            // Cached bytes depend on every transformer that rewrites a plugin class, and a
+            // transformer carries no version of its own: the build version below is the only thing
+            // that keeps cached classes from an earlier build out of this one, so it has to change
+            // whenever a transformer changes.
             var arclight = PrtsVersion.version();
             builder.append("arclight=").append(arclight).append(", ");
             builder.append("patcher=[");
