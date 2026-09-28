@@ -7,3 +7,8 @@ bin/
 *.log
 run_*/
 run
+# Dot files and directories of editors and build tools, at any level. The workflow definitions are
+# tracked on purpose, so they are listed again below.
+.*
+!.github/
+!.github/workflows/
