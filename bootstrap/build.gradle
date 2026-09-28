@@ -117,7 +117,7 @@ embed 'org.fusesource.jansi:jansi:1.18'
 // configurate is excluded by `transitive = false` on i18n-config, so embed it explicitly.
 // NOTE: log4j-jul is intentionally NOT embedded — NeoForge already ships a
 // org.apache.logging.log4j.jul module on the module path; embedding it into the
-// prts.boot automatic module triggers a split-package ResolutionException
+// luminara.boot automatic module triggers a split-package ResolutionException
 // (org.apache.logging.log4j.status). The JUL->log4j bridge failing to load is
 // non-fatal (JUL falls back to its default manager), so we rely on the external one.
 embed 'org.spongepowered:configurate-core:3.6.1'
@@ -146,7 +146,7 @@ tasks.register('neoforgeJar', Jar) {
     manifest.attributes 'Implementation-Version': "PRTS-${libs.versions.minecraft.get()}-${project.version}-$gitHash"
     manifest.attributes 'Implementation-Vendor': 'PRTS Team'
     manifest.attributes 'Implementation-Timestamp': new Date().format("yyyy-MM-dd HH:mm:ss")
-    manifest.attributes 'Automatic-Module-Name': 'prts.boot'
+    manifest.attributes 'Automatic-Module-Name': 'luminara.boot'
     from(configurations.embed.collect { it.isDirectory() ? it : zipTree(it) }) {
         exclude 'META-INF/MANIFEST.MF'
         exclude 'META-INF/*.SF'
@@ -179,7 +179,7 @@ tasks.register('fabricJar', Jar) {
     manifest.attributes 'Implementation-Version': "PRTS-${libs.versions.minecraft.get()}-${project.version}-$gitHash"
     manifest.attributes 'Implementation-Vendor': 'PRTS Team'
     manifest.attributes 'Implementation-Timestamp': new Date().format("yyyy-MM-dd HH:mm:ss")
-    manifest.attributes 'Automatic-Module-Name': 'prts.boot'
+    manifest.attributes 'Automatic-Module-Name': 'luminara.boot'
     from(configurations.embedFabric.collect { it.isDirectory() ? it : zipTree(it) })
     into('/') {
         it.from(project(':arclight-fabric').tasks.relocateCraftBukkit.outputs.files.collect())
