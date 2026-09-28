@@ -18,6 +18,7 @@
     "PrtsPaperBukkitApiMixin",
     "PrtsPaperHumanEntityApiMixin",
     "PrtsPaperServerApiMixin",
-    "PrtsSimpleCommandMapMixin"
+    "PrtsSimpleCommandMapMixin",
+    "PrtsTaczRespawnPacketMixin"
   ]
 }
