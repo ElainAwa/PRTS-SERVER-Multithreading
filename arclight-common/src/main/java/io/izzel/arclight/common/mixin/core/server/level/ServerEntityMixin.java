@@ -107,6 +107,10 @@ public abstract class ServerEntityMixin implements ServerEntityBridge {
         this.trackedPlayers = trackedPlayers;
     }
 
+    // Full replacement of the tracking update. Two things here wait on the commit order the new
+    // kernel defines for world state: the elapsed tick count is measured against the shared tick
+    // counter, and the tracking set walked below is written by the server thread alone. Whoever
+    // owns the tracking update decides whether this stays an overwrite or becomes an anchor.
     /**
      * @author IzzelAliz
      * @reason
