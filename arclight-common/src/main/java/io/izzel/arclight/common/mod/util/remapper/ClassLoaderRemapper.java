@@ -191,6 +191,9 @@ public class ClassLoaderRemapper extends LenientJarRemapper {
                 throw new NoClassDefFoundError(internalName);
             }
         }
+        // A client-side class that is missing here is answered with an empty stub instead of a
+        // failure, so a plugin that only mentions it keeps working and one that calls into it fails
+        // later. The stub is defined by this loader and never goes away.
         LOGGER.warn("Loading CLIENT side class: {}", normalizedName);
         ClassWriter writer = new ClassWriter(0);
         writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC | Opcodes.ACC_DEPRECATED, normalizedName, null, "java/lang/Object", new String[]{});
