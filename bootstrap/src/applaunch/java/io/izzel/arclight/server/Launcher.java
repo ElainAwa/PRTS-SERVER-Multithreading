@@ -1,9 +1,13 @@
 package io.izzel.arclight.server;
 
+import java.io.FileDescriptor;
+import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.PrintStream;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -22,7 +26,11 @@ public class Launcher {
     private static final String EULA_URL = "https://aka.ms/MinecraftEULA";
     private static final String EULA_FILE = "eula.txt";
 
+    /** Text used to ask the console encoding whether it can carry non-ASCII characters at all. */
+    private static final String NON_ASCII_PROBE = "\u4e2d\u6587";
+
     public static void main(String[] args) throws Throwable {
+        preserveLocalizedOutput();
         int javaVersion = (int) Float.parseFloat(System.getProperty("java.class.version"));
         if (javaVersion < MIN_CLASS_VERSION) {
             System.err.println("Arclight requires Java " + MIN_JAVA_VERSION);
@@ -55,6 +63,45 @@ public class Launcher {
             MethodHandle main = MethodHandles.lookup().findStatic(Class.forName(target), "main", MethodType.methodType(void.class, String[].class));
             main.invoke((Object) args);
         }
+    }
+
+    /**
+     * Keeps the localized startup text readable.
+     *
+     * <p>The banner and the i18n messages are written straight to the standard streams, before any
+     * logger exists. A JVM started under a locale whose console encoding cannot carry non-ASCII
+     * characters at all - the POSIX "C" locale, for example - silently replaces every one of them
+     * with a question mark. When the probe below says the console encoding cannot carry the text,
+     * the streams are replaced with UTF-8 writers; that is also the encoding the log files and any
+     * process reading a pipe expect. An encoding that can already carry the text, a Windows code
+     * page for instance, is left exactly as it is.</p>
+     */
+    private static void preserveLocalizedOutput() {
+        Charset console = consoleCharset();
+        if (console != null && console.newEncoder().canEncode(NON_ASCII_PROBE)) {
+            return;
+        }
+        System.setOut(new PrintStream(new FileOutputStream(FileDescriptor.out), true, StandardCharsets.UTF_8));
+        System.setErr(new PrintStream(new FileOutputStream(FileDescriptor.err), true, StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Reports the encoding the JVM uses for its standard streams.
+     *
+     * @return the console encoding, or the platform default when the JVM does not name one
+     */
+    private static Charset consoleCharset() {
+        for (String key : new String[]{"stdout.encoding", "native.encoding"}) {
+            String name = System.getProperty(key);
+            if (name != null) {
+                try {
+                    return Charset.forName(name);
+                } catch (Exception ignored) {
+                    // an unusable property value: try the next source
+                }
+            }
+        }
+        return Charset.defaultCharset();
     }
 
     /**
