@@ -535,6 +535,11 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
         return Iterators.filter(raw, it -> it != null && ((ServerPlayerBridge)it).bridge$getBukkitEntity().canSee(player.bridge$getBukkitEntity()));
     }
 
+    // The caught ConcurrentModificationException is the trace of a collection that is changed while
+    // the navigation list is walked; sending the update again keeps the server running, but the
+    // guard only hides the interleaving. Which collection that is, and when it may be written,
+    // belongs to the world state commit section, so the fallback stays until a world tick decides
+    // when a level's collections are allowed to change.
     @Decorate(method = "sendBlockUpdated", at = @At(value = "INVOKE", target = "Ljava/util/Iterator;next()Ljava/lang/Object;"))
     private Object arclight$guardConcurrencyOnNavigation(Iterator<PathNavigation> instance, @Local(ordinal = 0) BlockPos pos, @Local(ordinal = 0) BlockState before, @Local(ordinal = 1) BlockState after, @Local(ordinal = 0) int i) throws Throwable {
         try {
