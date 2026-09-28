@@ -4,6 +4,7 @@ import com.google.common.hash.Hasher;
 import com.google.common.hash.Hashing;
 import io.izzel.arclight.api.PluginPatcher;
 import io.izzel.arclight.common.mod.server.ArclightServer;
+import io.izzel.arclight.common.prts.support.PrtsVersion;
 import io.izzel.arclight.i18n.ArclightConfig;
 import io.izzel.tools.product.*;
 import org.apache.commons.io.FileUtils;
@@ -65,7 +66,9 @@ public abstract class ArclightClassCache implements AutoCloseable {
             var builder = new StringBuilder();
             builder.append("Arclight class cache").append(", ");
             builder.append("spec=").append(SPEC_VERSION).append(", ");
-            var arclight = ArclightClassCache.class.getPackage().getImplementationVersion();
+            // The package attribute is absent when the server ships as a plain mod, which would
+            // keep cached plugin classes alive across updates.
+            var arclight = PrtsVersion.version();
             builder.append("arclight=").append(arclight).append(", ");
             builder.append("patcher=[");
             for (PluginPatcher patcher : ArclightRemapper.INSTANCE.getPatchers()) {

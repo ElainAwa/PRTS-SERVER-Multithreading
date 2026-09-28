@@ -1,7 +1,9 @@
 package io.izzel.arclight.common.mod.util.remapper.patcher.integrated;
 
 import io.izzel.arclight.api.PluginPatcher;
+import io.izzel.arclight.common.prts.support.PrtsFaweCommandPatcher;
 import io.izzel.arclight.common.prts.support.PrtsLuckPermsPatcher;
+import io.izzel.arclight.common.prts.support.PrtsVersion;
 import org.objectweb.asm.tree.ClassNode;
 
 import java.util.ArrayList;
@@ -28,17 +30,18 @@ public class IntegratedPatcher implements PluginPatcher {
         // makes an added entry invalidate plugin classes that were cached before it existed.
         SPECIFIC.put("me/lucko/luckperms/bukkit/inject/permissible/PermissibleInjector",
             PrtsLuckPermsPatcher::handlePermissibleInjector);
+        SPECIFIC.put("com/sk89q/bukkit/util/CommandRegistration",
+            PrtsFaweCommandPatcher::handleFaweCommandRegistration);
     }
 
     @Override
     public String version() {
-        String implVersion = this.getClass().getPackage().getImplementationVersion();
         StringBuilder sb = new StringBuilder();
-        if (implVersion != null) {
-            sb.append("version=").append(implVersion);
-        }
+        // The package attribute is absent when the server ships as a plain mod, and this string is
+        // part of the class cache key, so it has to come from a source that is always present.
+        sb.append("version=").append(PrtsVersion.version());
         sb.append(" patchers=[");
-        sb.append("WorldEdit 1.21.1 4, LuckPerms PermissibleInjector");
+        sb.append("WorldEdit 1.21.1 4, LuckPerms PermissibleInjector, FAWE CommandRegistration");
         sb.append("]");
         return sb.toString();
     }
