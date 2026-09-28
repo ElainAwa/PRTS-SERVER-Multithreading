@@ -15,7 +15,6 @@ import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.level.block.entity.BlockEntity;
-import org.bukkit.TreeType;
 import org.bukkit.block.BlockState;
 import org.bukkit.craftbukkit.v.event.CraftPortalEvent;
 import org.bukkit.event.block.BlockBreakEvent;
@@ -177,20 +176,6 @@ public class ArclightCaptures {
             return placeEventHand == null ? hand : placeEventHand;
         } finally {
             placeEventHand = null;
-        }
-    }
-
-    private static TreeType treeType;
-
-    public static void captureTreeType(TreeType treeType) {
-        ArclightCaptures.treeType = treeType;
-    }
-
-    public static TreeType getTreeType() {
-        try {
-            return treeType == null ? ArclightConstants.MOD : treeType;
-        } finally {
-            treeType = null;
         }
     }
 

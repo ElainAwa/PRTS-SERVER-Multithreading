@@ -432,7 +432,6 @@
     "world.level.block.FarmBlockMixin",
     "world.level.block.FenceGateBlockMixin",
     "world.level.block.FireBlockMixin",
-    "world.level.block.FungusBlockMixin",
     "world.level.block.GrowingPlantHeadBlockMixin",
     "world.level.block.HopperBlockMixin",
     "world.level.block.IceBlockMixin",
