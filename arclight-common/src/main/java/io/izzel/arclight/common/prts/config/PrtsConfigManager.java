@@ -87,7 +87,11 @@ public final class PrtsConfigManager {
         ENTRIES.put(FIXES, new Entry("fixes.yml", true, Map.of(),
             "# Correctness fixes (crashes, injection anchors, serialization fallbacks)."));
         ENTRIES.put(MODSUPPORT, new Entry("modsupport.yml", true, modSupportFeatures(),
-            "# Mod interoperability. 'auto' means: apply only when the matching mod is present."));
+            "# Mod interoperability. 'auto' means: apply only when the matching mod is present.\n"
+                + "# 'disable-bukkit-reload-command: true' removes /reload and /bukkit:reload. A whole\n"
+                + "# server reload re-enters plugin loading inside a live hybrid server and can leave\n"
+                + "# plugins and mods in a state neither expects, so both commands stay available by\n"
+                + "# default and a restart of the process is the supported way to reload."));
         ENTRIES.put(PERFORMANCE, new Entry("performance.yml", true, Map.of(),
             "# Performance work that does not land on a new-kernel seam."));
         ENTRIES.put(OPTIONAL_SERVERCORE, new Entry("optional/servercore.yml", false, Map.of(),
