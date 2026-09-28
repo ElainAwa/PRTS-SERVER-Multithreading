@@ -13,30 +13,33 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 /**
  * Spreads the motion sync of fast projectiles over several ticks instead of every tick.
  *
- * <p>The mod keeps the interval in a shared default implementation that every projectile delegates
- * to, so raising the value there reaches all of them; a projectile that answers the question itself
- * keeps its own answer. The callers already throttle on the returned interval, so nothing else
- * changes - only how often the same message goes out.</p>
+ * <p>The interval question lives in a shared default implementation, but the two projectile base
+ * classes answer it with their own method that only delegates to that implementation, so the answer
+ * has to be raised where a call is actually received: in those two methods. Subclasses inherit
+ * either one of them, which is every fast projectile of the mod. A future class that answers the
+ * question itself keeps its own answer, and one that delegates is covered by the same two methods
+ * only if it extends one of these bases.</p>
  *
- * <p>The class is only applied while the mod is present, and it refers to the mod by name only, so
- * a server without the mod neither loads it nor pays for the reflection below.</p>
+ * <p>Nothing is captured from the target: the handler only replaces the returned value, which keeps
+ * the mod's own types off the compile class path entirely. The class is only applied while the mod
+ * is present, so a server without it neither loads this class nor changes anything.</p>
  */
 @OnlyInPlatform(ArclightPlatform.NEOFORGE)
 @LoadIfMod(modid = PrtsSbwCompat.MOD_ID, condition = LoadIfMod.ModCondition.PRESENT)
 @Pseudo
-@Mixin(targets = "com.atsuishio.superbwarfare.entity.projectile.IFastMotionSync$DefaultImpls", remap = false)
+@Mixin(targets = {
+    "com.atsuishio.superbwarfare.entity.projectile.ProjectileEntity",
+    "com.atsuishio.superbwarfare.entity.projectile.FastThrowableProjectile"
+}, remap = false)
 public abstract class PrtsSbwMotionSyncMixin {
 
     /**
-     * Answers the interval question of the shared default implementation.
+     * Answers the interval question of a projectile that delegates it to the shared default.
      *
-     * @param projectile the projectile asking, typed as object because the mod type is not on the
-     *     compile class path
      * @param cir callback handle carrying the answer
      */
-    @Inject(method = "syncMotionInterval(Lcom/atsuishio/superbwarfare/entity/projectile/IFastMotionSync;)I",
-        at = @At("HEAD"), cancellable = true, remap = false)
-    private static void prts$spreadMotionSync(Object projectile, CallbackInfoReturnable<Integer> cir) {
+    @Inject(method = "syncMotionInterval()I", at = @At("HEAD"), cancellable = true, remap = false)
+    private static void prts$spreadMotionSync(CallbackInfoReturnable<Integer> cir) {
         cir.setReturnValue(PrtsSbwCompat.MOTION_SYNC_INTERVAL);
     }
 }
