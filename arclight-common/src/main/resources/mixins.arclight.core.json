@@ -466,7 +466,6 @@
     "world.level.block.RedStoneWireBlockMixin",
     "world.level.block.RespawnAnchorBlockMixin",
     "world.level.block.RootedDirtBlockMixin",
-    "world.level.block.SaplingBlockMixin",
     "world.level.block.ScaffoldingBlockMixin",
     "world.level.block.SculkBlockMixin",
     "world.level.block.SculkSensorBlockMixin",
