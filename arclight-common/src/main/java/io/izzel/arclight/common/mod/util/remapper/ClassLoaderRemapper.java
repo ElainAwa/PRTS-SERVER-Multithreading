@@ -8,6 +8,7 @@ import com.google.common.io.ByteStreams;
 import io.izzel.arclight.api.Unsafe;
 import io.izzel.arclight.common.mod.server.ArclightServer;
 import io.izzel.arclight.common.mod.util.remapper.generated.ArclightReflectionHandler;
+import io.izzel.arclight.common.prts.support.PrtsCraftBukkitVersionRemapper;
 import io.izzel.arclight.i18n.ArclightConfig;
 import io.izzel.tools.product.Product;
 import io.izzel.tools.product.Product2;
@@ -178,15 +179,25 @@ public class ClassLoaderRemapper extends LenientJarRemapper {
     }
 
     public void tryDefineClass(String internalName) {
-        if (!internalName.startsWith(PREFIX)) {
-            throw new NoClassDefFoundError(internalName);
+        // A plugin may ask for a name of the other form, or for a release it was built against,
+        // and the name it asked for is the one that has to work.
+        String normalizedName = internalName.indexOf('.') == -1 ? internalName : internalName.replace('.', '/');
+        normalizedName = PrtsCraftBukkitVersionRemapper.remapInternalName(normalizedName);
+        if (!normalizedName.startsWith(PREFIX)) {
+            try {
+                Class.forName(normalizedName.replace('/', '.'), false, classLoader);
+                return;
+            } catch (ClassNotFoundException ignored) {
+                throw new NoClassDefFoundError(internalName);
+            }
         }
-        LOGGER.warn("Loading CLIENT side class: {}", internalName);
+        LOGGER.warn("Loading CLIENT side class: {}", normalizedName);
         ClassWriter writer = new ClassWriter(0);
-        writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC | Opcodes.ACC_DEPRECATED, internalName, null, "java/lang/Object", new String[]{});
+        writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC | Opcodes.ACC_DEPRECATED, normalizedName, null, "java/lang/Object", new String[]{});
         writer.visitEnd();
         byte[] bytes = writer.toByteArray();
-        Unsafe.defineClass(Type.getObjectType(internalName).getClassName(), bytes, 0, bytes.length, getClass().getClassLoader(), getClass().getProtectionDomain());
+        Unsafe.defineClass(Type.getObjectType(normalizedName).getClassName(), bytes, 0, bytes.length,
+            getClass().getClassLoader(), getClass().getProtectionDomain());
     }
 
     private String mapMethod(Method method) {

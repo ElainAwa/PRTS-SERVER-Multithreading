@@ -8,6 +8,7 @@ import io.izzel.arclight.common.mod.util.log.ArclightI18nLogger;
 import io.izzel.arclight.common.mod.util.remapper.patcher.ArclightPluginPatcher;
 import io.izzel.arclight.common.mod.util.remapper.patcher.PluginLoggerTransformer;
 import io.izzel.arclight.common.mod.util.remapper.resource.RemapSourceHandler;
+import io.izzel.arclight.common.prts.support.PrtsCraftBukkitVersionRemapper;
 import net.md_5.specialsource.InheritanceMap;
 import net.md_5.specialsource.JarMapping;
 import net.md_5.specialsource.JarRemapper;
@@ -93,6 +94,9 @@ public class ArclightRemapper {
         this.transformerList.add(ArclightInterfaceInvokerGen.INSTANCE);
         this.transformerList.add(ArclightRedirectAdapter.INSTANCE);
         this.transformerList.add(ClassLoaderAdapter.INSTANCE);
+        // Plugins carry the CraftBukkit release they were built against inside the package name;
+        // the segment is normalized here so that a plugin built for another release resolves.
+        this.transformerList.add(PrtsCraftBukkitVersionRemapper.INSTANCE);
         if (!(java.util.logging.LogManager.getLogManager() instanceof org.apache.logging.log4j.jul.LogManager)) {
             this.transformerList.add(new PluginLoggerTransformer());
         }
