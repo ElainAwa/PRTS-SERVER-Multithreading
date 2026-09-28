@@ -31,4 +31,18 @@ public abstract class PrtsLevelStructureGrowCaptureMixin {
             cir.setReturnValue(true);
         }
     }
+
+    /**
+     * The read side of the same capture: a generator that clears the sapling and then asks whether
+     * the spot is free must see its own write, otherwise the tree is built against a world where
+     * the sapling is still standing and no tree is placed at all. The check is one field read for
+     * every other block read on the server.
+     */
+    @Inject(method = "getBlockState", cancellable = true, at = @At("HEAD"))
+    private void prts$readCapturedTreeBlock(BlockPos pos, CallbackInfoReturnable<BlockState> cir) {
+        BlockState captured = PrtsStructureGrowCapture.capturedState((Level) (Object) this, pos);
+        if (captured != null) {
+            cir.setReturnValue(captured);
+        }
+    }
 }

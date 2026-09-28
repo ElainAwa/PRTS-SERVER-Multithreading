@@ -132,6 +132,21 @@ public final class PrtsStructureGrowCapture {
     }
 
     /**
+     * The state a captured position reads back as while a tree is being built. A generator that
+     * clears the sapling and then asks whether the spot is free has to see its own write, exactly
+     * as it would in the chunk.
+     *
+     * @return the captured state, or null when this position was not written by the growing tree
+     */
+    public static net.minecraft.world.level.block.state.BlockState capturedState(Level target, BlockPos pos) {
+        if (capturedLevel == null || capturedLevel != target) {
+            return null;
+        }
+        CapturedBlockState captured = CAPTURED_BLOCKS.get(pos);
+        return captured == null ? null : captured.getHandle();
+    }
+
+    /**
      * Records the feature {@link TreeGrower#growTree} resolved, which is the species of the tree.
      */
     public static void recordSpecies(ResourceKey<ConfiguredFeature<?, ?>> species) {
