@@ -1,6 +1,7 @@
 package io.izzel.arclight.common.mod;
 
 import io.izzel.arclight.common.mod.mixins.*;
+import io.izzel.arclight.common.prts.support.PrtsTotemCureCallSite;
 import io.izzel.arclight.mixin.MixinTools;
 import org.objectweb.asm.tree.ClassNode;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigPlugin;
@@ -20,7 +21,12 @@ public class ArclightMixinPlugin implements IMixinConfigPlugin {
         new CreateConstructorProcessor(),
         new InlineMethodProcessor(),
         new InlineFieldProcessor(),
-        new InvokeSpecialProcessor()
+        new InvokeSpecialProcessor(),
+        // The shared configuration replaces the totem death protection method of the living entity
+        // type, and with it a call the NeoForge patch of that type performs. Third party injectors
+        // anchored on that call would stop applying, so the call is put back for the platform that
+        // has it, before any other configuration is applied to the type.
+        new PrtsTotemCureCallSite()
     );
 
     @Override
