@@ -5,7 +5,10 @@ import io.izzel.arclight.common.prts.config.PrtsConfigManager.Entry;
 import io.izzel.arclight.common.prts.config.PrtsConfigManager.Upgraded;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -25,6 +28,17 @@ class PrtsConfigUpgradeTest {
 
     /** Layout version these expectations are written against; a bump has to update them. */
     private static final String LAYOUT = "2";
+
+    /**
+     * The features this build declares for the category under test, in the order it appends them.
+     *
+     * <p>The expectations below are derived from this declaration instead of naming the keys one by
+     * one: a feature added to the build changes what an older file is missing, and an expectation
+     * that spells out the count of a former build is a statement about that build, not about this
+     * one.</p>
+     */
+    private static final Map<String, Boolean> FEATURES =
+        PrtsConfigManager.entries().get(PrtsConfigManager.MODSUPPORT).features();
 
     /** A comment block of the shape an older build wrote, which no current file carries. */
     private static final String OLD_HEADER = """
@@ -53,12 +67,15 @@ class PrtsConfigUpgradeTest {
             """;
 
         Upgraded upgraded = PrtsConfigManager.upgrade(entry, stale);
+        Map<String, Boolean> appended = appended(stale);
 
-        assertEquals("version 1 -> " + LAYOUT + ", added 1 key, refreshed header", upgraded.detail());
+        assertEquals("version 1 -> " + LAYOUT + ", " + addedKeys(appended.size()) + ", refreshed header",
+            upgraded.detail());
         assertFalse(upgraded.content().contains("older build"), "the old comment block is gone");
         assertTrue(upgraded.content().contains("version: " + LAYOUT), "the version is written back");
-        assertTrue(upgraded.content().contains("disable-bukkit-reload-command: false"),
-            "the missing key is appended with the default of this build");
+        appended.forEach((name, value) -> assertTrue(
+            upgraded.content().contains("  " + name + ": " + value),
+            name + " is appended with the default of this build"));
         assertTrue(upgraded.content().contains("preload-bungee-chat-classes: false"),
             "the value the file carried is still there");
     }
@@ -90,12 +107,17 @@ class PrtsConfigUpgradeTest {
             """;
 
         Upgraded upgraded = PrtsConfigManager.upgrade(entry, stale);
+        Map<String, Boolean> appended = appended(stale);
 
-        assertEquals("version 1 -> " + LAYOUT + ", added 3 keys, refreshed header", upgraded.detail());
+        // the version line is rewritten rather than added, and the group header of the features block
+        // is not a key: what is added is the enabled key plus one entry per declared feature
+        assertEquals("version 1 -> " + LAYOUT + ", " + addedKeys(1 + appended.size()) + ", refreshed header",
+            upgraded.detail());
         assertTrue(upgraded.content().contains("enabled: true"), "the category default is written");
         assertTrue(upgraded.content().contains("features:"), "the group header is written");
-        assertTrue(upgraded.content().contains("preload-bungee-chat-classes: true"));
-        assertTrue(upgraded.content().contains("disable-bukkit-reload-command: false"));
+        appended.forEach((name, value) -> assertTrue(
+            upgraded.content().contains("  " + name + ": " + value),
+            name + " is appended with the default of this build"));
     }
 
     @Test
@@ -108,11 +130,14 @@ class PrtsConfigUpgradeTest {
             """;
 
         Upgraded upgraded = PrtsConfigManager.upgrade(entry, stale);
+        Map<String, Boolean> appended = appended(stale);
 
-        assertEquals("version 1 -> " + LAYOUT + ", added 2 keys, refreshed header", upgraded.detail());
+        assertEquals("version 1 -> " + LAYOUT + ", " + addedKeys(appended.size()) + ", refreshed header",
+            upgraded.detail());
         assertFalse(upgraded.content().contains("features: {}"), "a flow mapping became a block");
-        assertTrue(upgraded.content().contains("preload-bungee-chat-classes: true"));
-        assertTrue(upgraded.content().contains("disable-bukkit-reload-command: false"));
+        appended.forEach((name, value) -> assertTrue(
+            upgraded.content().contains("  " + name + ": " + value),
+            name + " is appended with the default of this build"));
     }
 
     @Test
@@ -129,7 +154,8 @@ class PrtsConfigUpgradeTest {
 
         assertTrue(upgraded.content().contains("preload-bungee-chat-classes: true\n  # added in v"),
             "the appended key sits behind the entries that are there: " + upgraded.content());
-        assertTrue(upgraded.content().endsWith("disable-bukkit-reload-command: false\n\n"),
+        Map.Entry<String, Boolean> last = lastOf(appended(stale));
+        assertTrue(upgraded.content().endsWith("  " + last.getKey() + ": " + last.getValue() + "\n\n"),
             "the blank line stays behind the block");
     }
 
@@ -146,6 +172,36 @@ class PrtsConfigUpgradeTest {
 
         assertNull(upgraded.detail());
         assertEquals(newer, upgraded.content());
+    }
+
+    /** Returns the wording the detail of an upgrade uses for a number of appended keys. */
+    private static String addedKeys(int count) {
+        return "added " + count + (count == 1 ? " key" : " keys");
+    }
+
+    /**
+     * Returns the features this build declares and a fixture does not mention, in the order they are
+     * appended -- the same rule the transform follows, so a feature this build adds is expected here
+     * without an edit.
+     *
+     * @param fixture a configuration file content
+     * @return feature name to default, in file order; empty when the fixture carries every feature
+     */
+    private static Map<String, Boolean> appended(String fixture) {
+        Map<String, Boolean> appended = new LinkedHashMap<>(FEATURES);
+        appended.keySet().removeIf(name -> fixture.contains("\n  " + name + ":"));
+        return appended;
+    }
+
+    /**
+     * Returns the entry appended last, which is the line in front of the trailing blank line.
+     *
+     * @param features the appended features, in file order
+     * @return the last entry
+     */
+    private static Map.Entry<String, Boolean> lastOf(Map<String, Boolean> features) {
+        List<Map.Entry<String, Boolean>> ordered = new ArrayList<>(features.entrySet());
+        return ordered.get(ordered.size() - 1);
     }
 
     /**
