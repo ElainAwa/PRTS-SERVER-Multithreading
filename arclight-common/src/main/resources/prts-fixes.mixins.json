@@ -15,6 +15,7 @@
     "PrtsRecipeGroupMixin",
     "PrtsSyntheticLevelGameEventMixin",
     "PrtsCraftBlockBoneMealMixin",
+    "PrtsCraftWorldGenerateTreeMixin",
     "PrtsLivingEntityTotemMixin",
     "PrtsShearsItemShearEventMixin",
     "PrtsLevelStructureGrowCaptureMixin",
