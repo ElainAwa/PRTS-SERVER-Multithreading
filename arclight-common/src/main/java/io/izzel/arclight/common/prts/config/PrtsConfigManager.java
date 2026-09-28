@@ -108,6 +108,10 @@ public final class PrtsConfigManager {
             "# Correctness fixes (crashes, injection anchors, serialization fallbacks)."));
         ENTRIES.put(MODSUPPORT, new Entry("modsupport.yml", true, modSupportFeatures(),
             "# Mod interoperability. 'auto' means: apply only when the matching mod is present.\n"
+                + "# 'guard-create-funnel-pickup: true' skips a funnel pickup whose filtering behaviour\n"
+                + "# cannot be read instead of letting the mod throw out of the block tick. It is off by\n"
+                + "# default, because no reading justifies changing funnel behaviour without the observed\n"
+                + "# fault.\n"
                 + "# 'disable-bukkit-reload-command: true' removes /reload and /bukkit:reload. A whole\n"
                 + "# server reload re-enters plugin loading inside a live hybrid server and can leave\n"
                 + "# plugins and mods in a state neither expects, so both commands stay available by\n"
@@ -135,6 +139,7 @@ public final class PrtsConfigManager {
         Map<String, Boolean> features = new LinkedHashMap<>();
         features.put("preload-bungee-chat-classes", true);
         features.put("disable-bukkit-reload-command", false);
+        features.put("guard-create-funnel-pickup", false);
         return features;
     }
 
