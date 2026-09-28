@@ -66,6 +66,8 @@ public final class PrtsConfigManager {
 
     private static final Map<String, Boolean> ENABLED = new ConcurrentHashMap<>();
 
+    private static final Map<String, Map<String, Boolean>> FEATURES = new ConcurrentHashMap<>();
+
     private static final Map<String, String> PROBLEMS = new ConcurrentHashMap<>();
 
     private static volatile boolean loaded;
@@ -75,24 +77,41 @@ public final class PrtsConfigManager {
      *
      * @param file            path relative to {@code prts-config}
      * @param defaultEnabled  value used when the file is missing or unreadable
+     * @param features        per-feature switches of the category and their built-in defaults
      * @param comment         human-readable purpose, written into the generated file
      */
-    public record Entry(String file, boolean defaultEnabled, String comment) {
+    public record Entry(String file, boolean defaultEnabled, Map<String, Boolean> features, String comment) {
     }
 
     static {
-        ENTRIES.put(FIXES, new Entry("fixes.yml", true,
+        ENTRIES.put(FIXES, new Entry("fixes.yml", true, Map.of(),
             "# Correctness fixes (crashes, injection anchors, serialization fallbacks)."));
-        ENTRIES.put(MODSUPPORT, new Entry("modsupport.yml", true,
+        ENTRIES.put(MODSUPPORT, new Entry("modsupport.yml", true, modSupportFeatures(),
             "# Mod interoperability. 'auto' means: apply only when the matching mod is present."));
-        ENTRIES.put(PERFORMANCE, new Entry("performance.yml", true,
+        ENTRIES.put(PERFORMANCE, new Entry("performance.yml", true, Map.of(),
             "# Performance work that does not land on a new-kernel seam."));
-        ENTRIES.put(OPTIONAL_SERVERCORE, new Entry("optional/servercore.yml", false,
+        ENTRIES.put(OPTIONAL_SERVERCORE, new Entry("optional/servercore.yml", false, Map.of(),
             "# Optional ServerCore layer: opt-in, mutually exclusive with an external ServerCore.\n"
                 + "# Reserved for the reliable chunk-save journal only. Chunk pipeline, entity tracking\n"
                 + "# and networking stay with the kernel and are never configured here."));
-        ENTRIES.put(KERNEL, new Entry("kernel.yml", false,
+        ENTRIES.put(KERNEL, new Entry("kernel.yml", false, Map.of(),
             "# Reserved for the new kernel."));
+    }
+
+    /**
+     * Declares the per-feature switches of the mod interoperability category.
+     *
+     * <p>A feature is an independent behaviour of the category. Declaring it here gives the
+     * generated file one commented default per behaviour and keeps operators from having to guess
+     * key names; a value that is not declared is reported as a problem and ignored.</p>
+     *
+     * @return the feature defaults, in the order they are written into the file
+     */
+    private static Map<String, Boolean> modSupportFeatures() {
+        Map<String, Boolean> features = new LinkedHashMap<>();
+        features.put("preload-bungee-chat-classes", true);
+        features.put("disable-bukkit-reload-command", false);
+        return features;
     }
 
     private PrtsConfigManager() {
@@ -188,21 +207,57 @@ public final class PrtsConfigManager {
     }
 
     /**
+     * Resolves one per-feature switch of a category.
+     *
+     * <p>The resolution never throws and never guesses: a feature the file does not mention, or
+     * mentions with a value this class does not recognize, keeps the declared built-in default, so
+     * an operator edit can only turn behaviour on or off deliberately.</p>
+     *
+     * @param category one of the category constants of this class
+     * @param name     feature name as declared by the category
+     * @param fallback value used when the last read did not provide the feature
+     * @return {@code true} when the feature is enabled
+     */
+    public static boolean feature(String category, String name, boolean fallback) {
+        Map<String, Boolean> features = FEATURES.get(category);
+        Boolean value = features == null ? null : features.get(name);
+        return value == null ? fallback : value;
+    }
+
+    /**
+     * Returns the per-feature switches of one category as they were last read.
+     *
+     * @param category one of the category constants of this class
+     * @return an immutable view; empty when the category declares no feature
+     */
+    public static Map<String, Boolean> features(String category) {
+        Map<String, Boolean> features = FEATURES.get(category);
+        return features == null ? Map.of() : features;
+    }
+
+    /**
      * Renders the default content of one category file.
      *
      * @param entry the category to render
      * @return the generated file content, including its header comments
      */
     public static String defaults(Entry entry) {
-        return HEADER
-            + entry.comment() + "\n"
-            + "version: " + VERSION + "\n"
-            + "enabled: " + entry.defaultEnabled() + "\n"
-            + "features: {}\n";
+        StringBuilder builder = new StringBuilder(HEADER)
+            .append(entry.comment()).append('\n')
+            .append("version: ").append(VERSION).append('\n')
+            .append("enabled: ").append(entry.defaultEnabled()).append('\n');
+        if (entry.features().isEmpty()) {
+            return builder.append("features: {}\n").toString();
+        }
+        builder.append("features:").append('\n');
+        entry.features().forEach((name, value) ->
+            builder.append("  ").append(name).append(": ").append(value).append('\n'));
+        return builder.toString();
     }
 
     private static void read() {
         ENABLED.clear();
+        FEATURES.clear();
         PROBLEMS.clear();
         for (Map.Entry<String, Entry> entry : ENTRIES.entrySet()) {
             ENABLED.put(entry.getKey(), read(entry.getKey(), entry.getValue()));
@@ -224,22 +279,41 @@ public final class PrtsConfigManager {
         }
         String version = null;
         String enabled = null;
+        Map<String, Boolean> features = new LinkedHashMap<>();
         try {
+            boolean inFeatures = false;
             for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
                 String trimmed = line.trim();
-                if (trimmed.startsWith("#")) {
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) {
                     continue;
                 }
+                if (line.charAt(0) == ' ' || line.charAt(0) == '\t') {
+                    if (inFeatures) {
+                        readFeature(category, trimmed, features);
+                    }
+                    continue;
+                }
+                inFeatures = false;
                 if (trimmed.startsWith("version:")) {
                     version = unquote(trimmed.substring("version:".length()).trim());
                 } else if (trimmed.startsWith("enabled:")) {
                     enabled = unquote(trimmed.substring("enabled:".length()).trim());
+                } else if (trimmed.startsWith("features:")) {
+                    inFeatures = true;
                 }
             }
         } catch (Throwable failure) {
             problem(category, "cannot be read (" + failure + "); the built-in default applies");
             return entry.defaultEnabled();
         }
+        Map<String, Boolean> resolved = new LinkedHashMap<>();
+        entry.features().forEach((name, fallback) -> resolved.put(name, features.getOrDefault(name, fallback)));
+        features.keySet().forEach(name -> {
+            if (!entry.features().containsKey(name)) {
+                problem(category, "unknown feature '" + name + "' is ignored");
+            }
+        });
+        FEATURES.put(category, Collections.unmodifiableMap(resolved));
         if (version != null && !VERSION.equals(version)) {
             problem(category, "declares version " + version + ", this build reads version " + VERSION);
         }
@@ -256,6 +330,30 @@ public final class PrtsConfigManager {
             return entry.defaultEnabled();
         }
         return parsed;
+    }
+
+    /**
+     * Reads one indented line of the {@code features} block.
+     *
+     * @param category category name, used when a problem is recorded
+     * @param trimmed  the line without surrounding blanks
+     * @param features collected values, written into
+     */
+    private static void readFeature(String category, String trimmed, Map<String, Boolean> features) {
+        int colon = trimmed.indexOf(':');
+        if (colon <= 0) {
+            problem(category, "cannot read feature line '" + trimmed + "'");
+            return;
+        }
+        String name = trimmed.substring(0, colon).trim();
+        String raw = unquote(trimmed.substring(colon + 1).trim());
+        Boolean value = parseEnabled(raw);
+        if (value == null) {
+            problem(category, "feature " + name + ": unrecognized value '" + raw
+                + "'; the built-in default applies");
+            return;
+        }
+        features.put(name, value);
     }
 
     private static Boolean parseEnabled(String value) {

@@ -14,6 +14,7 @@ import org.bukkit.craftbukkit.v.CraftServer;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.TreeSet;
 
 /**
@@ -100,6 +101,7 @@ public final class PrtsCommand {
         List<String> lines = new ArrayList<>();
         lines.add("[PRTS] prts-config reloaded");
         lines.add(switches());
+        lines.addAll(features());
         lines.addAll(problems());
         return lines;
     }
@@ -108,6 +110,7 @@ public final class PrtsCommand {
         List<String> lines = new ArrayList<>();
         lines.add("[PRTS] config directory: " + PrtsConfigManager.directory().toAbsolutePath());
         lines.add(switches());
+        lines.addAll(features());
         lines.addAll(problems());
         return lines;
     }
@@ -128,6 +131,29 @@ public final class PrtsCommand {
             }
         }
         return builder.toString();
+    }
+
+    /**
+     * Renders the per-feature switches of every category that declares one.
+     *
+     * <p>Each line carries the effective value, so an operator sees what the running process
+     * actually resolved instead of what the file claims.</p>
+     *
+     * @return one line per category with declared features, in category order
+     */
+    private static List<String> features() {
+        List<String> lines = new ArrayList<>();
+        for (String category : new TreeSet<>(PrtsConfigManager.entries().keySet())) {
+            Map<String, Boolean> features = PrtsConfigManager.features(category);
+            if (features.isEmpty()) {
+                continue;
+            }
+            StringBuilder builder = new StringBuilder("[PRTS] features:");
+            features.forEach((name, value) ->
+                builder.append(' ').append(category).append('.').append(name).append('=').append(value));
+            lines.add(builder.toString());
+        }
+        return lines;
     }
 
     /**
