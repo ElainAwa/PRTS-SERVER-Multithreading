@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts;
 
+import io.izzel.arclight.common.prts.support.PrtsBukkitVersionPatcher;
 import org.objectweb.asm.tree.ClassNode;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigPlugin;
 import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
@@ -75,5 +76,9 @@ public class PrtsMixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public void postApply(String targetClassName, ClassNode targetClass, String mixinClassName, IMixinInfo mixinInfo) {
+        // Some API members cannot be expressed as a mixin, a static method on a facade for
+        // example, so they are written into the target right here: the last point where the
+        // transformed type is still open for changes.
+        PrtsBukkitVersionPatcher.patch(targetClassName, targetClass);
     }
 }

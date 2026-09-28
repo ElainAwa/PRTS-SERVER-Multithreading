@@ -10,5 +10,14 @@
   },
   "compatibilityLevel": "JAVA_21",
   "mixins": [
+    "PrtsBlockMenuProviderInvoker",
+    "PrtsCraftHumanEntityPaperApiMixin",
+    "PrtsCraftServerPaperApiMixin",
+    "PrtsCraftServerPluginLoadMixin",
+    "PrtsItemPickupAttemptMixin",
+    "PrtsPaperBukkitApiMixin",
+    "PrtsPaperHumanEntityApiMixin",
+    "PrtsPaperServerApiMixin",
+    "PrtsSimpleCommandMapMixin"
   ]
 }
