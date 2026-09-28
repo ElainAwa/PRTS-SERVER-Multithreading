@@ -21,6 +21,7 @@
     "server.dedicated.DedicatedServerMixin_Vanilla",
     "server.level.ServerPlayerGameModeMixin",
     "server.level.ServerPlayerMixin_Vanilla",
+    "server.network.ServerConfigurationPacketListenerImplMixin_Vanilla",
     "world.effect.PoisonMobEffectMixin_Vanilla",
     "world.entity.EntityMixin_Vanilla",
     "world.entity.LivingEntityMixin_Vanilla",
