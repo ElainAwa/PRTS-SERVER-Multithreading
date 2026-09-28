@@ -88,6 +88,16 @@ public abstract class ArclightEventFactory {
             return null;
         }
 
+        // A plugin is the only observer this event can have, and both event classes share one
+        // handler list, so one read answers whether either of them has a listener. The read costs
+        // a volatile array read, while the skipped path would build a block state snapshot and
+        // dispatch into an empty list. Every caller of this funnel reads null as "no listener
+        // changed anything", which is what an empty dispatch means, so the two paths are
+        // observationally identical.
+        if (BlockFormEvent.getHandlerList().getRegisteredListeners().length == 0) {
+            return null;
+        }
+
         CraftBlockState blockState = CraftBlockStates.getBlockState(world, pos, flag);
         blockState.setData(block);
         BlockFormEvent event = entity == null ? new BlockFormEvent(blockState.getBlock(), blockState) : new EntityBlockFormEvent(entity.bridge$getBukkitEntity(), blockState.getBlock(), blockState);
