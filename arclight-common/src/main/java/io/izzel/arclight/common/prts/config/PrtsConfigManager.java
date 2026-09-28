@@ -5,9 +5,15 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -24,19 +30,22 @@ import java.util.concurrent.ConcurrentHashMap;
  * </pre>
  *
  * <p>Every category owns exactly one file, named after the category, so a category can be turned
- * off — or handed to the kernel — in one place. Files are generated on first start only and an
- * existing file is never overwritten, which keeps operator edits authoritative; the header of a
- * generated file says how to have it written again with the current comments, and a file whose
- * layout is older than this build is reported as a problem instead of passing silently.
- * {@code /prts reload} re-reads the directory without restarting the process.</p>
+ * off — or handed to the kernel — in one place. A file is generated on first start and an existing
+ * file is never overwritten, which keeps operator edits authoritative; the start then brings an
+ * existing file up to the layout of this build without touching a value: a key this build declares
+ * and the file does not mention is appended with its default, a leading comment block written by an
+ * older build is replaced, and the layout version is written back. A file that already carries this
+ * layout is left alone, so a start does not touch it. {@code /prts reload} re-reads the directory
+ * without restarting the process.</p>
  *
  * <p>Parsing is deliberately dependency-free: the files are written by this class and carry only
  * {@code version}, {@code enabled} and {@code features}, so no YAML library has to be present at
  * the very early point where the mixin categories are resolved.</p>
  *
- * <p>A file that is missing, unreadable, or carries an {@code enabled} value this class does not
- * recognize never fails the start: the category falls back to its built-in default and the reason
- * is recorded, so {@link #problems()} can show why an operator edit had no effect.</p>
+ * <p>A file that is missing, unreadable, unwritable, or carries an {@code enabled} value this class
+ * does not recognize never fails the start: the category falls back to its built-in default and the
+ * reason is recorded, so {@link #problems()} can show why an operator edit had no effect. A file
+ * that could not be brought up to this layout is used exactly as it is on disk.</p>
  */
 public final class PrtsConfigManager {
 
@@ -51,7 +60,11 @@ public final class PrtsConfigManager {
     /** Placeholder category reserved for the new kernel; disabled by default. */
     public static final String KERNEL = "kernel";
 
-    /** Version of the generated layout, header comments included; another version is reported. */
+    /**
+     * Version of the generated layout, header comments included. A file that declares an older
+     * version is brought up to this one; a file that declares a newer one is left alone and
+     * reported, because only the build that wrote it knows the keys it declared.
+     */
     private static final String VERSION = "2";
 
     /** Value of {@code enabled} that defers to the built-in default of the category. */
@@ -59,7 +72,9 @@ public final class PrtsConfigManager {
 
     private static final String HEADER =
         "# PRTS configuration. Generated on first start; an existing file is never overwritten.\n"
-            + "# Delete this file to have it generated again with the comments of this build.\n"
+            + "# On start, a key this build declares and this file does not have is appended below\n"
+            + "# its group with the default of this build, and a comment block written by an older\n"
+            + "# build is replaced. Values set here are never changed.\n"
             + "# Reload with /prts reload (no restart).\n"
             + "# Settings that belong to a kernel seam (scheduling, tick loop, chunk pipeline,\n"
             + "# entity queries, lighting, networking, world lifecycle, storage) belong in kernel.yml\n"
@@ -72,6 +87,8 @@ public final class PrtsConfigManager {
     private static final Map<String, Map<String, Boolean>> FEATURES = new ConcurrentHashMap<>();
 
     private static final Map<String, String> PROBLEMS = new ConcurrentHashMap<>();
+
+    private static final Map<String, String> UPGRADES = new ConcurrentHashMap<>();
 
     private static volatile boolean loaded;
 
@@ -143,24 +160,61 @@ public final class PrtsConfigManager {
     }
 
     /**
-     * Generates the missing files and loads the directory. Never throws: an unwritable working
-     * directory leaves the built-in defaults in place.
+     * Generates the missing files, brings the existing ones up to this layout, and loads the
+     * directory. Never throws: a working directory this process cannot write leaves the built-in
+     * defaults in place.
      */
     public static synchronized void ensureAndLoad() {
+        Map<String, String> failures = ensure();
+        read();
+        // read() starts a new problem list, so a file that could not be upgraded is reported after
+        // it: the values on disk still apply, and only the reason they are behind is added.
+        failures.forEach(PrtsConfigManager::problem);
+        loaded = true;
+    }
+
+    /**
+     * Generates the files this build does not find and brings an existing file up to this layout.
+     *
+     * <p>One file that cannot be read or written does not keep the other categories from being
+     * prepared, and nothing here throws out to the caller.</p>
+     *
+     * @return the failures, keyed by category, for the caller to report once the read is done
+     */
+    private static Map<String, String> ensure() {
+        Map<String, String> failures = new LinkedHashMap<>();
+        UPGRADES.clear();
         try {
             Files.createDirectories(directory());
-            for (Map.Entry<String, Entry> entry : ENTRIES.entrySet()) {
-                Path file = directory().resolve(entry.getValue().file());
+        } catch (Throwable failure) {
+            for (String category : ENTRIES.keySet()) {
+                failures.put(category, "directory cannot be created (" + failure
+                    + "); the built-in default applies");
+            }
+            return failures;
+        }
+        for (Map.Entry<String, Entry> entry : ENTRIES.entrySet()) {
+            String category = entry.getKey();
+            Path file = directory().resolve(entry.getValue().file());
+            try {
                 if (!Files.exists(file)) {
                     Files.createDirectories(file.getParent());
                     Files.writeString(file, defaults(entry.getValue()), StandardCharsets.UTF_8);
+                    continue;
                 }
+                String current = Files.readString(file, StandardCharsets.UTF_8);
+                Upgraded upgraded = upgrade(entry.getValue(), current);
+                if (upgraded.detail() == null) {
+                    continue;
+                }
+                Files.writeString(file, upgraded.content(), StandardCharsets.UTF_8);
+                UPGRADES.put(category, file + ": " + upgraded.detail());
+            } catch (Throwable failure) {
+                failures.put(category, "could not be brought up to the layout of this build ("
+                    + failure + "); the file is used as it is");
             }
-        } catch (Throwable ignored) {
-            // defaults still apply, and an unwritable directory must not stop the server
         }
-        read();
-        loaded = true;
+        return failures;
     }
 
     /** Re-reads {@code prts-config/**} without restarting the process. */
@@ -214,6 +268,20 @@ public final class PrtsConfigManager {
     }
 
     /**
+     * Returns the files the last {@link #ensureAndLoad()} brought up to the layout of this build.
+     *
+     * <p>An upgrade changes a file an operator owns, so it is named once instead of happening
+     * quietly: the appended keys take effect with the default of this build and the comment block
+     * of an older build is gone, both of which are worth a line at start and in
+     * {@code /prts status}.</p>
+     *
+     * @return an immutable, category-ordered view; empty when every file already carried this layout
+     */
+    public static Map<String, String> upgrades() {
+        return Collections.unmodifiableMap(new TreeMap<>(UPGRADES));
+    }
+
+    /**
      * Resolves one per-feature switch of a category.
      *
      * <p>The resolution never throws and never guesses: a feature the file does not mention, or
@@ -260,6 +328,299 @@ public final class PrtsConfigManager {
         entry.features().forEach((name, value) ->
             builder.append("  ").append(name).append(": ").append(value).append('\n'));
         return builder.toString();
+    }
+
+    /**
+     * Result of bringing one file up to the layout of this build.
+     *
+     * @param content the content to write; the content of the file when nothing changes
+     * @param detail  what changed, or {@code null} when the file already carries this layout
+     */
+    record Upgraded(String content, String detail) {
+    }
+
+    /** One insertion into a file: {@code lines} added at {@code index}. */
+    private record Edit(int index, List<String> lines) {
+    }
+
+    /**
+     * Brings one file up to the layout of this build without touching a value the operator set.
+     *
+     * <p>Three changes are possible. A key this build declares and the file does not mention is
+     * appended to the end of its group, carrying the default of this build and the version that
+     * added it. A leading comment block that is not the block of this build is replaced, which is
+     * how the text of an older build leaves a file. The layout version is written back. Every other
+     * line, and in particular every value, is carried over unchanged, and a file that already
+     * carries this layout comes back as the same string, which is what keeps a start from touching
+     * it.</p>
+     *
+     * <p>A file that declares a version newer than this build is not changed at all: only the build
+     * that wrote it knows the keys it declared, and taking the version back would hide that.</p>
+     *
+     * <p>Visible to the tests of this package, which drive a file content through it directly.</p>
+     *
+     * @param entry   the category the file belongs to
+     * @param content the file as it is on disk
+     * @return the content to write and what changed; the input and a {@code null} detail when the
+     *         file already carries this layout
+     */
+    static Upgraded upgrade(Entry entry, String content) {
+        List<String> lines = new ArrayList<>(Arrays.asList(content.split("\n", -1)));
+        Integer declared = topLevelKeys(lines, 0).get("version");
+        if (declared != null && isNewerVersion(value(lines.get(declared)))) {
+            return new Upgraded(content, null);
+        }
+
+        String versionChange = null;
+        int added = 0;
+        boolean headerRefreshed = false;
+
+        List<String> expected = headerLines(entry);
+        int headerEnd = 0;
+        while (headerEnd < lines.size() && isComment(lines.get(headerEnd))) {
+            headerEnd++;
+        }
+        if (!inOrder(lines.subList(0, headerEnd), expected)) {
+            lines.subList(0, headerEnd).clear();
+            lines.addAll(0, expected);
+            headerRefreshed = true;
+        }
+
+        Map<String, Integer> keys = topLevelKeys(lines, headerRefreshed ? expected.size() : headerEnd);
+        Integer versionIndex = keys.get("version");
+        if (versionIndex == null) {
+            // the key is written with the other appended keys, below
+        } else {
+            String current = value(lines.get(versionIndex));
+            if (!VERSION.equals(current)) {
+                lines.set(versionIndex, "version: " + VERSION);
+                versionChange = "version " + current + " -> " + VERSION;
+            }
+        }
+
+        List<String> appended = new ArrayList<>();
+        if (versionIndex == null) {
+            appended.add("# added in v" + VERSION);
+            appended.add("version: " + VERSION);
+            added++;
+        }
+        if (keys.get("enabled") == null) {
+            appended.add("# added in v" + VERSION);
+            appended.add("enabled: " + entry.defaultEnabled());
+            added++;
+        }
+
+        List<Edit> edits = new ArrayList<>();
+        Integer featuresIndex = keys.get("features");
+        if (featuresIndex == null) {
+            appended.add("# added in v" + VERSION);
+            if (entry.features().isEmpty()) {
+                appended.add("features: {}");
+                added++;
+            } else {
+                appended.add("features:");
+                for (Map.Entry<String, Boolean> feature : entry.features().entrySet()) {
+                    appended.add("  " + feature.getKey() + ": " + feature.getValue());
+                    added++;
+                }
+            }
+        } else {
+            Set<String> present = featureNames(lines, featuresIndex);
+            List<String> missing = new ArrayList<>();
+            for (Map.Entry<String, Boolean> feature : entry.features().entrySet()) {
+                if (present.contains(feature.getKey())) {
+                    continue;
+                }
+                missing.add("  # added in v" + VERSION);
+                missing.add("  " + feature.getKey() + ": " + feature.getValue());
+                added++;
+            }
+            if (!missing.isEmpty()) {
+                if (lines.get(featuresIndex).trim().endsWith("{}")) {
+                    // an empty flow mapping carries no block entries, so the header becomes a block
+                    lines.set(featuresIndex, "features:");
+                }
+                edits.add(new Edit(featuresEnd(lines, featuresIndex), missing));
+            }
+        }
+        if (!appended.isEmpty()) {
+            // without a features line to sit above, everything this build adds ends the file
+            edits.add(new Edit(featuresIndex == null ? endOfFile(lines) : featuresIndex, appended));
+        }
+
+        edits.sort(Comparator.comparingInt(Edit::index).reversed());
+        for (Edit edit : edits) {
+            lines.addAll(edit.index(), edit.lines());
+        }
+
+        String upgraded = String.join("\n", lines);
+        if (upgraded.equals(content)) {
+            return new Upgraded(content, null);
+        }
+        List<String> changes = new ArrayList<>();
+        if (versionChange != null) {
+            changes.add(versionChange);
+        }
+        if (added > 0) {
+            changes.add("added " + added + (added == 1 ? " key" : " keys"));
+        }
+        if (headerRefreshed) {
+            changes.add("refreshed header");
+        }
+        return new Upgraded(upgraded, changes.isEmpty() ? "layout" : String.join(", ", changes));
+    }
+
+    /**
+     * Renders the comment block this build writes above the keys of a file.
+     *
+     * @param entry the category the file belongs to
+     * @return the header and the category comment, one element per line
+     */
+    private static List<String> headerLines(Entry entry) {
+        List<String> lines = new ArrayList<>(
+            Arrays.asList((HEADER + entry.comment() + "\n").split("\n", -1)));
+        // the split keeps the empty element behind the final newline; it is not a line of the block
+        lines.remove(lines.size() - 1);
+        return lines;
+    }
+
+    /**
+     * Finds the top-level keys of a file, ignoring the indented entries of the features block.
+     *
+     * @param lines the file content
+     * @param from  index of the first line after the leading comment block
+     * @return key name to line index, for the first line that declares it
+     */
+    private static Map<String, Integer> topLevelKeys(List<String> lines, int from) {
+        Map<String, Integer> keys = new LinkedHashMap<>();
+        for (int index = from; index < lines.size(); index++) {
+            String line = lines.get(index);
+            if (isIndented(line)) {
+                continue;
+            }
+            String trimmed = line.trim();
+            if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                continue;
+            }
+            int colon = trimmed.indexOf(':');
+            if (colon > 0) {
+                keys.putIfAbsent(trimmed.substring(0, colon).trim(), index);
+            }
+        }
+        return keys;
+    }
+
+    /**
+     * Returns the index after the last line of the features block.
+     *
+     * <p>A blank line inside the block does not end it, so a new entry lands behind the entries that
+     * are there instead of in the middle of them.</p>
+     *
+     * @param lines  the file content
+     * @param header index of the {@code features} line
+     * @return the index a new entry of the block is appended at
+     */
+    private static int featuresEnd(List<String> lines, int header) {
+        int end = header + 1;
+        for (int index = header + 1; index < lines.size(); index++) {
+            if (isIndented(lines.get(index))) {
+                end = index + 1;
+            } else if (!lines.get(index).isBlank()) {
+                break;
+            }
+        }
+        return end;
+    }
+
+    /**
+     * Collects the feature names a file already mentions.
+     *
+     * @param lines  the file content
+     * @param header index of the {@code features} line
+     * @return the names, in file order
+     */
+    private static Set<String> featureNames(List<String> lines, int header) {
+        Set<String> names = new LinkedHashSet<>();
+        int end = featuresEnd(lines, header);
+        for (int index = header + 1; index < end; index++) {
+            String line = lines.get(index).trim();
+            if (line.startsWith("#")) {
+                continue;
+            }
+            int colon = line.indexOf(':');
+            if (colon > 0) {
+                names.add(line.substring(0, colon).trim());
+            }
+        }
+        return names;
+    }
+
+    /**
+     * Returns the index a new last line is appended at, in front of the newline that ends the file.
+     *
+     * @param lines the file content
+     * @return the index of the trailing empty element, or the size when the file has none
+     */
+    private static int endOfFile(List<String> lines) {
+        int last = lines.size() - 1;
+        return last >= 0 && lines.get(last).isEmpty() ? last : lines.size();
+    }
+
+    private static boolean isComment(String line) {
+        String trimmed = line.trim();
+        return trimmed.isEmpty() || trimmed.startsWith("#");
+    }
+
+    private static boolean isIndented(String line) {
+        return !line.isEmpty() && (line.charAt(0) == ' ' || line.charAt(0) == '\t');
+    }
+
+    /**
+     * Reports whether a comment block already carries every line of this build, in order.
+     *
+     * <p>An operator may add a line of their own to the block; as long as the text of this build is
+     * still in it, the block is not rewritten. A block an older build wrote does not carry those
+     * lines, which is how the text of that build leaves the file.</p>
+     *
+     * @param block    the comment block at the top of the file
+     * @param expected the block this build writes
+     * @return {@code true} when the block does not have to be replaced
+     */
+    private static boolean inOrder(List<String> block, List<String> expected) {
+        int index = 0;
+        for (String line : block) {
+            if (index < expected.size() && expected.get(index).equals(line)) {
+                index++;
+            }
+        }
+        return index == expected.size();
+    }
+
+    /**
+     * Reads the value of a scalar line.
+     *
+     * @param line a line of a generated file
+     * @return the value without surrounding quotes, or an empty string when the line carries none
+     */
+    private static String value(String line) {
+        String trimmed = line.trim();
+        int colon = trimmed.indexOf(':');
+        return colon < 0 ? "" : unquote(trimmed.substring(colon + 1).trim());
+    }
+
+    /**
+     * Reports whether a declared layout version was written by a build newer than this one.
+     *
+     * @param declared the value of the {@code version} key
+     * @return {@code true} when the file belongs to a newer build and has to be left alone
+     */
+    private static boolean isNewerVersion(String declared) {
+        try {
+            return Integer.parseInt(declared) > Integer.parseInt(VERSION);
+        } catch (NumberFormatException notANumber) {
+            // a value that is not a number is not a claim about a newer build
+            return false;
+        }
     }
 
     private static void read() {
@@ -321,10 +682,9 @@ public final class PrtsConfigManager {
             }
         });
         FEATURES.put(category, Collections.unmodifiableMap(resolved));
-        if (version != null && !VERSION.equals(version)) {
-            problem(category, "was generated by an older build (declares version " + version
-                + ", this build writes version " + VERSION + "); delete the file to have it"
-                + " generated again");
+        if (version != null && isNewerVersion(version)) {
+            problem(category, "declares version " + version + ", this build writes version " + VERSION
+                + "; it was written by a newer build and is left as it is");
         }
         if (enabled == null) {
             problem(category, "no enabled key; the built-in default applies");

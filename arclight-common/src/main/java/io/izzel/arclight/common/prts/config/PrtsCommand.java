@@ -102,6 +102,7 @@ public final class PrtsCommand {
         lines.add("[PRTS] prts-config reloaded");
         lines.add(switches());
         lines.addAll(features());
+        lines.addAll(upgrades());
         lines.addAll(problems());
         return lines;
     }
@@ -111,6 +112,7 @@ public final class PrtsCommand {
         lines.add("[PRTS] config directory: " + PrtsConfigManager.directory().toAbsolutePath());
         lines.add(switches());
         lines.addAll(features());
+        lines.addAll(upgrades());
         lines.addAll(problems());
         return lines;
     }
@@ -153,6 +155,22 @@ public final class PrtsCommand {
                 builder.append(' ').append(category).append('.').append(name).append('=').append(value));
             lines.add(builder.toString());
         }
+        return lines;
+    }
+
+    /**
+     * Renders the files this process brought up to the current configuration layout at start.
+     *
+     * <p>An upgrade rewrites a file an operator owns, so the file and what changed in it are shown
+     * here as well as in the start log. The line stays for the lifetime of the process: it is a
+     * statement about what happened to the files on disk, not about the values in effect.</p>
+     *
+     * @return the upgrade lines, empty when every file already carried the current layout
+     */
+    private static List<String> upgrades() {
+        List<String> lines = new ArrayList<>();
+        PrtsConfigManager.upgrades().forEach((category, upgrade) ->
+            lines.add("[PRTS] config upgraded: " + upgrade));
         return lines;
     }
 
