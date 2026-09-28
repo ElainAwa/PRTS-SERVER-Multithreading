@@ -23,6 +23,14 @@ import org.bukkit.event.entity.EntityPotionEffectEvent;
 
 import java.util.*;
 
+/**
+ * Capture slots for values that have to travel from one call to the next inside one interaction,
+ * which the Bukkit patches expressed as fields of the class they patched.
+ *
+ * <p>Each slot is written and read on the server thread, inside a single event call or a single
+ * block change, and the capture/consume pairs are expected to balance. The slots are owned by that
+ * thread; a world tick that runs on a worker cannot use them and needs a context of its own.</p>
+ */
 public class ArclightCaptures {
 
     private static Entity entityChangeBlock;
