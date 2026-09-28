@@ -1,6 +1,8 @@
 package io.izzel.arclight.common.mixin.core.world.entity.npc;
 
 import io.izzel.arclight.common.bridge.core.world.item.trading.MerchantOfferBridge;
+import io.izzel.arclight.mixin.Decorate;
+import io.izzel.arclight.mixin.DecorationOps;
 import net.minecraft.world.entity.npc.WanderingTrader;
 import net.minecraft.world.item.trading.MerchantOffer;
 import net.minecraft.world.item.trading.MerchantOffers;
@@ -12,21 +14,22 @@ import org.bukkit.event.entity.VillagerAcquireTradeEvent;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(WanderingTrader.class)
 public abstract class WanderingTraderMixin extends AbstractVillagerMixin {
 
-    @Redirect(method = "updateTrades", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/item/trading/MerchantOffers;add(Ljava/lang/Object;)Z"))
-    private boolean arclight$gainOffer(MerchantOffers merchantOffers, Object e) {
+    // Same call site as the vanilla offer add: a decorate composes with mod handlers here,
+    // where an exclusive redirect would silently drop one of them.
+    @Decorate(method = "updateTrades", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/item/trading/MerchantOffers;add(Ljava/lang/Object;)Z"))
+    private boolean arclight$gainOffer(MerchantOffers merchantOffers, Object e) throws Throwable {
         MerchantOffer offer = (MerchantOffer) e;
         VillagerAcquireTradeEvent event = new VillagerAcquireTradeEvent((AbstractVillager) getBukkitEntity(), ((MerchantOfferBridge) offer).bridge$asBukkit());
         if (this.valid) {
             Bukkit.getPluginManager().callEvent(event);
         }
         if (!event.isCancelled()) {
-            return merchantOffers.add(CraftMerchantRecipe.fromBukkit(event.getRecipe()).toMinecraft());
+            return (boolean) DecorationOps.callsite().invoke(merchantOffers, CraftMerchantRecipe.fromBukkit(event.getRecipe()).toMinecraft());
         }
         return false;
     }
