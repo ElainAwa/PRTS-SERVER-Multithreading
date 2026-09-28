@@ -27,7 +27,7 @@ public class Launcher {
     private static final String EULA_FILE = "eula.txt";
 
     /** Text used to ask the console encoding whether it can carry non-ASCII characters at all. */
-    private static final String NON_ASCII_PROBE = "\u4e2d\u6587";
+    private static final String NON_ASCII_SAMPLE = "\u4e2d\u6587";
 
     public static void main(String[] args) throws Throwable {
         preserveLocalizedOutput();
@@ -71,14 +71,14 @@ public class Launcher {
      * <p>The banner and the i18n messages are written straight to the standard streams, before any
      * logger exists. A JVM started under a locale whose console encoding cannot carry non-ASCII
      * characters at all - the POSIX "C" locale, for example - silently replaces every one of them
-     * with a question mark. When the probe below says the console encoding cannot carry the text,
+     * with a question mark. When this sample cannot be encoded by the console,
      * the streams are replaced with UTF-8 writers; that is also the encoding the log files and any
      * process reading a pipe expect. An encoding that can already carry the text, a Windows code
      * page for instance, is left exactly as it is.</p>
      */
     private static void preserveLocalizedOutput() {
         Charset console = consoleCharset();
-        if (console != null && console.newEncoder().canEncode(NON_ASCII_PROBE)) {
+        if (console != null && console.newEncoder().canEncode(NON_ASCII_SAMPLE)) {
             return;
         }
         System.setOut(new PrintStream(new FileOutputStream(FileDescriptor.out), true, StandardCharsets.UTF_8));
