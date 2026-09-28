@@ -9,6 +9,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.animal.Bee;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.BeehiveBlock;
 import net.minecraft.world.level.block.entity.BeehiveBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import org.bukkit.Bukkit;
@@ -85,19 +86,18 @@ public abstract class BeehiveBlockEntityMixin extends BlockEntityMixin {
     }
 
     private static boolean releaseBee(Level world, BlockPos pos, BlockState state, BeehiveBlockEntity.BeeData beeData, @Nullable List<Entity> list, BeehiveBlockEntity.BeeReleaseStatus status, @Nullable BlockPos pos1, boolean force) {
-        arclight$force = force;
-        try {
-            return releaseOccupant(world, pos, state, beeData.toOccupant(), list, status, pos1);
-        } finally {
-            arclight$force = false;
+        if (force && status == BeehiveBlockEntity.BeeReleaseStatus.BEE_RELEASED && world.isNight() && !world.isRaining()) {
+            // A forced release must not be stopped by the night half of the guard inside releaseOccupant.
+            // That guard reads Level#isNight, and mods that change bee behaviour redirect the very same call,
+            // where a second redirect is a load failure instead of a working override. Reproducing the guard
+            // here and asking the vanilla method with a status it never blocks keeps both paths intact.
+            BlockPos front = pos.relative(state.getValue(BeehiveBlock.FACING));
+            if (!world.getBlockState(front).getCollisionShape(world, front).isEmpty()) {
+                return false;
+            }
+            return releaseOccupant(world, pos, state, beeData.toOccupant(), list, BeehiveBlockEntity.BeeReleaseStatus.EMERGENCY, pos1);
         }
-    }
-
-    private static transient boolean arclight$force;
-
-    @Redirect(method = "releaseOccupant", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/Level;isNight()Z"))
-    private static boolean arclight$bypassNightCheck(Level world) {
-        return !arclight$force && world.isNight();
+        return releaseOccupant(world, pos, state, beeData.toOccupant(), list, status, pos1);
     }
 
     @Inject(method = "loadAdditional", at = @At("RETURN"))
