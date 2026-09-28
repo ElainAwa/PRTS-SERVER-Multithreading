@@ -3,28 +3,12 @@ package io.izzel.arclight.common.mixin.core.world.level.block;
 import net.minecraft.world.level.block.SaplingBlock;
 import org.spongepowered.asm.mixin.Mixin;
 
-// todo Re-implement this
+// Nothing here hooks the tree that grows out of a sapling: StructureGrowEvent has no dispatch point
+// on this platform, and the TreeType that the mushroom and fungus blocks capture has no reader
+// either. Such a hook belongs where the platform actually places the tree (TreeGrower and
+// SaplingBlock#performBonemeal, with the placed blocks collected before they are written), and it
+// needs a verification path of its own. The old commented-out body came from upstream and made this
+// class look as if it still carried an injector.
 @Mixin(SaplingBlock.class)
 public abstract class SaplingBlockMixin {
-
-    // @formatter:off
-    //@Shadow public abstract void grow(IWorld worldIn, BlockPos pos, BlockState state, Random rand);
-    // @formatter:on
-
-    // @SuppressWarnings("unchecked")
-    /*
-    @Redirect(method = "tick", at = @At(value = "INVOKE", target = "Lnet/minecraft/block/SaplingBlock;grow(Lnet/minecraft/world/IWorld;Lnet/minecraft/util/math/BlockPos;Lnet/minecraft/block/BlockState;Ljava/util/Random;)V"))
-    public void arclight$treeGrow(SaplingBlock saplingBlock, IWorld worldIn, BlockPos pos, BlockState state, Random rand) {
-        BlockStateListPopulator populator = new ArclightBlockPopulator(worldIn.getWorld());
-        this.grow(populator, pos, state, rand);
-        if (populator.getBlocks().size() > 0) {
-            TreeType treeType = ArclightCaptures.getTreeType();
-            Location location = CraftBlock.at(worldIn, pos).getLocation();
-            StructureGrowEvent event = new StructureGrowEvent(location, treeType, false, null, (List<org.bukkit.block.BlockState>) (Object) populator.getList());
-            Bukkit.getPluginManager().callEvent(event);
-            if (!event.isCancelled()) {
-                populator.updateList();
-            }
-        }
-    }*/
 }
