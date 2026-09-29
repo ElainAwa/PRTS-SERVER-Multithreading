@@ -17,6 +17,7 @@
     "PrtsCreateFunnelPickupGuardMixin",
     "PrtsCreateTreeCutterMixin",
     "PrtsItemPickupAttemptMixin",
+    "PrtsMineColoniesDiscoverMixin",
     "PrtsPaperBukkitApiMixin",
     "PrtsPaperHumanEntityApiMixin",
     "PrtsPaperServerApiMixin",
