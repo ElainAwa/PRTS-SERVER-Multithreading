@@ -4,6 +4,8 @@ package io.izzel.arclight.common.prts.modsupport;
 import io.izzel.arclight.api.ArclightPlatform;
 import io.izzel.arclight.common.mod.mixins.annotation.LoadIfMod;
 import io.izzel.arclight.common.mod.mixins.annotation.OnlyInPlatform;
+import io.izzel.arclight.common.prts.config.PrtsConfigManager;
+import io.izzel.arclight.common.prts.support.PrtsModSupportStats;
 import io.izzel.arclight.common.prts.support.PrtsSbwCompat;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
@@ -41,6 +43,11 @@ public abstract class PrtsSbwMotionSyncMixin {
      */
     @Inject(method = "syncMotionInterval()I", at = @At("HEAD"), cancellable = true, remap = false)
     private static void prts$spreadMotionSync(CallbackInfoReturnable<Integer> cir) {
+        if (!PrtsConfigManager.feature(PrtsConfigManager.MODSUPPORT, "spread-sbw-motion-sync")) {
+            // The switch is off: the answer of the mod stands.
+            return;
+        }
+        PrtsModSupportStats.count("sbw-motion-sync-answered");
         cir.setReturnValue(PrtsSbwCompat.MOTION_SYNC_INTERVAL);
     }
 }

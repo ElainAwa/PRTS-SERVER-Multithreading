@@ -4,6 +4,8 @@ package io.izzel.arclight.common.prts.modsupport;
 import io.izzel.arclight.api.ArclightPlatform;
 import io.izzel.arclight.common.mod.mixins.annotation.LoadIfMod;
 import io.izzel.arclight.common.mod.mixins.annotation.OnlyInPlatform;
+import io.izzel.arclight.common.prts.config.PrtsConfigManager;
+import io.izzel.arclight.common.prts.support.PrtsModSupportStats;
 import io.izzel.arclight.common.prts.support.PrtsSbwCompat;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.server.MinecraftServer;
@@ -53,9 +55,11 @@ public abstract class PrtsSbwMinecraftUtilMixin {
         if (!(player instanceof ServerPlayer serverPlayer)) {
             return;
         }
-        if (PrtsSbwCompat.isIffPayload(packet) && PrtsSbwCompat.iffThrottleApplies(packet)) {
+        if (PrtsConfigManager.feature(PrtsConfigManager.MODSUPPORT, "throttle-sbw-iff-payloads")
+                && PrtsSbwCompat.isIffPayload(packet) && PrtsSbwCompat.iffThrottleApplies(packet)) {
             MinecraftServer server = serverPlayer.getServer();
             if (server != null && server.getTickCount() % PrtsSbwCompat.IFF_THROTTLE_TICKS != 0) {
+                PrtsModSupportStats.count("sbw-iff-payloads-held");
                 return;
             }
         }
@@ -73,7 +77,8 @@ public abstract class PrtsSbwMinecraftUtilMixin {
      */
     @Overwrite(remap = false)
     public static void sendPacketToAll(CustomPacketPayload packet) {
-        if (PrtsSbwCompat.isVehicleShootPayload(packet)) {
+        if (PrtsConfigManager.feature(PrtsConfigManager.MODSUPPORT, "narrow-sbw-vehicle-shoot")
+                && PrtsSbwCompat.isVehicleShootPayload(packet)) {
             UUID vehicleId = PrtsSbwCompat.vehicleId(packet);
             if (vehicleId != null) {
                 MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
@@ -81,6 +86,7 @@ public abstract class PrtsSbwMinecraftUtilMixin {
                     for (ServerLevel level : server.getAllLevels()) {
                         Entity vehicle = level.getEntities().get(vehicleId);
                         if (vehicle != null) {
+                            PrtsModSupportStats.count("sbw-shoot-broadcasts-narrowed");
                             PacketDistributor.sendToPlayersTrackingEntity(vehicle, packet);
                             return;
                         }

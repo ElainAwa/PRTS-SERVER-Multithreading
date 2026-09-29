@@ -68,6 +68,7 @@ public final class PrtsTaczGunOperatorCompat {
             LOGGER.debug("[PRTS-TACZ] operator reset skipped player={} cause={}", name, thrown.toString());
             return;
         }
+        PrtsModSupportStats.count("tacz-gun-state-resyncs");
         SCHEDULER.schedule(() -> resyncLater(player), RESYNC_DELAY_MS, TimeUnit.MILLISECONDS);
     }
 

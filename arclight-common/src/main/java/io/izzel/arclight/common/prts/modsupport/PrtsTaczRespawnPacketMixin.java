@@ -2,6 +2,7 @@
 package io.izzel.arclight.common.prts.modsupport;
 
 import io.izzel.arclight.common.mod.mixins.annotation.LoadIfMod;
+import io.izzel.arclight.common.prts.config.PrtsConfigManager;
 import io.izzel.arclight.common.prts.support.PrtsTaczGunOperatorCompat;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientboundRespawnPacket;
@@ -35,6 +36,9 @@ public abstract class PrtsTaczRespawnPacketMixin {
     @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;)V", at = @At("HEAD"))
     private void prts$resyncGunOperatorOnRespawn(Packet<?> packet, CallbackInfo ci) {
         if (!(packet instanceof ClientboundRespawnPacket)) {
+            return;
+        }
+        if (!PrtsConfigManager.feature(PrtsConfigManager.MODSUPPORT, "resync-tacz-gun-state-on-respawn")) {
             return;
         }
         if (!(((Object) this) instanceof ServerGamePacketListenerImpl listener) || listener.player == null) {

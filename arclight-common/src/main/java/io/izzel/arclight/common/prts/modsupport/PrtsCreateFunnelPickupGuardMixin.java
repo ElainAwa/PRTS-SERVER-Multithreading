@@ -5,6 +5,7 @@ import io.izzel.arclight.api.ArclightPlatform;
 import io.izzel.arclight.common.mod.mixins.annotation.LoadIfMod;
 import io.izzel.arclight.common.mod.mixins.annotation.OnlyInPlatform;
 import io.izzel.arclight.common.prts.config.PrtsConfigManager;
+import io.izzel.arclight.common.prts.support.PrtsModSupportStats;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.BlockGetter;
@@ -73,6 +74,7 @@ public abstract class PrtsCreateFunnelPickupGuardMixin {
                 filteringType = type.get(null);
             }
             if (behaviourLookup != null && behaviourLookup.invoke(null, level, pos, filteringType) == null) {
+                PrtsModSupportStats.count("create-funnel-pickups-skipped");
                 ci.cancel();
             }
         } catch (Throwable ignored) {

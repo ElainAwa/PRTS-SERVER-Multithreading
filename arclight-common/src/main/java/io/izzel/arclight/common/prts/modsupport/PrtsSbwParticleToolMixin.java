@@ -4,6 +4,8 @@ package io.izzel.arclight.common.prts.modsupport;
 import io.izzel.arclight.api.ArclightPlatform;
 import io.izzel.arclight.common.mod.mixins.annotation.LoadIfMod;
 import io.izzel.arclight.common.mod.mixins.annotation.OnlyInPlatform;
+import io.izzel.arclight.common.prts.config.PrtsConfigManager;
+import io.izzel.arclight.common.prts.support.PrtsModSupportStats;
 import io.izzel.arclight.common.prts.support.PrtsSbwCompat;
 import net.minecraft.core.particles.ParticleOptions;
 import net.minecraft.server.level.ServerLevel;
@@ -51,14 +53,22 @@ public abstract class PrtsSbwParticleToolMixin {
     public static <T extends ParticleOptions> void sendParticle(
             ServerLevel level, T particle, double x, double y, double z, int count,
             double xOffset, double yOffset, double zOffset, double speed, boolean force) {
+        boolean narrow = PrtsConfigManager.feature(PrtsConfigManager.MODSUPPORT,
+            "narrow-sbw-particle-viewers");
+        int skipped = 0;
         for (ServerPlayer viewer : level.players()) {
-            double dx = viewer.getX() - x;
-            double dy = viewer.getY() - y;
-            double dz = viewer.getZ() - z;
-            if (dx * dx + dy * dy + dz * dz <= PrtsSbwCompat.PARTICLE_RADIUS_SQ) {
-                level.sendParticles(viewer, particle, force, x, y, z, count,
-                    xOffset, yOffset, zOffset, speed);
+            if (narrow) {
+                double dx = viewer.getX() - x;
+                double dy = viewer.getY() - y;
+                double dz = viewer.getZ() - z;
+                if (dx * dx + dy * dy + dz * dz > PrtsSbwCompat.PARTICLE_RADIUS_SQ) {
+                    skipped++;
+                    continue;
+                }
             }
+            level.sendParticles(viewer, particle, force, x, y, z, count,
+                xOffset, yOffset, zOffset, speed);
         }
+        PrtsModSupportStats.count("sbw-particle-viewers-skipped", skipped);
     }
 }
