@@ -41,7 +41,7 @@ public class ArclightConnector implements IMixinConnector {
         Mixins.addConfiguration("prts-fixes.mixins.json");
         Mixins.addConfiguration("prts-modsupport.mixins.json");
         Mixins.addConfiguration("prts-performance.mixins.json");
-        Mixins.addConfiguration("prts-optional-servercore.mixins.json");
+        // The optional layer contributes no mixin configuration: it is driven by platform events.
         LOGGER.info("mixin-load.prts");
     }
 }

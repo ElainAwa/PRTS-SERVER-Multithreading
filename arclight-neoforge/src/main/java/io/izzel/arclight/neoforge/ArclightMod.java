@@ -2,9 +2,11 @@ package io.izzel.arclight.neoforge;
 
 import io.izzel.arclight.api.Arclight;
 import io.izzel.arclight.common.mod.server.ArclightServer;
+import io.izzel.arclight.common.prts.PrtsSwitches;
 import io.izzel.arclight.neoforge.mod.NeoForgeArclightServer;
 import io.izzel.arclight.neoforge.mod.event.ArclightEventDispatcherRegistry;
 import io.izzel.arclight.neoforge.prts.fixes.PrtsCommandRegistration;
+import io.izzel.arclight.neoforge.prts.optional.PrtsJournalEvents;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.common.NeoForge;
 import org.apache.logging.log4j.Level;
@@ -26,6 +28,11 @@ public class ArclightMod {
         System.setErr(new LoggingPrintStream("STDERR", System.err, Level.ERROR));
         ArclightEventDispatcherRegistry.registerAllEventDispatchers();
         NeoForge.EVENT_BUS.addListener(PrtsCommandRegistration::onRegisterCommands);
+        // The optional layer is opt-in: with the category off its listeners are never subscribed,
+        // and with it on they drive the journal from platform events instead of kernel seams.
+        if (PrtsSwitches.enabled(PrtsSwitches.OPTIONAL_SERVERCORE)) {
+            PrtsJournalEvents.register();
+        }
     }
 
     private static class LoggingPrintStream extends PrintStream {

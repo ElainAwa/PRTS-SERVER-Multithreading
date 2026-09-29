@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-package io.izzel.arclight.common.prts.optional.journal;
+package io.izzel.arclight.common.prts.optional.servercore;
 
 import com.mojang.logging.LogUtils;
 import io.izzel.arclight.common.bridge.core.server.level.ChunkMapBridge;
@@ -48,17 +48,19 @@ import java.util.List;
  * been published, which leaves the evidence of one unclean exit in place without replaying it twice
  * on purpose; a clean shutdown removes both files.</p>
  *
- * <p><b>Ownership and threading.</b> Every entry point runs on the server thread: the tick hook
- * that drives a cycle, the world-creation hook that replays, and the shutdown hook. The cycle state
- * below is therefore owned by that thread, and it is static because a dedicated server runs one set
- * of levels per process. Serialization and the file writes that finish a cycle do block that thread
- * (disk I/O), which is bounded by the per-tick budget and the fsync of one file, and is one of the
- * reasons this layer is opt-in.</p>
+ * <p><b>Ownership and threading.</b> Every entry point runs on the server thread: the server tick
+ * event that drives a cycle, the level-load event that replays, and the server-stopping event that
+ * drops the files of a clean shutdown. The cycle state below is therefore owned by that thread, and
+ * it is static because a dedicated server runs one set of levels per process. Serialization and the
+ * file writes that finish a cycle do block that thread (disk I/O), which is bounded by the per-tick
+ * budget and the fsync of one file, and is one of the reasons this layer is opt-in.</p>
  *
- * <p><b>Kernel seam.</b> The seam this class sits on (storage and serialization) is owned by the new
- * kernel. When the kernel takes it over, this whole subtree and its mixin configuration are meant to
- * be deleted; the journal writes only under its own {@code journal} directory and never touches the
- * region layout, so dropping it leaves nothing behind.</p>
+ * <p><b>Kernel seam.</b> The class occupies no tick-loop, world-lifecycle or shutdown seam: it is
+ * driven by platform events, so a kernel that rewrites those methods keeps it running. The seam it
+ * does sit on is storage and serialization, which is owned by the kernel; when the kernel takes it
+ * over, this whole subtree is meant to be deleted. The journal writes only under its own
+ * {@code journal} directory and never touches the region layout, so dropping it leaves nothing
+ * behind.</p>
  */
 public final class ChunkJournal {
 

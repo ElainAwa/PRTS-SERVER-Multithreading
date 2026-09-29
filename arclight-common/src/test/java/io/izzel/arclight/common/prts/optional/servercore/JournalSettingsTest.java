@@ -2,7 +2,6 @@
 package io.izzel.arclight.common.prts.optional.servercore;
 
 import io.izzel.arclight.common.prts.config.PrtsConfigManager;
-import io.izzel.arclight.common.prts.optional.journal.JournalSettings;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
