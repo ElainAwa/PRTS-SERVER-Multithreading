@@ -30,6 +30,12 @@ public final class PrtsSbwCompat {
     /** Squared distance a particle is still sent within. */
     public static final double PARTICLE_RADIUS_SQ = 96.0 * 96.0;
 
+    /** Lifetime the mod ships for a projectile; only that value is answered differently. */
+    public static final int PROJECTILE_LIFE_DEFAULT = 400;
+
+    /** Lifetime answered for a projectile whose stored value is still the default of the mod. */
+    public static final int PROJECTILE_LIFE_TICKS = 60;
+
     private static final String CLASS_ENTITY_RELATION_SYNC =
         "com.atsuishio.superbwarfare.network.message.receive.EntityRelationSyncMessage";
     private static final String CLASS_PLAYER_INFO_SYNC =

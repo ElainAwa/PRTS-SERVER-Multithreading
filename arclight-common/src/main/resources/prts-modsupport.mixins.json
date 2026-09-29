@@ -27,6 +27,7 @@
     "PrtsTaczRespawnPacketMixin",
     "PrtsSbwMotionSyncMixin",
     "PrtsSbwParticleToolMixin",
-    "PrtsSbwMinecraftUtilMixin"
+    "PrtsSbwMinecraftUtilMixin",
+    "PrtsSbwProjectileLifeMixin"
   ]
 }
