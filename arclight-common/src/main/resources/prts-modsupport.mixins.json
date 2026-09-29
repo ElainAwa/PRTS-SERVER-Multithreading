@@ -15,6 +15,7 @@
     "PrtsCraftServerPaperApiMixin",
     "PrtsCraftServerPluginLoadMixin",
     "PrtsCreateFunnelPickupGuardMixin",
+    "PrtsCreateTreeCutterMixin",
     "PrtsItemPickupAttemptMixin",
     "PrtsPaperBukkitApiMixin",
     "PrtsPaperHumanEntityApiMixin",
