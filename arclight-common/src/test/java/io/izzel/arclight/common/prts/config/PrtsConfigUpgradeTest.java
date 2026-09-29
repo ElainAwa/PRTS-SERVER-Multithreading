@@ -70,7 +70,8 @@ class PrtsConfigUpgradeTest {
         Upgraded upgraded = PrtsConfigManager.upgrade(entry, stale);
         Map<String, Boolean> appended = appended(stale);
 
-        assertEquals("version 1 -> " + LAYOUT + ", " + addedKeys(appended.size()) + ", refreshed header",
+        assertEquals("version 1 -> " + LAYOUT + ", "
+                + addedKeys(appended.size() + appendedNumbers(stale).size()) + ", refreshed header",
             upgraded.detail());
         assertFalse(upgraded.content().contains("older build"), "the old comment block is gone");
         assertTrue(upgraded.content().contains("version: " + LAYOUT), "the version is written back");
@@ -111,8 +112,9 @@ class PrtsConfigUpgradeTest {
         Map<String, Boolean> appended = appended(stale);
 
         // the version line is rewritten rather than added, and the group header of the features block
-        // is not a key: what is added is the enabled key plus one entry per declared feature
-        assertEquals("version 1 -> " + LAYOUT + ", " + addedKeys(1 + appended.size()) + ", refreshed header",
+        // is not a key: what is added is the enabled key plus one entry per declared feature or setting
+        assertEquals("version 1 -> " + LAYOUT + ", "
+                + addedKeys(1 + appended.size() + appendedNumbers(stale).size()) + ", refreshed header",
             upgraded.detail());
         assertTrue(upgraded.content().contains("enabled: true"), "the category default is written");
         assertTrue(upgraded.content().contains("features:"), "the group header is written");
@@ -133,7 +135,8 @@ class PrtsConfigUpgradeTest {
         Upgraded upgraded = PrtsConfigManager.upgrade(entry, stale);
         Map<String, Boolean> appended = appended(stale);
 
-        assertEquals("version 1 -> " + LAYOUT + ", " + addedKeys(appended.size()) + ", refreshed header",
+        assertEquals("version 1 -> " + LAYOUT + ", "
+                + addedKeys(appended.size() + appendedNumbers(stale).size()) + ", refreshed header",
             upgraded.detail());
         assertFalse(upgraded.content().contains("features: {}"), "a flow mapping became a block");
         appended.forEach((name, value) -> assertTrue(
@@ -155,7 +158,7 @@ class PrtsConfigUpgradeTest {
 
         assertTrue(upgraded.content().contains("preload-bungee-chat-classes: true\n  # added in v"),
             "the appended key sits behind the entries that are there: " + upgraded.content());
-        Map.Entry<String, Boolean> last = lastOf(appended(stale));
+        Map.Entry<String, ?> last = lastAppended(stale);
         assertTrue(upgraded.content().endsWith("  " + last.getKey() + ": " + last.getValue() + "\n\n"),
             "the blank line stays behind the block");
     }
@@ -221,13 +224,35 @@ class PrtsConfigUpgradeTest {
     }
 
     /**
+     * Returns the whole-number settings this build declares and a fixture does not mention.
+     *
+     * <p>The declaration of the category is the source here as well, so a setting this build adds
+     * changes what an older file is missing without an edit to this class.</p>
+     *
+     * @param fixture a configuration file content
+     * @return setting name to default, in declaration order; empty when the fixture carries all
+     */
+    private static Map<String, Integer> appendedNumbers(String fixture) {
+        Map<String, Integer> declared = new LinkedHashMap<>();
+        PrtsConfigManager.entries().get(PrtsConfigManager.MODSUPPORT).numbers()
+            .forEach((name, setting) -> declared.put(name, setting.defaultValue()));
+        declared.keySet().removeIf(name -> fixture.contains("\n  " + name + ":"));
+        return declared;
+    }
+
+    /**
      * Returns the entry appended last, which is the line in front of the trailing blank line.
      *
-     * @param features the appended features, in file order
-     * @return the last entry
+     * <p>Switches are appended before whole-number settings, so the last entry of a category that
+     * declares both is one of the settings.</p>
+     *
+     * @param fixture a configuration file content
+     * @return the entry appended last
      */
-    private static Map.Entry<String, Boolean> lastOf(Map<String, Boolean> features) {
-        List<Map.Entry<String, Boolean>> ordered = new ArrayList<>(features.entrySet());
+    private static Map.Entry<String, ?> lastAppended(String fixture) {
+        Map<String, Object> appended = new LinkedHashMap<>(appended(fixture));
+        appended.putAll(appendedNumbers(fixture));
+        List<Map.Entry<String, Object>> ordered = new ArrayList<>(appended.entrySet());
         return ordered.get(ordered.size() - 1);
     }
 
