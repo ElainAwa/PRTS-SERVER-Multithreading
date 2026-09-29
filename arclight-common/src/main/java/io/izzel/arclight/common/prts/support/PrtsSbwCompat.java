@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-package io.izzel.arclight.common.prts.modsupport;
+package io.izzel.arclight.common.prts.support;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;

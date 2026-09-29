@@ -2,6 +2,7 @@
 package io.izzel.arclight.common.prts.modsupport;
 
 import io.izzel.arclight.common.mod.mixins.annotation.LoadIfMod;
+import io.izzel.arclight.common.prts.support.PrtsTaczGunOperatorCompat;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientboundRespawnPacket;
 import net.minecraft.server.MinecraftServer;
