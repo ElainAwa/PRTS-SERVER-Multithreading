@@ -19,6 +19,8 @@
     "PrtsPaperBukkitApiMixin",
     "PrtsPaperHumanEntityApiMixin",
     "PrtsPaperServerApiMixin",
+    "PrtsSablePhysicsPipelineMixin",
+    "PrtsSableRopeMixin",
     "PrtsSableVoxelCacheMixin",
     "PrtsSimpleCommandMapMixin",
     "PrtsTaczRespawnPacketMixin",
