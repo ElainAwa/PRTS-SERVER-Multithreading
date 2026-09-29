@@ -19,6 +19,7 @@
     "PrtsPaperBukkitApiMixin",
     "PrtsPaperHumanEntityApiMixin",
     "PrtsPaperServerApiMixin",
+    "PrtsSableVoxelCacheMixin",
     "PrtsSimpleCommandMapMixin",
     "PrtsTaczRespawnPacketMixin",
     "PrtsSbwMotionSyncMixin",

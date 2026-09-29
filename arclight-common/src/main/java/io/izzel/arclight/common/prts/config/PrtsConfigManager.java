@@ -146,15 +146,47 @@ public final class PrtsConfigManager {
         ENTRIES.put(FIXES, new Entry("fixes.yml", true, Map.of(),
             "# Correctness fixes (crashes, injection anchors, serialization fallbacks)."));
         ENTRIES.put(MODSUPPORT, new Entry("modsupport.yml", true, modSupportFeatures(),
+            modSupportNumbers(),
             "# Mod interoperability. 'auto' means: apply only when the matching mod is present.\n"
+                + "# Every switch here is read at the moment its patch runs, so /prts reload applies a\n"
+                + "# change without a restart. A switch that repairs a fault defaults to true; a switch\n"
+                + "# that only changes how much work a mod does defaults to false and is turned on\n"
+                + "# deliberately.\n"
                 + "# 'guard-create-funnel-pickup: true' skips a funnel pickup whose filtering behaviour\n"
                 + "# cannot be read instead of letting the mod throw out of the block tick. It is off by\n"
                 + "# default, because no reading justifies changing funnel behaviour without the observed\n"
                 + "# fault.\n"
+                + "# 'guard-create-tree-cutter-bounds: true' answers air for a tree search that reaches a\n"
+                + "# chunk which is not loaded, so a saw cannot pull a ring of chunks into memory.\n"
+                + "# 'guard-sable-voxel-cache: true' takes the memoized block lookup of the physics mod\n"
+                + "# under one lock, which keeps two threads from corrupting the same cache table.\n"
+                + "# 'serialize-sable-native-calls: true' runs the physics step and the rope calls of that\n"
+                + "# mod under one lock, so its native library is never entered twice at the same time.\n"
+                + "# 'narrow-unlockable-recipes-login-sync: true' sends the recipe refresh of the recipe\n"
+                + "# mod to the player who logged in instead of to every player online.\n"
+                + "# 'guard-minecolonies-compat-discovery: true' keeps one failing compatibility scan\n"
+                + "# from ending the remaining scan steps of the colony mod.\n"
+                + "# 'shorten-sbw-projectile-life: true' answers a shorter default lifetime for a\n"
+                + "# projectile of the vehicle mod.\n"
+                + "# 'spread-sbw-motion-sync: true' answers a wider motion sync interval for its fast\n"
+                + "# projectiles.\n"
+                + "# 'narrow-sbw-particle-viewers: true' sends a particle of that mod only to players\n"
+                + "# within 96 blocks instead of to every player of the level.\n"
+                + "# 'throttle-sbw-iff-payloads: true' sends the friend-or-foe update every third tick,\n"
+                + "# and only while the mod setting still holds the value the mod ships.\n"
+                + "# 'narrow-sbw-vehicle-shoot: true' sends the shoot broadcast of that mod to the players\n"
+                + "# tracking the vehicle instead of to the whole server.\n"
+                + "# 'resync-tacz-gun-state-on-respawn: true' re-sends the gun state of a player whose\n"
+                + "# respawn packet was pushed out, which a skin refresh does without the client\n"
+                + "# rebuilding that state.\n"
                 + "# 'disable-bukkit-reload-command: true' removes /reload and /bukkit:reload. A whole\n"
                 + "# server reload re-enters plugin loading inside a live hybrid server and can leave\n"
                 + "# plugins and mods in a state neither expects, so both commands stay available by\n"
-                + "# default and a restart of the process is the supported way to reload."));
+                + "# default and a restart of the process is the supported way to reload.\n"
+                + "# 'tree-cutter-node-budget' and 'tree-cutter-time-budget-ms' bound one tree search of\n"
+                + "# the machinery mod (block lookups, wall clock). Zero means the unbounded search of\n"
+                + "# the mod; a search that runs out of budget is cut short and the saw continues with\n"
+                + "# the next one."));
         ENTRIES.put(PERFORMANCE, new Entry("performance.yml", true, Map.of(),
             "# Performance work that does not land on a new-kernel seam."));
         ENTRIES.put(OPTIONAL_SERVERCORE, new Entry("optional/servercore.yml", false, journalFeatures(),
@@ -185,7 +217,34 @@ public final class PrtsConfigManager {
         features.put("preload-bungee-chat-classes", true);
         features.put("disable-bukkit-reload-command", false);
         features.put("guard-create-funnel-pickup", false);
+        features.put("guard-create-tree-cutter-bounds", true);
+        features.put("guard-sable-voxel-cache", true);
+        features.put("serialize-sable-native-calls", true);
+        features.put("narrow-unlockable-recipes-login-sync", true);
+        features.put("guard-minecolonies-compat-discovery", true);
+        features.put("shorten-sbw-projectile-life", false);
+        features.put("spread-sbw-motion-sync", false);
+        features.put("narrow-sbw-particle-viewers", false);
+        features.put("throttle-sbw-iff-payloads", false);
+        features.put("narrow-sbw-vehicle-shoot", false);
+        features.put("resync-tacz-gun-state-on-respawn", true);
         return features;
+    }
+
+    /**
+     * Declares the whole-number settings of the mod interoperability category.
+     *
+     * <p>Both bounds of a tree search default to zero, which is the unbounded search of the mod:
+     * cutting a search short changes what the mod does, so that is an operator decision. The upper
+     * bounds only keep a typo from turning one search into a stop-the-world pass.</p>
+     *
+     * @return the setting declarations, in the order they are written into the file
+     */
+    private static Map<String, IntSetting> modSupportNumbers() {
+        Map<String, IntSetting> numbers = new LinkedHashMap<>();
+        numbers.put("tree-cutter-node-budget", new IntSetting(0, 0, 65536));
+        numbers.put("tree-cutter-time-budget-ms", new IntSetting(0, 0, 60000));
+        return numbers;
     }
 
     /**
