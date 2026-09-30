@@ -72,6 +72,19 @@ class SharePlannerTest {
     }
 
     @Test
+    void theWeightsSplitOneWorldShareExactly() {
+        double sum = 0.0;
+        for (ShareClass shareClass : ShareClass.values()) {
+            sum += shareClass.weight();
+        }
+
+        assertEquals(1.0, sum, 1.0e-9);
+        SharePlanner planner = new SharePlanner();
+        ShareTable table = planner.plan(List.of("world"), 1L, Map.of());
+        assertEquals(KernelSettings.worldShareMs(), table.sumSharesMs(), 1.0e-9);
+    }
+
+    @Test
     void planningIsDeterministicAndCarriesEveryRow() {
         SharePlanner planner = new SharePlanner();
         ShareTable first = planner.plan(List.of("world"), 7L, used(1.0));

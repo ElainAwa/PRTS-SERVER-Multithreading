@@ -12,7 +12,7 @@ import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
  */
 public enum ShareClass {
 
-    ENTITY("entity", 0.32),
+    ENTITY("entity", 0.30),
     BLOCKENTITY("blockentity", 0.20),
     GRAPH("graph", 0.08),
     EVENT("event", 0.08),

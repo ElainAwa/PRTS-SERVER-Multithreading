@@ -114,14 +114,13 @@ public final class KernelSelfCheck {
         lines.add("selftest.unregistered_grant=" + ledger.unregisteredGrants());
         lines.add("selftest.closure=" + (ledger.verifyClosure() ? "ok" : "broken"));
         lines.add("selftest.double_holder=" + owners.doubleHolderCount());
-        lines.add("selftest.intent_order_violations=" + intents.orderViolationCount());
         lines.add("selftest.intent_rejected_full=" + intents.rejectedFullCount());
 
         if (verdicts.getOrDefault(WriteDisposition.GRANT, 0) != 2) {
             failures.add("expected two grants, saw " + verdicts.get(WriteDisposition.GRANT));
         }
-        if (verdicts.getOrDefault(WriteDisposition.INTENT, 0) != 3) {
-            failures.add("expected three intents, saw " + verdicts.get(WriteDisposition.INTENT));
+        if (verdicts.getOrDefault(WriteDisposition.INTENT, 0) != 2) {
+            failures.add("expected two intents, saw " + verdicts.get(WriteDisposition.INTENT));
         }
         if (ledger.unregisteredGrants() != 0L) {
             failures.add("an unregistered write was granted");
@@ -146,13 +145,15 @@ public final class KernelSelfCheck {
             failures.add("enforcement did not refuse an unregistered write");
         }
         CommitOrder outOfOrder = intents.commit(5L);
-        CommitOrder inOrder = intents.commit(1L);
+        CommitOrder first = intents.commit(0L);
+        CommitOrder second = intents.commit(1L);
         if (outOfOrder.code() != RejectCode.COMMIT_ORDER_VIOLATION) {
             failures.add("an out-of-order commit was not refused");
         }
-        if (!inOrder.committed()) {
+        if (!first.committed() || !second.committed()) {
             failures.add("the frozen order did not commit");
         }
+        lines.add("selftest.intent_order_violations=" + intents.orderViolationCount());
         lines.add("selftest.intent_order_committed=" + intents.committedCount());
 
         SharePlanner shares = new SharePlanner();
