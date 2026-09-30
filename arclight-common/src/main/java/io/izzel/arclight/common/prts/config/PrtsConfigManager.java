@@ -287,9 +287,9 @@ public final class PrtsConfigManager {
     /**
      * Declares the whole-number settings of the kernel scaffolding category.
      *
-     * <p>The budget numbers describe one tick: a share of twelve milliseconds for a world, a
+     * <p>The budget numbers describe one tick: a share of eight milliseconds for a world, a
      * reserved column of four and two milliseconds of host overhead fit inside the fifty
-     * millisecond budget for three worlds. The window floor of ten minutes is part of the
+     * millisecond budget for five worlds. The window floor of ten minutes is part of the
      * declaration, so a shorter window cannot be configured at all.</p>
      *
      * @return the setting declarations, in the order they are written into the file
@@ -299,7 +299,7 @@ public final class PrtsConfigManager {
         numbers.put("self-window-seconds", new IntSetting(600, 600, 86400));
         numbers.put("self-warmup-seconds", new IntSetting(60, 0, 3600));
         numbers.put("e-budget-ms", new IntSetting(50, 1, 1000));
-        numbers.put("world-share-ms", new IntSetting(12, 1, 1000));
+        numbers.put("world-share-ms", new IntSetting(8, 1, 1000));
         numbers.put("reserve-ms", new IntSetting(4, 0, 500));
         numbers.put("host-overhead-ms", new IntSetting(2, 0, 500));
         numbers.put("intent-queue-cap", new IntSetting(256, 1, 65536));
