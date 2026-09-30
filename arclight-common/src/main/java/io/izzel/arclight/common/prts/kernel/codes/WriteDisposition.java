@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-package io.izzel.arclight.common.prts.kernel.auth;
+package io.izzel.arclight.common.prts.kernel.codes;
 
 /**
  * The three dispositions a write attempt can leave with.

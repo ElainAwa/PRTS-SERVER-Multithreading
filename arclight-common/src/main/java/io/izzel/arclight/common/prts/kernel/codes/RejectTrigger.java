@@ -1,8 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.codes;
 
-import io.izzel.arclight.common.prts.kernel.auth.WriteDisposition;
-import io.izzel.arclight.common.prts.kernel.auth.ConflictClass;
 
 /**
  * Every refusal trigger the four pieces can raise, mapped onto the closed code set.

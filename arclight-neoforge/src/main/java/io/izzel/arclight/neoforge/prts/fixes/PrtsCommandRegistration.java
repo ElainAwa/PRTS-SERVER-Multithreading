@@ -2,6 +2,7 @@
 package io.izzel.arclight.neoforge.prts.fixes;
 
 import io.izzel.arclight.common.prts.config.PrtsCommand;
+import io.izzel.arclight.common.prts.kernel.observe.KernelCommandExtension;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 
@@ -27,6 +28,10 @@ public final class PrtsCommandRegistration {
      */
     @SubscribeEvent
     public static void onRegisterCommands(RegisterCommandsEvent event) {
+        // The kernel readout is registered here rather than inside the configuration package: the
+        // command layer owns the extension point, the kernel owns the extension, and the bridge is
+        // the only place that knows both. Registration is idempotent across command rebuilds.
+        PrtsCommand.registerExtension(KernelCommandExtension.extension());
         PrtsCommand.register(event.getDispatcher());
         PrtsCommand.registerInCommandMap();
     }

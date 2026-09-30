@@ -1,10 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /**
- * The refusal vocabulary of the kernel: the closed code set and the trigger table on top of it.
+ * The shared refusal vocabulary: codes, triggers, dispositions, conflict classes and levels.
  *
- * <p>The set is closed on purpose. Every trigger of the four pieces is written down here once,
- * together with the disposition it produces, so a new trigger cannot appear at a call site without
- * a code and a reader can see the whole vocabulary in two files. Diagnostic information that every
- * refusal carries lives here as well.</p>
+ * <p>This is the bottom of the kernel's internal order. Every type here is plain data or an enum,
+ * and nothing here imports another kernel package, so the pieces above can agree on one vocabulary
+ * without any of them depending on each other through it. Diagnostic information a refusal carries
+ * lives here as well.</p>
  */
 package io.izzel.arclight.common.prts.kernel.codes;

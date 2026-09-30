@@ -5,6 +5,6 @@
  * <p>An intent is frozen into a queue with the order it had at planning time, and the commit
  * segment walks exactly that order; this batch lands the shape and the ordering, not the world
  * write. The queue has an explicit depth and refuses at it, so pressure becomes a counted refusal
- * instead of unbounded growth.</p>
+ * instead of unbounded growth. The package depends on the shared vocabulary only.</p>
  */
 package io.izzel.arclight.common.prts.kernel.intent;

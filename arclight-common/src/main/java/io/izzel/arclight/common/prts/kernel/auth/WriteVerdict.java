@@ -3,6 +3,8 @@ package io.izzel.arclight.common.prts.kernel.auth;
 
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.codes.DegradeLevel;
+import io.izzel.arclight.common.prts.kernel.codes.ConflictClass;
+import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
 
 /**
  * What the decision point answers for one attempt.

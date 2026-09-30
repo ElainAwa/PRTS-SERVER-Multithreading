@@ -4,10 +4,6 @@ package io.izzel.arclight.common.prts.config;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import io.izzel.arclight.common.prts.PrtsSwitches;
-import io.izzel.arclight.common.prts.kernel.KernelModule;
-import io.izzel.arclight.common.prts.kernel.observe.KernelReadings;
-import io.izzel.arclight.common.prts.kernel.observe.KernelSelfCheck;
-import io.izzel.arclight.common.prts.kernel.observe.KernelStatusLines;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
@@ -20,17 +16,17 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * The {@code /prts} command: {@code reload} re-reads {@code prts-config/**} without restarting the
  * process, {@code status} prints the configuration directory, the category switches that are in
- * effect, every problem the last read found and a compact kernel section, and {@code kernel}
- * exports the kernel readout field by field.
+ * effect, every problem the last read found and the status lines of every registered extension.
  *
- * <p>The kernel export is the observation outlet of the new kernel scaffolding. The field names it
- * prints are observation requests rather than an approved counter table, so the export marks itself
- * as such and publishes every field even when its value is zero. {@code kernel selftest} runs the
- * decision matrix of the four pieces on scratch objects, which leaves the live counters alone.</p>
+ * <p>Feature layers do not live here. A layer that has something to run or to show registers a
+ * {@link PrtsCommandExtension}; the command builds its literals, dispatches it in both command
+ * worlds and appends its status lines, so the configuration package stays independent of the
+ * layers it serves and the package graph keeps pointing one way.</p>
  *
  * <p>The dispatcher side requires permission level 2, which the console, the remote console and
  * operators hold. The Bukkit view additionally declares and enforces the {@code prts.command}
@@ -55,10 +51,20 @@ public final class PrtsCommand {
     /** Vanilla permission level of the dispatcher side; the console and operators hold it. */
     private static final int PERMISSION_LEVEL = 2;
 
-    private static final String USAGE =
-        "usage: /prts reload | /prts status | /prts kernel [selftest]";
+    private static final Map<String, PrtsCommandExtension> EXTENSIONS = new ConcurrentHashMap<>();
 
     private PrtsCommand() {
+    }
+
+    /**
+     * Registers a subtree of another layer.
+     *
+     * @param extension the extension; a later registration under the same name replaces it
+     */
+    public static void registerExtension(PrtsCommandExtension extension) {
+        if (extension != null && extension.name() != null && !extension.name().isBlank()) {
+            EXTENSIONS.put(extension.name(), extension);
+        }
     }
 
     /**
@@ -87,17 +93,28 @@ public final class PrtsCommand {
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> node() {
-        return Commands.literal(NAME)
+        LiteralArgumentBuilder<CommandSourceStack> node = Commands.literal(NAME)
             .requires(source -> source.hasPermission(PERMISSION_LEVEL))
-            .executes(context -> reply(context.getSource(), List.of(USAGE)))
+            .executes(context -> reply(context.getSource(), List.of(usage())))
             .then(Commands.literal("reload")
                 .executes(context -> reply(context.getSource(), reload())))
             .then(Commands.literal("status")
-                .executes(context -> reply(context.getSource(), status())))
-            .then(Commands.literal("kernel")
-                .executes(context -> reply(context.getSource(), kernel()))
-                .then(Commands.literal("selftest")
-                    .executes(context -> reply(context.getSource(), kernelSelftest()))));
+                .executes(context -> reply(context.getSource(), status())));
+        for (PrtsCommandExtension extension : extensions()) {
+            node.then(extensionNode(extension));
+        }
+        return node;
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> extensionNode(
+        PrtsCommandExtension extension) {
+        LiteralArgumentBuilder<CommandSourceStack> node = Commands.literal(extension.name())
+            .executes(context -> reply(context.getSource(), extension.run(List.of())));
+        for (String subcommand : extension.subcommands()) {
+            node.then(Commands.literal(subcommand).executes(context ->
+                reply(context.getSource(), extension.run(List.of(subcommand)))));
+        }
+        return node;
     }
 
     private static int reply(CommandSourceStack source, List<String> lines) {
@@ -123,38 +140,13 @@ public final class PrtsCommand {
         List<String> lines = new ArrayList<>();
         lines.add("[PRTS] config directory: " + PrtsConfigManager.directory().toAbsolutePath());
         lines.add(switches());
-        lines.addAll(KernelStatusLines.status(KernelModule.instance()));
+        for (PrtsCommandExtension extension : extensions()) {
+            lines.addAll(extension.statusLines());
+        }
         lines.addAll(features());
         lines.addAll(numbers());
         lines.addAll(upgrades());
         lines.addAll(problems());
-        return lines;
-    }
-
-    /**
-     * Renders the full kernel readout, one {@code name=value} field per line.
-     *
-     * @return the export lines, prefixed so the command world shows them as one block
-     */
-    private static List<String> kernel() {
-        List<String> lines = new ArrayList<>();
-        lines.add("[PRTS] kernel export (observation requests; zero values are published too)");
-        for (String line : KernelReadings.export(KernelModule.instance())) {
-            lines.add("[PRTS] kernel " + line);
-        }
-        return lines;
-    }
-
-    /**
-     * Runs the decision matrix of the four kernel pieces on scratch objects.
-     *
-     * @return the result lines; the live counters are not touched
-     */
-    private static List<String> kernelSelftest() {
-        List<String> lines = new ArrayList<>();
-        for (String line : KernelSelfCheck.run()) {
-            lines.add("[PRTS] kernel " + line);
-        }
         return lines;
     }
 
@@ -251,6 +243,27 @@ public final class PrtsCommand {
         return lines;
     }
 
+    private static List<PrtsCommandExtension> extensions() {
+        List<String> names = new ArrayList<>(EXTENSIONS.keySet());
+        names.sort(String::compareTo);
+        List<PrtsCommandExtension> ordered = new ArrayList<>(names.size());
+        for (String name : names) {
+            ordered.add(EXTENSIONS.get(name));
+        }
+        return ordered;
+    }
+
+    private static String usage() {
+        StringBuilder builder = new StringBuilder("usage: /prts reload | /prts status");
+        for (PrtsCommandExtension extension : extensions()) {
+            builder.append(" | /prts ").append(extension.name());
+            if (!extension.subcommands().isEmpty()) {
+                builder.append(" [").append(String.join("|", extension.subcommands())).append(']');
+            }
+        }
+        return builder.toString();
+    }
+
     /**
      * Bukkit-side view of the same command, so the command map accepts the label and checks the
      * permission a plugin can grant.
@@ -260,7 +273,6 @@ public final class PrtsCommand {
         private BukkitView() {
             super(NAME);
             setDescription("PRTS server administration");
-            setUsage(USAGE);
             setPermission(PERMISSION);
         }
 
@@ -269,19 +281,25 @@ public final class PrtsCommand {
             if (!testPermission(sender)) {
                 return true;
             }
+            setUsage(usage());
             if (args.length == 1 && "reload".equalsIgnoreCase(args[0])) {
                 send(sender, reload());
             } else if (args.length == 1 && "status".equalsIgnoreCase(args[0])) {
                 send(sender, status());
-            } else if (args.length == 1 && "kernel".equalsIgnoreCase(args[0])) {
-                send(sender, kernel());
-            } else if (args.length == 2 && "kernel".equalsIgnoreCase(args[0])
-                && "selftest".equalsIgnoreCase(args[1])) {
-                send(sender, kernelSelftest());
+            } else if (args.length >= 1 && EXTENSIONS.containsKey(args[0])) {
+                send(sender, EXTENSIONS.get(args[0]).run(rest(args)));
             } else {
-                send(sender, List.of(USAGE));
+                send(sender, List.of(usage()));
             }
             return true;
+        }
+
+        private static List<String> rest(String[] args) {
+            List<String> rest = new ArrayList<>(args.length - 1);
+            for (int index = 1; index < args.length; index++) {
+                rest.add(args[index]);
+            }
+            return rest;
         }
 
         private static void send(CommandSender sender, List<String> lines) {
@@ -293,10 +311,16 @@ public final class PrtsCommand {
         @Override
         public List<String> tabComplete(CommandSender sender, String alias, String[] args) {
             if (args.length == 1) {
-                return List.of("reload", "status", "kernel");
+                List<String> names = new ArrayList<>();
+                names.add("reload");
+                names.add("status");
+                for (PrtsCommandExtension extension : extensions()) {
+                    names.add(extension.name());
+                }
+                return names;
             }
-            if (args.length == 2 && "kernel".equalsIgnoreCase(args[0])) {
-                return List.of("selftest");
+            if (args.length >= 2 && EXTENSIONS.containsKey(args[0])) {
+                return EXTENSIONS.get(args[0]).complete(rest(args));
             }
             return List.of();
         }

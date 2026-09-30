@@ -5,7 +5,7 @@ import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerToken;
 import io.izzel.arclight.common.prts.kernel.auth.WriteAttempt;
 import io.izzel.arclight.common.prts.kernel.auth.WriteAuthority;
-import io.izzel.arclight.common.prts.kernel.auth.WriteDisposition;
+import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLevel;
 import io.izzel.arclight.common.prts.kernel.auth.WriteVerdict;

@@ -4,7 +4,8 @@
  *
  * <p>The declaration and the defaults live in the configuration layer; this package only names the
  * keys and reads them at the moment a piece runs, so a reload applies without a restart and a
- * default is never repeated. Every read falls back to the declared default when the configuration
- * cannot answer, which keeps a broken file from turning behaviour on.</p>
+ * default is never repeated. It is the settings step of the internal order: the pieces above may
+ * read it, and it reads nothing above itself. Every read falls back to the declared default when
+ * the configuration cannot answer, which keeps a broken file from turning behaviour on.</p>
  */
 package io.izzel.arclight.common.prts.kernel.config;

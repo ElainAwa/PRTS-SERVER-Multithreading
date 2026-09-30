@@ -1,8 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.auth;
 
+import io.izzel.arclight.common.prts.kernel.codes.ConflictClass;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.codes.RejectTrigger;
+import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
 import io.izzel.arclight.common.prts.kernel.intent.CommitOrder;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import org.junit.jupiter.api.Test;

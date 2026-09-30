@@ -9,6 +9,7 @@ import io.izzel.arclight.common.prts.kernel.intent.WriteIntent;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
 import java.util.function.IntSupplier;
+import io.izzel.arclight.common.prts.kernel.codes.ConflictClass;
 
 /**
  * The one decision point every world write passes through.
