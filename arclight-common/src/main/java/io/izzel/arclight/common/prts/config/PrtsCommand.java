@@ -4,6 +4,10 @@ package io.izzel.arclight.common.prts.config;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import io.izzel.arclight.common.prts.PrtsSwitches;
+import io.izzel.arclight.common.prts.kernel.KernelModule;
+import io.izzel.arclight.common.prts.kernel.observe.KernelReadings;
+import io.izzel.arclight.common.prts.kernel.observe.KernelSelfCheck;
+import io.izzel.arclight.common.prts.kernel.observe.KernelStatusLines;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
@@ -20,11 +24,13 @@ import java.util.TreeSet;
 /**
  * The {@code /prts} command: {@code reload} re-reads {@code prts-config/**} without restarting the
  * process, {@code status} prints the configuration directory, the category switches that are in
- * effect, and every problem the last read found.
+ * effect, every problem the last read found and a compact kernel section, and {@code kernel}
+ * exports the kernel readout field by field.
  *
- * <p>The readout stays inside what this layer owns: the configuration directory, the resolved
- * category switches and the state of their files. Observation counters belong to the scheduling
- * kernel, so they are deliberately not reported here and no second source of numbers appears.</p>
+ * <p>The kernel export is the observation outlet of the new kernel scaffolding. The field names it
+ * prints are observation requests rather than an approved counter table, so the export marks itself
+ * as such and publishes every field even when its value is zero. {@code kernel selftest} runs the
+ * decision matrix of the four pieces on scratch objects, which leaves the live counters alone.</p>
  *
  * <p>The dispatcher side requires permission level 2, which the console, the remote console and
  * operators hold. The Bukkit view additionally declares and enforces the {@code prts.command}
@@ -49,7 +55,8 @@ public final class PrtsCommand {
     /** Vanilla permission level of the dispatcher side; the console and operators hold it. */
     private static final int PERMISSION_LEVEL = 2;
 
-    private static final String USAGE = "usage: /prts reload | /prts status";
+    private static final String USAGE =
+        "usage: /prts reload | /prts status | /prts kernel [selftest]";
 
     private PrtsCommand() {
     }
@@ -86,7 +93,11 @@ public final class PrtsCommand {
             .then(Commands.literal("reload")
                 .executes(context -> reply(context.getSource(), reload())))
             .then(Commands.literal("status")
-                .executes(context -> reply(context.getSource(), status())));
+                .executes(context -> reply(context.getSource(), status())))
+            .then(Commands.literal("kernel")
+                .executes(context -> reply(context.getSource(), kernel()))
+                .then(Commands.literal("selftest")
+                    .executes(context -> reply(context.getSource(), kernelSelftest()))));
     }
 
     private static int reply(CommandSourceStack source, List<String> lines) {
@@ -112,10 +123,38 @@ public final class PrtsCommand {
         List<String> lines = new ArrayList<>();
         lines.add("[PRTS] config directory: " + PrtsConfigManager.directory().toAbsolutePath());
         lines.add(switches());
+        lines.addAll(KernelStatusLines.status(KernelModule.instance()));
         lines.addAll(features());
         lines.addAll(numbers());
         lines.addAll(upgrades());
         lines.addAll(problems());
+        return lines;
+    }
+
+    /**
+     * Renders the full kernel readout, one {@code name=value} field per line.
+     *
+     * @return the export lines, prefixed so the command world shows them as one block
+     */
+    private static List<String> kernel() {
+        List<String> lines = new ArrayList<>();
+        lines.add("[PRTS] kernel export (observation requests; zero values are published too)");
+        for (String line : KernelReadings.export(KernelModule.instance())) {
+            lines.add("[PRTS] kernel " + line);
+        }
+        return lines;
+    }
+
+    /**
+     * Runs the decision matrix of the four kernel pieces on scratch objects.
+     *
+     * @return the result lines; the live counters are not touched
+     */
+    private static List<String> kernelSelftest() {
+        List<String> lines = new ArrayList<>();
+        for (String line : KernelSelfCheck.run()) {
+            lines.add("[PRTS] kernel " + line);
+        }
         return lines;
     }
 
@@ -234,6 +273,11 @@ public final class PrtsCommand {
                 send(sender, reload());
             } else if (args.length == 1 && "status".equalsIgnoreCase(args[0])) {
                 send(sender, status());
+            } else if (args.length == 1 && "kernel".equalsIgnoreCase(args[0])) {
+                send(sender, kernel());
+            } else if (args.length == 2 && "kernel".equalsIgnoreCase(args[0])
+                && "selftest".equalsIgnoreCase(args[1])) {
+                send(sender, kernelSelftest());
             } else {
                 send(sender, List.of(USAGE));
             }
@@ -248,7 +292,13 @@ public final class PrtsCommand {
 
         @Override
         public List<String> tabComplete(CommandSender sender, String alias, String[] args) {
-            return args.length == 1 ? List.of("reload", "status") : List.of();
+            if (args.length == 1) {
+                return List.of("reload", "status", "kernel");
+            }
+            if (args.length == 2 && "kernel".equalsIgnoreCase(args[0])) {
+                return List.of("selftest");
+            }
+            return List.of();
         }
     }
 }

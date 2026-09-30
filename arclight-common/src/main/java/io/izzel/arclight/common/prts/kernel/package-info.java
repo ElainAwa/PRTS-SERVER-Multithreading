@@ -1,14 +1,15 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /**
- * Reserved for the new kernel.
+ * The new kernel scaffolding: four pieces that observe or meter and never write the world.
  *
- * <p>Placeholder: the multithreaded scheduling kernel will own this subtree together with its own
- * mixin configuration. No implementation is written here yet.</p>
+ * <p>The four pieces are the write decision point ({@code auth}), the intent channel behind it
+ * ({@code intent}), the per-class self timer ({@code meter}), the time-budget share table
+ * ({@code shares}) and the wait point registry ({@code waitpoints}); the readout they publish lives
+ * in {@code observe}. {@link io.izzel.arclight.common.prts.kernel.KernelModule} is the single entry
+ * the platform drives once per tick.</p>
  *
- * <p>Until that kernel lands, a change that touches a kernel seam must not be placed in
- * {@code io.izzel.arclight.common.prts.performance}. The seams are the tick loop, the chunk
- * pipeline, entity queries and tracking, lighting, networking, world lifecycle, commit ordering
- * and planning, arena and segment storage, observation counters, the degradation ladder, wait
- * points, and I/O or serialization; such work belongs to the kernel subtree.</p>
+ * <p>Everything under this package is off unless the kernel category is enabled, occupies no mixin
+ * anchor and no world write path, and can be removed again by deleting this subtree and its one
+ * platform listener.</p>
  */
 package io.izzel.arclight.common.prts.kernel;

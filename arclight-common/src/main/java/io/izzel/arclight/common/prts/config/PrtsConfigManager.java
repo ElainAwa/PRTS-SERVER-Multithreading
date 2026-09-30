@@ -199,8 +199,26 @@ public final class PrtsConfigManager {
                 + "# category itself to be enabled as well.\n"
                 + "# 'journal-interval-seconds' is how often a cycle starts (at least 5 seconds),\n"
                 + "# 'journal-chunks-per-tick' caps how many chunks one tick serializes."));
-        ENTRIES.put(KERNEL, new Entry("kernel.yml", false, Map.of(),
-            "# Reserved for the new kernel."));
+        ENTRIES.put(KERNEL, new Entry("kernel.yml", false, kernelFeatures(), kernelNumbers(),
+            "# The new kernel scaffolding: the write decision point, the per-class self timer, the\n"
+                + "# time-budget share table and the wait point registry. All four observe or meter;\n"
+                + "# none of them writes world state. The category is off, so a server that does not\n"
+                + "# opt in pays nothing.\n"
+                + "# 'enforce-unregistered-writes: false' is the only switch that would refuse instead\n"
+                + "# of record: off, an unregistered write is frozen into the intent channel and\n"
+                + "# counted; on, the same write is refused with a code and a count. It never changes\n"
+                + "# whether a thread may be created.\n"
+                + "# 'self-timers', 'share-table' and 'wait-registry' turn the three metering pieces on\n"
+                + "# once the category is on; every row they publish is also published as zero.\n"
+                + "# 'self-window-seconds' is the metering window (at least ten minutes) and\n"
+                + "# 'self-warmup-seconds' is the leading part published as warm-up.\n"
+                + "# 'e-budget-ms' is what one tick may spend, 'world-share-ms' is the fair share of\n"
+                + "# one world inside it, 'reserve-ms' is the single column only a forced\n"
+                + "# materialization or a migration wait may draw from, and 'host-overhead-ms' is the\n"
+                + "# part the class rows may not borrow.\n"
+                + "# 'intent-queue-cap' is the depth at which the intent channel refuses instead of\n"
+                + "# growing, 'wait-bound-ms' is the upper bound of one wait, and 'retry-budget' is\n"
+                + "# how many retries one attempt carries before a refusal is final."));
     }
 
     /**
@@ -244,6 +262,49 @@ public final class PrtsConfigManager {
         Map<String, IntSetting> numbers = new LinkedHashMap<>();
         numbers.put("tree-cutter-node-budget", new IntSetting(0, 0, 65536));
         numbers.put("tree-cutter-time-budget-ms", new IntSetting(0, 0, 60000));
+        return numbers;
+    }
+
+    /**
+     * Declares the per-feature switches of the kernel scaffolding category.
+     *
+     * <p>The category is off, so these defaults only describe what an operator gets after turning
+     * it on. The metering pieces default to on because they only read; the one switch that refuses
+     * defaults to off, so registering an unregistered write never turns into a refusal by accident.
+     * </p>
+     *
+     * @return the feature defaults, in the order they are written into the file
+     */
+    private static Map<String, Boolean> kernelFeatures() {
+        Map<String, Boolean> features = new LinkedHashMap<>();
+        features.put("enforce-unregistered-writes", false);
+        features.put("self-timers", true);
+        features.put("share-table", true);
+        features.put("wait-registry", true);
+        return features;
+    }
+
+    /**
+     * Declares the whole-number settings of the kernel scaffolding category.
+     *
+     * <p>The budget numbers describe one tick: a share of twelve milliseconds for a world, a
+     * reserved column of four and two milliseconds of host overhead fit inside the fifty
+     * millisecond budget for three worlds. The window floor of ten minutes is part of the
+     * declaration, so a shorter window cannot be configured at all.</p>
+     *
+     * @return the setting declarations, in the order they are written into the file
+     */
+    private static Map<String, IntSetting> kernelNumbers() {
+        Map<String, IntSetting> numbers = new LinkedHashMap<>();
+        numbers.put("self-window-seconds", new IntSetting(600, 600, 86400));
+        numbers.put("self-warmup-seconds", new IntSetting(60, 0, 3600));
+        numbers.put("e-budget-ms", new IntSetting(50, 1, 1000));
+        numbers.put("world-share-ms", new IntSetting(12, 1, 1000));
+        numbers.put("reserve-ms", new IntSetting(4, 0, 500));
+        numbers.put("host-overhead-ms", new IntSetting(2, 0, 500));
+        numbers.put("intent-queue-cap", new IntSetting(256, 1, 65536));
+        numbers.put("wait-bound-ms", new IntSetting(50, 1, 60000));
+        numbers.put("retry-budget", new IntSetting(2, 0, 16));
         return numbers;
     }
 

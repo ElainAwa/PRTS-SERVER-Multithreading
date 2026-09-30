@@ -6,6 +6,7 @@ import io.izzel.arclight.common.prts.PrtsSwitches;
 import io.izzel.arclight.neoforge.mod.NeoForgeArclightServer;
 import io.izzel.arclight.neoforge.mod.event.ArclightEventDispatcherRegistry;
 import io.izzel.arclight.neoforge.prts.fixes.PrtsCommandRegistration;
+import io.izzel.arclight.neoforge.prts.kernel.PrtsKernelEvents;
 import io.izzel.arclight.neoforge.prts.optional.PrtsJournalEvents;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.common.NeoForge;
@@ -32,6 +33,12 @@ public class ArclightMod {
         // and with it on they drive the journal from platform events instead of kernel seams.
         if (PrtsSwitches.enabled(PrtsSwitches.OPTIONAL_SERVERCORE)) {
             PrtsJournalEvents.register();
+        }
+        // The kernel scaffolding is off by default as well: with the category off no listener is
+        // subscribed, and with it on the four pieces are driven from the platform tick event
+        // without touching a world write path.
+        if (PrtsSwitches.enabled(PrtsSwitches.KERNEL)) {
+            PrtsKernelEvents.register();
         }
     }
 
