@@ -60,6 +60,7 @@ public final class WaitPointRegistry {
     };
 
     private final Map<String, WaitPointEntry> rows = new LinkedHashMap<>();
+    private final SiteInventory sites = new SiteInventory();
     private final Map<String, String> callSites = new ConcurrentHashMap<>();
     private final Map<String, AtomicLong> observedMax = new ConcurrentHashMap<>();
     private final Map<String, Long> progress = new ConcurrentHashMap<>();
@@ -110,6 +111,21 @@ public final class WaitPointRegistry {
     }
 
     /**
+     * Registers one call site.
+     *
+     * @param site the site
+     * @return the stored site, a duplicate refusal, or the element that is missing
+     */
+    public SiteRegisterResult registerSite(WaitSite site) {
+        return sites.register(site);
+    }
+
+    /** @return the written-down list of call sites a wait can happen at */
+    public SiteInventory sites() {
+        return sites;
+    }
+
+    /**
      * Looks up a registered row.
      *
      * @param wpId the identity
@@ -148,6 +164,7 @@ public final class WaitPointRegistry {
         } else if (span.progressReading() != null && !span.progressReading().isBlank()) {
             progress.put(entry.wpId(), parseReading(span.progressReading()));
         }
+        sites.noteObserved(span.siteId());
         long waitMs = Math.max(0L, span.waitMs());
         AtomicLong max = observedMax.computeIfAbsent(key, ignored -> new AtomicLong());
         long current = max.accumulateAndGet(waitMs, Math::max);
@@ -200,8 +217,21 @@ public final class WaitPointRegistry {
             walked.put(entry.wpId(), walkthrough.getOrDefault(entry.wpId(), 0));
         }
         double coverage = rows.isEmpty() ? 100.0 : 100.0 * complete / rows.size();
+        List<WaitSite> listed = sites.sites();
+        List<String> uncovered = new ArrayList<>();
+        int siteComplete = 0;
+        for (WaitSite site : listed) {
+            if (site.complete()) {
+                siteComplete++;
+            }
+            if (!rows.containsKey(site.wpId())) {
+                uncovered.add(site.siteId());
+            }
+        }
+        double siteCoverage = listed.isEmpty() ? 100.0 : 100.0 * siteComplete / listed.size();
         return new CoverageReport(rows.size(), unregisteredCallSites.size(), coverage, walked,
-            forcedConvergence(), complete + unregisteredCallSites.size(), pendingElements);
+            forcedConvergence(), listed.size(), pendingElements, siteComplete,
+            sites.observedWithoutRow().size(), siteCoverage, sites.pendingElements(), uncovered);
     }
 
     /** @return the forced convergence count; this batch has none, so it is always zero */

@@ -204,10 +204,17 @@ public final class PrtsConfigManager {
                 + "# time-budget share table and the wait point registry. All four observe or meter;\n"
                 + "# none of them writes world state. The category is off, so a server that does not\n"
                 + "# opt in pays nothing.\n"
-                + "# 'enforce-unregistered-writes: false' is the only switch that would refuse instead\n"
-                + "# of record: off, an unregistered write is frozen into the intent channel and\n"
-                + "# counted; on, the same write is refused with a code and a count. It never changes\n"
-                + "# whether a thread may be created.\n"
+                + "# 'write-path-guard: true' watches the write paths this build already hooks: the\n"
+                + "# server thread writing its own world takes a short path that allocates nothing,\n"
+                + "# and every other writer is counted by thread and holder. It records only.\n"
+                + "# 'enforce-unregistered-writes: false' is the switch that would refuse instead of\n"
+                + "# record: off, an unregistered write is counted with the routing the decision point\n"
+                + "# would choose; on, the same write is refused with a code and a count.\n"
+                + "# 'commit-intents: false' leaves the commit segment proving the frozen order only;\n"
+                + "# on, it applies each intent it reaches, on the thread that drives the tick.\n"
+                + "# 'route-unregistered-writes: false' hands an unregistered write to that segment\n"
+                + "# instead of letting it pass; it needs 'commit-intents' to be on as well.\n"
+                + "# It never changes whether a thread may be created.\n"
                 + "# 'self-timers', 'share-table' and 'wait-registry' turn the three metering pieces on\n"
                 + "# once the category is on; every row they publish is also published as zero.\n"
                 + "# 'self-window-seconds' is the metering window (at least ten minutes) and\n"
@@ -281,6 +288,9 @@ public final class PrtsConfigManager {
         features.put("self-timers", true);
         features.put("share-table", true);
         features.put("wait-registry", true);
+        features.put("write-path-guard", true);
+        features.put("commit-intents", false);
+        features.put("route-unregistered-writes", false);
         return features;
     }
 

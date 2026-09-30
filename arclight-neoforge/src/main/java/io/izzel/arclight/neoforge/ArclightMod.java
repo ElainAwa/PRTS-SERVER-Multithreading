@@ -35,8 +35,9 @@ public class ArclightMod {
             PrtsJournalEvents.register();
         }
         // The kernel scaffolding is off by default as well: with the category off no listener is
-        // subscribed, and with it on the four pieces are driven from the platform tick event
-        // without touching a world write path.
+        // subscribed and no write path watcher is installed, so a write path pays one volatile
+        // read; with it on the pieces are driven from the platform tick event and the watcher is
+        // the one that driver refreshes.
         if (PrtsSwitches.enabled(PrtsSwitches.KERNEL)) {
             PrtsKernelEvents.register();
         }

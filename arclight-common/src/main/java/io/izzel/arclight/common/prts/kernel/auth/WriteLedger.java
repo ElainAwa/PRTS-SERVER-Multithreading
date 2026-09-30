@@ -108,6 +108,22 @@ public final class WriteLedger {
     }
 
     /**
+     * Counts one refusal code on its own.
+     *
+     * <p>A write point that refuses an attempt before it reaches a per-world pair - the commit
+     * segment, for example, whose refusal belongs to no world of its own - counts the code here, so
+     * the code table stays the one place a reader has to look.</p>
+     *
+     * @param code the code to count
+     */
+    public void noteCode(RejectCode code) {
+        LongAdder counter = codes.get(code);
+        if (counter != null) {
+            counter.increment();
+        }
+    }
+
+    /**
      * Recomputes the closure of every pair.
      *
      * @return {@code true} when every pair closes; a failure also counts a missing counter

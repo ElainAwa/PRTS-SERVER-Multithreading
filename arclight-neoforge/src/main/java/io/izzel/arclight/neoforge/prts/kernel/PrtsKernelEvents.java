@@ -29,8 +29,15 @@ public final class PrtsKernelEvents {
     private PrtsKernelEvents() {
     }
 
-    /** Subscribes the driver for this server process; called once, while the category is enabled. */
+    /**
+     * Subscribes the driver for this server process; called once, while the category is enabled.
+     *
+     * <p>The same moment is when the write path watcher is installed: with the category off nothing
+     * is installed and the write paths pay one volatile read each, and with it on the watcher is
+     * the one the tick driver refreshes.</p>
+     */
     public static void register() {
+        KernelModule.instance().installWritePathTap();
         NeoForge.EVENT_BUS.register(new PrtsKernelEvents());
     }
 

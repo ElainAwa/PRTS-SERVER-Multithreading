@@ -37,6 +37,15 @@ public final class KernelSettings {
     /** Turns the wait point registry on; on with the category. */
     public static final String WAIT_REGISTRY = "wait-registry";
 
+    /** Watches the real world write paths; on with the category, and it only records. */
+    public static final String WRITE_PATH_GUARD = "write-path-guard";
+
+    /** Applies what the commit segment reaches; off, so a commit only proves the frozen order. */
+    public static final String COMMIT_INTENTS = "commit-intents";
+
+    /** Hands an undeclared write to the commit segment instead of only recording it; off. */
+    public static final String ROUTE_UNREGISTERED_WRITES = "route-unregistered-writes";
+
     /** Length of one self-metering window, in seconds; never shorter than ten minutes. */
     public static final String SELF_WINDOW_SECONDS = "self-window-seconds";
 
@@ -98,6 +107,21 @@ public final class KernelSettings {
     /** @return {@code true} when wait observations are collected */
     public static boolean waitRegistry() {
         return feature(WAIT_REGISTRY);
+    }
+
+    /** @return {@code true} when the real world write paths are watched */
+    public static boolean writePathGuard() {
+        return feature(WRITE_PATH_GUARD);
+    }
+
+    /** @return {@code true} when the commit segment applies what it reaches */
+    public static boolean commitIntents() {
+        return feature(COMMIT_INTENTS);
+    }
+
+    /** @return {@code true} when an undeclared write is handed to the commit segment */
+    public static boolean routeUnregisteredWrites() {
+        return feature(ROUTE_UNREGISTERED_WRITES);
     }
 
     /** @return window length in ticks, never shorter than ten minutes */

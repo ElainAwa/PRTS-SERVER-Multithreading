@@ -18,8 +18,16 @@ import io.izzel.arclight.common.prts.kernel.shares.OverrunRecord;
 import io.izzel.arclight.common.prts.kernel.shares.ShareClass;
 import io.izzel.arclight.common.prts.kernel.shares.SharePlanner;
 import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
+import io.izzel.arclight.common.prts.kernel.sites.WriteDecision;
+import io.izzel.arclight.common.prts.kernel.sites.WritePath;
+import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
+import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard;
+import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
+import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
+import io.izzel.arclight.common.prts.kernel.sites.ThreadOrigin;
 import io.izzel.arclight.common.prts.kernel.waitpoints.CoverageReport;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry;
+import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSite;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -52,6 +60,7 @@ public final class KernelReadings {
         List<String> lines = new ArrayList<>();
         settings(lines, module);
         writeRights(lines, module);
+        writePaths(lines, module);
         intentQueue(lines, module);
         tokens(lines, module);
         rejectCodes(lines, module);
@@ -68,6 +77,12 @@ public final class KernelReadings {
         add(lines, "kernel.self_timers", KernelSettings.selfTimers());
         add(lines, "kernel.share_table", KernelSettings.shareTable());
         add(lines, "kernel.wait_registry", KernelSettings.waitRegistry());
+        add(lines, "kernel.write_path_guard", KernelSettings.writePathGuard());
+        add(lines, "kernel.commit_intents", KernelSettings.commitIntents());
+        add(lines, "kernel.route_unregistered_writes", KernelSettings.routeUnregisteredWrites());
+        add(lines, "kernel.intent_commit_mode", module.intents().commitMode());
+        add(lines, "kernel.write_path_tap_installed",
+            io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps.installed() ? 1 : 0);
         add(lines, "kernel.observation_requests", 1);
         add(lines, "kernel.e_budget_ms", format(KernelSettings.eBudgetMs()));
         add(lines, "kernel.world_share_ms", format(KernelSettings.worldShareMs()));
@@ -109,6 +124,56 @@ public final class KernelReadings {
         add(lines, "degrade.action_executed", module.shares().anyActionExecuted() ? 1 : 0);
     }
 
+    private static void writePaths(List<String> lines, KernelModule module) {
+        WorldWriteGuard guard = module.guard();
+        WritePathCounters counters = guard.counters();
+        add(lines, "write.path_guard_active", guard.active() ? 1 : 0);
+        add(lines, "write.path_enforce", guard.enforcing() ? 1 : 0);
+        add(lines, "write.path_routing", guard.routing() ? 1 : 0);
+        add(lines, "write.path_attempt_total", counters.totalAttempts());
+        add(lines, "write.path_granted_total", counters.total(WriteDisposition.GRANT));
+        add(lines, "write.path_intent_total", counters.total(WriteDisposition.INTENT));
+        add(lines, "write.path_denied_total", counters.total(WriteDisposition.DENY));
+        add(lines, "write.path_unregistered_attempt", counters.unregisteredAttempts());
+        add(lines, "write.path_accounting_ok", counters.closureHolds() ? 1 : 0);
+        add(lines, "write.path_pairs_checked", counters.pairsChecked());
+        add(lines, "write.undeclared_threads", guard.undeclaredThreads());
+        add(lines, "write.declared_holders", guard.declaredHolders());
+        for (WritePath path : WritePath.values()) {
+            add(lines, "write.path." + path.key() + ".attempts", counters.attemptsAt(path));
+            for (ThreadOrigin origin : ThreadOrigin.values()) {
+                for (HolderKind holder : HolderKind.values()) {
+                    String prefix = "write.path." + path.key() + "." + origin.key() + "."
+                        + holder.name().toLowerCase(Locale.ROOT) + ".";
+                    add(lines, prefix + "attempts", counters.attempts(path, origin, holder));
+                    for (WriteDisposition disposition : WriteDisposition.values()) {
+                        add(lines, prefix + disposition.name().toLowerCase(Locale.ROOT),
+                            counters.count(path, origin, holder, disposition));
+                    }
+                }
+            }
+        }
+        WriteDecision last = guard.lastDecision();
+        add(lines, "write.last_decision.present", last == null ? 0 : 1);
+        add(lines, "write.last_decision.path", last == null ? "none" : last.path().key());
+        add(lines, "write.last_decision.origin", last == null ? "none" : last.origin().key());
+        add(lines, "write.last_decision.holder", last == null ? "none"
+            : last.holder().name().toLowerCase(Locale.ROOT));
+        add(lines, "write.last_decision.disposition", last == null ? "none"
+            : last.disposition().name().toLowerCase(Locale.ROOT));
+        add(lines, "write.last_decision.code", last == null || last.code() == null ? "none"
+            : last.code().text());
+        add(lines, "write.last_decision.site", last == null ? "none" : last.siteId());
+        add(lines, "write.last_decision.thread", last == null ? "none" : last.threadRef());
+        add(lines, "write.last_decision.world", last == null ? "none" : last.worldId());
+        add(lines, "write.last_decision.tick", last == null ? 0L : last.tickIndex());
+        add(lines, "write.payload_applied", guard.payloads().appliedCount());
+        add(lines, "write.payload_failed", guard.payloads().failedCount());
+        add(lines, "write.payload_unbound", guard.payloads().unboundCount());
+        add(lines, "write.payload_dropped", guard.payloads().droppedCount());
+        add(lines, "write.payload_pending", guard.payloads().pendingCount());
+    }
+
     private static void intentQueue(List<String> lines, KernelModule module) {
         IntentQueue intents = module.intents();
         add(lines, "intent.queue_depth", intents.depth());
@@ -118,6 +183,10 @@ public final class KernelReadings {
         add(lines, "intent.committed", intents.committedCount());
         add(lines, "intent.rejected_full", intents.rejectedFullCount());
         add(lines, "intent.order_violations", intents.orderViolationCount());
+        add(lines, "intent.executed", intents.executedCount());
+        add(lines, "intent.payload_refusals", intents.payloadRefusalCount());
+        add(lines, "intent.shape_only", intents.shapeOnlyCount());
+        add(lines, "intent.commit_mode", intents.commitMode());
     }
 
     private static void tokens(List<String> lines, KernelModule module) {
@@ -250,6 +319,22 @@ public final class KernelReadings {
             add(lines, "wp.progress." + entry.getKey(), entry.getValue());
         }
         add(lines, "wp.unregistered_todo", registry.unregisteredTodo().size());
+        add(lines, "wp.site_inventory_total", coverage.siteInventoryTotal());
+        add(lines, "wp.site_registered", coverage.siteRegistered());
+        add(lines, "wp.site_unregistered", coverage.siteUnregistered());
+        add(lines, "wp.site_uncovered", coverage.siteUncoveredIds().size());
+        add(lines, "wp.site_coverage_pct", format(coverage.siteCoveragePct()));
+        add(lines, "wp.site_call_sites", registry.sites().callSites());
+        add(lines, "wp.site_pending_list", join(coverage.sitePendingElements()));
+        add(lines, "wp.site_unregistered_list", join(registry.sites().observedWithoutRow()));
+        add(lines, "wp.site_uncovered_list", join(coverage.siteUncoveredIds()));
+        for (WaitSite site : registry.sites().sites()) {
+            String prefix = "wp.site." + safe(site.siteId()) + ".";
+            add(lines, prefix + "wp", site.wpId());
+            add(lines, prefix + "phase", site.tickPhase());
+            add(lines, prefix + "share_class", site.shareClass());
+            add(lines, prefix + "calls", site.callSites());
+        }
         add(lines, "wait.cap_defined", KernelSettings.waitBoundMs() > 0 ? 1 : 0);
         add(lines, "wait.bound_ms", KernelSettings.waitBoundMs());
         add(lines, "wait.max_ms", registry.maxWaitMs());
@@ -274,6 +359,10 @@ public final class KernelReadings {
 
     static String format(double value) {
         return String.format(Locale.ROOT, "%.3f", value);
+    }
+
+    static String join(List<String> values) {
+        return values.isEmpty() ? "-" : String.join(",", values);
     }
 
     static String safe(String value) {

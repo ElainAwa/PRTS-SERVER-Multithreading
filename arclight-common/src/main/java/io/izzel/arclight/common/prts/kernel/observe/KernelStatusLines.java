@@ -5,7 +5,9 @@ import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.meter.MeterWindow;
+import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
 import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
+import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
 import io.izzel.arclight.common.prts.kernel.waitpoints.CoverageReport;
 
 import java.util.ArrayList;
@@ -18,6 +20,9 @@ import java.util.List;
  * the full export publishes, so a reader can move between the two without meeting a different
  * count. The last line states that the fields are observation requests rather than an approved
  * counter table.</p>
+ *
+ * <p>The write path lines report what the real write paths did: how many attempts each of them
+ * carried, how they left, and whether the per-path accounting closes.</p>
  */
 public final class KernelStatusLines {
 
@@ -36,13 +41,31 @@ public final class KernelStatusLines {
             + " enforce-unregistered-writes=" + KernelSettings.enforceUnregisteredWrites()
             + " self-timers=" + KernelSettings.selfTimers()
             + " share-table=" + KernelSettings.shareTable()
-            + " wait-registry=" + KernelSettings.waitRegistry());
+            + " wait-registry=" + KernelSettings.waitRegistry()
+            + " write-path-guard=" + KernelSettings.writePathGuard()
+            + " commit-intents=" + KernelSettings.commitIntents()
+            + " route-unregistered-writes=" + KernelSettings.routeUnregisteredWrites());
         WriteLedger ledger = module.ledger();
         lines.add("[PRTS] kernel: write attempts=" + ledger.totalAttempts()
             + " granted=" + ledger.totalGranted() + " intent=" + ledger.totalIntent()
             + " denied=" + ledger.totalDenied()
             + " closure=" + (ledger.accountingOk() ? "ok" : "broken")
             + " unregistered_grant=" + ledger.unregisteredGrants());
+        WritePathCounters paths = module.guard().counters();
+        lines.add("[PRTS] kernel: write paths attempts=" + paths.totalAttempts()
+            + " granted=" + paths.total(WriteDisposition.GRANT)
+            + " intent=" + paths.total(WriteDisposition.INTENT)
+            + " denied=" + paths.total(WriteDisposition.DENY)
+            + " unregistered=" + paths.unregisteredAttempts()
+            + " closure=" + (paths.closureHolds() ? "ok" : "broken")
+            + " guard_active=" + (module.guard().active() ? 1 : 0)
+            + " enforce=" + (module.guard().enforcing() ? 1 : 0)
+            + " routing=" + (module.guard().routing() ? 1 : 0));
+        lines.add("[PRTS] kernel: intent depth=" + module.intents().depth() + "/"
+            + module.intents().capacity() + " committed=" + module.intents().committedCount()
+            + " executed=" + module.intents().executedCount()
+            + " mode=" + module.intents().commitMode()
+            + " order_violations=" + module.intents().orderViolationCount());
         MeterWindow window = module.window();
         lines.add("[PRTS] kernel: self rows=" + window.rowCount()
             + " missing=" + window.missingClasses() + " sample_rate="
@@ -67,6 +90,12 @@ public final class KernelStatusLines {
             + " unregistered=" + coverage.unregistered()
             + " coverage=" + KernelReadings.format(coverage.coveragePct()) + "%"
             + " forced_convergence=" + coverage.forcedConvergence());
+        lines.add("[PRTS] kernel: wait sites listed=" + coverage.siteInventoryTotal()
+            + " registered=" + coverage.siteRegistered()
+            + " unregistered=" + coverage.siteUnregistered()
+            + " uncovered=" + coverage.siteUncoveredIds().size()
+            + " coverage=" + KernelReadings.format(coverage.siteCoveragePct()) + "%"
+            + " call_sites=" + module.waitPoints().sites().callSites());
         lines.add("[PRTS] kernel: observation requests, not an approved counter table;"
             + " run '/prts kernel' for the full export");
         return lines;

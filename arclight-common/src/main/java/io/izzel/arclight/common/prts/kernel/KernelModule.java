@@ -5,6 +5,7 @@ import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
 import io.izzel.arclight.common.prts.kernel.auth.WriteAuthority;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
+import io.izzel.arclight.common.prts.kernel.intent.CommitOrder;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import io.izzel.arclight.common.prts.kernel.meter.MeterWindow;
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
@@ -14,7 +15,11 @@ import io.izzel.arclight.common.prts.kernel.shares.OverrunRecord;
 import io.izzel.arclight.common.prts.kernel.shares.ShareClass;
 import io.izzel.arclight.common.prts.kernel.shares.SharePlanner;
 import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
+import io.izzel.arclight.common.prts.kernel.sites.IntentPayloadDirectory;
+import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
+import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry;
+import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
 
 import java.util.EnumMap;
 import java.util.List;
@@ -47,16 +52,23 @@ public final class KernelModule {
 
     private static final KernelModule INSTANCE = new KernelModule();
     private static final String RUNTIME_WORLD = "";
+    private static final String SERVER_SITE = "host:server-thread";
 
     private final OwnerRegistry owners = new OwnerRegistry();
-    private final IntentQueue intents = new IntentQueue(KernelSettings::intentQueueCap);
+    private final IntentQueue intents = new IntentQueue(KernelSettings::intentQueueCap,
+        KernelSettings::commitIntents);
     private final WriteLedger ledger = new WriteLedger();
+    private final WritePathCounters pathCounters = new WritePathCounters();
+    private final IntentPayloadDirectory payloads = new IntentPayloadDirectory();
     private final WriteAuthority authority = new WriteAuthority(owners, intents, ledger,
         KernelSettings::enforceUnregisteredWrites, KernelSettings::retryBudget);
+    private final WorldWriteGuard guard = new WorldWriteGuard(pathCounters, authority, intents,
+        payloads, ledger);
     private final WaitPointRegistry waitPoints = new WaitPointRegistry(KernelSettings::waitBoundMs);
     private final SharePlanner shares = new SharePlanner();
 
     private long tickIndex;
+    private long nextCommitOrder;
     private long windowStartTick;
     private boolean started;
     private MeterWindow lastWindow;
@@ -64,6 +76,7 @@ public final class KernelModule {
     private ControlFrame control = ControlFrame.empty();
 
     private KernelModule() {
+        intents.bindPayload(guard);
     }
 
     /** @return the module of this process */
@@ -78,6 +91,7 @@ public final class KernelModule {
      */
     public void serverTick(List<String> worldIds) {
         if (!KernelSettings.enabled()) {
+            guard.refresh(false, false, false, false, tickIndex);
             return;
         }
         long startedAt = System.nanoTime();
@@ -86,6 +100,14 @@ public final class KernelModule {
             started = true;
             windowStartTick = tickIndex;
         }
+        if (!guard.serverThreadBound()) {
+            guard.bindServerThread(Thread.currentThread(), SERVER_SITE);
+        }
+        guard.refresh(KernelSettings.writePathGuard(),
+            KernelSettings.enforceUnregisteredWrites(),
+            KernelSettings.routeUnregisteredWrites(),
+            KernelSettings.commitIntents(), tickIndex);
+        driveCommitSegment();
         if (KernelSettings.selfTimers()) {
             owners.reclaimExpired(tickIndex);
         }
@@ -97,6 +119,42 @@ public final class KernelModule {
         }
         ledger.verifyClosure();
         SelfTimers.note(SelfClass.OBSERVE, RUNTIME_WORLD, "runtime", System.nanoTime() - startedAt);
+    }
+
+    /**
+     * Walks the commit segment for this tick.
+     *
+     * <p>The segment takes the head of the channel while it carries the order frozen at planning
+     * time. A refusal ends the walk: the head stays where it is and the next tick tries again, so a
+     * write is never reordered to get past a refusal.</p>
+     */
+    private void driveCommitSegment() {
+        if (intents.depth() == 0) {
+            return;
+        }
+        int budget = intents.capacity();
+        for (int index = 0; index < budget; index++) {
+            CommitOrder order = intents.commit(nextCommitOrder);
+            if (!order.committed()) {
+                return;
+            }
+            nextCommitOrder++;
+        }
+    }
+
+    /**
+     * Installs the write path watcher.
+     *
+     * <p>Called while the category is on. The seam costs the write paths one volatile read when the
+     * kernel is off, and nothing is installed at all then.</p>
+     */
+    public void installWritePathTap() {
+        PrtsWorldWriteTaps.install(guard);
+    }
+
+    /** Removes the write path watcher. */
+    public void removeWritePathTap() {
+        PrtsWorldWriteTaps.install(null);
     }
 
     private void planBudget(List<String> worldIds) {
@@ -185,6 +243,11 @@ public final class KernelModule {
         return authority;
     }
 
+    /** @return the guard that reaches the decision point from the real write paths */
+    public WorldWriteGuard guard() {
+        return guard;
+    }
+
     /** @return the wait point registry */
     public WaitPointRegistry waitPoints() {
         return waitPoints;
@@ -208,7 +271,9 @@ public final class KernelModule {
     /** Clears the live counters. Used by the readout reset and by tests, never by the scheduler. */
     public void resetReadings() {
         SelfTimers.resetAll();
+        guard.resetReadings();
         tickIndex = 0L;
+        nextCommitOrder = 0L;
         windowStartTick = 0L;
         started = false;
         lastWindow = null;

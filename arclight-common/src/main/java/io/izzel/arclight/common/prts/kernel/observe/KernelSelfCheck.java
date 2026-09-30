@@ -14,6 +14,13 @@ import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.codes.RejectTrigger;
 import io.izzel.arclight.common.prts.kernel.intent.CommitOrder;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
+import io.izzel.arclight.common.prts.kernel.sites.IntentPayloadDirectory;
+import io.izzel.arclight.common.prts.kernel.sites.WritePath;
+import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
+import io.izzel.arclight.common.prts.kernel.sites.ThreadOrigin;
+import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard;
+import io.izzel.arclight.common.prts.kernel.waitpoints.SiteRegisterResult;
+import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSite;
 import io.izzel.arclight.common.prts.kernel.shares.OverrunRecord;
 import io.izzel.arclight.common.prts.kernel.shares.ShareClass;
 import io.izzel.arclight.common.prts.kernel.shares.SharePlanner;
@@ -215,12 +222,156 @@ public final class KernelSelfCheck {
             failures.add("a wait over the bound was not reported");
         }
 
+        lines.addAll(writePathMatrix(failures, tick));
+        lines.addAll(siteCoverage(failures, waits));
+
         lines.add("selftest.failures=" + failures.size());
         for (String failure : failures) {
             lines.add("selftest.failure=" + failure);
         }
         lines.add("selftest.result=" + (failures.isEmpty() ? "ok" : "failed"));
         return lines;
+    }
+
+    /** Drives the real write paths on scratch objects: short path, long path and enforcement. */
+    private static List<String> writePathMatrix(List<String> failures, long tick) {
+        List<String> lines = new ArrayList<>();
+        WritePathCounters counters = new WritePathCounters();
+        WriteLedger ledger = new WriteLedger();
+        OwnerRegistry owners = new OwnerRegistry();
+        IntentPayloadDirectory payloads = new IntentPayloadDirectory();
+        IntentQueue intents = new IntentQueue(() -> 8, () -> true);
+        WriteAuthority authority = new WriteAuthority(owners, intents, ledger, () -> true, () -> 2);
+        WorldWriteGuard guard = new WorldWriteGuard(counters, authority, intents, payloads, ledger);
+        intents.bindPayload(guard);
+        guard.bindServerThread(Thread.currentThread(), "host:server-thread");
+        guard.refresh(true, false, false, true, tick);
+        Object levelRef = new Object();
+
+        int shortPath = guard.classifyBlockWrite(levelRef);
+        WorkerWrite observed = new WorkerWrite(guard, levelRef);
+        runOnWorker(observed);
+        lines.add("selftest.path_short=" + (shortPath == 0 ? "pass" : "judge"));
+        lines.add("selftest.path_worker_verdict=" + (observed.verdict == 1 ? "judge" : "pass"));
+        lines.add("selftest.path_worker_proceeded=" + (observed.proceeded ? 1 : 0));
+        lines.add("selftest.path_worker_intent="
+            + counters.count(WritePath.BLOCK_WRITE, ThreadOrigin.WORKER, HolderKind.UNREGISTERED,
+                WriteDisposition.INTENT));
+        lines.add("selftest.path_main_grant="
+            + counters.count(WritePath.BLOCK_WRITE, ThreadOrigin.MAIN, HolderKind.REGISTERED,
+                WriteDisposition.GRANT));
+
+        guard.refresh(true, true, false, true, tick);
+        WorkerWrite enforced = new WorkerWrite(guard, levelRef);
+        runOnWorker(enforced);
+        lines.add("selftest.path_enforce_proceeded=" + (enforced.proceeded ? 1 : 0));
+        lines.add("selftest.path_enforce_denied="
+            + counters.count(WritePath.BLOCK_WRITE, ThreadOrigin.WORKER, HolderKind.UNREGISTERED,
+                WriteDisposition.DENY));
+
+        guard.refresh(true, false, true, true, tick);
+        WorkerWrite handedOver = new WorkerWrite(guard, levelRef);
+        runOnWorker(handedOver);
+        CommitOrder committed = intents.commit(0L);
+        lines.add("selftest.path_handed_over=" + (handedOver.proceeded ? 0 : 1));
+        lines.add("selftest.path_commit_committed=" + (committed.committed() ? 1 : 0));
+        lines.add("selftest.path_payload_applied=" + (handedOver.deferredApplied ? 1 : 0));
+        lines.add("selftest.path_commit_entry="
+            + counters.count(WritePath.KERNEL_COMMIT, ThreadOrigin.MAIN, HolderKind.KERNEL,
+                WriteDisposition.GRANT));
+        lines.add("selftest.path_closure=" + (counters.closureHolds() ? "ok" : "broken"));
+
+        if (shortPath != 0) {
+            failures.add("the server thread did not take the short write path");
+        }
+        if (observed.verdict != 1 || !observed.proceeded) {
+            failures.add("a worker write did not take the long path and pass while observing");
+        }
+        if (counters.count(WritePath.BLOCK_WRITE, ThreadOrigin.WORKER, HolderKind.UNREGISTERED,
+            WriteDisposition.GRANT) != 0L) {
+            failures.add("an undeclared writer was granted at a real write path");
+        }
+        if (enforced.proceeded) {
+            failures.add("enforcement let an undeclared write through");
+        }
+        if (!committed.committed() || !handedOver.deferredApplied) {
+            failures.add("the handed-over write was not applied by the commit segment");
+        }
+        if (!counters.closureHolds()) {
+            failures.add("the write path accounting does not close");
+        }
+        return lines;
+    }
+
+    /** Drives the written-down call site list: completeness, refusal and coverage. */
+    private static List<String> siteCoverage(List<String> failures, WaitPointRegistry waits) {
+        List<String> lines = new ArrayList<>();
+        CoverageReport coverage = waits.reportCoverage();
+        SiteRegisterResult missing = waits.registerSite(new WaitSite("incomplete", "chunk",
+            "example.Incomplete", "run", "entity_tick", "other", "",
+            new Dec19Elements.ProgressSignal(Dec19Elements.SignalKind.COUNT, "progress.incomplete"),
+            "postpone", "snapshot", "self check", 1));
+        SiteRegisterResult stored = waits.registerSite(new WaitSite("extra", "chunk",
+            "example.Extra", "run", "entity_tick", "other", "chunk materialization pipeline",
+            new Dec19Elements.ProgressSignal(Dec19Elements.SignalKind.COUNT,
+                "progress.chunk.materialized_per_tick"), "forced materialization convergence",
+            "read-only snapshot", "self check", 1));
+        lines.add("selftest.site_total=" + coverage.siteInventoryTotal());
+        lines.add("selftest.site_registered=" + coverage.siteRegistered());
+        lines.add("selftest.site_uncovered=" + coverage.siteUncoveredIds().size());
+        lines.add("selftest.site_coverage_pct="
+            + String.format(Locale.ROOT, "%.1f", coverage.siteCoveragePct()));
+        lines.add("selftest.site_missing_element="
+            + (missing instanceof SiteRegisterResult.MissingElement ? 1 : 0));
+        lines.add("selftest.site_stored=" + (stored instanceof SiteRegisterResult.Ok ? 1 : 0));
+        if (coverage.siteInventoryTotal() < 1) {
+            failures.add("the call site list is empty");
+        }
+        if (coverage.siteRegistered() != coverage.siteInventoryTotal()) {
+            failures.add("a listed call site does not carry all four elements");
+        }
+        if (!coverage.siteUncoveredIds().isEmpty()) {
+            failures.add("a listed call site has no wait point row");
+        }
+        if (!(missing instanceof SiteRegisterResult.MissingElement)) {
+            failures.add("a call site missing an element was stored");
+        }
+        return lines;
+    }
+
+    /** Drives one write attempt from a thread that is not the thread that bound the guard. */
+    private static void runOnWorker(WorkerWrite write) {
+        Thread thread = new Thread(write, "selftest-worker");
+        thread.start();
+        try {
+            thread.join();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** One write attempt driven from a thread that is not the server thread. */
+    private static final class WorkerWrite implements Runnable {
+
+        private final WorldWriteGuard guard;
+        private final Object levelRef;
+        private int verdict = -1;
+        private boolean proceeded;
+        private volatile boolean deferredApplied;
+
+        private WorkerWrite(WorldWriteGuard guard, Object levelRef) {
+            this.guard = guard;
+            this.levelRef = levelRef;
+        }
+
+        @Override
+        public void run() {
+            verdict = guard.classifyBlockWrite(levelRef);
+            proceeded = guard.admitBlockWrite(levelRef, "world", () -> {
+                deferredApplied = true;
+                return true;
+            });
+        }
     }
 
     private static EnumMap<ShareClass, Double> usedRow(double used) {

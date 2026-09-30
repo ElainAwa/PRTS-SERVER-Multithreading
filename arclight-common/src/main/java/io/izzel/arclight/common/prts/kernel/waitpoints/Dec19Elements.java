@@ -43,17 +43,31 @@ public final class Dec19Elements {
         if (declaration == null) {
             return "declaration";
         }
-        if (declaration.producer() == null || declaration.producer().isBlank()) {
+        return missingElement(declaration.producer(), declaration.signal(),
+            declaration.timeoutAction(), declaration.degradeTo());
+    }
+
+    /**
+     * Returns the element a set of four is missing.
+     *
+     * @param producer      who produces the thing that is waited for
+     * @param signal        how progress of that producer is observed
+     * @param timeoutAction what happens when the wait runs out of time
+     * @param degradeTo     what the wait degrades to when it cannot proceed
+     * @return the missing element, or {@code null} when all four are present
+     */
+    public static String missingElement(String producer, ProgressSignal signal, String timeoutAction,
+                                        String degradeTo) {
+        if (producer == null || producer.isBlank()) {
             return "producer";
         }
-        if (declaration.signal() == null || declaration.signal().fieldRef() == null
-            || declaration.signal().fieldRef().isBlank()) {
+        if (signal == null || signal.fieldRef() == null || signal.fieldRef().isBlank()) {
             return "progress signal";
         }
-        if (declaration.timeoutAction() == null || declaration.timeoutAction().isBlank()) {
+        if (timeoutAction == null || timeoutAction.isBlank()) {
             return "timeout action";
         }
-        if (declaration.degradeTo() == null || declaration.degradeTo().isBlank()) {
+        if (degradeTo == null || degradeTo.isBlank()) {
             return "degrade target";
         }
         return null;

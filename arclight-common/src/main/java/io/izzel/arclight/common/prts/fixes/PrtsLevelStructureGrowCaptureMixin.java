@@ -10,6 +10,7 @@ package io.izzel.arclight.common.prts.fixes;
 import io.izzel.arclight.api.ArclightPlatform;
 import io.izzel.arclight.common.mod.mixins.annotation.OnlyInPlatform;
 import io.izzel.arclight.common.prts.support.PrtsStructureGrowCapture;
+import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
@@ -26,10 +27,29 @@ public abstract class PrtsLevelStructureGrowCaptureMixin {
         cancellable = true, at = @At("HEAD"))
     private void prts$captureGrownTreeBlock(BlockPos pos, BlockState state, int flags, int recursionLeft,
                                             CallbackInfoReturnable<Boolean> cir) {
+        if (!prts$admitWorldWrite(pos, state, flags, recursionLeft)) {
+            cir.setReturnValue(false);
+            return;
+        }
         if (PrtsStructureGrowCapture.capture((Level) (Object) this, pos, state, flags)) {
             // The generator is told the block is there; it is written only if the event allows it.
             cir.setReturnValue(true);
         }
+    }
+
+    /**
+     * Hands the block write to whoever watches write rights.
+     *
+     * <p>The fast question costs one volatile read while no watcher is installed, and the world identity is
+     * only built on the slow path, so an unwatched or short-path write allocates nothing here.</p>
+     */
+    private boolean prts$admitWorldWrite(BlockPos pos, BlockState state, int flags, int recursionLeft) {
+        Level level = (Level) (Object) this;
+        if (PrtsWorldWriteTaps.classifyBlockWrite(level) == PrtsWorldWriteTaps.BlockWriteTap.PASS) {
+            return true;
+        }
+        return PrtsWorldWriteTaps.admitBlockWrite(level, level.dimension().location().toString(),
+            () -> level.setBlock(pos, state, flags, recursionLeft));
     }
 
     /**
