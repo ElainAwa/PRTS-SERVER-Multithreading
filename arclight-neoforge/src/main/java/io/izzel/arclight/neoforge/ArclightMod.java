@@ -5,7 +5,7 @@ import io.izzel.arclight.common.mod.server.ArclightServer;
 import io.izzel.arclight.common.prts.PrtsSwitches;
 import io.izzel.arclight.neoforge.mod.NeoForgeArclightServer;
 import io.izzel.arclight.neoforge.mod.event.ArclightEventDispatcherRegistry;
-import io.izzel.arclight.neoforge.prts.fixes.PrtsCommandRegistration;
+import io.izzel.arclight.neoforge.prts.kernel.PrtsCommandRegistration;
 import io.izzel.arclight.neoforge.prts.kernel.PrtsKernelEvents;
 import io.izzel.arclight.neoforge.prts.optional.PrtsJournalEvents;
 import net.neoforged.fml.common.Mod;

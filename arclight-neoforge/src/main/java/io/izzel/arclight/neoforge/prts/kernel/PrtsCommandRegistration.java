@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-package io.izzel.arclight.neoforge.prts.fixes;
+package io.izzel.arclight.neoforge.prts.kernel;
 
 import io.izzel.arclight.common.prts.config.PrtsCommand;
 import io.izzel.arclight.common.prts.kernel.observe.KernelCommandExtension;
@@ -14,7 +14,11 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
  * pack reload). The shared command is registered into that dispatcher and into the Bukkit command
  * map, which keeps it reachable from the console and from players.</p>
  *
- * <p>PRTS category: fixes, NeoForge platform module.</p>
+ * <p>This is the command half of the platform bridge: the configuration layer owns the command
+ * and its extension point, the kernel owns the extension, and this listener is the only place that
+ * knows both.</p>
+ *
+ * <p>PRTS category: kernel, NeoForge platform module.</p>
  */
 public final class PrtsCommandRegistration {
 
