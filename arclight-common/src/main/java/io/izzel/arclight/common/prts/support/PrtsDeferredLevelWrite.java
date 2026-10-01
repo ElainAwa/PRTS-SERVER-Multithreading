@@ -39,7 +39,6 @@ public final class PrtsDeferredLevelWrite implements PrtsWorldWriteTaps.Deferred
 
     @Override
     public boolean apply() {
-        level.setBlock(pos, state, flags, recursionLeft);
-        return true;
+        return level.setBlock(pos, state, flags, recursionLeft);
     }
 }

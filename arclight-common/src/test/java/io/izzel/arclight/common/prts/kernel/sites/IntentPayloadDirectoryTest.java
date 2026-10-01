@@ -5,6 +5,8 @@ import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.intent.WriteIntent;
 import org.junit.jupiter.api.Test;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
@@ -31,6 +33,21 @@ class IntentPayloadDirectoryTest {
         assertEquals(RejectCode.VERSION_MISMATCH, payloads.apply(intent(handle)));
         assertEquals(1L, payloads.failedCount());
         assertEquals(0L, payloads.appliedCount());
+        assertEquals(1, payloads.pendingCount());
+    }
+
+    @Test
+    void aFailedWriteCanBeRetriedByTheSameIntent() {
+        IntentPayloadDirectory payloads = new IntentPayloadDirectory();
+        AtomicInteger attempts = new AtomicInteger();
+        String handle = payloads.bind("block_write", () -> attempts.incrementAndGet() > 1);
+
+        assertEquals(RejectCode.VERSION_MISMATCH, payloads.apply(intent(handle)));
+        assertNull(payloads.apply(intent(handle)));
+        assertEquals(2, attempts.get());
+        assertEquals(1L, payloads.failedCount());
+        assertEquals(1L, payloads.appliedCount());
+        assertEquals(0, payloads.pendingCount());
     }
 
     @Test
@@ -43,7 +60,7 @@ class IntentPayloadDirectoryTest {
         assertEquals(RejectCode.VERSION_MISMATCH, payloads.apply(intent(handle)));
         assertEquals(1L, payloads.threwCount());
         assertEquals(0L, payloads.appliedCount());
-        assertEquals(0, payloads.pendingCount());
+        assertEquals(1, payloads.pendingCount());
     }
 
     @Test

@@ -34,13 +34,9 @@ public class ArclightMod {
         if (PrtsSwitches.enabled(PrtsSwitches.OPTIONAL_SERVERCORE)) {
             PrtsJournalEvents.register();
         }
-        // The kernel scaffolding is off by default as well: with the category off no listener is
-        // subscribed and no write path watcher is installed, so a write path pays one volatile
-        // read; with it on the pieces are driven from the platform tick event and the watcher is
-        // the one that driver refreshes.
-        if (PrtsSwitches.enabled(PrtsSwitches.KERNEL)) {
-            PrtsKernelEvents.register();
-        }
+        // The kernel keeps only a lightweight reload hook while disabled. The platform listener and
+        // write/wait taps are installed or removed when the category changes, including via reload.
+        PrtsKernelEvents.register();
     }
 
     private static class LoggingPrintStream extends PrintStream {

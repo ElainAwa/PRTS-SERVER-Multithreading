@@ -2,6 +2,7 @@
 package io.izzel.arclight.common.prts.kernel.intent;
 
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
+import io.izzel.arclight.common.prts.kernel.sites.IntentPayloadDirectory;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -95,6 +96,32 @@ class CommitSegmentTest {
     }
 
     @Test
+    void aDirectoryFailureKeepsTheIntentAndPayloadPairedForRetry() {
+        IntentPayloadDirectory payloads = new IntentPayloadDirectory();
+        AtomicInteger attempts = new AtomicInteger();
+        String handle = payloads.bind("block_write", () -> attempts.incrementAndGet() > 1);
+        IntentQueue queue = new IntentQueue(() -> 8);
+        queue.bindPayload(payloads);
+        queue.enqueue(intent(1L, handle));
+        CommitSegment segment = new CommitSegment(queue, () -> true, queue::capacity);
+
+        CommitSegment.Pass refused = segment.run(TICK);
+
+        assertEquals(RejectCode.VERSION_MISMATCH, refused.code());
+        assertEquals(1, queue.depth());
+        assertEquals(1, payloads.pendingCount());
+        assertEquals(0, refused.steps());
+
+        CommitSegment.Pass committed = segment.run(NEXT_TICK);
+
+        assertNull(committed.code());
+        assertEquals(1, committed.steps());
+        assertEquals(0, queue.depth());
+        assertEquals(0, payloads.pendingCount());
+        assertEquals(1L, payloads.appliedCount());
+    }
+
+    @Test
     void theBudgetEndsTheWalkWithoutLosingWhatIsLeft() {
         IntentQueue queue = new IntentQueue(() -> 8);
         queue.bindPayload(intent -> null);
@@ -107,6 +134,24 @@ class CommitSegmentTest {
         assertEquals(1, segment.run(NEXT_TICK).steps());
         assertEquals(0, queue.depth());
         assertEquals(2L, queue.committedCount());
+    }
+
+    @Test
+    void resettingReadingsDoesNotRewindTheFrozenOrder() {
+        IntentQueue queue = new IntentQueue(() -> 8);
+        queue.bindPayload(intent -> null);
+        queue.enqueue(intent(1L, "first"));
+        CommitSegment segment = new CommitSegment(queue, () -> true, queue::capacity);
+
+        assertEquals(1, segment.run(TICK).steps());
+        segment.reset();
+        queue.enqueue(intent(2L, "second"));
+
+        assertEquals(1, segment.run(NEXT_TICK).steps());
+        assertEquals(0, queue.depth());
+        assertEquals(0L, queue.orderViolationCount());
+        assertEquals(2L, segment.cursor());
+        assertEquals(1L, segment.passes());
     }
 
     private static WriteIntent intent(long id, String handle) {

@@ -124,9 +124,11 @@ public final class CommitSegment {
         return refusals;
     }
 
-    /** Clears the live counters. Used by the readout reset and by tests, never by the scheduler. */
+    /**
+     * Clears live counters without rewinding the submission cursor owned by the queue lifecycle.
+     * Used by the readout reset and by tests, never by the scheduler.
+     */
     public void reset() {
-        cursor = 0L;
         passes = 0L;
         steps = 0L;
         refusals = 0L;

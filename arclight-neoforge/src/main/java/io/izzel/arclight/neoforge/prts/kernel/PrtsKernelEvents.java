@@ -2,6 +2,8 @@
 package io.izzel.arclight.neoforge.prts.kernel;
 
 import io.izzel.arclight.common.prts.kernel.KernelModule;
+import io.izzel.arclight.common.prts.config.PrtsConfigManager;
+import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import net.minecraft.server.level.ServerLevel;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.common.NeoForge;
@@ -14,32 +16,56 @@ import java.util.List;
  * Drives the kernel scaffolding from the platform tick event.
  *
  * <p>{@link ServerTickEvent.Post} is fired at the end of the server tick, immediately before that
- * method returns. The four pieces only observe or meter, so the driver occupies no mixin anchor and
- * no world write path: a kernel that later rewrites the tick loop keeps this layer working, and
- * deleting the layer removes the listener and nothing else.</p>
+ * method returns. The driver advances the observable kernel and, when the commit switch is enabled,
+ * applies deferred writes on the server thread. It occupies no mixin tick-loop anchor.</p>
  *
- * <p>The listeners are subscribed only while the kernel category is enabled, so a server that does
- * not opt in pays nothing at all and never loads the driver. The world identities are read from the
- * level list the event carries; the driver itself never touches a world object.</p>
+ * <p>The kernel category owns the listener and the write/wait taps. They are installed only while the
+ * category is enabled, and a configuration reload can add or remove them without restarting the
+ * process.</p>
  *
  * <p>PRTS category: kernel, NeoForge platform module.</p>
  */
 public final class PrtsKernelEvents {
 
+    private static final PrtsKernelEvents INSTANCE = new PrtsKernelEvents();
+    private static boolean reloadHookInstalled;
+    private static boolean subscribed;
+
     private PrtsKernelEvents() {
     }
 
     /**
-     * Subscribes the driver for this server process; called once, while the category is enabled.
+     * Installs the configuration reload hook and synchronizes the platform subscription once.
      *
-     * <p>The same moment is when the write path watcher is installed: with the category off nothing
-     * is installed and the write paths pay one volatile read each, and with it on the watcher is
-     * the one the tick driver refreshes.</p>
+     * <p>The hook remains registered while the category is off, but the tick listener and write/wait
+     * taps are absent until the category is enabled. A later reload can therefore turn the layer on
+     * or off without requiring a process restart.</p>
      */
-    public static void register() {
-        KernelModule.instance().installWritePathTap();
-        KernelModule.instance().installWaitSiteTap();
-        NeoForge.EVENT_BUS.register(new PrtsKernelEvents());
+    public static synchronized void register() {
+        if (!reloadHookInstalled) {
+            PrtsConfigManager.addReloadListener(PrtsKernelEvents::syncSubscription);
+            reloadHookInstalled = true;
+        }
+        syncSubscription();
+    }
+
+    private static synchronized void syncSubscription() {
+        boolean wanted = KernelSettings.enabled();
+        if (wanted == subscribed) {
+            return;
+        }
+        KernelModule module = KernelModule.instance();
+        if (wanted) {
+            module.installWritePathTap();
+            module.installWaitSiteTap();
+            NeoForge.EVENT_BUS.register(INSTANCE);
+            subscribed = true;
+            return;
+        }
+        module.removeWritePathTap();
+        module.removeWaitSiteTap();
+        NeoForge.EVENT_BUS.unregister(INSTANCE);
+        subscribed = false;
     }
 
     /**

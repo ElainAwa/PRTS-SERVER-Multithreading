@@ -14,10 +14,11 @@ import java.util.concurrent.atomic.LongAdder;
 /**
  * Holds the writes that were handed over, so the commit segment can apply them in order.
  *
- * <p>A deferred write is stored under the handle its intent carries and is consumed exactly once:
- * the handle is removed when it is applied, so a second commit of the same intent finds nothing and
- * is refused instead of repeating a write. A handle nobody registered, and a write whose action
- * reports that it did not land, are both refusals with a code - never a quiet success.</p>
+ * <p>A deferred write is stored under the handle its intent carries. A successful application consumes
+ * it exactly once; a write whose action reports that it did not land, or throws, remains pending so the
+ * queue can retry it instead of retaining an unprocessable intent head with no payload. A handle nobody
+ * registered, and a write that ultimately reports failure, are both refusals with a code - never a quiet
+ * success.</p>
  */
 public final class IntentPayloadDirectory implements IntentPayload {
 
@@ -54,8 +55,8 @@ public final class IntentPayloadDirectory implements IntentPayload {
     }
 
     @Override
-    public RejectCode apply(WriteIntent intent) {
-        PrtsWorldWriteTaps.DeferredWrite write = pending.remove(intent.payloadHandle());
+    public synchronized RejectCode apply(WriteIntent intent) {
+        PrtsWorldWriteTaps.DeferredWrite write = pending.get(intent.payloadHandle());
         if (write == null) {
             unbound.increment();
             return RejectCode.NATIVE_UNDECLARED;
@@ -66,11 +67,11 @@ public final class IntentPayloadDirectory implements IntentPayload {
                 return RejectCode.VERSION_MISMATCH;
             }
         } catch (Throwable thrown) {
-            // a deferred write that threw did not land either, so it refuses the commit with a
-            // code and a count instead of escaping into the tick that walks the channel
+            // Keep the payload paired with the queue head so a transient failure can be retried.
             this.threw.increment();
             return RejectCode.VERSION_MISMATCH;
         }
+        pending.remove(intent.payloadHandle());
         applied.increment();
         return null;
     }
