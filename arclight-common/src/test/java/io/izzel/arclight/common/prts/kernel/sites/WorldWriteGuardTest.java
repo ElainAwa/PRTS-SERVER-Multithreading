@@ -7,7 +7,7 @@ import io.izzel.arclight.common.prts.kernel.auth.WriteAuthority;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
-import io.izzel.arclight.common.prts.kernel.intent.CommitOrder;
+import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import org.junit.jupiter.api.Test;
 
@@ -29,7 +29,7 @@ class WorldWriteGuardTest {
     void theServerThreadTakesTheShortPathAndIsCountedThere() {
         Scratch scratch = new Scratch(8);
         scratch.guard.bindServerThread(Thread.currentThread(), "host:server-thread");
-        scratch.guard.refresh(true, false, false, false, TICK);
+        scratch.guard.refresh(true, false, false, TICK);
 
         assertEquals(0, scratch.guard.classifyBlockWrite(LEVEL));
         assertEquals(1L, scratch.grants(ThreadOrigin.MAIN, HolderKind.REGISTERED));
@@ -42,7 +42,7 @@ class WorldWriteGuardTest {
     void anUndeclaredThreadIsCountedAndItsWriteStillProceeds() {
         Scratch scratch = new Scratch(8);
         scratch.guard.bindServerThread(Thread.currentThread(), "host:server-thread");
-        scratch.guard.refresh(true, false, false, false, TICK);
+        scratch.guard.refresh(true, false, false, TICK);
         Probe probe = scratch.probe();
 
         assertEquals(1, probe.probe.get());
@@ -61,7 +61,7 @@ class WorldWriteGuardTest {
     void enforcementRefusesAnUndeclaredWrite() {
         Scratch scratch = new Scratch(8);
         scratch.guard.bindServerThread(Thread.currentThread(), "host:server-thread");
-        scratch.guard.refresh(true, true, false, false, TICK);
+        scratch.guard.refresh(true, true, false, TICK);
         Probe probe = scratch.probe();
 
         assertFalse(probe.proceeded);
@@ -75,7 +75,7 @@ class WorldWriteGuardTest {
     void aDeclaredWriterWithoutAVersionIsRefusedButObserved() {
         Scratch scratch = new Scratch(8);
         scratch.guard.bindServerThread(Thread.currentThread(), "host:server-thread");
-        scratch.guard.refresh(true, false, false, false, TICK);
+        scratch.guard.refresh(true, false, false, TICK);
         Probe probe = scratch.probe(holder -> scratch.guard.registerHolder(holder,
             HolderKind.REGISTERED, "site:worker"));
 
@@ -91,13 +91,14 @@ class WorldWriteGuardTest {
     void aHandedOverWriteIsAppliedByTheCommitSegment() {
         Scratch scratch = new Scratch(8);
         scratch.guard.bindServerThread(Thread.currentThread(), "host:server-thread");
-        scratch.guard.refresh(true, false, true, true, TICK);
+        scratch.guard.refresh(true, false, true, TICK);
         Probe probe = scratch.probe();
 
         assertFalse(probe.proceeded);
         assertEquals(1, scratch.intents.depth());
-        CommitOrder order = scratch.intents.commit(0L);
-        assertTrue(order.committed());
+        assertEquals("execute", scratch.segment.mode());
+        assertTrue(scratch.segment.run(TICK).ran());
+        assertEquals(0, scratch.intents.depth());
         assertTrue(probe.deferredApplied.get());
         assertEquals(1L, scratch.payloads.appliedCount());
         assertEquals(1L, scratch.counters.count(WritePath.KERNEL_COMMIT, ThreadOrigin.MAIN,
@@ -106,10 +107,29 @@ class WorldWriteGuardTest {
     }
 
     @Test
+    void aRoutedWriteIsFrozenIntoTheChannelWhileTheCommitIsOff() {
+        Scratch scratch = new Scratch(8);
+        scratch.guard.bindServerThread(Thread.currentThread(), "host:server-thread");
+        scratch.guard.refresh(true, false, true, TICK);
+        Probe probe = scratch.probe();
+
+        assertFalse(probe.proceeded);
+        assertFalse(probe.deferredApplied.get());
+        assertEquals(1L, scratch.intents.enqueuedCount());
+        assertEquals(0L, scratch.intents.executedCount());
+        assertEquals(1, scratch.intents.depth());
+        assertEquals(1, scratch.payloads.pendingCount());
+        assertEquals(1L, scratch.counters.count(WritePath.BLOCK_WRITE, ThreadOrigin.WORKER,
+            HolderKind.UNREGISTERED, WriteDisposition.INTENT));
+        assertEquals(0L, scratch.counters.count(WritePath.BLOCK_WRITE, ThreadOrigin.WORKER,
+            HolderKind.UNREGISTERED, WriteDisposition.GRANT));
+    }
+
+    @Test
     void aFullChannelCountsTheRefusalAndDropsTheHandover() {
         Scratch scratch = new Scratch(1);
         scratch.guard.bindServerThread(Thread.currentThread(), "host:server-thread");
-        scratch.guard.refresh(true, false, true, true, TICK);
+        scratch.guard.refresh(true, false, true, TICK);
         Probe first = scratch.probe();
         Probe second = scratch.probe();
 
@@ -127,7 +147,7 @@ class WorldWriteGuardTest {
     void anInactiveGuardCountsNothingAndPassesEverything() {
         Scratch scratch = new Scratch(8);
         scratch.guard.bindServerThread(Thread.currentThread(), "host:server-thread");
-        scratch.guard.refresh(false, false, false, false, TICK);
+        scratch.guard.refresh(false, false, false, TICK);
         Probe probe = scratch.probe();
 
         assertTrue(probe.proceeded);
@@ -142,11 +162,13 @@ class WorldWriteGuardTest {
         private final WriteLedger ledger = new WriteLedger();
         private final IntentPayloadDirectory payloads = new IntentPayloadDirectory();
         private final IntentQueue intents;
+        private final CommitSegment segment;
         private final WriteAuthority authority;
         private final WorldWriteGuard guard;
 
         private Scratch(int capacity) {
-            this.intents = new IntentQueue(() -> capacity, () -> true);
+            this.intents = new IntentQueue(() -> capacity);
+            this.segment = new CommitSegment(intents, () -> true, intents::capacity);
             this.authority = new WriteAuthority(new OwnerRegistry(), intents, ledger, () -> false,
                 () -> 2);
             this.guard = new WorldWriteGuard(counters, authority, intents, payloads, ledger);

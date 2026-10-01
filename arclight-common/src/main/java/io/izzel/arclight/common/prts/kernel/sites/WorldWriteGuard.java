@@ -28,10 +28,12 @@ import java.util.concurrent.atomic.LongAdder;
  * another thread, or a thread nobody declared - takes the long path, where the attempt is named,
  * judged and remembered as the last decision of the readout.</p>
  *
- * <p>The long path never changes what a write does while enforcement is off: an attempt the
- * decision point refuses is counted with its code and the write still proceeds. With enforcement on
- * the same attempt is refused for real; with routing on an undeclared write is handed to the commit
- * segment instead, which applies it in the order frozen at planning time.</p>
+ * <p>The long path never changes what a write does while enforcement and routing are off: an
+ * attempt the decision point refuses is counted with its code and the write still proceeds. With
+ * enforcement on the same attempt is refused for real. With routing on an undeclared write is handed
+ * to the intent channel instead of being written: the channel freezes it where it arrives, and the
+ * commit segment applies it when its own switch is on - while that switch is off the intent waits in
+ * the channel and the depth says so.</p>
  *
  * <p>Nothing here registers a thread on its own. An undeclared thread is remembered per thread so
  * classifying it stays allocation free, and that memory is deliberately kept outside the site
@@ -45,7 +47,6 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
     private final IntentPayloadDirectory payloads;
     private final WriteLedger ledger;
     private final AtomicLong nextAttemptId = new AtomicLong(1L);
-    private final AtomicLong nextPlanOrder = new AtomicLong(0L);
     private final Map<Thread, HolderIdentity> declared = new ConcurrentHashMap<>();
     private final LongAdder undeclaredThreads = new LongAdder();
     private final ThreadLocal<HolderIdentity> undeclared = ThreadLocal.withInitial(() -> {
@@ -82,17 +83,19 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
     /**
      * Applies the switches the guard reads on every attempt.
      *
+     * <p>Routing is read here on its own: a routed write is frozen into the intent channel whether or
+     * not the segment is walking, so the two switches answer different questions - which writes are
+     * deferred, and when a deferred write lands.</p>
+     *
      * @param active       whether the write paths should judge at all
      * @param enforce      whether an undeclared writer is refused instead of recorded
-     * @param routeIntents whether an undeclared write is handed to the commit segment
-     * @param commitIntents whether the commit segment applies what it is handed
+     * @param routeIntents whether an undeclared write is handed to the intent channel
      * @param tickIndex    tick the next attempts belong to
      */
-    public void refresh(boolean active, boolean enforce, boolean routeIntents, boolean commitIntents,
-                        long tickIndex) {
+    public void refresh(boolean active, boolean enforce, boolean routeIntents, long tickIndex) {
         this.active = active;
         this.enforce = enforce;
-        this.routing = routeIntents && commitIntents;
+        this.routing = routeIntents;
         this.tickIndex = tickIndex;
     }
 
@@ -106,7 +109,7 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
         return enforce;
     }
 
-    /** @return whether an undeclared write is handed to the commit segment */
+    /** @return whether an undeclared write is handed to the intent channel */
     public boolean routing() {
         return routing;
     }
@@ -245,7 +248,6 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
     public void resetReadings() {
         counters.reset();
         nextAttemptId.set(1L);
-        nextPlanOrder.set(0L);
         lastDecision = null;
     }
 
@@ -257,13 +259,19 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
         return holder == null ? undeclared.get() : holder;
     }
 
+    /**
+     * Hands one write to the intent channel.
+     *
+     * <p>The channel freezes the order itself, so this side only names the write: an attempt refused
+     * at the depth limit leaves no gap behind it, and the cursor of the commit segment can never meet
+     * an order nobody ever queued.</p>
+     */
     private RejectCode handOver(WritePath path, ThreadOrigin origin, HolderIdentity holder,
                                 String worldId, PrtsWorldWriteTaps.DeferredWrite deferred) {
         String handle = payloads.bind(path.key(), deferred);
-        long order = nextPlanOrder.getAndIncrement();
-        WriteIntent intent = new WriteIntent(intents.nextIntentId(), worldId, worldId, path.key(), 0L,
-            order, handle, "xdomain", holder.siteId());
-        IntentQueue.EnqueueResult result = intents.enqueue(intent);
+        WriteIntent draft = WriteIntent.draft(intents.nextIntentId(), worldId, worldId, path.key(),
+            0L, handle, "xdomain", holder.siteId());
+        IntentQueue.EnqueueResult result = intents.enqueue(draft);
         if (result.accepted()) {
             return null;
         }

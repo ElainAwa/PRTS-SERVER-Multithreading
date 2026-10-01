@@ -25,6 +25,7 @@ public final class IntentPayloadDirectory implements IntentPayload {
     private final AtomicLong nextHandle = new AtomicLong(1L);
     private final LongAdder applied = new LongAdder();
     private final LongAdder failed = new LongAdder();
+    private final LongAdder threw = new LongAdder();
     private final LongAdder unbound = new LongAdder();
     private final LongAdder dropped = new LongAdder();
 
@@ -59,8 +60,15 @@ public final class IntentPayloadDirectory implements IntentPayload {
             unbound.increment();
             return RejectCode.NATIVE_UNDECLARED;
         }
-        if (!write.apply()) {
-            failed.increment();
+        try {
+            if (!write.apply()) {
+                failed.increment();
+                return RejectCode.VERSION_MISMATCH;
+            }
+        } catch (Throwable thrown) {
+            // a deferred write that threw did not land either, so it refuses the commit with a
+            // code and a count instead of escaping into the tick that walks the channel
+            this.threw.increment();
             return RejectCode.VERSION_MISMATCH;
         }
         applied.increment();
@@ -75,6 +83,11 @@ public final class IntentPayloadDirectory implements IntentPayload {
     /** @return deferred writes whose action reported that it did not land */
     public long failedCount() {
         return failed.sum();
+    }
+
+    /** @return deferred writes whose action threw instead of reporting */
+    public long threwCount() {
+        return threw.sum();
     }
 
     /** @return commits whose handle had no registered write */

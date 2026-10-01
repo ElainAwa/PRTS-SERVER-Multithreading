@@ -163,16 +163,17 @@ class WriteAuthorityTest {
     }
 
     @Test
-    void theIntentSegmentKeepsTheFrozenOrder() {
+    void theIntentSegmentKeepsTheOrderTheChannelFroze() {
         Scratch scratch = new Scratch(false, 8);
         scratch.authority.authorize(attempt(1L, "unregistered:t:0", "world", "world",
             WriteLevel.REGION, "region-1", HolderKind.UNREGISTERED, true, 7L, 4L).build());
         scratch.authority.authorize(attempt(2L, "unregistered:t:0", "world", "world",
             WriteLevel.REGION, "region-2", HolderKind.UNREGISTERED, true, 7L, 5L).build());
 
-        CommitOrder outOfOrder = scratch.intents.commit(5L);
-        CommitOrder first = scratch.intents.commit(4L);
-        CommitOrder second = scratch.intents.commit(5L);
+        scratch.intents.bindPayload(intent -> null);
+        CommitOrder outOfOrder = scratch.intents.commit(5L, TICK);
+        CommitOrder first = scratch.intents.commit(0L, TICK);
+        CommitOrder second = scratch.intents.commit(1L, TICK);
 
         assertEquals(RejectCode.COMMIT_ORDER_VIOLATION, outOfOrder.code());
         assertTrue(first.committed());
@@ -180,6 +181,7 @@ class WriteAuthorityTest {
         assertEquals(1L, scratch.intents.orderViolationCount());
         assertEquals(2L, scratch.intents.committedCount());
         assertEquals(0, scratch.intents.depth());
+        assertEquals(2L, scratch.intents.enqueuedCount());
     }
 
     @Test

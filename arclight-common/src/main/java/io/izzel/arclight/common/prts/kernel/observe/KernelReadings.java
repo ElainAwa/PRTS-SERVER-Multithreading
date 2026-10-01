@@ -8,6 +8,7 @@ import io.izzel.arclight.common.prts.kernel.codes.DegradeLevel;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.codes.RejectTrigger;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
+import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import io.izzel.arclight.common.prts.kernel.meter.MeterWindow;
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
@@ -80,7 +81,7 @@ public final class KernelReadings {
         add(lines, "kernel.write_path_guard", KernelSettings.writePathGuard());
         add(lines, "kernel.commit_intents", KernelSettings.commitIntents());
         add(lines, "kernel.route_unregistered_writes", KernelSettings.routeUnregisteredWrites());
-        add(lines, "kernel.intent_commit_mode", module.intents().commitMode());
+        add(lines, "kernel.intent_commit_mode", module.commitSegment().mode());
         add(lines, "kernel.write_path_tap_installed",
             io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps.installed() ? 1 : 0);
         add(lines, "kernel.observation_requests", 1);
@@ -169,6 +170,7 @@ public final class KernelReadings {
         add(lines, "write.last_decision.tick", last == null ? 0L : last.tickIndex());
         add(lines, "write.payload_applied", guard.payloads().appliedCount());
         add(lines, "write.payload_failed", guard.payloads().failedCount());
+        add(lines, "write.payload_threw", guard.payloads().threwCount());
         add(lines, "write.payload_unbound", guard.payloads().unboundCount());
         add(lines, "write.payload_dropped", guard.payloads().droppedCount());
         add(lines, "write.payload_pending", guard.payloads().pendingCount());
@@ -176,6 +178,7 @@ public final class KernelReadings {
 
     private static void intentQueue(List<String> lines, KernelModule module) {
         IntentQueue intents = module.intents();
+        CommitSegment segment = module.commitSegment();
         add(lines, "intent.queue_depth", intents.depth());
         add(lines, "intent.queue_cap", intents.capacity());
         add(lines, "intent.queue_slope", intents.depthSlope());
@@ -185,8 +188,12 @@ public final class KernelReadings {
         add(lines, "intent.order_violations", intents.orderViolationCount());
         add(lines, "intent.executed", intents.executedCount());
         add(lines, "intent.payload_refusals", intents.payloadRefusalCount());
-        add(lines, "intent.shape_only", intents.shapeOnlyCount());
-        add(lines, "intent.commit_mode", intents.commitMode());
+        add(lines, "intent.last_exec_tick", intents.lastExecTick());
+        add(lines, "intent.commit_mode", segment.mode());
+        add(lines, "intent.commit_passes", segment.passes());
+        add(lines, "intent.commit_steps", segment.steps());
+        add(lines, "intent.commit_cursor", segment.cursor());
+        add(lines, "intent.commit_refusals", segment.refusals());
     }
 
     private static void tokens(List<String> lines, KernelModule module) {

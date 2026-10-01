@@ -22,7 +22,9 @@ import java.util.List;
  * counter table.</p>
  *
  * <p>The write path lines report what the real write paths did: how many attempts each of them
- * carried, how they left, and whether the per-path accounting closes.</p>
+ * carried, how they left, and whether the per-path accounting closes. The intent line reports the
+ * channel the same way: what was frozen into it, what the commit segment applied, and the mode the
+ * segment is in - {@code hold} means nothing is consumed and the depth is what is waiting.</p>
  */
 public final class KernelStatusLines {
 
@@ -62,9 +64,11 @@ public final class KernelStatusLines {
             + " enforce=" + (module.guard().enforcing() ? 1 : 0)
             + " routing=" + (module.guard().routing() ? 1 : 0));
         lines.add("[PRTS] kernel: intent depth=" + module.intents().depth() + "/"
-            + module.intents().capacity() + " committed=" + module.intents().committedCount()
+            + module.intents().capacity() + " enqueued=" + module.intents().enqueuedCount()
+            + " committed=" + module.intents().committedCount()
             + " executed=" + module.intents().executedCount()
-            + " mode=" + module.intents().commitMode()
+            + " mode=" + module.commitSegment().mode()
+            + " last_exec_tick=" + module.intents().lastExecTick()
             + " order_violations=" + module.intents().orderViolationCount());
         MeterWindow window = module.window();
         lines.add("[PRTS] kernel: self rows=" + window.rowCount()

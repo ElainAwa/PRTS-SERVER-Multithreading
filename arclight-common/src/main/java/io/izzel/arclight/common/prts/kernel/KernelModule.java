@@ -5,7 +5,7 @@ import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
 import io.izzel.arclight.common.prts.kernel.auth.WriteAuthority;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
-import io.izzel.arclight.common.prts.kernel.intent.CommitOrder;
+import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import io.izzel.arclight.common.prts.kernel.meter.MeterWindow;
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
@@ -28,10 +28,14 @@ import java.util.Map;
 /**
  * The module entry: one instance per process, driven once per tick by the platform listener.
  *
- * <p>The driver is read-only with respect to the world. It reclaims expired tokens, plans the time
- * budget, turns overruns into records that are never executed, checks the accounting closure and
- * publishes the metering window when its length has passed. It occupies no world write path and no
- * lock, and the platform subscriber exists only while the kernel category is on.</p>
+ * <p>The driver reclaims expired tokens, plans the time budget, turns overruns into records that are
+ * never executed, checks the accounting closure and publishes the metering window when its length
+ * has passed. It occupies no world write path and no lock, and the platform subscriber exists only
+ * while the kernel category is on.</p>
+ *
+ * <p>The one world write the module can perform is the commit segment: it walks the intent channel
+ * and applies what a routed write was deferred into. Its switch is off by default, and while it is
+ * off the module only observes - nothing is consumed from the channel and no deferred write lands.</p>
  *
  * <p>The only clock read here is the one that measures the driver itself, so the cost of the
  * observation can be published as a row of its own. Planning reads the tick index and the metered
@@ -55,8 +59,9 @@ public final class KernelModule {
     private static final String SERVER_SITE = "host:server-thread";
 
     private final OwnerRegistry owners = new OwnerRegistry();
-    private final IntentQueue intents = new IntentQueue(KernelSettings::intentQueueCap,
-        KernelSettings::commitIntents);
+    private final IntentQueue intents = new IntentQueue(KernelSettings::intentQueueCap);
+    private final CommitSegment commitSegment = new CommitSegment(intents,
+        KernelSettings::commitIntents, intents::capacity);
     private final WriteLedger ledger = new WriteLedger();
     private final WritePathCounters pathCounters = new WritePathCounters();
     private final IntentPayloadDirectory payloads = new IntentPayloadDirectory();
@@ -68,7 +73,6 @@ public final class KernelModule {
     private final SharePlanner shares = new SharePlanner();
 
     private long tickIndex;
-    private long nextCommitOrder;
     private long windowStartTick;
     private boolean started;
     private MeterWindow lastWindow;
@@ -91,7 +95,7 @@ public final class KernelModule {
      */
     public void serverTick(List<String> worldIds) {
         if (!KernelSettings.enabled()) {
-            guard.refresh(false, false, false, false, tickIndex);
+            guard.refresh(false, false, false, tickIndex);
             return;
         }
         long startedAt = System.nanoTime();
@@ -105,9 +109,8 @@ public final class KernelModule {
         }
         guard.refresh(KernelSettings.writePathGuard(),
             KernelSettings.enforceUnregisteredWrites(),
-            KernelSettings.routeUnregisteredWrites(),
-            KernelSettings.commitIntents(), tickIndex);
-        driveCommitSegment();
+            KernelSettings.routeUnregisteredWrites(), tickIndex);
+        commitSegment.run(tickIndex);
         if (KernelSettings.selfTimers()) {
             owners.reclaimExpired(tickIndex);
         }
@@ -119,27 +122,6 @@ public final class KernelModule {
         }
         ledger.verifyClosure();
         SelfTimers.note(SelfClass.OBSERVE, RUNTIME_WORLD, "runtime", System.nanoTime() - startedAt);
-    }
-
-    /**
-     * Walks the commit segment for this tick.
-     *
-     * <p>The segment takes the head of the channel while it carries the order frozen at planning
-     * time. A refusal ends the walk: the head stays where it is and the next tick tries again, so a
-     * write is never reordered to get past a refusal.</p>
-     */
-    private void driveCommitSegment() {
-        if (intents.depth() == 0) {
-            return;
-        }
-        int budget = intents.capacity();
-        for (int index = 0; index < budget; index++) {
-            CommitOrder order = intents.commit(nextCommitOrder);
-            if (!order.committed()) {
-                return;
-            }
-            nextCommitOrder++;
-        }
     }
 
     /**
@@ -233,6 +215,11 @@ public final class KernelModule {
         return intents;
     }
 
+    /** @return the commit segment that walks the intent queue */
+    public CommitSegment commitSegment() {
+        return commitSegment;
+    }
+
     /** @return the write ledger */
     public WriteLedger ledger() {
         return ledger;
@@ -272,8 +259,8 @@ public final class KernelModule {
     public void resetReadings() {
         SelfTimers.resetAll();
         guard.resetReadings();
+        commitSegment.reset();
         tickIndex = 0L;
-        nextCommitOrder = 0L;
         windowStartTick = 0L;
         started = false;
         lastWindow = null;

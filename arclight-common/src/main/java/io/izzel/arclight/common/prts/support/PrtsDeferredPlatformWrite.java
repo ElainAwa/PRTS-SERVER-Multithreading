@@ -1,0 +1,39 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/*
+ * The write a platform block edit is handed over as: the same data setter, run again later on the
+ * thread that drives the tick. It lives beside the seam rather than in the package the mixins are
+ * declared in, because a class in a mixin package that is not itself a mixin cannot be referenced.
+ * The second call takes the short path of the same hook - it runs on the thread that owns the
+ * world - so a handed-over write cannot be handed over a second time.
+ */
+package io.izzel.arclight.common.prts.support;
+
+import org.bukkit.block.data.BlockData;
+import org.bukkit.craftbukkit.v.block.CraftBlock;
+
+/** One platform block write, deferred until the commit segment reaches it. */
+public final class PrtsDeferredPlatformWrite implements PrtsWorldWriteTaps.DeferredWrite {
+
+    private final CraftBlock block;
+    private final BlockData data;
+    private final boolean applyPhysics;
+
+    /**
+     * Creates the deferred write.
+     *
+     * @param block        the block the write targets
+     * @param data         the data to write
+     * @param applyPhysics whether the original call wanted physics
+     */
+    public PrtsDeferredPlatformWrite(CraftBlock block, BlockData data, boolean applyPhysics) {
+        this.block = block;
+        this.data = data;
+        this.applyPhysics = applyPhysics;
+    }
+
+    @Override
+    public boolean apply() {
+        block.setBlockData(data, applyPhysics);
+        return true;
+    }
+}

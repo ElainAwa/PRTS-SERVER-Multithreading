@@ -9,6 +9,7 @@ package io.izzel.arclight.common.prts.fixes;
 
 import io.izzel.arclight.api.ArclightPlatform;
 import io.izzel.arclight.common.mod.mixins.annotation.OnlyInPlatform;
+import io.izzel.arclight.common.prts.support.PrtsDeferredLevelWrite;
 import io.izzel.arclight.common.prts.support.PrtsStructureGrowCapture;
 import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
 import net.minecraft.core.BlockPos;
@@ -49,7 +50,7 @@ public abstract class PrtsLevelStructureGrowCaptureMixin {
             return true;
         }
         return PrtsWorldWriteTaps.admitBlockWrite(level, level.dimension().location().toString(),
-            () -> level.setBlock(pos, state, flags, recursionLeft));
+            new PrtsDeferredLevelWrite(level, pos, state, flags, recursionLeft));
     }
 
     /**

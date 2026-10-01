@@ -13,7 +13,9 @@ import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.codes.RejectTrigger;
 import io.izzel.arclight.common.prts.kernel.intent.CommitOrder;
+import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
+import io.izzel.arclight.common.prts.kernel.intent.WriteIntent;
 import io.izzel.arclight.common.prts.kernel.sites.IntentPayloadDirectory;
 import io.izzel.arclight.common.prts.kernel.sites.WritePath;
 import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
@@ -151,9 +153,9 @@ public final class KernelSelfCheck {
             || refused.code() != RejectCode.WRITE_DENIED_NOT_OWNER) {
             failures.add("enforcement did not refuse an unregistered write");
         }
-        CommitOrder outOfOrder = intents.commit(5L);
-        CommitOrder first = intents.commit(0L);
-        CommitOrder second = intents.commit(1L);
+        CommitOrder outOfOrder = intents.commit(1L, tick);
+        CommitOrder first = intents.commit(0L, tick);
+        CommitOrder second = intents.commit(1L, tick);
         if (outOfOrder.code() != RejectCode.COMMIT_ORDER_VIOLATION) {
             failures.add("an out-of-order commit was not refused");
         }
@@ -222,6 +224,7 @@ public final class KernelSelfCheck {
             failures.add("a wait over the bound was not reported");
         }
 
+        lines.addAll(commitSegmentMatrix(failures, tick));
         lines.addAll(writePathMatrix(failures, tick));
         lines.addAll(siteCoverage(failures, waits));
 
@@ -240,12 +243,13 @@ public final class KernelSelfCheck {
         WriteLedger ledger = new WriteLedger();
         OwnerRegistry owners = new OwnerRegistry();
         IntentPayloadDirectory payloads = new IntentPayloadDirectory();
-        IntentQueue intents = new IntentQueue(() -> 8, () -> true);
+        IntentQueue intents = new IntentQueue(() -> 8);
         WriteAuthority authority = new WriteAuthority(owners, intents, ledger, () -> true, () -> 2);
         WorldWriteGuard guard = new WorldWriteGuard(counters, authority, intents, payloads, ledger);
         intents.bindPayload(guard);
+        CommitSegment segment = new CommitSegment(intents, () -> true, intents::capacity);
         guard.bindServerThread(Thread.currentThread(), "host:server-thread");
-        guard.refresh(true, false, false, true, tick);
+        guard.refresh(true, false, false, tick);
         Object levelRef = new Object();
 
         int shortPath = guard.classifyBlockWrite(levelRef);
@@ -261,7 +265,7 @@ public final class KernelSelfCheck {
             + counters.count(WritePath.BLOCK_WRITE, ThreadOrigin.MAIN, HolderKind.REGISTERED,
                 WriteDisposition.GRANT));
 
-        guard.refresh(true, true, false, true, tick);
+        guard.refresh(true, true, false, tick);
         WorkerWrite enforced = new WorkerWrite(guard, levelRef);
         runOnWorker(enforced);
         lines.add("selftest.path_enforce_proceeded=" + (enforced.proceeded ? 1 : 0));
@@ -269,12 +273,14 @@ public final class KernelSelfCheck {
             + counters.count(WritePath.BLOCK_WRITE, ThreadOrigin.WORKER, HolderKind.UNREGISTERED,
                 WriteDisposition.DENY));
 
-        guard.refresh(true, false, true, true, tick);
+        guard.refresh(true, false, true, tick);
         WorkerWrite handedOver = new WorkerWrite(guard, levelRef);
         runOnWorker(handedOver);
-        CommitOrder committed = intents.commit(0L);
+        CommitSegment.Pass pass = segment.run(tick);
+        boolean committed = pass.ran() && pass.code() == null && pass.steps() == 1;
         lines.add("selftest.path_handed_over=" + (handedOver.proceeded ? 0 : 1));
-        lines.add("selftest.path_commit_committed=" + (committed.committed() ? 1 : 0));
+        lines.add("selftest.path_commit_committed=" + (committed ? 1 : 0));
+        lines.add("selftest.path_commit_steps=" + pass.steps());
         lines.add("selftest.path_payload_applied=" + (handedOver.deferredApplied ? 1 : 0));
         lines.add("selftest.path_commit_entry="
             + counters.count(WritePath.KERNEL_COMMIT, ThreadOrigin.MAIN, HolderKind.KERNEL,
@@ -294,13 +300,70 @@ public final class KernelSelfCheck {
         if (enforced.proceeded) {
             failures.add("enforcement let an undeclared write through");
         }
-        if (!committed.committed() || !handedOver.deferredApplied) {
+        if (!committed || !handedOver.deferredApplied) {
             failures.add("the handed-over write was not applied by the commit segment");
         }
         if (!counters.closureHolds()) {
             failures.add("the write path accounting does not close");
         }
         return lines;
+    }
+
+    /**
+     * Drives the commit segment on scratch objects: while its switch is off nothing is consumed, and
+     * while it is on the queue drains in the order the channel froze.
+     */
+    private static List<String> commitSegmentMatrix(List<String> failures, long tick) {
+        List<String> lines = new ArrayList<>();
+        IntentQueue queue = new IntentQueue(() -> 8);
+        List<String> applied = new ArrayList<>();
+        queue.bindPayload(intent -> {
+            applied.add(intent.payloadHandle());
+            return null;
+        });
+        queue.enqueue(intent(1L, "first"));
+        queue.enqueue(intent(2L, "second"));
+        CommitSegment holding = new CommitSegment(queue, () -> false, queue::capacity);
+
+        CommitSegment.Pass held = holding.run(tick);
+        lines.add("selftest.intent_hold_ran=" + (held.ran() ? 1 : 0));
+        lines.add("selftest.intent_hold_depth=" + queue.depth());
+        lines.add("selftest.intent_hold_mode=" + holding.mode());
+        lines.add("selftest.intent_hold_executed=" + queue.executedCount());
+
+        CommitSegment walking = new CommitSegment(queue, () -> true, queue::capacity);
+        CommitSegment.Pass walked = walking.run(tick);
+        lines.add("selftest.intent_walk_steps=" + walked.steps());
+        lines.add("selftest.intent_walk_executed=" + queue.executedCount());
+        lines.add("selftest.intent_walk_depth=" + queue.depth());
+        lines.add("selftest.intent_walk_cursor=" + walking.cursor());
+        lines.add("selftest.intent_walk_last_exec_tick=" + queue.lastExecTick());
+        lines.add("selftest.intent_walk_order_violations=" + queue.orderViolationCount());
+        lines.add("selftest.intent_walk_applied=" + String.join(",", applied));
+
+        if (held.ran() || queue.depth() != 2 || queue.executedCount() != 0L) {
+            failures.add("the commit segment consumed something while its switch was off");
+        }
+        if (walked.steps() != 2 || queue.executedCount() != 2L || queue.depth() != 0) {
+            failures.add("the commit segment did not drain the frozen order");
+        }
+        if (!applied.equals(List.of("first", "second"))) {
+            failures.add("the commit segment did not apply the frozen order");
+        }
+        if (queue.lastExecTick() != tick) {
+            failures.add("the commit segment did not publish the tick it executed on");
+        }
+        queue.enqueue(intent(3L, "third"));
+        CommitOrder outOfOrder = queue.commit(7L, tick);
+        if (outOfOrder.code() != RejectCode.COMMIT_ORDER_VIOLATION || queue.orderViolationCount() != 1L) {
+            failures.add("an order the channel never froze was not refused");
+        }
+        return lines;
+    }
+
+    private static WriteIntent intent(long id, String handle) {
+        return WriteIntent.draft(id, "world", "world", "block_write", 0L, handle, "xdomain",
+            "site:a");
     }
 
     /** Drives the written-down call site list: completeness, refusal and coverage. */

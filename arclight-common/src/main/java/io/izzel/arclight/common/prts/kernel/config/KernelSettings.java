@@ -40,10 +40,10 @@ public final class KernelSettings {
     /** Watches the real world write paths; on with the category, and it only records. */
     public static final String WRITE_PATH_GUARD = "write-path-guard";
 
-    /** Applies what the commit segment reaches; off, so a commit only proves the frozen order. */
+    /** Walks the intent channel and applies what it reaches; off, so nothing is consumed. */
     public static final String COMMIT_INTENTS = "commit-intents";
 
-    /** Hands an undeclared write to the commit segment instead of only recording it; off. */
+    /** Hands an undeclared write to the intent channel instead of only recording it; off. */
     public static final String ROUTE_UNREGISTERED_WRITES = "route-unregistered-writes";
 
     /** Length of one self-metering window, in seconds; never shorter than ten minutes. */
@@ -114,12 +114,12 @@ public final class KernelSettings {
         return feature(WRITE_PATH_GUARD);
     }
 
-    /** @return {@code true} when the commit segment applies what it reaches */
+    /** @return {@code true} when the commit segment walks the intent channel */
     public static boolean commitIntents() {
         return feature(COMMIT_INTENTS);
     }
 
-    /** @return {@code true} when an undeclared write is handed to the commit segment */
+    /** @return {@code true} when an undeclared write is handed to the intent channel */
     public static boolean routeUnregisteredWrites() {
         return feature(ROUTE_UNREGISTERED_WRITES);
     }
