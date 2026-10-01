@@ -12,3 +12,6 @@ run
 .*
 !.github/
 !.github/workflows/
+
+# 测试副产品日志（构建/单测输出）
+arclight-common/logs/
