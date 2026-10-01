@@ -153,6 +153,7 @@ public final class KernelSelfCheck {
             || refused.code() != RejectCode.WRITE_DENIED_NOT_OWNER) {
             failures.add("enforcement did not refuse an unregistered write");
         }
+        intents.bindPayload(intent -> null);
         CommitOrder outOfOrder = intents.commit(1L, tick);
         CommitOrder first = intents.commit(0L, tick);
         CommitOrder second = intents.commit(1L, tick);
@@ -326,10 +327,12 @@ public final class KernelSelfCheck {
         CommitSegment holding = new CommitSegment(queue, () -> false, queue::capacity);
 
         CommitSegment.Pass held = holding.run(tick);
+        int heldDepth = queue.depth();
+        long heldExecuted = queue.executedCount();
         lines.add("selftest.intent_hold_ran=" + (held.ran() ? 1 : 0));
-        lines.add("selftest.intent_hold_depth=" + queue.depth());
+        lines.add("selftest.intent_hold_depth=" + heldDepth);
         lines.add("selftest.intent_hold_mode=" + holding.mode());
-        lines.add("selftest.intent_hold_executed=" + queue.executedCount());
+        lines.add("selftest.intent_hold_executed=" + heldExecuted);
 
         CommitSegment walking = new CommitSegment(queue, () -> true, queue::capacity);
         CommitSegment.Pass walked = walking.run(tick);
@@ -341,7 +344,7 @@ public final class KernelSelfCheck {
         lines.add("selftest.intent_walk_order_violations=" + queue.orderViolationCount());
         lines.add("selftest.intent_walk_applied=" + String.join(",", applied));
 
-        if (held.ran() || queue.depth() != 2 || queue.executedCount() != 0L) {
+        if (held.ran() || heldDepth != 2 || heldExecuted != 0L) {
             failures.add("the commit segment consumed something while its switch was off");
         }
         if (walked.steps() != 2 || queue.executedCount() != 2L || queue.depth() != 0) {
