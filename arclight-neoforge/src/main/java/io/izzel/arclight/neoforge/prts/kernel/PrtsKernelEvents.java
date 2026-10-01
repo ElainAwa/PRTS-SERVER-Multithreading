@@ -38,6 +38,7 @@ public final class PrtsKernelEvents {
      */
     public static void register() {
         KernelModule.instance().installWritePathTap();
+        KernelModule.instance().installWaitSiteTap();
         NeoForge.EVENT_BUS.register(new PrtsKernelEvents());
     }
 

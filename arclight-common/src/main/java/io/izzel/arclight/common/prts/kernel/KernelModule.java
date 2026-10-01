@@ -19,6 +19,8 @@ import io.izzel.arclight.common.prts.kernel.sites.IntentPayloadDirectory;
 import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
 import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry;
+import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteObserver;
+import io.izzel.arclight.common.prts.support.PrtsWaitSites;
 import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
 
 import java.util.EnumMap;
@@ -70,9 +72,12 @@ public final class KernelModule {
     private final WorldWriteGuard guard = new WorldWriteGuard(pathCounters, authority, intents,
         payloads, ledger);
     private final WaitPointRegistry waitPoints = new WaitPointRegistry(KernelSettings::waitBoundMs);
+    private final WaitSiteObserver waitSites = new WaitSiteObserver(waitPoints, this::tickIndex,
+        KernelSettings::waitBoundMs);
     private final SharePlanner shares = new SharePlanner();
 
     private long tickIndex;
+    private boolean waitSiteTapInstalled;
     private long windowStartTick;
     private boolean started;
     private MeterWindow lastWindow;
@@ -96,6 +101,7 @@ public final class KernelModule {
     public void serverTick(List<String> worldIds) {
         if (!KernelSettings.enabled()) {
             guard.refresh(false, false, false, tickIndex);
+            syncWaitSiteTap(false);
             return;
         }
         long startedAt = System.nanoTime();
@@ -110,6 +116,7 @@ public final class KernelModule {
         guard.refresh(KernelSettings.writePathGuard(),
             KernelSettings.enforceUnregisteredWrites(),
             KernelSettings.routeUnregisteredWrites(), tickIndex);
+        syncWaitSiteTap(KernelSettings.waitRegistry());
         commitSegment.run(tickIndex);
         if (KernelSettings.selfTimers()) {
             owners.reclaimExpired(tickIndex);
@@ -137,6 +144,29 @@ public final class KernelModule {
     /** Removes the write path watcher. */
     public void removeWritePathTap() {
         PrtsWorldWriteTaps.install(null);
+    }
+
+    /**
+     * Installs the wait observation watcher.
+     *
+     * <p>Called while the category is on. The call sites cost one volatile read each while nothing
+     * is installed, and nothing is installed at all then.</p>
+     */
+    public void installWaitSiteTap() {
+        syncWaitSiteTap(KernelSettings.waitRegistry());
+    }
+
+    /** Removes the wait observation watcher. */
+    public void removeWaitSiteTap() {
+        syncWaitSiteTap(false);
+    }
+
+    private void syncWaitSiteTap(boolean wanted) {
+        if (waitSiteTapInstalled == wanted) {
+            return;
+        }
+        waitSiteTapInstalled = wanted;
+        PrtsWaitSites.install(wanted ? waitSites : null);
     }
 
     private void planBudget(List<String> worldIds) {
@@ -240,6 +270,11 @@ public final class KernelModule {
         return waitPoints;
     }
 
+    /** @return the observer that turns the waits of the real call sites into observations */
+    public WaitSiteObserver waitSites() {
+        return waitSites;
+    }
+
     /** @return the share planner */
     public SharePlanner shares() {
         return shares;
@@ -259,6 +294,7 @@ public final class KernelModule {
     public void resetReadings() {
         SelfTimers.resetAll();
         guard.resetReadings();
+        waitSites.reset();
         commitSegment.reset();
         tickIndex = 0L;
         windowStartTick = 0L;

@@ -29,6 +29,7 @@ import io.izzel.arclight.common.prts.kernel.sites.ThreadOrigin;
 import io.izzel.arclight.common.prts.kernel.waitpoints.CoverageReport;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSite;
+import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteReadings;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -347,6 +348,35 @@ public final class KernelReadings {
         add(lines, "wait.max_ms", registry.maxWaitMs());
         add(lines, "wait.overrun", registry.waitOverrunCount());
         add(lines, "wait.observed", registry.observationCount());
+        waitSiteReadings(lines, module);
+    }
+
+    /**
+     * Publishes what the waits of the real call sites added up to, site by site.
+     *
+     * <p>Every site of the written-down list gets its row, zero included: a site that never waited
+     * states that as a number rather than by being absent. The two verdicts are published next to the
+     * duration they belong to, and neither of them is acted on.</p>
+     */
+    private static void waitSiteReadings(List<String> lines, KernelModule module) {
+        WaitSiteReadings readings = module.waitSites().readings();
+        add(lines, "wait.over_one_tick", readings.overOneTickTotal());
+        add(lines, "wait.forced_convergence_candidates", readings.convergenceCandidateTotal());
+        for (int index = 0; index < readings.siteCount(); index++) {
+            String siteId = safe(readings.siteIds()[index]);
+            String prefix = "wait.site." + siteId + ".";
+            add(lines, "wait.observed_by_site." + siteId, readings.observed(index));
+            add(lines, prefix + "wait_point",
+                module.waitSites().waitPointId(index) == null ? "UNREGISTERED"
+                    : module.waitSites().waitPointId(index));
+            add(lines, prefix + "call_site",
+                module.waitSites().callSiteRef(index) == null ? "unknown"
+                    : module.waitSites().callSiteRef(index));
+            add(lines, prefix + "max_ms", readings.maxMs(index));
+            add(lines, prefix + "over_one_tick", readings.overOneTick(index));
+            add(lines, prefix + "forced_convergence_candidates",
+                readings.convergenceCandidates(index));
+        }
     }
 
     private static void control(List<String> lines, KernelModule module) {

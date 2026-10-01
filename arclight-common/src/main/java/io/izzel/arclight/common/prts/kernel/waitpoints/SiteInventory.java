@@ -27,9 +27,18 @@ public final class SiteInventory {
                        String timeoutAction, String degradeTo, String evidence) {
     }
 
+    /**
+     * The timeout action that a forced materialization convergence would carry out.
+     *
+     * <p>A site whose row names it is one where a wait over the configured bound would have entered
+     * that action, had this build been allowed to run one. The constant is published so the reader
+     * of the wait observations asks the same question the list answers.</p>
+     */
+    public static final String FORCED_MATERIALIZATION = "forced materialization convergence";
+
     private static final String CHUNK_SOURCE = "chunk materialization pipeline";
     private static final String CHUNK_PROGRESS = "progress.chunk.materialized_per_tick";
-    private static final String CHUNK_TIMEOUT = "forced materialization convergence";
+    private static final String CHUNK_TIMEOUT = FORCED_MATERIALIZATION;
     private static final String SNAPSHOT = "read-only snapshot or placeholder upgrade";
 
     private static final Row[] LIST = {

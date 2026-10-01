@@ -9,6 +9,7 @@ import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
 import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
 import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
 import io.izzel.arclight.common.prts.kernel.waitpoints.CoverageReport;
+import io.izzel.arclight.common.prts.support.PrtsWaitSites;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -100,6 +101,12 @@ public final class KernelStatusLines {
             + " uncovered=" + coverage.siteUncoveredIds().size()
             + " coverage=" + KernelReadings.format(coverage.siteCoveragePct()) + "%"
             + " call_sites=" + module.waitPoints().sites().callSites());
+        lines.add("[PRTS] kernel: wait observed=" + module.waitPoints().observationCount()
+            + " max_ms=" + module.waitPoints().maxWaitMs()
+            + " over_one_tick=" + module.waitSites().readings().overOneTickTotal()
+            + " convergence_candidates="
+            + module.waitSites().readings().convergenceCandidateTotal()
+            + " watcher=" + (PrtsWaitSites.installed() ? 1 : 0));
         lines.add("[PRTS] kernel: observation requests, not an approved counter table;"
             + " run '/prts kernel' for the full export");
         return lines;

@@ -24,6 +24,18 @@
     "PrtsCraftBlockWriteTapMixin",
     "PrtsSaplingStructureGrowEventMixin",
     "PrtsTreeGrowerSpeciesMixin",
-    "PrtsCraftMetaItemBlockEntityDataMixin"
+    "PrtsCraftMetaItemBlockEntityDataMixin",
+    "waitpoints.PrtsEntityWaitSiteMixin",
+    "waitpoints.PrtsBlockCollisionsWaitSiteMixin",
+    "waitpoints.PrtsNaturalSpawnerWaitSiteMixin",
+    "waitpoints.PrtsMultifaceSpreaderWaitSiteMixin",
+    "waitpoints.PrtsEndGatewayWaitSitesMixin",
+    "waitpoints.PrtsEndDragonFightWaitSitesMixin",
+    "waitpoints.PrtsMapItemWaitSiteMixin",
+    "waitpoints.PrtsPoiManagerWaitSiteMixin",
+    "waitpoints.PrtsStructureManagerWaitSitesMixin",
+    "waitpoints.PrtsPlayerRespawnLogicWaitSiteMixin",
+    "waitpoints.PrtsServerLevelWaitSiteMixin",
+    "waitpoints.PrtsChunkMapWaitSiteMixin"
   ]
 }

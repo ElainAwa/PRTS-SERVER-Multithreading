@@ -34,6 +34,8 @@ import io.izzel.arclight.common.prts.kernel.waitpoints.WaitObservation;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointDeclaration;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSpan;
+import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteObserver;
+import io.izzel.arclight.common.prts.support.PrtsWaitSites;
 
 import java.util.ArrayList;
 import java.util.EnumMap;
@@ -228,6 +230,7 @@ public final class KernelSelfCheck {
         lines.addAll(commitSegmentMatrix(failures, tick));
         lines.addAll(writePathMatrix(failures, tick));
         lines.addAll(siteCoverage(failures, waits));
+        lines.addAll(waitSiteMatrix(failures, tick));
 
         lines.add("selftest.failures=" + failures.size());
         for (String failure : failures) {
@@ -367,6 +370,78 @@ public final class KernelSelfCheck {
     private static WriteIntent intent(long id, String handle) {
         return WriteIntent.draft(id, "world", "world", "block_write", 0L, handle, "xdomain",
             "site:a");
+    }
+
+    /**
+     * Drives the observation of the real call sites on scratch objects.
+     *
+     * <p>One wait goes through the seam itself, which is the path a hooked method takes, and three
+     * more are handed to the observer with durations the check can pin down: one over a host tick,
+     * one exactly on it and one under it. The check states what the readings made of them and that
+     * the observation left the upper bound where it was.</p>
+     */
+    private static List<String> waitSiteMatrix(List<String> failures, long tick) {
+        List<String> lines = new ArrayList<>();
+        WaitPointRegistry registry = new WaitPointRegistry(() -> 50);
+        WaitSiteObserver observer = new WaitSiteObserver(registry, () -> tick, () -> 50);
+
+        PrtsWaitSites.install(observer);
+        try {
+            PrtsWaitSites.begin(PrtsWaitSites.SERVER_LEVEL_SET_CHUNK_FORCED);
+            PrtsWaitSites.end(PrtsWaitSites.SERVER_LEVEL_SET_CHUNK_FORCED);
+        } finally {
+            PrtsWaitSites.install(null);
+        }
+        observer.observed(PrtsWaitSites.ENTITY_SET_POS_RAW,
+            PrtsWaitSites.SITE_IDS[PrtsWaitSites.ENTITY_SET_POS_RAW], "world", 60_000_000L);
+        observer.observed(PrtsWaitSites.BLOCK_COLLISIONS_COMPUTE_NEXT,
+            PrtsWaitSites.SITE_IDS[PrtsWaitSites.BLOCK_COLLISIONS_COMPUTE_NEXT], "world",
+            50_000_000L);
+        observer.observed(PrtsWaitSites.NATURAL_SPAWNER_SPAWN_CATEGORY,
+            PrtsWaitSites.SITE_IDS[PrtsWaitSites.NATURAL_SPAWNER_SPAWN_CATEGORY], "world",
+            10_000_000L);
+
+        int zeroRows = 0;
+        for (int index = 0; index < observer.readings().siteCount(); index++) {
+            if (observer.readings().observed(index) == 0L) {
+                zeroRows++;
+            }
+        }
+        lines.add("selftest.wait_site_seam_hits="
+            + observer.readings().observed(PrtsWaitSites.SERVER_LEVEL_SET_CHUNK_FORCED));
+        lines.add("selftest.wait_site_observed=" + observer.readings().observedTotal());
+        lines.add("selftest.wait_site_registry_observed=" + registry.observationCount());
+        lines.add("selftest.wait_site_over_one_tick=" + observer.readings().overOneTickTotal());
+        lines.add("selftest.wait_site_candidates="
+            + observer.readings().convergenceCandidateTotal());
+        lines.add("selftest.wait_site_max_ms=" + observer.readings().maxMs());
+        lines.add("selftest.wait_site_zero_rows=" + zeroRows);
+        lines.add("selftest.wait_site_registered_total=" + registry.reportCoverage().siteInventoryTotal());
+        lines.add("selftest.wait_site_unregistered=" + registry.reportCoverage().siteUnregistered());
+
+        if (observer.readings().observed(PrtsWaitSites.SERVER_LEVEL_SET_CHUNK_FORCED) != 1L) {
+            failures.add("a wait driven through the seam never reached the observer");
+        }
+        if (observer.readings().observedTotal() != 4L
+            || registry.observationCount() != 4L) {
+            failures.add("the wait observations were not recorded once each");
+        }
+        if (observer.readings().overOneTickTotal() != 1L) {
+            failures.add("a wait longer than a host tick was not counted exactly once");
+        }
+        if (observer.readings().convergenceCandidateTotal() != 1L) {
+            failures.add("a wait over the upper bound was not counted exactly once");
+        }
+        if (observer.readings().maxMs() != 60L) {
+            failures.add("the longest observed wait was not published");
+        }
+        if (zeroRows != observer.readings().siteCount() - 4) {
+            failures.add("a call site that never waited was not published as zero");
+        }
+        if (registry.reportCoverage().siteUnregistered() != 0) {
+            failures.add("an observed call site was not resolved to its row");
+        }
+        return lines;
     }
 
     /** Drives the written-down call site list: completeness, refusal and coverage. */
