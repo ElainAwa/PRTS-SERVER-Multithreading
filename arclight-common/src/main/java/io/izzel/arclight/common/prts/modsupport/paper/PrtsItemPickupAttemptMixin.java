@@ -4,7 +4,7 @@
  * ("add player attempt pickup event").
  * Reworked as a standalone mixin of the prts.modsupport category; see THIRD-PARTY.md.
  */
-package io.izzel.arclight.common.prts.modsupport;
+package io.izzel.arclight.common.prts.modsupport.paper;
 
 import io.izzel.arclight.common.bridge.core.entity.EntityBridge;
 import io.izzel.arclight.common.bridge.core.server.level.ServerPlayerBridge;

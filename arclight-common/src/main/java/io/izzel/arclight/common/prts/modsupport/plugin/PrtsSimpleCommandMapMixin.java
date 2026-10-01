@@ -4,7 +4,7 @@
  * ("control Bukkit reload commands").
  * Reworked as a standalone mixin of the prts.modsupport category; see THIRD-PARTY.md.
  */
-package io.izzel.arclight.common.prts.modsupport;
+package io.izzel.arclight.common.prts.modsupport.plugin;
 
 import io.izzel.arclight.common.prts.config.PrtsConfigManager;
 import org.bukkit.command.Command;

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-package io.izzel.arclight.common.prts.modsupport;
+package io.izzel.arclight.common.prts.modsupport.tacz;
 
 import io.izzel.arclight.common.mod.mixins.annotation.LoadIfMod;
 import io.izzel.arclight.common.prts.config.PrtsConfigManager;

@@ -4,7 +4,7 @@
  * ("add common Paper API compatibility").
  * Reworked as a standalone mixin of the prts.modsupport category; see THIRD-PARTY.md.
  */
-package io.izzel.arclight.common.prts.modsupport;
+package io.izzel.arclight.common.prts.modsupport.paper;
 
 import net.minecraft.server.dedicated.DedicatedServer;
 import org.bukkit.craftbukkit.v.CraftServer;

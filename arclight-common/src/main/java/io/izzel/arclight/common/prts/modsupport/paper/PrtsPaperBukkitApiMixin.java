@@ -4,7 +4,7 @@
  * ("add common Paper API compatibility").
  * Reworked for the prts.modsupport category; see THIRD-PARTY.md.
  */
-package io.izzel.arclight.common.prts.modsupport;
+package io.izzel.arclight.common.prts.modsupport.paper;
 
 import org.bukkit.Bukkit;
 import org.spongepowered.asm.mixin.Mixin;
