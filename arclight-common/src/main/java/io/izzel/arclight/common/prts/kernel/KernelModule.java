@@ -1,10 +1,23 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel;
 
+import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
 import io.izzel.arclight.common.prts.kernel.auth.WriteAuthority;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
+import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
+import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
+import io.izzel.arclight.common.prts.kernel.dispatch.DispatchPass;
+import io.izzel.arclight.common.prts.kernel.dispatch.DispatchReadings;
+import io.izzel.arclight.common.prts.kernel.dispatch.DispatchSettings;
+import io.izzel.arclight.common.prts.kernel.dispatch.DispatchSnapshot;
+import io.izzel.arclight.common.prts.kernel.dispatch.EntityCandidateView;
+import io.izzel.arclight.common.prts.kernel.dispatch.EntityIntegrator;
+import io.izzel.arclight.common.prts.kernel.dispatch.MergeSegment;
+import io.izzel.arclight.common.prts.kernel.dispatch.TaskLedger;
+import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan;
+import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import io.izzel.arclight.common.prts.kernel.meter.MeterWindow;
@@ -22,10 +35,15 @@ import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry;
 import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteObserver;
 import io.izzel.arclight.common.prts.support.PrtsWaitSites;
 import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * The module entry: one instance per process, driven once per tick by the platform listener.
@@ -65,6 +83,10 @@ public final class KernelModule {
     private static final KernelModule INSTANCE = new KernelModule();
     private static final String RUNTIME_WORLD = "";
     private static final String SERVER_SITE = "host:server-thread";
+    private static final String DISPATCH_DOMAIN = "entity";
+    private static final String DISPATCH_THREAD_PREFIX = "prts-worker-";
+    private static final long DISPATCH_EVIDENCE_TICKS = 400L;
+    private static final Logger DISPATCH_EVIDENCE = LogManager.getLogger("PRTS");
 
     private final OwnerRegistry owners = new OwnerRegistry();
     private final IntentQueue intents = new IntentQueue(KernelSettings::intentQueueCap,
@@ -83,7 +105,21 @@ public final class KernelModule {
         KernelSettings::waitBoundMs);
     private final SharePlanner shares = new SharePlanner();
 
+    private final ArenaLedger arena = new ArenaLedger();
+    private final DispatchReadings dispatchReadings = new DispatchReadings();
+    private final TaskLedger dispatchLedger = new TaskLedger(0L);
+    private final DiffProbe diffProbe = new DiffProbe();
+    private final MergeSegment mergeSegment = new MergeSegment();
+    private final Map<String, Long> dispatchWorldEpochs = new HashMap<>();
+    private final Set<String> dispatchLiveWorlds = new HashSet<>();
+
     private long tickIndex;
+    private long dispatchWorldEpochSeq;
+    private long dispatchTaskSeq;
+    private long lastDispatchEvidenceTick;
+    private WorkerPool dispatchPool;
+    private DispatchPass pendingDispatch;
+    private MergeSegment.Frame lastDispatchFrame = MergeSegment.Frame.empty();
     private boolean waitSiteTapInstalled;
     private long windowStartTick;
     private boolean started;
@@ -109,6 +145,7 @@ public final class KernelModule {
         if (!KernelSettings.enabled()) {
             guard.refresh(false, false, false, tickIndex);
             syncWaitSiteTap(false);
+            shutdownDispatch();
             return;
         }
         long startedAt = System.nanoTime();
@@ -137,6 +174,7 @@ public final class KernelModule {
             publishWindowIfDue();
         }
         ledger.verifyClosure();
+        driveDispatch();
         if (KernelSettings.selfTimers()) {
             SelfTimers.note(SelfClass.OBSERVE, RUNTIME_WORLD, "runtime",
                 System.nanoTime() - startedAt);
@@ -194,6 +232,96 @@ public final class KernelModule {
         }
         waitSiteTapInstalled = wanted;
         PrtsWaitSites.install(wanted ? waitSites : null);
+    }
+
+    /**
+     * Drives the first parallel domain: merge the previous tick's pass at this tick's entry, then
+     * freeze and dispatch this tick's plan.
+     *
+     * <p>The tick boundary is the hard deadline. The previous plan is merged first - with the
+     * configured grace, which is zero by default - and whatever did not answer by then is cancelled
+     * and redone on this thread in the frozen order. The new plan is frozen from a read-only entity
+     * view and offered to the pool; planning itself reads no clock.</p>
+     */
+    private void driveDispatch() {
+        boolean parallel = KernelSettings.dispatchParallel();
+        if (parallel) {
+            DispatchSettings.Policy policy = DispatchSettings.resolve();
+            if (pendingDispatch != null) {
+                long grace = policy.deadlineGraceMs();
+                long deadline = System.nanoTime() + grace * 1_000_000L;
+                lastDispatchFrame = mergeSegment.merge(pendingDispatch, deadline, arena,
+                    dispatchReadings, diffProbe, HashWhitelist.bitexact(), DISPATCH_DOMAIN);
+                pendingDispatch = null;
+                if (lastDispatchFrame == null) {
+                    lastDispatchFrame = MergeSegment.Frame.empty();
+                }
+            }
+            List<EntityCandidateView> views = DispatchSnapshot.capture(this::dispatchWorldEpoch);
+            forgetAbsentDispatchWorlds(views);
+            WorkPlan plan = WorkPlan.freeze(tickIndex, dispatchLedger.epoch(), views,
+                policy.batchChunks(), dispatchTaskSeq + 1L);
+            dispatchTaskSeq += plan.taskCount();
+            dispatchReadings.noteTasks(plan.taskCount());
+            if (!plan.empty()) {
+                if (dispatchPool == null) {
+                    try {
+                        dispatchPool = WorkerPool.open(new WorkerPool.Spec(policy.workerCount(),
+                            DISPATCH_THREAD_PREFIX, Thread.NORM_PRIORITY, policy.queueCap(),
+                            policy.batchChunks()), policy.retryBudget(), dispatchReadings, arena);
+                    } catch (Throwable t) {
+                        dispatchReadings.notePoolOpenFailed();
+                        dispatchPool = null;
+                    }
+                }
+                if (dispatchPool != null) {
+                    pendingDispatch = DispatchPass.dispatch(plan, dispatchPool,
+                        EntityIntegrator.INSTANCE, arena, dispatchReadings, dispatchLedger);
+                }
+            }
+        } else if (dispatchPool != null) {
+            shutdownDispatch();
+        }
+        if (tickIndex - lastDispatchEvidenceTick >= DISPATCH_EVIDENCE_TICKS) {
+            lastDispatchEvidenceTick = tickIndex;
+            DISPATCH_EVIDENCE.info(dispatchReadings.evidenceLine(arena,
+                dispatchPool == null ? 0 : dispatchPool.alive(), lastDispatchFrame.closureOk()));
+        }
+    }
+
+    private synchronized long dispatchWorldEpoch(String worldId) {
+        if (!dispatchLiveWorlds.contains(worldId)) {
+            dispatchWorldEpochSeq++;
+            dispatchWorldEpochs.put(worldId, dispatchWorldEpochSeq);
+            dispatchLiveWorlds.add(worldId);
+        }
+        return dispatchWorldEpochs.getOrDefault(worldId, dispatchWorldEpochSeq);
+    }
+
+    private synchronized void forgetAbsentDispatchWorlds(List<EntityCandidateView> views) {
+        Set<String> seen = new HashSet<>();
+        for (EntityCandidateView view : views) {
+            seen.add(view.worldId());
+        }
+        dispatchLiveWorlds.retainAll(seen);
+    }
+
+    /**
+     * Stops the pool in the ordered shutdown steps and gives the arena segments back.
+     *
+     * <p>The steps are the ones world unload uses as well: stop offering work, wait for what is in
+     * flight, end the threads inside a bounded wait, and only then return the slots. A worker that
+     * answers after its handle was cancelled is refused by the handle and counted as late, never
+     * silently accepted.</p>
+     */
+    private void shutdownDispatch() {
+        WorkerPool current = dispatchPool;
+        dispatchPool = null;
+        pendingDispatch = null;
+        if (current != null) {
+            current.shutdown(true, true, 250L);
+        }
+        arena.releaseAll();
     }
 
     private void planBudget(List<String> worldIds) {
@@ -319,6 +447,14 @@ public final class KernelModule {
 
     /** Clears the live counters. Used by the readout reset and by tests, never by the scheduler. */
     public void resetReadings() {
+        shutdownDispatch();
+        dispatchReadings.reset();
+        dispatchLedger.reset();
+        mergeSegment.reset();
+        diffProbe.reset();
+        arena.reset();
+        lastDispatchFrame = MergeSegment.Frame.empty();
+        lastDispatchEvidenceTick = 0L;
         SelfTimers.resetAll();
         guard.resetReadings();
         waitSites.reset();

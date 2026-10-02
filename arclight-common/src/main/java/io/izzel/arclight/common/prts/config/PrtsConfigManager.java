@@ -236,7 +236,19 @@ public final class PrtsConfigManager {
                 + "# reach, so a large queue cannot turn one tick into a long synchronous drain.\n"
                 + "# 'wait-bound-ms' is the upper bound of one wait, and 'retry-budget' is how many\n"
                 + "# retries one failing intent carries before its refusal is final and the channel\n"
-                + "# releases it."));
+                + "# releases it.\n"
+                + "# 'dispatch-parallel: false' leaves the first parallel domain switched off: no plan,\n"
+                + "# no worker thread and no intermediate slot exists while it is off. On, one tick\n"
+                + "# freezes its entity work into tasks, runs each task on a named worker and merges\n"
+                + "# the results on the tick thread at the next tick boundary.\n"
+                + "# 'worker-count: 0' derives the pool size from the machine (one to four workers,\n"
+                + "# never more than the processors minus one); a declared value is clamped to one\n"
+                + "# through eight. 'worker-queue-cap' is how many batches may be in flight before the\n"
+                + "# tick thread takes the work over, 'worker-batch-chunks' is how many chunks one\n"
+                + "# region covers, 'worker-deadline-grace-ms' is how long the merge waits past the\n"
+                + "# tick boundary (zero cancels immediately), and 'worker-retry-budget' is how many\n"
+                + "# retryable faults a worker attempt carries before it falls back; it is never\n"
+                + "# larger than 'retry-budget' above."));
     }
 
     /**
@@ -302,6 +314,7 @@ public final class PrtsConfigManager {
         features.put("write-path-guard", true);
         features.put("commit-intents", false);
         features.put("route-unregistered-writes", false);
+        features.put("dispatch-parallel", false);
         return features;
     }
 
@@ -327,6 +340,11 @@ public final class PrtsConfigManager {
         numbers.put("commit-budget", new IntSetting(64, 1, 4096));
         numbers.put("wait-bound-ms", new IntSetting(50, 1, 60000));
         numbers.put("retry-budget", new IntSetting(2, 0, 16));
+        numbers.put("worker-count", new IntSetting(0, 0, 8));
+        numbers.put("worker-queue-cap", new IntSetting(32, 1, 256));
+        numbers.put("worker-batch-chunks", new IntSetting(4, 1, 64));
+        numbers.put("worker-deadline-grace-ms", new IntSetting(0, 0, 1000));
+        numbers.put("worker-retry-budget", new IntSetting(1, 0, 2));
         return numbers;
     }
 

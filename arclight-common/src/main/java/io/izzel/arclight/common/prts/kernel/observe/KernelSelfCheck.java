@@ -2,6 +2,7 @@
 package io.izzel.arclight.common.prts.kernel.observe;
 
 import io.izzel.arclight.common.prts.kernel.KernelModule;
+import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerToken;
 import io.izzel.arclight.common.prts.kernel.auth.WriteAttempt;
@@ -12,6 +13,18 @@ import io.izzel.arclight.common.prts.kernel.auth.WriteLevel;
 import io.izzel.arclight.common.prts.kernel.auth.WriteVerdict;
 import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
+import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
+import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
+import io.izzel.arclight.common.prts.kernel.diff.StateHasher;
+import io.izzel.arclight.common.prts.kernel.dispatch.CancelToken;
+import io.izzel.arclight.common.prts.kernel.dispatch.DispatchPass;
+import io.izzel.arclight.common.prts.kernel.dispatch.DispatchReadings;
+import io.izzel.arclight.common.prts.kernel.dispatch.EntityCandidateView;
+import io.izzel.arclight.common.prts.kernel.dispatch.EntityIntegrator;
+import io.izzel.arclight.common.prts.kernel.dispatch.MergeSegment;
+import io.izzel.arclight.common.prts.kernel.dispatch.TaskLedger;
+import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan;
+import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
 import io.izzel.arclight.common.prts.kernel.codes.RejectTrigger;
 import io.izzel.arclight.common.prts.kernel.intent.CommitOrder;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
@@ -236,6 +249,7 @@ public final class KernelSelfCheck {
         lines.addAll(writePathMatrix(failures, tick));
         lines.addAll(siteCoverage(failures, waits));
         lines.addAll(waitSiteMatrix(failures, tick));
+        lines.addAll(dispatchMatrix(failures, tick));
 
         lines.add("selftest.failures=" + failures.size());
         for (String failure : failures) {
@@ -583,6 +597,154 @@ public final class KernelSelfCheck {
     }
 
     /** Drives the written-down call site list: completeness, refusal and coverage. */
+    /**
+     * Drives the dispatch machinery against scratch state: a worker really runs a batch, the merge
+     * commits it once, a duplicate commit is refused, a late result is dropped with a count, a full
+     * queue falls back and the two arms of the hash agree bit for bit.
+     */
+    private static List<String> dispatchMatrix(List<String> failures, long tick) {
+        List<String> lines = new ArrayList<>();
+        DispatchReadings readings = new DispatchReadings();
+        ArenaLedger arena = new ArenaLedger();
+        TaskLedger ledger = new TaskLedger(1L);
+        EntityCandidateView view = dispatchFixture();
+        WorkPlan plan = WorkPlan.freeze(tick, 1L, List.of(view), 4, 1L);
+        WorkerPool pool = WorkerPool.open(new WorkerPool.Spec(1, "prts-worker-", Thread.NORM_PRIORITY,
+            8, 4), 1, readings, arena);
+        try {
+            MergeSegment merge = new MergeSegment();
+            merge.bindOwnerThread(Thread.currentThread());
+            DispatchPass pass = DispatchPass.dispatch(plan, pool, EntityIntegrator.INSTANCE, arena,
+                readings, ledger);
+            MergeSegment.Frame frame = merge.merge(pass, System.nanoTime() + 2_000_000_000L, arena,
+                readings, new DiffProbe(), HashWhitelist.bitexact(), "entity");
+            lines.add("selftest.dispatch_tasks=" + plan.taskCount());
+            lines.add("selftest.dispatch_worker_exec=" + readings.execByThread("prts-worker-0"));
+            lines.add("selftest.dispatch_executed=" + readings.executed());
+            lines.add("selftest.dispatch_committed=" + frame.committed());
+            lines.add("selftest.dispatch_closure=" + (frame.closureOk() ? "ok" : "broken"));
+            lines.add("selftest.dispatch_hash_equal=" + (frame.hashEqual() ? 1 : 0));
+            lines.add("selftest.dispatch_pins=" + (arena.pinPairsHold() ? "ok" : "broken"));
+            lines.add("selftest.dispatch_thread_class=" + pool.threadClasses().get(0).threadClass());
+            if (frame == null || frame.committed() != plan.taskCount()) {
+                failures.add("the dispatched batches were not committed exactly once");
+            }
+            if (!frame.closureOk()) {
+                failures.add("the dispatch accounting does not close");
+            }
+            if (readings.execByThread("prts-worker-0") <= 0) {
+                failures.add("no batch ran on a worker thread");
+            }
+            if (!frame.hashEqual()) {
+                failures.add("the two arms of the state hash did not agree");
+            }
+            if (!arena.pinPairsHold()) {
+                failures.add("an arena slot was not released");
+            }
+            long firstBatch = plan.tasks().get(0).batchId() + 1000L;
+            ledger.register(firstBatch);
+            boolean firstCommit = ledger.markCommitted(firstBatch);
+            boolean secondCommit = ledger.markCommitted(firstBatch);
+            lines.add("selftest.dispatch_duplicate_refused=" + (firstCommit && !secondCommit ? 1 : 0));
+            if (!firstCommit || secondCommit) {
+                failures.add("a second commit of one batch was not refused");
+            }
+            lines.addAll(dispatchFailureMatrix(failures, tick));
+        } finally {
+            pool.shutdown(true, true, 500L);
+            arena.reset();
+        }
+        return lines;
+    }
+
+    private static List<String> dispatchFailureMatrix(List<String> failures, long tick) {
+        List<String> lines = new ArrayList<>();
+        DispatchReadings readings = new DispatchReadings();
+        ArenaLedger arena = new ArenaLedger();
+        TaskLedger ledger = new TaskLedger(1L);
+        EntityCandidateView slow = dispatchFixture("dispatch-late");
+        WorkPlan plan = WorkPlan.freeze(tick, 1L, List.of(slow), 4, 1L);
+        WorkerPool pool = WorkerPool.open(new WorkerPool.Spec(1, "prts-worker-", Thread.NORM_PRIORITY,
+            1, 4), 1, readings, arena);
+        try {
+            DispatchPass first = DispatchPass.dispatch(plan, pool, (batch, target, token) -> {
+                try {
+                    Thread.sleep(120L);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return EntityIntegrator.INSTANCE.run(batch, target, token);
+            }, arena, readings, ledger);
+            WorkPlan extra = WorkPlan.freeze(tick, 1L, List.of(dispatchFixture("dispatch-full")), 4,
+            2L);
+            DispatchPass refused = DispatchPass.dispatch(extra, pool, EntityIntegrator.INSTANCE,
+                arena, readings, ledger);
+            lines.add("selftest.dispatch_backpressure=" + (refused.entries().get(0).handle() == null
+                ? 1 : 0));
+            if (refused.entries().get(0).handle() != null) {
+                failures.add("a full worker queue did not fall back");
+            }
+            first.awaitAll(System.nanoTime() + 1_000_000L);
+            long dropsBefore = readings.lateResultDropped();
+            joinQuietly(180L);
+            lines.add("selftest.dispatch_late_dropped="
+                + (readings.lateResultDropped() > dropsBefore ? 1 : 0));
+            if (readings.lateResultDropped() <= dropsBefore) {
+                failures.add("a result that arrived after the deadline was not dropped and counted");
+            }
+            lines.add("selftest.dispatch_timeouts=" + readings.timeouts());
+            if (readings.timeouts() <= 0) {
+                failures.add("the deadline did not cancel a batch that did not answer");
+            }
+        } finally {
+            pool.shutdown(true, true, 500L);
+            arena.reset();
+        }
+        List<StateHasher.Slice> one = List.of(dispatchSlice(1.0));
+        List<StateHasher.Slice> same = List.of(dispatchSlice(1.0));
+        List<StateHasher.Slice> other = List.of(dispatchSlice(1.0000000000000002));
+        boolean equal = StateHasher.hash("entity", tick, one, HashWhitelist.bitexact()).value()
+            == StateHasher.hash("entity", tick, same, HashWhitelist.bitexact()).value();
+        boolean different = StateHasher.hash("entity", tick, one, HashWhitelist.bitexact()).value()
+            != StateHasher.hash("entity", tick, other, HashWhitelist.bitexact()).value();
+        boolean empty = !StateHasher.hash("entity", tick, List.of(), HashWhitelist.bitexact())
+            .comparable();
+        lines.add("selftest.dispatch_hash_exact=" + (equal && different ? 1 : 0));
+        lines.add("selftest.dispatch_hash_empty_refused=" + (empty ? 1 : 0));
+        if (!equal || !different) {
+            failures.add("the bit-exact hash did not agree and disagree as required");
+        }
+        if (!empty) {
+            failures.add("an empty range produced a hash instead of an error");
+        }
+        return lines;
+    }
+
+    private static StateHasher.Slice dispatchSlice(double x) {
+        return new StateHasher.Slice("world", "r0.0", 1L, 1L, x, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0L, 0L, 0L);
+    }
+
+    private static EntityCandidateView dispatchFixture() {
+        return dispatchFixture("dispatch-selftest");
+    }
+
+    private static EntityCandidateView dispatchFixture(String worldId) {
+        EntityCandidateView.Builder builder = EntityCandidateView.builder(worldId, 1L);
+        for (int i = 0; i < 8; i++) {
+            builder.add(i, 0, 0, i, 64.0, 0.0, 0.1, 0.0, 0.0, 0.01, 0.0, 0L);
+        }
+        return builder.build();
+    }
+
+    private static void joinQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private static List<String> siteCoverage(List<String> failures, WaitPointRegistry waits) {
         List<String> lines = new ArrayList<>();
         CoverageReport coverage = waits.reportCoverage();

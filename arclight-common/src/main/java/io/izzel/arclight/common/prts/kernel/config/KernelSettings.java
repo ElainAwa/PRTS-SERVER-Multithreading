@@ -76,11 +76,44 @@ public final class KernelSettings {
     /** Number of retries one attempt carries before a refusal is final. */
     public static final String RETRY_BUDGET = "retry-budget";
 
+    /** Turns the parallel dispatch of the first domain on; off, so nothing is dispatched. */
+    public static final String DISPATCH_PARALLEL = "dispatch-parallel";
+
+    /** How many worker threads the pool holds; zero means derive it from the machine. */
+    public static final String WORKER_COUNT = "worker-count";
+
+    /** How many batches may wait in the pool before the tick thread takes over. */
+    public static final String WORKER_QUEUE_CAP = "worker-queue-cap";
+
+    /** How many chunks one region covers on a side, the span of one batch. */
+    public static final String WORKER_BATCH_CHUNKS = "worker-batch-chunks";
+
+    /** How long the merge waits past the tick boundary before it cancels. */
+    public static final String WORKER_DEADLINE_GRACE_MS = "worker-deadline-grace-ms";
+
+    /** How many retryable faults a worker attempt may carry before it falls back. */
+    public static final String WORKER_RETRY_BUDGET = "worker-retry-budget";
+
     /** Upper bound the channel depth is clamped to, whatever the file says. */
     public static final int INTENT_QUEUE_CAP_MAX = 65536;
 
     /** Upper bound the commit budget is clamped to, whatever the file says. */
     public static final int COMMIT_BUDGET_MAX = 4096;
+
+    /** Upper bound the declared worker count is clamped to, whatever the file says. */
+    public static final int WORKER_COUNT_MAX = 8;
+
+    /** Upper bound the worker queue depth is clamped to, whatever the file says. */
+    public static final int WORKER_QUEUE_CAP_MAX = 256;
+
+    /** Upper bound the region span is clamped to, whatever the file says. */
+    public static final int WORKER_BATCH_CHUNKS_MAX = 64;
+
+    /** Upper bound the deadline grace is clamped to, whatever the file says. */
+    public static final int WORKER_DEADLINE_GRACE_MS_MAX = 1000;
+
+    /** Upper bound the worker retry budget is clamped to, whatever the file says. */
+    public static final int WORKER_RETRY_BUDGET_MAX = 2;
 
     private KernelSettings() {
     }
@@ -216,6 +249,36 @@ public final class KernelSettings {
     /** @return the retry budget one attempt carries */
     public static int retryBudget() {
         return number(RETRY_BUDGET);
+    }
+
+    /** @return whether the parallel dispatch of the first domain is on */
+    public static boolean dispatchParallel() {
+        return feature(DISPATCH_PARALLEL);
+    }
+
+    /** @return the declared worker count, zero meaning derive it from the machine */
+    public static int workerCountDeclared() {
+        return number(WORKER_COUNT);
+    }
+
+    /** @return how many batches may wait in the pool before the tick thread takes over */
+    public static int workerQueueCap() {
+        return clamp(number(WORKER_QUEUE_CAP), 1, WORKER_QUEUE_CAP_MAX);
+    }
+
+    /** @return how many chunks one region covers on a side */
+    public static int workerBatchChunks() {
+        return clamp(number(WORKER_BATCH_CHUNKS), 1, WORKER_BATCH_CHUNKS_MAX);
+    }
+
+    /** @return how long the merge waits past the tick boundary before it cancels */
+    public static int workerDeadlineGraceMs() {
+        return clamp(number(WORKER_DEADLINE_GRACE_MS), 0, WORKER_DEADLINE_GRACE_MS_MAX);
+    }
+
+    /** @return how many retryable faults a worker attempt may carry */
+    public static int workerRetryBudget() {
+        return clamp(number(WORKER_RETRY_BUDGET), 0, WORKER_RETRY_BUDGET_MAX);
     }
 
     private static boolean feature(String name) {
