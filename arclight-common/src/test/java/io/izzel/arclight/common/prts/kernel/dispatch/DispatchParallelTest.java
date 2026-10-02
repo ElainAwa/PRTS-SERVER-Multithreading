@@ -82,14 +82,23 @@ class DispatchParallelTest {
         TaskLedger ledger = new TaskLedger(1L);
         WorkPlan plan = WorkPlan.freeze(TICK, 1L, List.of(view("world", 4)), 4, 1L);
         WorkerPool pool = pool(readings, arena, 4, 1);
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        boolean shutDown = false;
         try {
             MergeSegment merge = new MergeSegment();
             merge.bindOwnerThread(Thread.currentThread());
             DispatchPass pass = DispatchPass.dispatch(plan, pool, (batch, target, token) -> {
-                sleep(150L);
+                started.countDown();
+                awaitLatch(release);
                 return EntityIntegrator.INSTANCE.run(batch, target, token);
             }, arena, readings, ledger);
-            MergeSegment.Frame frame = merge.merge(pass, System.nanoTime() + 1_000_000L, arena,
+            assertTrue(awaitLatch(started), "the worker must be inside the batch before the merge");
+            long deadline = System.nanoTime() + 1_000_000L;
+            while (System.nanoTime() < deadline) {
+                Thread.onSpinWait();
+            }
+            MergeSegment.Frame frame = merge.merge(pass, deadline, arena,
                 readings, new DiffProbe(), HashWhitelist.bitexact(), "entity", null);
 
             assertEquals(1L, readings.timeouts());
@@ -98,12 +107,17 @@ class DispatchParallelTest {
             assertEquals(1, frame.redone());
             assertEquals(plan.taskCount(), frame.committed());
             long before = readings.lateResultDropped();
-            sleep(250L);
+            release.countDown();
+            pool.shutdown(true, true, 2_000L);
+            shutDown = true;
             assertTrue(readings.lateResultDropped() > before,
                 "a result after the deadline must be dropped with a count");
             assertTrue(arena.pinPairsHold());
         } finally {
-            pool.shutdown(true, true, 500L);
+            release.countDown();
+            if (!shutDown) {
+                pool.shutdown(true, true, 500L);
+            }
         }
     }
 
