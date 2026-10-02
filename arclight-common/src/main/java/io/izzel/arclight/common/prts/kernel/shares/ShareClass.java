@@ -3,13 +3,9 @@ package io.izzel.arclight.common.prts.kernel.shares;
 
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
 
-/**
- * The rows of the time-budget share table.
- *
- * <p>Five rows are the asserted classes, one row carries the region tick work as a single item,
- * one row carries the world level resources and one is the catch-all. The weights split the fair
- * share of a world; the reserved pool is not a row here and is planned as its own column.</p>
- */
+/** The rows of the time-budget share table. Five rows are the asserted classes, one row carries
+ * the region tick work as a single item, one row carries the world level resources and one is the
+ * catch-all. */
 public enum ShareClass {
 
     ENTITY("entity", 0.30),
@@ -29,32 +25,21 @@ public enum ShareClass {
         this.weight = weight;
     }
 
-    /** @return the name the row is published under */
     public String key() {
         return key;
     }
 
-    /** @return the part of a world fair share this row receives */
     public double weight() {
         return weight;
     }
 
-    /** @return the number of rows, the row count the readout publishes */
     public static int rowCount() {
         return values().length;
     }
 
-    /**
-     * Maps a metered class onto its share row.
-     *
-     * <p>Three classes deliberately map to nothing: chunk I/O belongs to the waiting side and the
+    /** Three classes deliberately map to nothing: chunk I/O belongs to the waiting side and the
      * storage side, native payload is metered on its own and must not squeeze the entity or region
-     * shares, and observation itself must never be charged to a class share. The mapping is the
-     * only place this decision is written.</p>
-     *
-     * @param selfClass the metered class
-     * @return the share row, or {@code null} when the class has no row of its own
-     */
+     * shares, and observation itself must never be charged to a class share. */
     public static ShareClass of(SelfClass selfClass) {
         return switch (selfClass) {
             case ENTITY -> ENTITY;

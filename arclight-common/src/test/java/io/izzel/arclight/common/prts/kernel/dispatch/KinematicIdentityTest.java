@@ -6,6 +6,7 @@ import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.diff.StateHasher;
 import org.junit.jupiter.api.Test;
 
+import io.izzel.arclight.common.prts.kernel.dispatch.LiveEntityAccess.KinematicIdentity;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;

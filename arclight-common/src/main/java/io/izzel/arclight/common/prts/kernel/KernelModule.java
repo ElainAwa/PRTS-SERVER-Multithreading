@@ -10,7 +10,7 @@ import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
 import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchPass;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchReadings;
-import io.izzel.arclight.common.prts.kernel.dispatch.DispatchSettings;
+import io.izzel.arclight.common.prts.kernel.dispatch.DispatchPass.DispatchSettings;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchSnapshot;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchWriteBack;
 import io.izzel.arclight.common.prts.kernel.dispatch.EntityCandidateView;
@@ -22,11 +22,11 @@ import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
-import io.izzel.arclight.common.prts.kernel.meter.MeterWindow;
+import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.MeterWindow;
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
-import io.izzel.arclight.common.prts.kernel.meter.SelfRow;
+import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.SelfRow;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers;
-import io.izzel.arclight.common.prts.kernel.shares.ConservationCheck;
+import io.izzel.arclight.common.prts.kernel.shares.SharePlanner.ConservationCheck;
 import io.izzel.arclight.common.prts.kernel.shares.OverrunRecord;
 import io.izzel.arclight.common.prts.kernel.shares.ShareClass;
 import io.izzel.arclight.common.prts.kernel.shares.SharePlanner;
@@ -45,28 +45,9 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * The module entry: one instance per process, driven once per tick by the platform listener.
- *
- * <p>The driver reclaims expired tokens, plans the time budget, turns overruns into records that are
+/** The driver reclaims expired tokens, plans the time budget, turns overruns into records that are
  * never executed, checks the accounting closure and publishes the metering window when its length
- * has passed. It occupies no world write path and no lock, and the platform subscriber exists only
- * while the kernel category is on.</p>
- *
- * <p>Reclaiming an expired owner token belongs to the write-right lifecycle, not to the observation
- * of it: it runs on every driven tick whether or not the self timers are on, so a token can never
- * outlive its expiry just because an operator turned a metering switch off.</p>
- *
- * <p>The one world write the module can perform is the commit segment: it walks the intent channel
- * and applies what a routed write was deferred into. Its switch is off by default, and while it is
- * off the module only observes - nothing is consumed from the channel and no deferred write lands.
- * The walk belongs to the thread that drives the tick, and the segment carries that thread, so a
- * worker that reaches the segment is refused instead of draining the channel.</p>
- *
- * <p>The only clock read here is the one that measures the driver itself, so the cost of the
- * observation can be published as a row of its own. Planning reads the tick index and the metered
- * work, never the clock.</p>
- */
+ * has passed. */
 public final class KernelModule {
 
     /** The control plane of one tick: the five values the next tick would plan with. */
@@ -74,7 +55,6 @@ public final class KernelModule {
                                long waitBoundHits, double reserveUsedMs, double reserveRemainingMs,
                                String degradeState) {
 
-        /** @return a frame for a tick the driver did not reach */
         public static ControlFrame empty() {
             return new ControlFrame(0L, 0.0, 0L, 0L, 0.0, 0.0, "none");
         }
@@ -131,16 +111,11 @@ public final class KernelModule {
         intents.bindPayload(guard);
     }
 
-    /** @return the module of this process */
     public static KernelModule instance() {
         return INSTANCE;
     }
 
-    /**
-     * Advances the kernel by one tick.
-     *
-     * @param worldIds the worlds the tick carries, in the order the platform lists them
-     */
+    /** Advances the kernel by one tick. */
     public void serverTick(List<String> worldIds) {
         if (!KernelSettings.enabled()) {
             guard.refresh(false, false, false, tickIndex);
@@ -181,12 +156,7 @@ public final class KernelModule {
         }
     }
 
-    /**
-     * Installs the write path watcher.
-     *
-     * <p>Called while the category is on. The seam costs the write paths one volatile read when the
-     * kernel is off, and nothing is installed at all then.</p>
-     */
+    /** Installs the write path watcher. Called while the category is on. */
     public void installWritePathTap() {
         PrtsWorldWriteTaps.install(guard);
     }
@@ -196,12 +166,7 @@ public final class KernelModule {
         PrtsWorldWriteTaps.install(null);
     }
 
-    /**
-     * Installs the wait observation watcher.
-     *
-     * <p>Called while the category is on. The call sites cost one volatile read each while nothing
-     * is installed, and nothing is installed at all then.</p>
-     */
+    /** Installs the wait observation watcher. Called while the category is on. */
     public void installWaitSiteTap() {
         syncWaitSiteTap(KernelSettings.waitRegistry());
     }
@@ -211,14 +176,10 @@ public final class KernelModule {
         syncWaitSiteTap(false);
     }
 
-    /**
-     * Puts the wait observation seam back to the watcher the configuration asks for.
-     *
-     * <p>A tool that borrows the seam - the self check is one - hands it back here instead of leaving
-     * the process with whatever it installed last: the module forgets what it believed was installed
-     * and installs the configured watcher again, so a borrowed seam cannot silently end the
-     * observation of the twenty real call sites.</p>
-     */
+    /** A tool that borrows the seam - the self check is one - hands it back here instead of
+     * leaving the process with whatever it installed last: the module forgets what it believed was
+     * installed and installs the configured watcher again, so a borrowed seam cannot silently end
+     * the observation of the twenty real call sites. */
     public synchronized void resyncWaitSiteTap() {
         // What is installed now is read first: a tool that handed the seam back leaves the module
         // agreeing with it instead of installing its own watcher over a seam somebody else owns.
@@ -234,15 +195,6 @@ public final class KernelModule {
         PrtsWaitSites.install(wanted ? waitSites : null);
     }
 
-    /**
-     * Drives the first parallel domain: merge the previous tick's pass at this tick's entry, then
-     * freeze and dispatch this tick's plan.
-     *
-     * <p>The tick boundary is the hard deadline. The previous plan is merged first - with the
-     * configured grace, which is zero by default - and whatever did not answer by then is cancelled
-     * and redone on this thread in the frozen order. The new plan is frozen from a read-only entity
-     * view and offered to the pool; planning itself reads no clock.</p>
-     */
     private void driveDispatch() {
         boolean parallel = KernelSettings.dispatchParallel();
         // The line is exported before the merge of this tick and after the commit of this tick, so
@@ -311,22 +263,10 @@ public final class KernelModule {
         }
     }
 
-    /**
-     * Answers whether the commit segment may walk this tick.
-     *
-     * <p>The switch that walks the channel is the one that already existed, read through the line
-     * the takeover tier adds to it: a write-back the merge handed over has to land, or the values a
-     * worker computed would sit in the channel forever while the frame hash said they were committed.
-     * The compute-only tier - the default - hands nothing over, so it does not make the segment walk;
-     * with the dispatcher off the expression is exactly the old switch.</p>
-     *
-     * @return {@code true} when a deferred write may be applied this tick
-     */
     private static boolean commitWanted() {
         return KernelSettings.commitIntents() || KernelSettings.dispatchTakeover();
     }
 
-    /** @return the entity row of the self timer, in milliseconds */
     private double selfEntityMs() {
         for (SelfRow row : window().rows()) {
             if (row.selfClass() == SelfClass.ENTITY) {
@@ -336,11 +276,6 @@ public final class KernelModule {
         return 0.0;
     }
 
-    /**
-     * Closes the pending pass, stops the pool and returns the slots. The pass is closed before the
-     * pool is, so switching back on cannot inherit a pending batch; an unconfirmed wait quarantines
-     * the arena instead of returning slots a worker might still hold.
-     */
     private void shutdownDispatch() {
         WorkerPool current = dispatchPool;
         dispatchPool = null;
@@ -407,11 +342,7 @@ public final class KernelModule {
         return used;
     }
 
-    /**
-     * Returns the window to publish.
-     *
-     * @return the last completed window, or a live view when none has completed yet
-     */
+    /** Returns the window to publish. */
     public DispatchReadings dispatchReadings() {
         return dispatchReadings;
     }
@@ -428,7 +359,8 @@ public final class KernelModule {
         return arena;
     }
 
-    /** Hands the module the pass the next merge must close; used by the switch test, not the driver. */
+    /** Hands the module the pass the next merge must close; used by the switch test, not the
+     * driver. */
     void stagePendingDispatch(DispatchPass pass) {
         this.pendingDispatch = pass;
     }
@@ -442,72 +374,59 @@ public final class KernelModule {
             tickIndex <= KernelSettings.selfWarmupTicks());
     }
 
-    /** @return the tick index the module reached */
     public long tickIndex() {
         return tickIndex;
     }
 
-    /** @return whether a tick was driven at all */
     public boolean started() {
         return started;
     }
 
-    /** @return the owner registry */
     public OwnerRegistry owners() {
         return owners;
     }
 
-    /** @return the intent queue */
     public IntentQueue intents() {
         return intents;
     }
 
-    /** @return the commit segment that walks the intent queue */
     public CommitSegment commitSegment() {
         return commitSegment;
     }
 
-    /** @return the write ledger */
     public WriteLedger ledger() {
         return ledger;
     }
 
-    /** @return the write decision point */
     public WriteAuthority authority() {
         return authority;
     }
 
-    /** @return the guard that reaches the decision point from the real write paths */
     public WorldWriteGuard guard() {
         return guard;
     }
 
-    /** @return the wait point registry */
     public WaitPointRegistry waitPoints() {
         return waitPoints;
     }
 
-    /** @return the observer that turns the waits of the real call sites into observations */
     public WaitSiteObserver waitSites() {
         return waitSites;
     }
 
-    /** @return the share planner */
     public SharePlanner shares() {
         return shares;
     }
 
-    /** @return the conservation of the last planned table */
     public ConservationCheck conservation() {
         return lastConservation;
     }
 
-    /** @return the control plane of the last tick */
     public ControlFrame control() {
         return control;
     }
 
-    /** Clears the live counters. Used by the readout reset and by tests, never by the scheduler. */
+    /** Clears the live counters. */
     public void resetReadings() {
         shutdownDispatch();
         dispatchReadings.reset();

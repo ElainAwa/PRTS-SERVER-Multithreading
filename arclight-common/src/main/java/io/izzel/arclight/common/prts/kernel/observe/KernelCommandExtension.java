@@ -7,17 +7,9 @@ import io.izzel.arclight.common.prts.kernel.KernelModule;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * The readout the kernel adds to {@code /prts}: a status section and a {@code kernel} subtree.
- *
- * <p>The extension is what keeps the command layer and the kernel apart: the configuration package
+/** The extension is what keeps the command layer and the kernel apart: the configuration package
  * owns the command and the extension point, this class implements the point, and neither imports
- * the other's internals. The plain-line interface also keeps this class free of command or game
- * types, so it stays testable without the game class path.</p>
- *
- * <p>{@code kernel} exports every field even when its value is zero, and {@code kernel selftest}
- * runs the decision matrix on scratch objects, which leaves the live counters alone.</p>
- */
+ * the other's internals. */
 public final class KernelCommandExtension implements PrtsCommandExtension {
 
     private static final String NAME = "kernel";
@@ -27,7 +19,6 @@ public final class KernelCommandExtension implements PrtsCommandExtension {
     private KernelCommandExtension() {
     }
 
-    /** @return a fresh extension for the platform bridge to register */
     public static PrtsCommandExtension extension() {
         return new KernelCommandExtension();
     }

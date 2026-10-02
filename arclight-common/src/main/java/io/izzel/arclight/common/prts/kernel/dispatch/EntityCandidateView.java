@@ -1,18 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.dispatch;
 
-/**
- * An immutable read-only view of the entity kinematics one world offers to a tick.
- *
- * <p>The view is a struct of arrays: the parallel arm and the serial arm read the same instance, so
- * a comparison can never be explained by two different reads of the world. It is built on the tick
- * thread from a plain snapshot of positions, orientations, velocities and flags, and it carries no
- * host object: a worker only sees primitive values and the entity sequence it was given.</p>
- *
- * <p>The view is bounded ({@link #MAX_CANDIDATES} entries per world). A world with more entities
- * than that contributes its first entries only; the cut is deterministic for one iteration order,
- * which is what the two arms of a comparison need.</p>
- */
+/** The view is a struct of arrays: the parallel arm and the serial arm read the same instance, so
+ * a comparison can never be explained by two different reads of the world. */
 public final class EntityCandidateView {
 
     /** Most entities one world contributes to a single tick. */
@@ -52,91 +42,68 @@ public final class EntityCandidateView {
         this.flags = java.util.Arrays.copyOf(builder.flags, builder.count);
     }
 
-    /** @return the world this view belongs to */
     public String worldId() {
         return worldId;
     }
 
-    /** @return the world generation the view was taken from */
     public long worldEpoch() {
         return worldEpoch;
     }
 
-    /** @return how many entities the view carries */
     public int count() {
         return count;
     }
 
-    /** @param index entity position in the view @return the stable entity sequence number */
     public long entitySeq(int index) {
         return entitySeq[index];
     }
 
-    /** @param index entity position in the view @return the chunk x coordinate */
     public int chunkX(int index) {
         return chunkX[index];
     }
 
-    /** @param index entity position in the view @return the chunk z coordinate */
     public int chunkZ(int index) {
         return chunkZ[index];
     }
 
-    /** @param index entity position in the view @return x position */
     public double posX(int index) {
         return posX[index];
     }
 
-    /** @param index entity position in the view @return y position */
     public double posY(int index) {
         return posY[index];
     }
 
-    /** @param index entity position in the view @return z position */
     public double posZ(int index) {
         return posZ[index];
     }
 
-    /** @param index entity position in the view @return yaw in degrees */
     public double yaw(int index) {
         return yaw[index];
     }
 
-    /** @param index entity position in the view @return pitch in degrees */
     public double pitch(int index) {
         return pitch[index];
     }
 
-    /** @param index entity position in the view @return velocity on x */
     public double velX(int index) {
         return velX[index];
     }
 
-    /** @param index entity position in the view @return velocity on y */
     public double velY(int index) {
         return velY[index];
     }
 
-    /** @param index entity position in the view @return velocity on z */
     public double velZ(int index) {
         return velZ[index];
     }
 
-    /** @param index entity position in the view @return the opaque flag word of the entity */
     public long flags(int index) {
         return flags[index];
     }
 
-    /**
-     * Returns the same rows reordered by region and entity sequence.
-     *
-     * <p>A region is one group of {@code chunks} by {@code chunks} chunks. Reordering before the
-     * plan is frozen is what makes a task range contiguous: the plan then cuts runs straight out of
-     * the returned view, and both arms of a comparison see the same row order.</p>
-     *
-     * @param chunks how many chunks one region covers on a side
-     * @return a new view with the rows grouped by region
-     */
+    /** Returns the same rows reordered by region and entity sequence. A region is one group of
+     * {@code chunks} by {@code chunks} chunks. */
     public EntityCandidateView sortedByRegion(int chunks) {
         int side = Math.max(1, chunks);
         Integer[] order = new Integer[count];
@@ -155,21 +122,12 @@ public final class EntityCandidateView {
         return builder.build();
     }
 
-    /**
-     * Names the region one chunk belongs to.
-     *
-     * @param chunkX chunk x coordinate
-     * @param chunkZ chunk z coordinate
-     * @param chunks how many chunks one region covers on a side
-     * @return the stable region name
-     */
+    /** Names the region one chunk belongs to. */
     public static String regionKey(int chunkX, int chunkZ, int chunks) {
         int side = Math.max(1, chunks);
         return "r" + Math.floorDiv(chunkX, side) + "." + Math.floorDiv(chunkZ, side);
     }
 
-    /** @param worldId the world the view belongs to @param worldEpoch the generation of that world
-     * @return a builder for one view */
     public static Builder builder(String worldId, long worldEpoch) {
         return new Builder(worldId, worldEpoch);
     }
@@ -198,32 +156,15 @@ public final class EntityCandidateView {
             this.worldEpoch = worldEpoch;
         }
 
-        /** @return whether the view has reached its bound and refuses more rows */
         public boolean full() {
             return count >= MAX_CANDIDATES;
         }
 
-        /** @return how many rows were added so far */
         public int size() {
             return count;
         }
 
-        /**
-         * Adds one entity row.
-         *
-         * @param entitySeq stable sequence number of the entity
-         * @param chunkX    chunk x coordinate
-         * @param chunkZ    chunk z coordinate
-         * @param x         x position
-         * @param y         y position
-         * @param z         z position
-         * @param yawDeg    yaw in degrees
-         * @param pitchDeg  pitch in degrees
-         * @param vx        velocity on x
-         * @param vy        velocity on y
-         * @param vz        velocity on z
-         * @param flagWord  opaque flag word
-         */
+        /** Adds one entity row. */
         public void add(long entitySeq, int chunkX, int chunkZ, double x, double y, double z,
                         double yawDeg, double pitchDeg, double vx, double vy, double vz,
                         long flagWord) {
@@ -248,7 +189,6 @@ public final class EntityCandidateView {
             count++;
         }
 
-        /** @return the frozen view */
         public EntityCandidateView build() {
             return new EntityCandidateView(this);
         }

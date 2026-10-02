@@ -1,25 +1,20 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.arena;
+import java.util.concurrent.atomic.AtomicLong;
+import io.izzel.arclight.common.prts.kernel.arena.ArenaSegment.SegmentRef;
 
-/**
- * One state slot and the lease its owner holds: a release that no longer matches the lease is
- * refused and never touches the buffer of the batch that was given the slot next.
- */
+/** One state slot and the lease its owner holds: a release that no longer matches the lease is
+ * refused and never touches the buffer of the batch that was given the slot next. */
 public final class ArenaSlot {
 
     /** The lifecycle of one slot. */
     public enum State {
-        /** Not owned by any batch. */
         FREE,
-        /** Owned by a batch that has not published yet. */
         PINNED,
-        /** Published by its owner and waiting for the merge. */
         PUBLISHED
     }
 
-    /**
-     * Ownership record of one claim: the slot, the owner and the buffer that claim writes.
-     */
+    /** Ownership record of one claim: the slot, the owner and the buffer that claim writes. */
     public record Lease(SegmentRef segment, int slotIndex, long generation, long ownerBatchId,
                         long ownerPlanEpoch, ArenaScratch scratch) {
 
@@ -36,13 +31,9 @@ public final class ArenaSlot {
 
     /** What a release attempt did; only {@link #RELEASED} changed the slot. */
     public enum Release {
-        /** The lease still owned the slot and the slot was returned to its segment. */
         RELEASED,
-        /** The same lease was released before; the slot is free at the generation that release left. */
         ALREADY_RELEASED,
-        /** The slot is owned by another batch or moved on; nothing about it was changed. */
         STALE_LEASE,
-        /** The lease names a segment the ledger does not hold. */
         FOREIGN_SEGMENT
     }
 
@@ -74,7 +65,6 @@ public final class ArenaSlot {
         return new SlotRef(worldId, regionId, segmentKind, index, generation.value());
     }
 
-    /** @return the buffer of the current owner; unreachable once the slot is free */
     public ArenaScratch scratch() {
         return scratch;
     }
@@ -119,11 +109,7 @@ public final class ArenaSlot {
         return true;
     }
 
-    /**
-     * Releases the slot if and only if the lease still owns it. Only the matching release bumps the
-     * generation; a release the owner did not confirm retires the buffer, so a worker still in its
-     * body cannot write into the next claim's buffer.
-     */
+    /** Releases the slot if and only if the lease still owns it. */
     public Release release(Lease lease, boolean ownerConfirmed) {
         if (lease != null && state != State.FREE && ownerBatchId == lease.ownerBatchId()
             && generation.value() == lease.generation()) {
@@ -152,5 +138,30 @@ public final class ArenaSlot {
         state = State.FREE;
         scratch.reset(0);
         return true;
+    }
+
+    /** The generation counter of one slot or one segment. The counter only moves forward, and it
+     * always moves before a slot is handed to another owner. */
+    public static final class SlotGeneration {
+
+        private final AtomicLong value;
+
+        /** Creates a counter at generation zero. */
+        public SlotGeneration() {
+            this(0L);
+        }
+
+        public SlotGeneration(long initial) {
+            this.value = new AtomicLong(initial);
+        }
+
+        public long value() {
+            return value.get();
+        }
+
+        /** Advances the generation. */
+        public long bump() {
+            return value.incrementAndGet();
+        }
     }
 }

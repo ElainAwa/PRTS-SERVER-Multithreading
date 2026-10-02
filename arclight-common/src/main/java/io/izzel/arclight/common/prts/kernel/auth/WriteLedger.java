@@ -8,18 +8,11 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAdder;
 import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
+import io.izzel.arclight.common.prts.kernel.auth.WriteAttempt.WriteOp;
 
-/**
- * Counts every write attempt and every disposition, per world and site.
- *
- * <p>The ledger is entered before the judgement, so the accounting closure
- * {@code attempts == granted + intent + denied} is a statement about all attempts, including the
- * ones that fail behind the decision point. A pair whose three parts do not add up counts a missing
- * counter and makes the observation face invalid.</p>
- *
- * <p>Reads are classified but kept outside the write closure: a read takes no write right and never
- * enters one of the three write dispositions.</p>
- */
+/** Counts every write attempt and every disposition, per world and site. The ledger is entered
+ * before the judgement, so the accounting closure {@code attempts == granted + intent + denied} is
+ * a statement about all attempts, including the ones that fail behind the decision point. */
 public final class WriteLedger {
 
     /** One accounting pair: attempts and the three dispositions they ended in. */
@@ -33,32 +26,26 @@ public final class WriteLedger {
         private final java.util.concurrent.atomic.AtomicLong version =
             new java.util.concurrent.atomic.AtomicLong();
 
-        /** @return write attempts of this pair */
         public long attempts() {
             return attempts.sum();
         }
 
-        /** @return grants of this pair */
         public long granted() {
             return granted.sum();
         }
 
-        /** @return intents of this pair */
         public long intent() {
             return intent.sum();
         }
 
-        /** @return refusals of this pair */
         public long denied() {
             return denied.sum();
         }
 
-        /** @return attempts of this pair that were counted and not yet judged */
         public long inFlight() {
             return inFlight.sum();
         }
 
-        /** @return the version of the pair, odd while a writer is inside it */
         long version() {
             return version.get();
         }
@@ -86,11 +73,7 @@ public final class WriteLedger {
         }
     }
 
-    /**
-     * Counts an attempt before it is judged.
-     *
-     * @param attempt the attempt
-     */
+    /** Counts an attempt before it is judged. */
     public void noteAttempt(WriteAttempt attempt) {
         if (attempt.op() == WriteOp.READ) {
             readGrants.increment();
@@ -108,12 +91,7 @@ public final class WriteLedger {
         }
     }
 
-    /**
-     * Counts the disposition of an attempt and its code, if it carries one.
-     *
-     * @param attempt the attempt
-     * @param verdict the verdict it received
-     */
+    /** Counts the disposition of an attempt and its code, if it carries one. */
     public void noteVerdict(WriteAttempt attempt, WriteVerdict verdict) {
         if (attempt.op() == WriteOp.READ) {
             return;
@@ -140,16 +118,9 @@ public final class WriteLedger {
         }
     }
 
-    /**
-     * Counts an attempt that will never receive a verdict.
-     *
-     * <p>A judgement that fails before it produces a verdict - an error on the way, a caller that
-     * never returned - takes the attempt out of flight. The accounting check then sees it as a
-     * missing counter, which is what it is, instead of leaving it in flight forever where the check
-     * would politely subtract it for the rest of the process.</p>
-     *
-     * @param attempt the attempt that will not be judged
-     */
+    /** Counts an attempt that will never receive a verdict. A judgement that fails before it
+     * produces a verdict - an error on the way, a caller that never returned - takes the attempt
+     * out of flight. */
     public void noteUnjudged(WriteAttempt attempt) {
         if (attempt.op() == WriteOp.READ) {
             return;
@@ -160,15 +131,9 @@ public final class WriteLedger {
         pair.leave();
     }
 
-    /**
-     * Counts one refusal code on its own.
-     *
-     * <p>A write point that refuses an attempt before it reaches a per-world pair - the commit
-     * segment, for example, whose refusal belongs to no world of its own - counts the code here, so
-     * the code table stays the one place a reader has to look.</p>
-     *
-     * @param code the code to count
-     */
+    /** Counts one refusal code on its own. A write point that refuses an attempt before it reaches
+     * a per-world pair - the commit segment, for example, whose refusal belongs to no world of its
+     * own - counts the code here, so the code table stays the one place a reader has to look. */
     public void noteCode(RejectCode code) {
         LongAdder counter = codes.get(code);
         if (counter != null) {
@@ -176,16 +141,8 @@ public final class WriteLedger {
         }
     }
 
-    /**
-     * Recomputes the closure of every pair.
-     *
-     * <p>An attempt that was counted and not yet judged is subtracted first. A writer that is between
-     * the two updates is in flight, not missing: the check reads the closure of the pairs whose
-     * judgement has landed, so a walk that happens to run across a concurrent writer cannot record a
-     * transient state as a permanent accounting failure.</p>
-     *
-     * @return {@code true} when every pair closes; a failure also counts a missing counter
-     */
+    /** Recomputes the closure of every pair. An attempt that was counted and not yet judged is
+     * subtracted first. */
     public boolean verifyClosure() {
         boolean ok = true;
         for (Pair pair : pairs.values()) {
@@ -213,7 +170,6 @@ public final class WriteLedger {
         return ok;
     }
 
-    /** @return attempts that were counted and not yet judged */
     public long inFlightAttempts() {
         long total = 0L;
         for (Pair pair : pairs.values()) {
@@ -222,48 +178,39 @@ public final class WriteLedger {
         return total;
     }
 
-    /** @return {@code true} when no closure has failed in this process */
     public boolean accountingOk() {
         return accountingFailures.sum() == 0L;
     }
 
-    /** @return accounting pairs that were checked */
     public long checkedPairs() {
         return checkedPairs.sum();
     }
 
-    /** @return closure failures; must stay zero */
     public long accountingFailures() {
         return accountingFailures.sum();
     }
 
-    /** @return reads that passed the decision point */
     public long readGrants() {
         return readGrants.sum();
     }
 
-    /** @return write attempts of unregistered holders */
     public long unregisteredAttempts() {
         return unregisteredAttempts.sum();
     }
 
-    /** @return grants handed to unregistered holders; must stay zero */
     public long unregisteredGrants() {
         return unregisteredGrants.sum();
     }
 
-    /** @return the count of one code, zero included */
     public long codeCount(RejectCode code) {
         LongAdder counter = codes.get(code);
         return counter == null ? 0L : counter.sum();
     }
 
-    /** @return the accounting pairs, keyed by {@code world|site}, in insertion order */
     public Map<String, Pair> pairs() {
         return new LinkedHashMap<>(pairs);
     }
 
-    /** @return write attempts over all pairs */
     public long totalAttempts() {
         long total = 0L;
         for (Pair pair : pairs.values()) {
@@ -272,7 +219,6 @@ public final class WriteLedger {
         return total;
     }
 
-    /** @return grants over all pairs */
     public long totalGranted() {
         long total = 0L;
         for (Pair pair : pairs.values()) {
@@ -281,7 +227,6 @@ public final class WriteLedger {
         return total;
     }
 
-    /** @return intents over all pairs */
     public long totalIntent() {
         long total = 0L;
         for (Pair pair : pairs.values()) {
@@ -290,7 +235,6 @@ public final class WriteLedger {
         return total;
     }
 
-    /** @return refusals over all pairs */
     public long totalDenied() {
         long total = 0L;
         for (Pair pair : pairs.values()) {
@@ -299,7 +243,6 @@ public final class WriteLedger {
         return total;
     }
 
-    /** @return the number of accounting pairs, the site registry entry count */
     public int pairCount() {
         return pairs.size();
     }

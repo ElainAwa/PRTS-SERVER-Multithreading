@@ -3,6 +3,10 @@ package io.izzel.arclight.common.prts.kernel.waitpoints;
 
 import org.junit.jupiter.api.Test;
 
+import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry.WaitPointDeclaration;
+import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry.WaitObservation;
+import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry.WaitSpan;
+import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry.RegisterResult;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;

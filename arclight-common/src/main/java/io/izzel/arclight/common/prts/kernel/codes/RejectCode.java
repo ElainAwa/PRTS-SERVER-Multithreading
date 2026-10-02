@@ -1,13 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.codes;
 
-/**
- * Refusal codes of the kernel.
- *
- * <p>The set is closed: this batch adds no code and every trigger of the four pieces maps onto a
- * member of this enum. A code is a report, not a control flow: a count of zero is published as
- * well, and a code is never invented at a call site.</p>
- */
+/** Refusal codes of the kernel. The set is closed: this batch adds no code and every trigger of
+ * the four pieces maps onto a member of this enum. */
 public enum RejectCode {
 
     WAIT_BOUND_EXCEEDED,
@@ -31,7 +26,6 @@ public enum RejectCode {
     WORLD_LIFECYCLE_DENIED,
     CROSS_WORLD_WRITE_DENIED;
 
-    /** @return the code text as it is published */
     public String text() {
         return name();
     }

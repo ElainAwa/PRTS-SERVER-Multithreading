@@ -8,13 +8,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 
-/**
- * Compares the two arms tick by tick and locates the first fork.
- *
- * <p>The comparison is read-only and never repairs anything. A mismatch descends six levels - tick,
- * world, region, batch, entity sequence, field - each narrowed to the context above it. A mismatch
- * the descent cannot place is counted as unattributed and still makes the pair unequal.</p>
- */
+/** Compares the two arms tick by tick and locates the first fork. The comparison is read-only and
+ * never repairs anything. */
 public final class DiffProbe {
 
     private long tickPairs;
@@ -30,12 +25,7 @@ public final class DiffProbe {
     private final Set<String> attributedWorlds = new LinkedHashSet<>();
     private long attributedSites;
 
-    /**
-     * Compares one pair of hashes.
-     *
-     * @param parallel the hash of the parallel arm
-     * @param serial   the hash of the serial arm
-     */
+    /** Compares one pair of hashes. */
     public void compare(DomainHash parallel, DomainHash serial) {
         tickPairs++;
         if (parallel == null || serial == null || !parallel.comparable()
@@ -150,7 +140,6 @@ public final class DiffProbe {
         return null;
     }
 
-    /** @return the report of everything compared so far */
     public DiffReport report() {
         double rate = tickPairs == 0 ? 0.0 : (double) equal / (double) tickPairs;
         return new DiffReport(tickPairs, equal, rate,
@@ -159,17 +148,14 @@ public final class DiffProbe {
             forkedFields.size(), attributedSites, attributedWorlds.size());
     }
 
-    /** @return the pairs compared so far */
     public long tickPairs() {
         return tickPairs;
     }
 
-    /** @return the pairs that were equal */
     public long equal() {
         return equal;
     }
 
-    /** @return mismatches the descent could not place */
     public long unattributed() {
         return unattributed;
     }
@@ -191,5 +177,29 @@ public final class DiffProbe {
     }
 
     private record Fork(String world, String region, long batch, long entitySeq, String field) {
+    }
+
+    /** What a comparison of the two arms saw. The report keeps the pair count and the equal count -
+     * the rate is their quotient - and the first fork down to one entity and one field. */
+    public record DiffReport(long tickPairs, long equal, double rate, String algorithmId,
+                             long firstForkTick, String firstForkWorld, String firstForkRegion,
+                             long firstForkBatch, long firstForkEntitySeq, String firstForkField,
+                             long unattributed, long fieldCount, long attributedSites,
+                             long attributedWorlds) {
+
+        public static DiffReport empty() {
+            return new DiffReport(0L, 0L, 0.0, "", -1L, "", "", -1L, -1L, "", 0L, 0L, 0L, 0L);
+        }
+
+        /** Renders the first fork as one line. */
+        public String forkLine() {
+            if (firstForkTick < 0) {
+                return "first_fork=none pairs=" + tickPairs + " equal=" + equal;
+            }
+            return "first_fork tick=" + firstForkTick + " world=" + firstForkWorld + " region="
+                + firstForkRegion + " batch=" + firstForkBatch + " entity_seq=" + firstForkEntitySeq
+                + " field=" + firstForkField + " unattributed=" + unattributed + " fields="
+                + fieldCount;
+        }
     }
 }

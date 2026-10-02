@@ -7,17 +7,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Folds the whitelisted values of a committed frame into one 64-bit value.
- *
- * <p>The fold order is fixed - world, region, entity sequence, field order - and the scalars are
- * folded as their raw bits, so two frames that differ in one bit of one coordinate produce different
- * hashes. No clock, no random source and no iteration order of a hash table takes part. The
- * quantized form exists for a comparison across machines and is off unless a caller asks for it.</p>
- *
- * <p>The hasher also publishes per-level digests. They are what lets the comparison descend from a
- * mismatching tick to one entity and one field instead of stopping at "different".</p>
- */
+/** The fold order is fixed - world, region, entity sequence, field order - and the scalars are
+ * folded as their raw bits, so two frames that differ in one bit of one coordinate produce
+ * different hashes. */
 public final class StateHasher {
 
     /** Identifier of the bit-exact algorithm. */
@@ -38,39 +30,13 @@ public final class StateHasher {
     private StateHasher() {
     }
 
-    /**
-     * One entity row of a committed frame.
-     *
-     * @param worldId        the world the row belongs to
-     * @param regionId       the region the row belongs to
-     * @param batchId        the batch that produced the row
-     * @param entitySeq      the entity sequence of the row
-     * @param x              x position
-     * @param y              y position
-     * @param z              z position
-     * @param yaw            yaw in degrees
-     * @param pitch          pitch in degrees
-     * @param velX           velocity on x
-     * @param velY           velocity on y
-     * @param velZ           velocity on z
-     * @param flags          opaque flag word
-     * @param slotGeneration the generation of the slot the row was read from
-     * @param segmentRef     identity of the segment the row was read from
-     */
+    /** One entity row of a committed frame. */
     public record Slice(String worldId, String regionId, long batchId, long entitySeq, double x,
                         double y, double z, double yaw, double pitch, double velX, double velY,
                         double velZ, long flags, long slotGeneration, long segmentRef) {
     }
 
-    /**
-     * Hashes one committed frame.
-     *
-     * @param domainId   the domain the frame belongs to
-     * @param tickIndex  the tick the frame was committed in
-     * @param slices     the rows of the frame
-     * @param whitelist  the fields to fold
-     * @return the hash, or an unavailable hash when the range is empty
-     */
+    /** Hashes one committed frame. */
     public static DomainHash hash(String domainId, long tickIndex, List<Slice> slices,
                                   HashWhitelist whitelist) {
         if (whitelist == null) {
@@ -152,24 +118,12 @@ public final class StateHasher {
         return raw;
     }
 
-    /**
-     * Mixes one value into a running FNV-1a fold.
-     *
-     * @param seed  the running value
-     * @param value the value to mix
-     * @return the next running value
-     */
+    /** Mixes one value into a running FNV-1a fold. */
     public static long mixLong(long seed, long value) {
         return (seed ^ value) * PRIME;
     }
 
-    /**
-     * Mixes one string into a running FNV-1a fold.
-     *
-     * @param seed  the running value
-     * @param value the string to mix
-     * @return the next running value
-     */
+    /** Mixes one string into a running FNV-1a fold. */
     public static long mixString(long seed, String value) {
         long running = seed;
         for (int i = 0; i < value.length(); i++) {

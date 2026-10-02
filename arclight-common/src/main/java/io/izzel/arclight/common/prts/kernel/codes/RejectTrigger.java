@@ -2,19 +2,9 @@
 package io.izzel.arclight.common.prts.kernel.codes;
 
 
-/**
- * Every refusal trigger the four pieces can raise, mapped onto the closed code set.
- *
- * <p>The table is data, not behaviour: the decision point, the share table and the wait registry
+/** The table is data, not behaviour: the decision point, the share table and the wait registry
  * each raise the member that belongs to them, and this enum is the single place where a trigger is
- * tied to a code and to the disposition it produces. Adding a trigger without a code is not
- * possible here, and {@link #RESERVE_BORROWED} is the one row that deliberately carries no code:
- * a reserved pool taken by the wrong ring is a discipline violation, and the design gives it no
- * refusal code.</p>
- *
- * <p>Twelve rows belong to the write decision point, nine to the share table and eight to the wait
- * registry. A test pins the row count and the code usage so a row cannot disappear quietly.</p>
- */
+ * tied to a code and to the disposition it produces. */
 public enum RejectTrigger {
 
     // write decision point
@@ -95,11 +85,8 @@ public enum RejectTrigger {
 
     /** Which of the four pieces raises this trigger. */
     public enum Scope {
-        /** The write decision point. */
         WRITE,
-        /** The time-budget share table. */
         SHARE,
-        /** The wait point registry. */
         WAIT
     }
 
@@ -118,28 +105,42 @@ public enum RejectTrigger {
         this.description = description;
     }
 
-    /** @return the piece that raises this trigger */
     public Scope scope() {
         return scope;
     }
 
-    /** @return the code this trigger raises, or {@code null} for the discipline row */
     public RejectCode code() {
         return code;
     }
 
-    /** @return the disposition the write decision point returns, or {@code null} elsewhere */
     public WriteDisposition disposition() {
         return disposition;
     }
 
-    /** @return the conflict class of the disposition, or {@code null} elsewhere */
     public ConflictClass conflictClass() {
         return conflictClass;
     }
 
-    /** @return one sentence about the condition this trigger observes */
     public String description() {
         return description;
+    }
+
+    /** The five pieces of diagnostic information every refusal carries. A refusal without them is not
+     * readable from a log after the fact, and the code alone does not say who hit it where. */
+    public record Diag5(String code, String siteId, String threadRef, String worldId, long tickIndex) {
+
+        public String line() {
+            return "code=" + code + " site=" + siteId + " thread=" + threadRef
+                + " world=" + worldId + " tick=" + tickIndex;
+        }
+    }
+
+    /** How a conflict is handled; every class maps onto one of the three dispositions. */
+    public enum ConflictClass {
+
+        QUEUE,
+        DEGRADE,
+        REJECT,
+        SKIP
     }
 }

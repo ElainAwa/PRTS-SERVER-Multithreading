@@ -6,18 +6,9 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
-/**
- * The owner registry: one valid token per domain at any moment.
- *
- * <p>The registry is the only place a write right comes from, and it is deliberately lock free:
- * a token is a value, and a second holder for the same domain is refused by compare-and-set instead
- * of being serialized by a lock. The counters next to it are readouts; nothing in a write path
- * depends on them.</p>
- *
- * <p>A token is never replaced silently. Acquiring a domain that already carries a valid token for
- * a different holder counts a zero-tolerance violation and leaves the register untouched; expired
- * tokens are reclaimed together and counted.</p>
- */
+/** The registry is the only place a write right comes from, and it is deliberately lock free: a
+ * token is a value, and a second holder for the same domain is refused by compare-and-set instead
+ * of being serialized by a lock. */
 public final class OwnerRegistry {
 
     private final Map<OwnershipDomain, OwnerToken> tokens = new ConcurrentHashMap<>();
@@ -27,13 +18,7 @@ public final class OwnerRegistry {
     private final AtomicLong reclaimPasses = new AtomicLong();
     private final AtomicLong doubleHolder = new AtomicLong();
 
-    /**
-     * Acquires a domain for a holder.
-     *
-     * @param token the token to install
-     * @return {@code true} when the register now carries this token; {@code false} when another
-     *         valid holder owns the domain, which is counted as a violation
-     */
+    /** Acquires a domain for a holder. */
     public boolean acquire(OwnerToken token) {
         OwnerToken installed = tokens.putIfAbsent(token.domain(), token);
         if (installed == null) {
@@ -47,13 +32,7 @@ public final class OwnerRegistry {
         return false;
     }
 
-    /**
-     * Releases a domain, but only for the holder that owns it.
-     *
-     * @param domain the domain
-     * @param siteId the site that releases
-     * @return {@code true} when the register was cleared
-     */
+    /** Releases a domain, but only for the holder that owns it. */
     public boolean release(OwnershipDomain domain, String siteId) {
         OwnerToken current = tokens.get(domain);
         if (current == null || !current.holderSiteId().equals(siteId)) {
@@ -66,24 +45,12 @@ public final class OwnerRegistry {
         return false;
     }
 
-    /**
-     * Looks up the token of a domain.
-     *
-     * @param worldId  world of the domain
-     * @param level    level of the domain
-     * @param domainId identity inside the level
-     * @return the valid token, or empty when the domain has none
-     */
+    /** Looks up the token of a domain. */
     public Optional<OwnerToken> lookup(String worldId, WriteLevel level, String domainId) {
         return Optional.ofNullable(tokens.get(new OwnershipDomain(worldId, level, domainId)));
     }
 
-    /**
-     * Reclaims every token whose expiry tick has passed.
-     *
-     * @param tickIndex current tick
-     * @return the number of reclaimed tokens, also added to the readout
-     */
+    /** Reclaims every token whose expiry tick has passed. */
     public int reclaimExpired(long tickIndex) {
         reclaimPasses.incrementAndGet();
         int reclaimed = 0;
@@ -101,45 +68,34 @@ public final class OwnerRegistry {
         return reclaimed;
     }
 
-    /** @return the number of domains that currently carry a token */
     public int activeTokens() {
         return tokens.size();
     }
 
-    /** @return a snapshot of the register, safe to read while tokens change */
     public Map<OwnershipDomain, OwnerToken> snapshot() {
         return Map.copyOf(tokens);
     }
 
-    /** @return tokens granted since the process started */
     public long acquiredCount() {
         return acquired.get();
     }
 
-    /** @return tokens released by their holder since the process started */
     public long releasedCount() {
         return released.get();
     }
 
-    /** @return tokens reclaimed because they expired */
     public long expiredReclaimedCount() {
         return expiredReclaimed.get();
     }
 
-    /**
-     * Returns how often the expiry sweep ran.
-     *
-     * <p>Reclaiming belongs to the write-right lifecycle and not to the observation of it, so this
-     * count keeps moving while the metering switches are off; a readout that shows it standing still
-     * is showing that the kernel is not being driven at all.</p>
-     *
-     * @return sweeps since the process started
-     */
+    /** Returns how often the expiry sweep ran. Reclaiming belongs to the write-right lifecycle and
+     * not to the observation of it, so this count keeps moving while the metering switches are
+     * off; a readout that shows it standing still is showing that the kernel is not being driven
+     * at all. */
     public long reclaimPasses() {
         return reclaimPasses.get();
     }
 
-    /** @return acquisitions refused because another holder was still valid; must stay zero */
     public long doubleHolderCount() {
         return doubleHolder.get();
     }
@@ -147,5 +103,11 @@ public final class OwnerRegistry {
     private static boolean sameHolder(OwnerToken installed, OwnerToken candidate) {
         return installed.holderSiteId().equals(candidate.holderSiteId())
             && installed.epoch() == candidate.epoch();
+    }
+
+    /** The key of one write right domain. A right is always held for one world and one level of that
+     * world, so the pair plus the identity inside the level is the key the owner registry stores a
+     * token under. */
+    public record OwnershipDomain(String worldId, WriteLevel level, String domainId) {
     }
 }

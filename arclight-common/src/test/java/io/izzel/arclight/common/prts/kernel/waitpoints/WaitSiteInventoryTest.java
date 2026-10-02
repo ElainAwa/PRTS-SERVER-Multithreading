@@ -7,6 +7,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry.WaitSpan;
+import io.izzel.arclight.common.prts.kernel.waitpoints.SiteInventory.SiteRegisterResult;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;

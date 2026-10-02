@@ -17,29 +17,17 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
+import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan.WorkBatch;
 
-/**
- * The fixed pool of worker threads the kernel owns.
- *
- * <p>The pool is never shared with the host or with a mod: it has a fixed size, its threads are
+/** The pool is never shared with the host or with a mod: it has a fixed size, its threads are
  * named so a result can be attributed to the thread that produced it, their priority never exceeds
- * the priority of the tick thread, and none of them is bound to a core. A batch is offered to one
- * shard per world and taken by exactly one worker, so two workers never hold the same batch.</p>
- *
- * <p>The queue depth is bounded. When it is full the batch is refused rather than queued, and the
- * caller falls back to the tick thread; an unbounded queue would only hide the exhaustion.</p>
- */
+ * the priority of the tick thread, and none of them is bound to a core. */
 public final class WorkerPool {
 
-    /**
-     * The shape of one pool.
-     *
-     * @param count       how many worker threads
-     * @param namePrefix  the prefix of every thread name
-     * @param priority    the priority every worker is created with
-     * @param queueCap    how many batches may be in flight at once
-     * @param batchChunks how many chunks one region covers on a side
-     */
+    /** The shape of one pool. */
     public record Spec(int count, String namePrefix, int priority, int queueCap,
                        int batchChunks) {
 
@@ -60,31 +48,13 @@ public final class WorkerPool {
         }
     }
 
-    /**
-     * The declarative registration of one worker thread class.
-     *
-     * <p>A worker is the kernel's own thread, so it is registered as a kernel holder rather than as
-     * an unregistered one. It serves every world, so its world scope is the multi-world one, and it
-     * claims no world-dimension exemption bit.</p>
-     *
-     * @param threadClass  the stable class name of the thread, the pool prefix
-     * @param threadName   the name of the thread instance
-     * @param holderKind   where the thread comes from
-     * @param worldScope   one single world, two many worlds, zero no world dimension
-     * @param exemptFlags  the world-dimension exemption bits, none for a worker
-     */
+    /** The declarative registration of one worker thread class. A worker is the kernel's own
+     * thread, so it is registered as a kernel holder rather than as an unregistered one. */
     public record ThreadClass(String threadClass, String threadName, HolderKind holderKind,
                               int worldScope, long exemptFlags) {
     }
 
-    /**
-     * What a shutdown left behind.
-     *
-     * @param stopped           whether new work stopped being accepted
-     * @param cancelledInFlight batches whose cancellation was requested
-     * @param remainingInFlight batches still in flight when the wait ended
-     * @param terminated        whether every worker thread ended inside the wait
-     */
+    /** What a shutdown left behind. */
     public record ShutdownReport(boolean stopped, int cancelledInFlight, int remainingInFlight,
                                  boolean terminated) {
     }
@@ -115,15 +85,7 @@ public final class WorkerPool {
         this.arena = arena;
     }
 
-    /**
-     * Opens a pool and starts its workers.
-     *
-     * @param spec        the shape of the pool
-     * @param retryBudget how many retryable faults a batch may carry
-     * @param readings    where the pool publishes
-     * @param arena       the arena ledger a late result releases into
-     * @return the running pool
-     */
+    /** Opens a pool and starts its workers. */
     public static WorkerPool open(Spec spec, int retryBudget, DispatchReadings readings,
                                   ArenaLedger arena) {
         WorkerPool pool = new WorkerPool(spec, retryBudget, readings, arena);
@@ -160,16 +122,7 @@ public final class WorkerPool {
         }
     }
 
-    /**
-     * Offers one batch to the pool.
-     *
-     * @param batch      the batch to run
-     * @param token      its cancellation token
-     * @param body       the body to run
-     * @param slot       the slot the body writes
-     * @param lease      the lease the batch holds on that slot
-     * @return the handle of the batch, or {@code null} when the pool refused it
-     */
+    /** Offers one batch to the pool. */
     public WorkerHandle submit(WorkBatch batch, CancelToken token, WorkBody body, ArenaSlot slot,
                                ArenaSlot.Lease lease) {
         if (!accepting.get() || active.get() <= 0) {
@@ -296,14 +249,7 @@ public final class WorkerPool {
         }
     }
 
-    /**
-     * Stops the pool in the ordered steps shutdown uses everywhere.
-     *
-     * @param stopDispatch     whether new submissions stop being accepted
-     * @param awaitInFlight    whether to wait for work in flight
-     * @param awaitTerminationMs how long the worker threads are given to end
-     * @return what the shutdown left behind
-     */
+    /** Stops the pool in the ordered steps shutdown uses everywhere. */
     public ShutdownReport shutdown(boolean stopDispatch, boolean awaitInFlight,
                                    long awaitTerminationMs) {
         if (stopDispatch) {
@@ -344,12 +290,7 @@ public final class WorkerPool {
         return new ShutdownReport(stopDispatch, cancelled, remaining, terminated);
     }
 
-    /**
-     * Retires one worker after a hard fault and shrinks the pool.
-     *
-     * @param index the worker index that died
-     * @return whether the pool still has a live worker
-     */
+    /** Retires one worker after a hard fault and shrinks the pool. */
     public synchronized boolean shrink(int index) {
         if (index < 0 || index >= threads.size()) {
             return active.get() > 0;
@@ -359,33 +300,80 @@ public final class WorkerPool {
         return active.get() > 0;
     }
 
-    /** @return how many workers the pool was opened with */
     public int count() {
         return spec.count();
     }
 
-    /** @return how many workers are alive right now */
     public int alive() {
         return active.get();
     }
 
-    /** @return the batches in flight right now */
     public int queueDepth() {
         return inFlight.get();
     }
 
-    /** @return the declarative registration of this pool's thread class */
     public List<ThreadClass> threadClasses() {
         return List.copyOf(threadClasses);
     }
 
-    /** @return whether the pool still accepts work */
     public boolean accepting() {
         return accepting.get();
     }
 
-    /** @return the shape the pool was opened with */
     public Spec spec() {
         return spec;
+    }
+
+    /** The one-shot answer slot of a dispatched batch. The worker writes the outcome, and the merge
+     * may write it first when the deadline passes. */
+    public static final class WorkerHandle {
+
+        private final long batchId;
+        private final long batchEpoch;
+        private final CompletableFuture<TaskOutcome> outcome = new CompletableFuture<>();
+
+        /** Creates the handle of one batch. */
+        public WorkerHandle(long batchId, long batchEpoch) {
+            this.batchId = batchId;
+            this.batchEpoch = batchEpoch;
+        }
+
+        public long batchId() {
+            return batchId;
+        }
+
+        public long batchEpoch() {
+            return batchEpoch;
+        }
+
+        /** Publishes an outcome if none was published yet. */
+        public boolean complete(TaskOutcome result) {
+            return outcome.complete(result);
+        }
+
+        public boolean isDone() {
+            return outcome.isDone();
+        }
+
+        /** Waits for the outcome until the deadline. */
+        public TaskOutcome await(long timeoutNanos) {
+            if (outcome.isDone()) {
+                return outcome.getNow(null);
+            }
+            try {
+                return outcome.get(Math.max(0L, timeoutNanos), TimeUnit.NANOSECONDS);
+            } catch (TimeoutException e) {
+                return null;
+            } catch (ExecutionException e) {
+                return null;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
+
+        public TaskOutcome peek() {
+            return outcome.getNow(null);
+        }
     }
 }

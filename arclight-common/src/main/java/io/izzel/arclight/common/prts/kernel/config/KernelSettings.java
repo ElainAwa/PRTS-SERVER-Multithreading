@@ -4,22 +4,8 @@ package io.izzel.arclight.common.prts.kernel.config;
 import io.izzel.arclight.common.prts.PrtsSwitches;
 import io.izzel.arclight.common.prts.config.PrtsConfigManager;
 
-/**
- * Settings of the kernel scaffolding layer.
- *
- * <p>The names and the defaults live in the configuration layer, which is the only place a
- * generated file is rendered from. This class only names the keys the four pieces read, so a
- * default is never repeated and cannot drift away from the generated file.</p>
- *
- * <p>Every accessor falls back to the declared default when the configuration layer cannot answer:
- * the mixin plugins resolve categories before the configuration directory has been read, and a
- * broken file must not turn a category on by accident.</p>
- *
- * <p>The category itself is off by default, so nothing in this package runs unless an operator
- * turns the kernel category on (or overrides it with the category system property). Every feature
- * below is read at the moment its piece runs, so a configuration reload applies without a
- * restart.</p>
- */
+/** Settings of the kernel scaffolding layer. The names and the defaults live in the configuration
+ * layer, which is the only place a generated file is rendered from. */
 public final class KernelSettings {
 
     /** Category the four pieces belong to; also the configuration file they are declared in. */
@@ -124,16 +110,9 @@ public final class KernelSettings {
     private KernelSettings() {
     }
 
-    /**
-     * Returns whether one PRTS category is enabled.
-     *
-     * <p>A piece of the kernel can be gated by a category other than its own - the call-site seams
-     * live in the correctness-fixes category - so a reader that wants to know whether such a seam is
-     * even in the bytecode asks the category switch through here.</p>
-     *
-     * @param category the category name
-     * @return {@code true} when that category is enabled
-     */
+    /** A piece of the kernel can be gated by a category other than its own - the call-site seams
+     * live in the correctness-fixes category - so a reader that wants to know whether such a seam
+     * is even in the bytecode asks the category switch through here. */
     public static boolean categoryEnabled(String category) {
         try {
             return PrtsSwitches.enabled(category);
@@ -142,11 +121,7 @@ public final class KernelSettings {
         }
     }
 
-    /**
-     * Returns whether the kernel category is enabled.
-     *
-     * @return {@code true} when the platform should drive the four pieces
-     */
+    /** Returns whether the kernel category is enabled. */
     public static boolean enabled() {
         try {
             return PrtsSwitches.enabled(CATEGORY);
@@ -155,165 +130,117 @@ public final class KernelSettings {
         }
     }
 
-    /** @return {@code true} when an unregistered write is refused instead of queued as an intent */
     public static boolean enforceUnregisteredWrites() {
         return feature(ENFORCE_UNREGISTERED_WRITES);
     }
 
-    /** @return {@code true} when the per-class self timers record samples */
     public static boolean selfTimers() {
         return feature(SELF_TIMERS);
     }
 
-    /** @return {@code true} when the per-tick share table is planned */
     public static boolean shareTable() {
         return feature(SHARE_TABLE);
     }
 
-    /** @return {@code true} when wait observations are collected */
     public static boolean waitRegistry() {
         return feature(WAIT_REGISTRY);
     }
 
-    /** @return {@code true} when the real world write paths are watched */
     public static boolean writePathGuard() {
         return feature(WRITE_PATH_GUARD);
     }
 
-    /** @return {@code true} when the commit segment walks the intent channel */
     public static boolean commitIntents() {
         return feature(COMMIT_INTENTS);
     }
 
-    /** @return {@code true} when an undeclared write is handed to the intent channel */
     public static boolean routeUnregisteredWrites() {
         return feature(ROUTE_UNREGISTERED_WRITES);
     }
 
-    /** @return window length in ticks, never shorter than ten minutes */
     public static long selfWindowTicks() {
         return 20L * number(SELF_WINDOW_SECONDS);
     }
 
-    /** @return warm-up length in ticks */
     public static long selfWarmupTicks() {
         return 20L * number(SELF_WARMUP_SECONDS);
     }
 
-    /** @return time one tick may spend in total, in milliseconds */
     public static double eBudgetMs() {
         return number(E_BUDGET_MS);
     }
 
-    /** @return fair share of one world per tick, in milliseconds */
     public static double worldShareMs() {
         return number(WORLD_SHARE_MS);
     }
 
-    /** @return the reserved pool in milliseconds */
     public static double reserveMs() {
         return number(RESERVE_MS);
     }
 
-    /** @return the part of the budget the class rows may not borrow */
     public static double hostOverheadMs() {
         return number(HOST_OVERHEAD_MS);
     }
 
-    /** @return the intent channel depth at which one world's shard refuses */
     public static int intentQueueCap() {
         return clamp(number(INTENT_QUEUE_CAP), 1, INTENT_QUEUE_CAP_MAX);
     }
 
-    /** @return how many intents one tick's commit walk may reach */
     public static int commitBudget() {
         return clamp(number(COMMIT_BUDGET), 1, COMMIT_BUDGET_MAX);
     }
 
-    /**
-     * Clamps one whole-number setting into its accepted range.
-     *
-     * <p>The configuration layer already clamps what it reads against the declared range; this is the
-     * second bound, at the point a piece of the kernel turns the setting into work. A depth limit and
-     * a per-tick budget are what keep one tick from doing an unbounded amount of synchronous work, so
-     * neither of them is ever used unclamped.</p>
-     *
-     * @param value the value read from the configuration layer
-     * @param low   lower bound, applied first
-     * @param high  upper bound
-     * @return the value inside the range
-     */
+    /** Clamps one whole-number setting into its accepted range. The configuration layer already
+     * clamps what it reads against the declared range; this is the second bound, at the point a
+     * piece of the kernel turns the setting into work. */
     public static int clamp(int value, int low, int high) {
         return Math.min(high, Math.max(low, value));
     }
 
-    /** @return the upper bound of one wait, in milliseconds */
     public static int waitBoundMs() {
         return number(WAIT_BOUND_MS);
     }
 
-    /** @return the retry budget one attempt carries */
     public static int retryBudget() {
         return number(RETRY_BUDGET);
     }
 
-    /** @return whether the parallel dispatch of the first domain is on */
     public static boolean dispatchParallel() {
         return feature(DISPATCH_PARALLEL);
     }
 
-    /**
-     * Answers whether the write-back may only take over kinematics the host already holds.
-     *
-     * <p>On, the leg lands nothing it cannot prove the host path itself produced: a row whose
+    /** On, the leg lands nothing it cannot prove the host path itself produced: a row whose
      * position, orientation and velocity are bit-identical to the world's own values is counted as
      * taken over and left untouched (writing it would be the same value through a setter with side
-     * effects), and a row that differs is counted and stays with the host path. Off, the leg lands
-     * every value the domain computed. The open tier runs without changing host semantics only with
-     * this on.</p>
-     *
-     * @return whether only bit-identical kinematics may be taken over
-     */
+     * effects), and a row that differs is counted and stays with the host path. */
     public static boolean dispatchIdenticalOnly() {
         return feature(DISPATCH_IDENTICAL_ONLY);
     }
 
-    /**
-     * Answers whether the write-back may own the kinematics it lands.
-     *
-     * <p>Off, the domain only computes: the merge settles each batch by reading the world back in
-     * the same tick, counting how many rows the host path itself produced, and landing nothing, so
-     * every state change stays with the host. On, the leg hands each batch to the intent channel and
-     * the commit segment lands it, which is the tier the controlled comparison registered as a
-     * semantic deviation; the switch keeps that tier reachable, it does not widen the default.</p>
-     *
-     * @return whether the write-back leg may land the kinematics it computed
-     */
+    /** Answers whether the write-back may own the kinematics it lands. Off, the domain only
+     * computes: the merge settles each batch by reading the world back in the same tick, counting
+     * how many rows the host path itself produced, and landing nothing, so every state change
+     * stays with the host. */
     public static boolean dispatchTakeover() {
         return feature(DISPATCH_TAKEOVER);
     }
 
-    /** @return the declared worker count, zero meaning derive it from the machine */
     public static int workerCountDeclared() {
         return number(WORKER_COUNT);
     }
 
-    /** @return how many batches may wait in the pool before the tick thread takes over */
     public static int workerQueueCap() {
         return clamp(number(WORKER_QUEUE_CAP), 1, WORKER_QUEUE_CAP_MAX);
     }
 
-    /** @return how many chunks one region covers on a side */
     public static int workerBatchChunks() {
         return clamp(number(WORKER_BATCH_CHUNKS), 1, WORKER_BATCH_CHUNKS_MAX);
     }
 
-    /** @return how long the merge waits past the tick boundary before it cancels */
     public static int workerDeadlineGraceMs() {
         return clamp(number(WORKER_DEADLINE_GRACE_MS), 0, WORKER_DEADLINE_GRACE_MS_MAX);
     }
 
-    /** @return how many retryable faults a worker attempt may carry */
     public static int workerRetryBudget() {
         return clamp(number(WORKER_RETRY_BUDGET), 0, WORKER_RETRY_BUDGET_MAX);
     }

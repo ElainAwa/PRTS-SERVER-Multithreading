@@ -11,19 +11,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.IntSupplier;
+import io.izzel.arclight.common.prts.kernel.waitpoints.SiteInventory.SiteRegisterResult;
 
-/**
- * The single legal list of wait points, and the coverage it can prove about itself.
- *
- * <p>A wait point is complete when it names its producer, its progress signal, its timeout action
- * and where it degrades to; a row missing any of them is refused, not stored. The registry starts
- * with the nine existing wait point classes and appends new rows behind them: a class appears in
- * code only after it was registered here.</p>
- *
- * <p>This batch registers and observes. An observation never loosens or tightens an upper bound and
- * never cancels a wait; a wait at a call site no row covers is counted and listed, not refused. The
- * forced convergence count stays at zero because this batch has no convergence to run.</p>
- */
+/** A wait point is complete when it names its producer, its progress signal, its timeout action
+ * and where it degrades to; a row missing any of them is refused, not stored. */
 public final class WaitPointRegistry {
 
     /** Marker of a call site that no wait point covers. */
@@ -70,23 +61,13 @@ public final class WaitPointRegistry {
     private final LongAdder observations = new LongAdder();
     private final IntSupplier boundMs;
 
-    /**
-     * Creates a registry and registers the nine existing wait point classes.
-     *
-     * @param boundMs upper bound of one wait in milliseconds, read at every observation so a
-     *                configuration reload applies without a restart
-     */
+    /** Creates a registry and registers the nine existing wait point classes. */
     public WaitPointRegistry(IntSupplier boundMs) {
         this.boundMs = boundMs;
         registerBuiltins();
     }
 
-    /**
-     * Registers one wait point.
-     *
-     * @param declaration the declaration
-     * @return the stored row, a duplicate refusal, or the element that is missing
-     */
+    /** Registers one wait point. */
     public synchronized RegisterResult registerWaitPoint(WaitPointDeclaration declaration) {
         if (declaration == null || declaration.wpId() == null || declaration.wpId().isBlank()) {
             return new RegisterResult.MissingElement(
@@ -110,49 +91,27 @@ public final class WaitPointRegistry {
         return new RegisterResult.Ok(entry);
     }
 
-    /**
-     * Registers one call site.
-     *
-     * @param site the site
-     * @return the stored site, a duplicate refusal, or the element that is missing
-     */
+    /** Registers one call site. */
     public SiteRegisterResult registerSite(WaitSite site) {
         return sites.register(site);
     }
 
-    /** @return the written-down list of call sites a wait can happen at */
     public SiteInventory sites() {
         return sites;
     }
 
-    /**
-     * Looks up a registered row.
-     *
-     * @param wpId the identity
-     * @return the row, or {@code null}
-     */
+    /** Looks up a registered row. */
     public synchronized WaitPointEntry lookup(String wpId) {
         return wpId == null ? null : rows.get(wpId);
     }
 
-    /**
-     * Looks up the row that covers a call site.
-     *
-     * @param callSiteRef the call site
-     * @return the row, or {@code null} when no row covers it
-     */
+    /** Looks up the row that covers a call site. */
     public WaitPointEntry lookupByCallSite(String callSiteRef) {
         String wpId = callSiteRef == null ? null : callSites.get(callSiteRef);
         return wpId == null ? null : lookup(wpId);
     }
 
-    /**
-     * Observes one wait. The registry never changes what the wait does.
-     *
-     * @param wpId the wait point that covers the wait, or {@code null}
-     * @param span the observed wait
-     * @return the observation, with the bound verdict and the progress reading
-     */
+    /** Observes one wait. */
     public WaitObservation observeWait(String wpId, WaitSpan span) {
         if (span == null) {
             throw new IllegalArgumentException("an observation needs a wait span");
@@ -177,33 +136,21 @@ public final class WaitPointRegistry {
         return new WaitObservation(current, overrun, span.progressReading());
     }
 
-    /**
-     * Counts a wait at a call site no row covers and puts it on the todo list.
-     *
-     * @param span the observed wait
-     */
+    /** Counts a wait at a call site no row covers and puts it on the todo list. */
     public void noteUnregisteredWait(WaitSpan span) {
         String key = span.callSiteRef() == null || span.callSiteRef().isBlank()
             ? "unknown" : span.callSiteRef();
         unregisteredCallSites.merge(key, 1, Integer::sum);
     }
 
-    /**
-     * Records that a fixture walked one wait point through an injection.
-     *
-     * @param wpId the wait point that was walked through
-     */
+    /** Records that a fixture walked one wait point through an injection. */
     public void noteInjectionWalkthrough(String wpId) {
         if (wpId != null) {
             walkthrough.merge(wpId, 1, Integer::sum);
         }
     }
 
-    /**
-     * Publishes the coverage self-check.
-     *
-     * @return the report; the forced convergence count stays zero in this batch
-     */
+    /** Publishes the coverage self-check. */
     public synchronized CoverageReport reportCoverage() {
         int complete = 0;
         Map<String, Integer> walked = new LinkedHashMap<>();
@@ -234,22 +181,18 @@ public final class WaitPointRegistry {
             sites.observedWithoutRow().size(), siteCoverage, sites.pendingElements(), uncovered);
     }
 
-    /** @return the forced convergence count; this batch has none, so it is always zero */
     public long forcedConvergence() {
         return 0L;
     }
 
-    /** @return the number of registered rows */
     public synchronized int registeredTotal() {
         return rows.size();
     }
 
-    /** @return the number of call sites no row covers */
     public int unregisteredCallSites() {
         return unregisteredCallSites.size();
     }
 
-    /** @return the longest wait observed, in milliseconds */
     public long maxWaitMs() {
         long max = 0L;
         for (AtomicLong value : observedMax.values()) {
@@ -258,17 +201,14 @@ public final class WaitPointRegistry {
         return max;
     }
 
-    /** @return waits that exceeded the configured upper bound */
     public long waitOverrunCount() {
         return waitOverruns.sum();
     }
 
-    /** @return wait spans observed */
     public long observationCount() {
         return observations.sum();
     }
 
-    /** @return the last progress reading of each row, keyed by row identity */
     public synchronized Map<String, Long> progressReadings() {
         Map<String, Long> readings = new LinkedHashMap<>();
         for (String wpId : rows.keySet()) {
@@ -277,7 +217,6 @@ public final class WaitPointRegistry {
         return readings;
     }
 
-    /** @return the call sites that carry an unregistered wait, with their counts */
     public Map<String, Integer> unregisteredTodo() {
         return Map.copyOf(unregisteredCallSites);
     }
@@ -295,6 +234,59 @@ public final class WaitPointRegistry {
             return Long.parseLong(reading.trim());
         } catch (NumberFormatException notANumber) {
             return 0L;
+        }
+    }
+
+    /** One registered wait point. A registered row is immutable: a new revision is a new registration,
+     * never an edit in place, so a reader of the coverage report sees exactly which declaration
+     * produced a row. */
+    public record WaitPointEntry(String wpId, String className, String producer,
+                                 Dec19Elements.ProgressSignal signal, String timeoutAction,
+                                 String degradeTo, String worldScope, String callSiteRef,
+                                 int revision) {
+
+        public boolean complete() {
+            return Dec19Elements.missingElement(new WaitPointDeclaration(wpId, className, producer,
+                signal, timeoutAction, degradeTo, worldScope, callSiteRef, revision)) == null;
+        }
+    }
+
+    /** A wait point offered for registration. The four elements - producer, progress signal, timeout
+     * action and degradation target - are mandatory; the rest identifies the row and the call site it
+     * covers. */
+    public record WaitPointDeclaration(String wpId, String className, String producer,
+                                       Dec19Elements.ProgressSignal signal, String timeoutAction,
+                                       String degradeTo, String worldScope, String callSiteRef,
+                                       int revision) {
+    }
+
+    /** What the registry answers about one wait. The answer is a reading, not a command: it reports
+     * the longest wait seen for the row, whether this wait crossed the configured upper bound and the
+     * progress value that came with it. */
+    public record WaitObservation(long maxWaitMs, boolean overrun, String progressReading) {
+    }
+
+    /** One observed wait. The wait point may be unknown: an observation is recorded either way,
+     * because a wait at a call site no row covers is exactly what the coverage report has to show. */
+    public record WaitSpan(String wpId, String callSiteRef, String siteId, String worldId,
+                           long tickIndex, long waitMs, String progressReading) {
+    }
+
+    /** The result of offering a wait point for registration. Three outcomes, and no silent fourth: the
+     * row was stored, the identity is already taken, or one of the four elements is missing and is
+     * named. */
+    public sealed interface RegisterResult {
+
+        /** The row was stored. */
+        record Ok(WaitPointEntry entry) implements RegisterResult {
+        }
+
+        /** The identity is already registered; rows are never replaced silently. */
+        record DuplicateWpId(String wpId) implements RegisterResult {
+        }
+
+        /** One of the four elements is missing. */
+        record MissingElement(String wpId, String which) implements RegisterResult {
         }
     }
 }

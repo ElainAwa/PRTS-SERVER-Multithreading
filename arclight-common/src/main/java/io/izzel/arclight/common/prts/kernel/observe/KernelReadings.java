@@ -11,16 +11,16 @@ import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchReadings;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
-import io.izzel.arclight.common.prts.kernel.meter.MeterWindow;
+import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.MeterWindow;
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
-import io.izzel.arclight.common.prts.kernel.meter.SelfRow;
+import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.SelfRow;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers;
-import io.izzel.arclight.common.prts.kernel.shares.ConservationCheck;
+import io.izzel.arclight.common.prts.kernel.shares.SharePlanner.ConservationCheck;
 import io.izzel.arclight.common.prts.kernel.shares.OverrunRecord;
 import io.izzel.arclight.common.prts.kernel.shares.ShareClass;
 import io.izzel.arclight.common.prts.kernel.shares.SharePlanner;
 import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
-import io.izzel.arclight.common.prts.kernel.sites.WriteDecision;
+import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard.WriteDecision;
 import io.izzel.arclight.common.prts.kernel.sites.WritePath;
 import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
 import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard;
@@ -38,28 +38,15 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-/**
- * Renders the full readout of the four pieces.
- *
- * <p>The fields are observation requests: they are published so an operator and the tests can see
- * them, but they are not part of an approved counter table. Every field is published even when its
- * value is zero, because a missing zero is an observation failure. Nothing here changes state
- * beyond the queue slope, which is a difference between two reads.</p>
- *
- * <p>Names are stable and machine readable: {@code name=value}, one per line, with the name never
- * carrying a value that a checker would have to parse apart.</p>
- */
+/** Renders the full readout of the four pieces. The fields are observation requests: they are
+ * published so an operator and the tests can see them, but they are not part of an approved
+ * counter table. */
 public final class KernelReadings {
 
     private KernelReadings() {
     }
 
-    /**
-     * Renders the full export.
-     *
-     * @param module the module to read
-     * @return one {@code name=value} line per field
-     */
+    /** Renders the full export. */
     public static List<String> export(KernelModule module) {
         List<String> lines = new ArrayList<>();
         settings(lines, module);
@@ -103,15 +90,6 @@ public final class KernelReadings {
         seams(lines);
     }
 
-    /**
-     * Publishes every call-site seam the kernel depends on, and whether it is actually there.
-     *
-     * <p>A kernel can be enabled and its watcher installed while the bytecode that would call the
-     * watcher was never applied, because the seam is gated by a different category. The state of each
-     * declared seam is published here - the category that gates it, whether that category is on,
-     * whether the mixin plugin decided to apply it, and whether the application was seen - together
-     * with the one verdict a reader needs: whether the kernel may be judged at all.</p>
-     */
     private static void seams(List<String> lines) {
         List<PrtsSeams.SeamState> states = PrtsSeams.states(KernelSettings::categoryEnabled);
         int reachable = 0;
@@ -388,17 +366,6 @@ public final class KernelReadings {
         dispatchCost(lines, module);
     }
 
-    /**
-     * Publishes the four segments of the dispatcher's own cost inside the self domain.
-     *
-     * <p>The rows are the dispatcher's decomposition of its main-thread work, printed next to the
-     * class rows because that is where a reader looks for the cost of the entity domain. Only the
-     * snapshot, the check and the fallback are work of that domain; the wait for the workers is a
-     * wait and is published here as a number of its own, never added to a class row.</p>
-     *
-     * @param lines  the lines of the export
-     * @param module the kernel the readings come from
-     */
     private static void dispatchCost(List<String> lines, KernelModule module) {
         DispatchReadings readings = module.dispatchReadings();
         add(lines, "self.dispatch_snapshot_ms", format(readings.snapshotNanos() / 1_000_000.0));
@@ -447,13 +414,6 @@ public final class KernelReadings {
         waitSiteReadings(lines, module);
     }
 
-    /**
-     * Publishes what the waits of the real call sites added up to, site by site.
-     *
-     * <p>Every site of the written-down list gets its row, zero included: a site that never waited
-     * states that as a number rather than by being absent. The two verdicts are published next to the
-     * duration they belong to, and neither of them is acted on.</p>
-     */
     private static void waitSiteReadings(List<String> lines, KernelModule module) {
         WaitSiteReadings readings = module.waitSites().readings();
         add(lines, "wait.over_one_tick", readings.overOneTickTotal());

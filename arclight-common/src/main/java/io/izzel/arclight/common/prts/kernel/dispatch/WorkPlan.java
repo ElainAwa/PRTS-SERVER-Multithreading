@@ -4,23 +4,7 @@ package io.izzel.arclight.common.prts.kernel.dispatch;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * The frozen task set of one tick.
- *
- * <p>Planning reads the entity views and the plan epoch only. It never reads a clock, never starts
- * a thread and never decides again later: the task order published here is the order the merge walks
- * and the order a hash folds, so the same input always produces the same plan.</p>
- *
- * <p>The plan carries the tick whose commit segment will merge it. A plan built for tick n is
- * merged at the entry of tick n + 1, which is the hard deadline of the batch: whatever has not
- * produced a result by then is cancelled and done on the tick thread instead.</p>
- *
- * @param tickIndex        the tick the tasks were planned in
- * @param planEpoch        the dispatch epoch the plan belongs to
- * @param views            the entity views the plan was cut from, in world order
- * @param tasks            the frozen tasks, in merge order
- * @param hardDeadlineTick the tick whose entry is the hard deadline of every batch
- */
+/** The frozen task set of one tick. Planning reads the entity views and the plan epoch only. */
 public record WorkPlan(long tickIndex, long planEpoch, List<EntityCandidateView> views,
                        List<WorkTask> tasks, long hardDeadlineTick) {
 
@@ -36,31 +20,16 @@ public record WorkPlan(long tickIndex, long planEpoch, List<EntityCandidateView>
         tasks = List.copyOf(tasks);
     }
 
-    /** @return how many tasks the plan carries */
     public int taskCount() {
         return tasks.size();
     }
 
-    /** @return whether the plan has no work at all */
     public boolean empty() {
         return tasks.isEmpty();
     }
 
-    /**
-     * Freezes the plan of one tick from the entity views.
-     *
-     * <p>Each view is grouped by region first, so the rows of one region are contiguous and a task
-     * is exactly one region. The same view always yields the same tasks in the same order: planning
-     * reads no clock and touches no thread.</p>
-     *
-     * @param tickIndex   the tick the plan is built in
-     * @param planEpoch   the dispatch epoch the plan belongs to
-     * @param views       the entity views of the tick, in world order
-     * @param batchChunks how many chunks one region covers on a side
-     * @param firstTaskId the first task identity to hand out; identities never repeat across
-     *                    ticks, which is what makes a second commit of one identity detectable
-     * @return the frozen plan
-     */
+    /** Freezes the plan of one tick from the entity views. Each view is grouped by region first,
+     * so the rows of one region are contiguous and a task is exactly one region. */
     public static WorkPlan freeze(long tickIndex, long planEpoch, List<EntityCandidateView> views,
                                   int batchChunks, long firstTaskId) {
         List<EntityCandidateView> sortedViews = new ArrayList<>(views.size());
@@ -90,5 +59,53 @@ public record WorkPlan(long tickIndex, long planEpoch, List<EntityCandidateView>
             }
         }
         return new WorkPlan(tickIndex, planEpoch, sortedViews, tasks, tickIndex + 1);
+    }
+
+    /** The batch epoch is the identity a late result is judged by. */
+    public record WorkBatch(long batchId, WorkTask task, long batchEpoch, EntityCandidateView view) {
+
+        /** Validates the batch identity. */
+        public WorkBatch {
+            if (task == null || view == null) {
+                throw new IllegalArgumentException("a batch needs a task and a view");
+            }
+            if (batchId != task.batchId()) {
+                throw new IllegalArgumentException("a batch must carry the identity of its task");
+            }
+        }
+
+        public int rangeStart() {
+            return task.entitySeqStart();
+        }
+
+        public int rangeEnd() {
+            return task.entitySeqEnd();
+        }
+    }
+
+    /** A task is created at planning time and never changes afterwards. */
+    public record WorkTask(long taskId, String worldId, String regionId, long batchId,
+                           int entitySeqStart, int entitySeqEnd, long snapshotRef, long worldEpoch,
+                           int shareMsHint, String cancelScope) {
+
+        /** Validates the identity and the range of one task. */
+        public WorkTask {
+            if (worldId == null || worldId.isEmpty()) {
+                throw new IllegalArgumentException("a task needs a world");
+            }
+            if (regionId == null || regionId.isEmpty()) {
+                throw new IllegalArgumentException("a task needs a region");
+            }
+            if (cancelScope == null || cancelScope.isEmpty()) {
+                throw new IllegalArgumentException("a task needs a cancellation scope");
+            }
+            if (entitySeqStart < 0 || entitySeqEnd <= entitySeqStart) {
+                throw new IllegalArgumentException("a task needs a non-empty entity range");
+            }
+        }
+
+        public int entityCount() {
+            return entitySeqEnd - entitySeqStart;
+        }
     }
 }

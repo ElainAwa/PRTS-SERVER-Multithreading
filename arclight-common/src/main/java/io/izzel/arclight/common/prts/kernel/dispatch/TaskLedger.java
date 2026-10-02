@@ -4,27 +4,15 @@ package io.izzel.arclight.common.prts.kernel.dispatch;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/**
- * The one-way state of every batch, and the closure of a tick.
- *
- * <p>A batch starts {@code PENDING} and moves exactly once to {@code COMMITTED} or
- * {@code DROPPED}; a second commit of the same identity is refused and counted rather than
- * accepted. A drop always carries the code that ended the batch, so a batch can never disappear
- * without a reason.</p>
- *
- * <p>The ledger also carries the dispatch epoch. The merge advances it when a tick is closed, which
- * is what makes a result that arrives afterwards visibly late instead of silently applying to the
- * next frame.</p>
- */
+/** The one-way state of every batch, and the closure of a tick. A batch starts {@code PENDING} and
+ * moves exactly once to {@code COMMITTED} or {@code DROPPED}; a second commit of the same identity
+ * is refused and counted rather than accepted. */
 public final class TaskLedger {
 
     /** The states one batch may be in. */
     public enum BatchState {
-        /** Dispatched, no result merged yet. */
         PENDING,
-        /** Merged and accepted exactly once. */
         COMMITTED,
-        /** Ended without a merge, always with a code. */
         DROPPED
     }
 
@@ -33,7 +21,6 @@ public final class TaskLedger {
                                 long cancelled, long failed, long committed, long dropped,
                                 long pending, boolean ok) {
 
-        /** @return a report that holds because nothing was dispatched */
         public static ClosureReport empty() {
             return new ClosureReport(0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, true);
         }
@@ -45,12 +32,10 @@ public final class TaskLedger {
     private long duplicateCommits;
     private long droppedWithoutCode;
 
-    /** @param epoch the dispatch epoch the ledger starts in */
     public TaskLedger(long epoch) {
         this.epoch = epoch;
     }
 
-    /** @return the dispatch epoch results are judged against */
     public synchronized long epoch() {
         return epoch;
     }
@@ -60,21 +45,12 @@ public final class TaskLedger {
         epoch++;
     }
 
-    /**
-     * Registers a batch as pending.
-     *
-     * @param batchId identity of the batch
-     */
+    /** Registers a batch as pending. */
     public synchronized void register(long batchId) {
         states.putIfAbsent(batchId, BatchState.PENDING);
     }
 
-    /**
-     * Marks a batch as committed.
-     *
-     * @param batchId identity of the batch
-     * @return {@code false} when the batch was already committed, which is a duplicate
-     */
+    /** Marks a batch as committed. */
     public synchronized boolean markCommitted(long batchId) {
         BatchState current = states.get(batchId);
         if (current == BatchState.COMMITTED) {
@@ -86,13 +62,7 @@ public final class TaskLedger {
         return true;
     }
 
-    /**
-     * Marks a batch as dropped.
-     *
-     * @param batchId identity of the batch
-     * @param code    the code that ended it, never empty
-     * @return {@code false} when no code was given, which is refused and counted
-     */
+    /** Marks a batch as dropped. */
     public synchronized boolean markDropped(long batchId, String code) {
         if (code == null || code.isEmpty()) {
             droppedWithoutCode++;
@@ -103,37 +73,24 @@ public final class TaskLedger {
         return true;
     }
 
-    /**
-     * Answers the state of one batch.
-     *
-     * @param batchId identity of the batch
-     * @return the state, or {@code null} when the batch was never registered
-     */
+    /** Answers the state of one batch. */
     public synchronized BatchState state(long batchId) {
         return states.get(batchId);
     }
 
-    /**
-     * Answers the code a dropped batch ended with.
-     *
-     * @param batchId identity of the batch
-     * @return the code, or {@code null} when the batch was not dropped
-     */
+    /** Answers the code a dropped batch ended with. */
     public synchronized String dropCode(long batchId) {
         return dropCodes.get(batchId);
     }
 
-    /** @return attempts to commit one batch twice */
     public synchronized long duplicateCommits() {
         return duplicateCommits;
     }
 
-    /** @return drops refused because they carried no code */
     public synchronized long droppedWithoutCode() {
         return droppedWithoutCode;
     }
 
-    /** @return how many batches are still pending */
     public synchronized long pendingCount() {
         long pending = 0L;
         for (BatchState state : states.values()) {
@@ -144,17 +101,7 @@ public final class TaskLedger {
         return pending;
     }
 
-    /**
-     * Builds the closure of one tick from the outcomes that were merged.
-     *
-     * @param dispatched batches the tick dispatched
-     * @param executed   batches a worker executed
-     * @param retried    batches a retryable fault ended early
-     * @param fellback   batches a non-retryable fault ended early
-     * @param cancelled  batches the deadline cancelled
-     * @param failed     batches whose worker died
-     * @return the report, with {@code ok} telling whether both closures hold
-     */
+    /** Builds the closure of one tick from the outcomes that were merged. */
     public synchronized ClosureReport closure(long dispatched, long executed, long retried,
                                               long fellback, long cancelled, long failed) {
         long committed = 0L;
@@ -175,11 +122,8 @@ public final class TaskLedger {
             committed, dropped, pending, dispatchCloses && batchCloses);
     }
 
-    /**
-     * Closes the window of one merge: the states of a finished tick are dropped, while the
-     * duplicate and missing-code counters stay. Batch identities never repeat, so a later tick
-     * cannot inherit a state from an earlier one.
-     */
+    /** Closes the window of one merge: the states of a finished tick are dropped, while the
+     * duplicate and missing-code counters stay. */
     public synchronized void closeWindow() {
         states.clear();
         dropCodes.clear();

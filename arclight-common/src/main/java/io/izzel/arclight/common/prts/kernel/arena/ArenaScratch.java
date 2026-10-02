@@ -3,15 +3,8 @@ package io.izzel.arclight.common.prts.kernel.arena;
 
 import java.util.Arrays;
 
-/**
- * The reusable output buffer of one batch: the integrated position, orientation and velocity of a
- * contiguous entity range.
- *
- * <p>A scratch is written only by the thread that owns it, and it is reset before every use, so a
- * shorter batch can never read the tail of a longer one. It is the only object a worker body sees
- * besides its frozen batch, which keeps the worker away from the world and from the arena's
- * bookkeeping at the same time.</p>
- */
+/** A scratch is written only by the thread that owns it, and it is reset before every use, so a
+ * shorter batch can never read the tail of a longer one. */
 public final class ArenaScratch {
 
     private double[] posX = new double[0];
@@ -25,11 +18,7 @@ public final class ArenaScratch {
     private long[] flags = new long[0];
     private int filled;
 
-    /**
-     * Prepares the buffer for a range of the given length.
-     *
-     * @param capacity how many entities the next write covers
-     */
+    /** Prepares the buffer for a range of the given length. */
     public void reset(int capacity) {
         int needed = Math.max(0, capacity);
         if (posX.length < needed) {
@@ -48,20 +37,7 @@ public final class ArenaScratch {
         filled = 0;
     }
 
-    /**
-     * Writes one integrated entity row.
-     *
-     * @param index  row position inside the range
-     * @param x      integrated x position
-     * @param y      integrated y position
-     * @param z      integrated z position
-     * @param yawDeg normalized yaw
-     * @param pitchDeg clamped pitch
-     * @param vx     velocity on x
-     * @param vy     velocity on y
-     * @param vz     velocity on z
-     * @param flag   opaque flag word
-     */
+    /** Writes one integrated entity row. */
     public void write(int index, double x, double y, double z, double yawDeg, double pitchDeg,
                       double vx, double vy, double vz, long flag) {
         posX[index] = x;
@@ -78,52 +54,42 @@ public final class ArenaScratch {
         }
     }
 
-    /** @return how many rows were written since the last reset */
     public int filled() {
         return filled;
     }
 
-    /** @param index row position @return integrated x position */
     public double posX(int index) {
         return posX[index];
     }
 
-    /** @param index row position @return integrated y position */
     public double posY(int index) {
         return posY[index];
     }
 
-    /** @param index row position @return integrated z position */
     public double posZ(int index) {
         return posZ[index];
     }
 
-    /** @param index row position @return yaw in degrees */
     public double yaw(int index) {
         return yaw[index];
     }
 
-    /** @param index row position @return pitch in degrees */
     public double pitch(int index) {
         return pitch[index];
     }
 
-    /** @param index row position @return velocity on x */
     public double velX(int index) {
         return velX[index];
     }
 
-    /** @param index row position @return velocity on y */
     public double velY(int index) {
         return velY[index];
     }
 
-    /** @param index row position @return velocity on z */
     public double velZ(int index) {
         return velZ[index];
     }
 
-    /** @param index row position @return the opaque flag word */
     public long flags(int index) {
         return flags[index];
     }

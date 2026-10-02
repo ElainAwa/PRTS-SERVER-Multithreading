@@ -9,25 +9,12 @@ import io.izzel.arclight.common.prts.kernel.intent.WriteIntent;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
 import java.util.function.IntSupplier;
-import io.izzel.arclight.common.prts.kernel.codes.ConflictClass;
+import io.izzel.arclight.common.prts.kernel.codes.RejectTrigger.ConflictClass;
+import io.izzel.arclight.common.prts.kernel.auth.WriteAttempt.WriteOp;
 
-/**
- * The one decision point every world write passes through.
- *
- * <p>The decision is total: every attempt leaves with exactly one of the three dispositions, so the
- * accounting closure of the ledger holds by construction. The inputs are the attempt itself - tick
- * index and planning order included - and never a clock; a caller that read one says so in the
- * attempt, and that alone turns the verdict into a planning refusal.</p>
- *
- * <p>An unregistered holder reads: reads pass and take no write right. Its writes go to the intent
- * channel, where they keep the order frozen at planning time; the grant count for unregistered
- * writes stays at zero by construction. When the explicit switch is on, the same attempt is refused
- * instead, still with a code and a count, never silently. When the intent channel is at its depth,
- * the attempt is refused as well: pressure never turns into an unbounded queue.</p>
- *
- * <p>This batch registers and judges; it does not intercept. No world write path is routed through
- * here yet, and the commit segment below the channel does not write the world.</p>
- */
+/** The one decision point every world write passes through. The decision is total: every attempt
+ * leaves with exactly one of the three dispositions, so the accounting closure of the ledger holds
+ * by construction. */
 public final class WriteAuthority {
 
     private final OwnerRegistry owners;
@@ -37,15 +24,7 @@ public final class WriteAuthority {
     private final IntSupplier retryBudget;
     private final AtomicLong nextAttemptId = new AtomicLong(1L);
 
-    /**
-     * Creates the decision point.
-     *
-     * @param owners                    owner registry that holds the tokens
-     * @param intents                   controlled channel for intents
-     * @param ledger                    accounting the decision writes to
-     * @param enforceUnregisteredWrites read at every attempt, so a reload applies
-     * @param retryBudget               read at every attempt
-     */
+    /** Creates the decision point. */
     public WriteAuthority(OwnerRegistry owners, IntentQueue intents, WriteLedger ledger,
                           BooleanSupplier enforceUnregisteredWrites, IntSupplier retryBudget) {
         this.owners = owners;
@@ -55,17 +34,11 @@ public final class WriteAuthority {
         this.retryBudget = retryBudget;
     }
 
-    /** @return the next attempt identity for a caller that builds an attempt */
     public long nextAttemptId() {
         return nextAttemptId.getAndIncrement();
     }
 
-    /**
-     * Judges one attempt.
-     *
-     * @param attempt the attempt, counted before the judgement
-     * @return the verdict; never {@code null}
-     */
+    /** Judges one attempt. */
     public WriteVerdict authorize(WriteAttempt attempt) {
         ledger.noteAttempt(attempt);
         WriteVerdict verdict;

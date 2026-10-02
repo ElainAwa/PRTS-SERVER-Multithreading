@@ -10,40 +10,17 @@ import org.bukkit.entity.Player;
 
 import java.util.ArrayList;
 import java.util.List;
+import net.minecraft.server.level.ServerLevel;
 
-/**
- * Takes the read-only entity view of one tick.
- *
- * <p>This is the one place the dispatcher reads the host: it runs on the tick thread, copies plain
- * numbers out of the live entities and never keeps a reference to one. A world that cannot be read
- * contributes nothing instead of failing the tick, and a view is bounded per world, so a crowded
- * world cannot turn one tick into an unbounded copy.</p>
- *
- * <p>A world is stamped with the key the platform lists it under - the same key the world lifecycle
- * hands the write-right guard - so the generation a write-back carries is the generation the commit
- * compares, and a write-back can never land in a world that was unloaded and rebuilt meanwhile.</p>
- *
- * <p>Players are not candidates. Their position is driven by their own connection, and a domain that
- * owns an entity has to own what moves it; until the domain owns the player tick as well, writing a
- * player back would fight the client for the same value. Both arms and the write-back therefore
- * cover the same candidate set: every entity that is not a player.</p>
- *
- * <p>Every row also carries the host step of the entity it was read from, packed into the flag word
- * of the view. The classification reads only fields of the entity itself - never a block, a chunk or
- * an entity other than the one being read - so it costs the tick thread a few field reads and lets
- * the domain body state the same step the host will run instead of guessing at it.</p>
- */
+/** Takes the read-only entity view of one tick. This is the one place the dispatcher reads the
+ * host: it runs on the tick thread, copies plain numbers out of the live entities and never keeps
+ * a reference to one. */
 public final class DispatchSnapshot {
 
     private DispatchSnapshot() {
     }
 
-    /**
-     * Copies the entity kinematics of every live world.
-     *
-     * @param worldEpochs the generation to stamp each world with
-     * @return one view per world, in the order the host lists the worlds
-     */
+    /** Copies the entity kinematics of every live world. */
     public static List<EntityCandidateView> capture(WorldEpochSource worldEpochs) {
         List<EntityCandidateView> views = new ArrayList<>();
         List<World> worlds;
@@ -87,17 +64,6 @@ public final class DispatchSnapshot {
         return builder.build();
     }
 
-    /**
-     * Reads the host step of one entity into the flag word of its row.
-     *
-     * <p>Only the entity's own fields are read, so the answer is a property of the row and not of
-     * the world around it. Two of them are moved to the domain body: an armour stand that does not
-     * travel, and an item off the ground with gravity switched off. Everything else answers the
-     * plain step, which is where the domain stays until that host step can be stated exactly.</p>
-     *
-     * @param entity the entity to classify
-     * @return the flag word the row carries
-     */
     private static long hostStep(Entity entity) {
         net.minecraft.world.entity.Entity handle = ((CraftEntity) entity).getHandle();
         if (handle instanceof net.minecraft.world.entity.decoration.ArmorStand armorStand) {
@@ -124,12 +90,23 @@ public final class DispatchSnapshot {
     @FunctionalInterface
     public interface WorldEpochSource {
 
-        /**
-         * Answers the generation of one world.
-         *
-         * @param worldId the world key
-         * @return the generation the view is stamped with
-         */
+        /** Answers the generation of one world. */
         long epochOf(String worldId);
+    }
+
+    /** The one key a world is named by: the snapshot stamps views with it, the write-back freezes it
+     * and the write-right guard tracks the generation under it. */
+    public static final class WorldKey {
+
+        private WorldKey() {
+        }
+
+        public static String id(World world) {
+            return world.getKey().toString();
+        }
+
+        public static String id(ServerLevel level) {
+            return level.dimension().location().toString();
+        }
     }
 }

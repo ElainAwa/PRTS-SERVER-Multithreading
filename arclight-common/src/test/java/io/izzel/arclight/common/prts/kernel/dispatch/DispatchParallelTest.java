@@ -17,6 +17,8 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
+import io.izzel.arclight.common.prts.kernel.dispatch.DispatchPass.DispatchSettings;
+import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan.WorkTask;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;

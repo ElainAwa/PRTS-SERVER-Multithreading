@@ -24,8 +24,8 @@ import io.izzel.arclight.common.prts.kernel.dispatch.EntityCandidateView;
 import io.izzel.arclight.common.prts.kernel.dispatch.EntityIntegrator;
 import io.izzel.arclight.common.prts.kernel.dispatch.MergeSegment;
 import io.izzel.arclight.common.prts.kernel.dispatch.TaskLedger;
-import io.izzel.arclight.common.prts.kernel.dispatch.WorkBatch;
-import io.izzel.arclight.common.prts.kernel.dispatch.WorkTask;
+import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan.WorkBatch;
+import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan.WorkTask;
 import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan;
 import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
 import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
@@ -40,7 +40,7 @@ import io.izzel.arclight.common.prts.kernel.sites.WritePath;
 import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
 import io.izzel.arclight.common.prts.kernel.sites.ThreadOrigin;
 import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard;
-import io.izzel.arclight.common.prts.kernel.waitpoints.SiteRegisterResult;
+import io.izzel.arclight.common.prts.kernel.waitpoints.SiteInventory.SiteRegisterResult;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSite;
 import io.izzel.arclight.common.prts.kernel.shares.OverrunRecord;
 import io.izzel.arclight.common.prts.kernel.shares.ShareClass;
@@ -48,11 +48,11 @@ import io.izzel.arclight.common.prts.kernel.shares.SharePlanner;
 import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
 import io.izzel.arclight.common.prts.kernel.waitpoints.CoverageReport;
 import io.izzel.arclight.common.prts.kernel.waitpoints.Dec19Elements;
-import io.izzel.arclight.common.prts.kernel.waitpoints.RegisterResult;
-import io.izzel.arclight.common.prts.kernel.waitpoints.WaitObservation;
-import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointDeclaration;
+import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry.RegisterResult;
+import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry.WaitObservation;
+import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry.WaitPointDeclaration;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry;
-import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSpan;
+import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry.WaitSpan;
 import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteObserver;
 import io.izzel.arclight.common.prts.support.PrtsWaitSites;
 
@@ -68,24 +68,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 import java.util.function.IntSupplier;
 
-/**
- * A self-check that drives the decision matrix of the four pieces on scratch objects.
- *
- * <p>The check never touches the live counters: it builds its own registry, queue and ledger,
- * drives the paths a call site would drive and prints what came back. That makes it usable on a
- * running server without polluting the readout, and it gives an acceptance run one command whose
- * output states the matrix in numbers.</p>
- */
+/** The check never touches the live counters: it builds its own registry, queue and ledger, drives
+ * the paths a call site would drive and prints what came back. */
 public final class KernelSelfCheck {
 
     private KernelSelfCheck() {
     }
 
-    /**
-     * Runs the matrix.
-     *
-     * @return one {@code name=value} line per result, ending with the verdict of the check
-     */
+    /** Runs the matrix. */
     public static List<String> run() {
         List<String> lines = new ArrayList<>();
         List<String> failures = new ArrayList<>();
@@ -265,7 +255,6 @@ public final class KernelSelfCheck {
         return lines;
     }
 
-    /** Drives the real write paths on scratch objects: short path, long path and enforcement. */
     private static List<String> writePathMatrix(List<String> failures, long tick) {
         List<String> lines = new ArrayList<>();
         WritePathCounters counters = new WritePathCounters();
@@ -338,10 +327,6 @@ public final class KernelSelfCheck {
         return lines;
     }
 
-    /**
-     * Drives the commit segment on scratch objects: while its switch is off nothing is consumed, and
-     * while it is on the queue drains in the order the channel froze.
-     */
     private static List<String> commitSegmentMatrix(List<String> failures, long tick) {
         List<String> lines = new ArrayList<>();
         IntentQueue queue = new IntentQueue(() -> 8, () -> 2);
@@ -397,15 +382,6 @@ public final class KernelSelfCheck {
             WriteIntent.UNTRACKED_EPOCH, handle, "xdomain", "site:a");
     }
 
-    /**
-     * Drives the bounded refusal, the per-world isolation and the two runtime ownership checks.
-     *
-     * <p>One world carries an intent whose payload never lands: the channel offers it again until the
-     * retry budget is spent, releases it with its code, and the intent behind it still lands. A second
-     * world carries a write that lands while that happens, which is what per-world isolation means in
-     * numbers. The same scratch objects then show a write whose world was unloaded, a commit asked for
-     * from a thread that is not the owner, and the seam the wait observation was borrowed from.</p>
-     */
     private static List<String> retryAndLifecycleMatrix(List<String> failures, long tick) {
         List<String> lines = new ArrayList<>();
         IntentPayloadDirectory payloads = new IntentPayloadDirectory();
@@ -519,14 +495,6 @@ public final class KernelSelfCheck {
         return segment;
     }
 
-    /**
-     * Drives the observation of the real call sites on scratch objects.
-     *
-     * <p>One wait goes through the seam itself, which is the path a hooked method takes, and three
-     * more are handed to the observer with durations the check can pin down: one over a host tick,
-     * one exactly on it and one under it. The check states what the readings made of them and that
-     * the observation left the upper bound where it was.</p>
-     */
     private static List<String> waitSiteMatrix(List<String> failures, long tick) {
         List<String> lines = new ArrayList<>();
         WaitPointRegistry registry = new WaitPointRegistry(() -> 50);
@@ -603,11 +571,6 @@ public final class KernelSelfCheck {
     }
 
     /** Drives the written-down call site list: completeness, refusal and coverage. */
-    /**
-     * Drives the dispatch machinery against scratch state: a worker really runs a batch, the merge
-     * commits it once, a duplicate commit is refused, a late result is dropped with a count, a full
-     * queue falls back and the two arms of the hash agree bit for bit.
-     */
     private static List<String> dispatchMatrix(List<String> failures, long tick) {
         List<String> lines = new ArrayList<>();
         DispatchReadings readings = new DispatchReadings();
@@ -664,11 +627,6 @@ public final class KernelSelfCheck {
         return lines;
     }
 
-    /**
-     * Drives the write-back leg against a scratch channel: what the merge commits becomes one intent
-     * per batch, in the frozen order, tagged with the batch it carries, and the commit segment is
-     * what consumes the orders - with a channel at its depth refusing the write-back and counting it.
-     */
     private static List<String> dispatchWriteBackMatrix(List<String> failures, long tick) {
         List<String> lines = new ArrayList<>();
         DispatchReadings readings = new DispatchReadings();
@@ -884,7 +842,6 @@ public final class KernelSelfCheck {
         return lines;
     }
 
-    /** Drives one write attempt from a thread that is not the thread that bound the guard. */
     private static void runOnWorker(WorkerWrite write) {
         Thread thread = new Thread(write, "selftest-worker");
         thread.start();
@@ -895,7 +852,6 @@ public final class KernelSelfCheck {
         }
     }
 
-    /** One write attempt driven from a thread that is not the server thread. */
     private static final class WorkerWrite implements Runnable {
 
         private final WorldWriteGuard guard;

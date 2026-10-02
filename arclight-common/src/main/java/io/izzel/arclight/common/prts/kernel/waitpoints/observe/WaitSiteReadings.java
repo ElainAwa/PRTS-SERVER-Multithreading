@@ -7,18 +7,7 @@ import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.IntSupplier;
 
-/**
- * What the wait observations of the written-down call sites add up to, per site and in total.
- *
- * <p>Two verdicts travel with every wait beside its duration. One is physical and fixed: did the
- * wait cross a host tick. The other follows the configured upper bound and answers the question the
- * convergence action would ask - a wait that crossed it at a site whose timeout action is a forced
- * materialization would have entered that action, had this build been allowed to run one. Both are
- * recorded here and neither is acted on.</p>
- *
- * <p>The counters are published whole, zero rows included, and are indexed the same way the seam
- * numbers its call sites, so a reader can line the two tables up without a lookup.</p>
- */
+/** Two verdicts travel with every wait beside its duration. */
 public final class WaitSiteReadings {
 
     /** Length of one host tick in milliseconds; the fixed threshold of the physical verdict. */
@@ -34,12 +23,7 @@ public final class WaitSiteReadings {
     private final LongAdder overOneTickTotal = new LongAdder();
     private final LongAdder convergenceCandidateTotal = new LongAdder();
 
-    /**
-     * Creates the readings for every written-down call site.
-     *
-     * @param boundMs upper bound of one wait in milliseconds, read at every observation so a
-     *                configuration reload applies without a restart
-     */
+    /** Creates the readings for every written-down call site. */
     public WaitSiteReadings(IntSupplier boundMs) {
         this.siteIds = PrtsWaitSites.SITE_IDS.clone();
         this.boundMs = boundMs;
@@ -50,14 +34,7 @@ public final class WaitSiteReadings {
         this.maxMs = new AtomicLongArray(count);
     }
 
-    /**
-     * Notes one observed wait.
-     *
-     * @param siteIndex            index of the site in the seam table
-     * @param waitMs               duration of the wait in milliseconds
-     * @param convergenceCandidate whether the wait point covering the site names a forced
-     *                             materialization convergence as its timeout action
-     */
+    /** Notes one observed wait. */
     public void note(int siteIndex, long waitMs, boolean convergenceCandidate) {
         if (siteIndex < 0 || siteIndex >= siteIds.length) {
             return;
@@ -76,7 +53,7 @@ public final class WaitSiteReadings {
         }
     }
 
-    /** Clears every counter. Used by the readout reset and by tests, never by the scheduler. */
+    /** Clears every counter. */
     public void reset() {
         for (int index = 0; index < siteIds.length; index++) {
             observed[index].reset();
@@ -89,73 +66,48 @@ public final class WaitSiteReadings {
         convergenceCandidateTotal.reset();
     }
 
-    /** @return identities of the call sites, in the order the seam numbers them */
     public String[] siteIds() {
         return siteIds.clone();
     }
 
-    /** @return how many sites the readings cover */
     public int siteCount() {
         return siteIds.length;
     }
 
-    /**
-     * Returns how many waits one site produced.
-     *
-     * @param siteIndex index of the site
-     * @return the number of observed waits, zero when it never waited
-     */
+    /** Returns how many waits one site produced. */
     public long observed(int siteIndex) {
         return siteIndex >= 0 && siteIndex < siteIds.length ? observed[siteIndex].sum() : 0L;
     }
 
-    /**
-     * Returns the longest wait one site produced.
-     *
-     * @param siteIndex index of the site
-     * @return the longest wait in milliseconds, zero when it never waited
-     */
+    /** Returns the longest wait one site produced. */
     public long maxMs(int siteIndex) {
         return siteIndex >= 0 && siteIndex < siteIds.length ? maxMs.get(siteIndex) : 0L;
     }
 
-    /**
-     * Returns how many waits of one site crossed a host tick.
-     *
-     * @param siteIndex index of the site
-     * @return the number of waits longer than one tick
-     */
+    /** Returns how many waits of one site crossed a host tick. */
     public long overOneTick(int siteIndex) {
         return siteIndex >= 0 && siteIndex < siteIds.length ? overOneTick[siteIndex].sum() : 0L;
     }
 
-    /**
-     * Returns how many waits of one site would have entered a forced materialization convergence.
-     *
-     * @param siteIndex index of the site
-     * @return the number of waits over the configured upper bound
+    /** Returns how many waits of one site would have entered a forced materialization convergence.
      */
     public long convergenceCandidates(int siteIndex) {
         return siteIndex >= 0 && siteIndex < siteIds.length
             ? convergenceCandidates[siteIndex].sum() : 0L;
     }
 
-    /** @return every observed wait, across all sites */
     public long observedTotal() {
         return observedTotal.sum();
     }
 
-    /** @return every wait longer than one host tick, across all sites */
     public long overOneTickTotal() {
         return overOneTickTotal.sum();
     }
 
-    /** @return every wait that crossed the configured upper bound, across all sites */
     public long convergenceCandidateTotal() {
         return convergenceCandidateTotal.sum();
     }
 
-    /** @return the longest wait observed at any site, in milliseconds */
     public long maxMs() {
         long max = 0L;
         for (int index = 0; index < siteIds.length; index++) {

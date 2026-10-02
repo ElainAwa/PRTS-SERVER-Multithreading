@@ -10,16 +10,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
-/**
- * What one process's dispatch did, published as proposed readings rather than an approved counter
- * table.
- *
- * <p>Every value is readable at zero, which is what makes the switch-off leg a reading instead of an
- * absence: the same line is rendered with the pool never created and every count at zero. The
- * per-thread counts are the thread-identity evidence - a batch that ran on a worker is counted under
- * that worker's name - and the closure flag is the arithmetic that proves the five statuses account
- * for every dispatched batch.</p>
- */
+/** Every value is readable at zero, which is what makes the switch-off leg a reading instead of an
+ * absence: the same line is rendered with the pool never created and every count at zero. */
 public final class DispatchReadings {
 
     private final LongAdder tasksTotal = new LongAdder();
@@ -82,7 +74,6 @@ public final class DispatchReadings {
         lastPlanTasks = count;
     }
 
-    /** @return the task count of the most recently frozen plan */
     public int lastPlanTasks() {
         return lastPlanTasks;
     }
@@ -98,11 +89,7 @@ public final class DispatchReadings {
         execByThread.computeIfAbsent(threadName, key -> new LongAdder()).increment();
     }
 
-    /**
-     * Counts one terminal outcome.
-     *
-     * @param outcome the outcome to count
-     */
+    /** Counts one terminal outcome. */
     public void noteOutcome(TaskOutcome outcome) {
         switch (outcome.status()) {
             case EXECUTED -> executed.increment();
@@ -127,61 +114,34 @@ public final class DispatchReadings {
         tasksOnMain.increment();
     }
 
-    /**
-     * Counts the time the tick thread spent recomputing one batch itself.
-     *
-     * <p>This is the fallback row and nothing else: a batch the worker did not answer is computed
-     * here, in its own position of the frozen order. The equivalence check of an answered batch is
-     * a different job and is counted by {@link #noteVerify(long)}, so a reading of this row is a
-     * statement about fallbacks rather than about the cost of the check.</p>
-     *
-     * @param nanos the duration
-     */
+    /** Counts the time the tick thread spent recomputing one batch itself. This is the fallback
+     * row and nothing else: a batch the worker did not answer is computed here, in its own
+     * position of the frozen order. */
     public void noteRedo(long nanos) {
         if (nanos > 0L) {
             redoNanos.add(nanos);
         }
     }
 
-    /**
-     * Counts the time the tick thread spent checking what a worker answered.
-     *
-     * <p>The check runs in the merge of the tick the frame belongs to and on the thread that owns
+    /** The check runs in the merge of the tick the frame belongs to and on the thread that owns
      * the tick, so it is main-thread work of the entity domain like the fallback; keeping the two
-     * in one row is what left the cost of the check unreadable.</p>
-     *
-     * @param nanos the duration
-     */
+     * in one row is what left the cost of the check unreadable. */
     public void noteVerify(long nanos) {
         if (nanos > 0L) {
             verifyNanos.add(nanos);
         }
     }
 
-    /**
-     * Counts the time the tick thread spent waiting for and merging the frame.
-     *
-     * <p>It is the wait for the workers plus the frozen-order walk and the two hashes. The wait is
-     * deliberately not added to any self class row: a wait is not work the entity domain did, and
-     * the class rows are where the share of the tick is accounted.</p>
-     *
-     * @param nanos the duration
-     */
+    /** It is the wait for the workers plus the frozen-order walk and the two hashes. */
     public void noteCompute(long nanos) {
         if (nanos > 0L) {
             computeNanos.add(nanos);
         }
     }
 
-    /**
-     * Counts the rows one batch check folded.
-     *
-     * <p>The rows are what the check's time is spent on, so a window that reports the check and its
-     * rows can be read as a cost per row instead of as a total that depends on how long the window
-     * happened to be.</p>
-     *
-     * @param rows the rows of the batch the check folded
-     */
+    /** Counts the rows one batch check folded. The rows are what the check's time is spent on, so
+     * a window that reports the check and its rows can be read as a cost per row instead of as a
+     * total that depends on how long the window happened to be. */
     public void noteVerifyRows(int rows) {
         if (rows > 0) {
             verifyRows.add(rows);
@@ -207,13 +167,7 @@ public final class DispatchReadings {
         }
     }
 
-    /**
-     * Counts one write-back payload the commit applied.
-     *
-     * @param written entities the payload wrote
-     * @param gone    entities the payload found gone
-     * @param nanos   the time the application took
-     */
+    /** Counts one write-back payload the commit applied. */
     public void noteWriteBack(int written, int gone, long nanos) {
         writeBackBatches.increment();
         writeBackRows.add(written);
@@ -235,12 +189,7 @@ public final class DispatchReadings {
         writeBackRefused.increment();
     }
 
-    /**
-     * Counts the rows of one commit the takeover boundary decided about.
-     *
-     * @param identical rows the world already held bit for bit and the leg left untouched
-     * @param kept      rows that differed and stayed with the host path
-     */
+    /** Counts the rows of one commit the takeover boundary decided about. */
     public void noteWriteBackIdentity(int identical, int kept) {
         if (identical > 0) {
             writeBackIdentical.add(identical);
@@ -250,24 +199,14 @@ public final class DispatchReadings {
         }
     }
 
-    /**
-     * Counts the rows one read back left out because the takeover boundary kept them.
-     *
-     * @param kept rows the world was not asked about
-     */
+    /** Counts the rows one read back left out because the takeover boundary kept them. */
     public void noteReadBackKept(int kept) {
         if (kept > 0) {
             readBackKept.add(kept);
         }
     }
 
-    /**
-     * Counts one read back of a committed frame.
-     *
-     * @param rows  rows the world still held
-     * @param gone  rows whose entity was no longer in its level
-     * @param equal whether the world held exactly the values the frame committed
-     */
+    /** Counts one read back of a committed frame. */
     public void noteReadBack(int rows, int gone, boolean equal) {
         readBackPairs.increment();
         readBackRows.add(rows);
@@ -340,11 +279,7 @@ public final class DispatchReadings {
         queuePeak.accumulateAndGet(depth, Math::max);
     }
 
-    /**
-     * Records one comparison of the two arms.
-     *
-     * @param equal whether the two hashes were equal
-     */
+    /** Records one comparison of the two arms. */
     public void noteHashPair(boolean equal) {
         hashPairs.increment();
         if (equal) {
@@ -362,7 +297,6 @@ public final class DispatchReadings {
         hashInconsistent.increment();
     }
 
-    /** @return committed frames whose hash no longer matched */
     public long hashInconsistent() {
         return hashInconsistent.sum();
     }
@@ -372,47 +306,38 @@ public final class DispatchReadings {
         planClockReads.incrementAndGet();
     }
 
-    /** @return the clock reads planning performed; must stay zero */
     public long planClockReads() {
         return planClockReads.get();
     }
 
-    /** @return the tasks frozen since the last reset */
     public long tasksTotal() {
         return tasksTotal.sum();
     }
 
-    /** @return the batches dispatched since the last reset */
     public long dispatched() {
         return dispatched.sum();
     }
 
-    /** @return the batches a worker executed */
     public long executed() {
         return executed.sum();
     }
 
-    /** @return the batches a retryable fault ended early */
     public long retried() {
         return retried.sum();
     }
 
-    /** @return the batches a non-retryable fault ended early */
     public long fellback() {
         return fellback.sum();
     }
 
-    /** @return the batches the deadline cancelled */
     public long cancelled() {
         return cancelled.sum();
     }
 
-    /** @return the batches whose worker died */
     public long failed() {
         return failed.sum();
     }
 
-    /** @return the late results that were dropped and counted */
     public long lateResultDropped() {
         return lateResultDropped.sum();
     }
@@ -421,27 +346,22 @@ public final class DispatchReadings {
         return lateEpochDropped.sum();
     }
 
-    /** @return the batches refused by a full queue */
     public long backpressure() {
         return backpressure.sum();
     }
 
-    /** @return the deadlines that cancelled at least one batch */
     public long timeouts() {
         return timeouts.sum();
     }
 
-    /** @return the duplicate commits that were refused */
     public long duplicateCommit() {
         return duplicateCommit.sum();
     }
 
-    /** @return the drops that carried no code */
     public long droppedWithoutCode() {
         return droppedWithoutCode.sum();
     }
 
-    /** @return the pools that could not be opened */
     public long poolOpenFailed() {
         return poolOpenFailed.sum();
     }
@@ -462,87 +382,70 @@ public final class DispatchReadings {
         return shutdownDropped.sum();
     }
 
-    /** @return the worker threads started */
     public long threadsStarted() {
         return threadsStarted.sum();
     }
 
-    /** @return the worker threads retired */
     public long threadsRetired() {
         return threadsRetired.sum();
     }
 
-    /** @return the nanoseconds workers spent in batch bodies */
     public long entityNanos() {
         return entityNanos.sum();
     }
 
-    /** @return the batches the tick thread had to compute itself */
     public long tasksOnMain() {
         return tasksOnMain.sum();
     }
 
-    /** @return the nanoseconds the tick thread spent recomputing batches itself */
     public long redoNanos() {
         return redoNanos.sum();
     }
 
-    /** @return the nanoseconds the tick thread spent checking what the workers answered */
     public long verifyNanos() {
         return verifyNanos.sum();
     }
 
-    /** @return the nanoseconds the tick thread spent waiting for and merging the frame */
     public long computeNanos() {
         return computeNanos.sum();
     }
 
-    /** @return the rows the checks folded */
     public long verifyRows() {
         return verifyRows.sum();
     }
 
-    /** @return the batches the check refused and the tick thread recomputed */
     public long verifyMismatch() {
         return verifyMismatch.sum();
     }
 
-    /** @return the nanoseconds the tick thread spent recomputing and checking batches itself */
     public long entityNanosMain() {
         return redoNanos() + verifyNanos();
     }
 
-    /** @return the nanoseconds the tick thread spent computing the serial arm */
     public long entityNanosSerialArm() {
         return entityNanosSerialArm.sum();
     }
 
-    /** @return the nanoseconds the tick thread spent reading the entity candidates */
     public long snapshotNanos() {
         return snapshotNanos.sum();
     }
 
-    /** @return the nanoseconds the commit spent applying write-back payloads */
     public long writeBackNanos() {
         return writeBackNanos.sum();
     }
 
-    /** @return the write-back payloads the commit applied */
     public long writeBackBatches() {
         return writeBackBatches.sum();
     }
 
-    /** @return the rows handed to the intent channel for writing back */
     public long writeBackEnqueued() {
         return writeBackRows.sum();
     }
 
-    /** @return the rows the write-back found gone from their level */
     public long writeBackGone() {
         return writeBackGone.sum();
     }
 
-    /** @return the batches whose write-back the channel refused */
     public long writeBackRefused() {
         return writeBackRefused.sum();
     }
@@ -555,78 +458,60 @@ public final class DispatchReadings {
         return writeBackNoRows.sum();
     }
 
-    /** @return the rows the takeover boundary found already held by the world */
     public long writeBackIdentical() {
         return writeBackIdentical.sum();
     }
 
-    /** @return the rows the takeover boundary left with the host path */
     public long writeBackKept() {
         return writeBackKept.sum();
     }
 
-    /** @return the committed frames the world was asked about */
     public long readBackPairs() {
         return readBackPairs.sum();
     }
 
-    /** @return the committed frames the world still held exactly */
     public long readBackEqual() {
         return readBackEqual.sum();
     }
 
-    /** @return the rows the read back compared */
     public long readBackRows() {
         return readBackRows.sum();
     }
 
-    /** @return the rows whose entity was gone when the read back looked */
     public long readBackGone() {
         return readBackGone.sum();
     }
 
-    /** @return the rows the takeover boundary left out of the read back */
     public long readBackKept() {
         return readBackKept.sum();
     }
 
-    /** @return the pairs of hashes compared */
     public long hashPairs() {
         return hashPairs.sum();
     }
 
-    /** @return the pairs of hashes that were equal */
     public long hashEqual() {
         return hashEqual.sum();
     }
 
-    /** @return the mismatches the descent could not place */
     public long forkUnattributed() {
         return forkUnattributed.sum();
     }
 
-    /** @return the queue depth of the last submission */
     public int queueDepth() {
         return queueDepth.get();
     }
 
-    /** @return the high-water mark of the queue depth */
     public int queuePeak() {
         return queuePeak.get();
     }
 
-    /**
-     * Answers the executions one worker thread performed.
-     *
-     * @param threadName the thread name, for example the pool prefix and its index
-     * @return the executions, or zero when that thread never ran a batch
-     */
+    /** Answers the executions one worker thread performed. */
     public long execByThread(String threadName) {
         LongAdder adder = execByThread.get(threadName);
         return adder == null ? 0L : adder.sum();
     }
 
-    /** @return a stable copy of the per-thread execution counts */
     public synchronized Map<String, Long> execByThreadSnapshot() {
         execSnapshot.clear();
         for (Map.Entry<String, LongAdder> entry : new TreeMap<>(execByThread).entrySet()) {
@@ -635,38 +520,17 @@ public final class DispatchReadings {
         return Map.copyOf(execSnapshot);
     }
 
-    /**
-     * The values of one window that belong to the segments the dispatcher does not own.
-     *
-     * <p>The line is exported at one moment, so the commit cursor, the channel depth and the self row
-     * are read here rather than assembled from several moments afterwards. That is what lets the
-     * closure of the write-back leg - the tasks the plan froze, the orders the commit consumed and the
-     * rows the world was asked about - be read as one statement instead of a join a reader would have
-     * to make.</p>
-     *
-     * @param threadsAlive   how many worker threads are alive right now
-     * @param closureOk      whether both closures held for the last tick
-     * @param commitCursor   the orders the commit segment consumed
-     * @param intentPending  intents still waiting in the channel
-     * @param orderViolations commits refused because the frozen order did not match
-     * @param selfEntityMs   the entity row of the self timer, in milliseconds
-     */
+    /** The line is exported at one moment, so the commit cursor, the channel depth and the self
+     * row are read here rather than assembled from several moments afterwards. */
     public record Window(int threadsAlive, boolean closureOk, long commitCursor, int intentPending,
                          long orderViolations, double selfEntityMs) {
 
-        /** @return a window of a process that never dispatched */
         public static Window idle() {
             return new Window(0, true, 0L, 0, 0L, 0.0);
         }
     }
 
-    /**
-     * Renders the evidence line of one window.
-     *
-     * @param arena  the arena ledger the line reports with
-     * @param window the values of the segments next to the dispatcher
-     * @return the line, with every value present even when it is zero
-     */
+    /** Renders the evidence line of one window. */
     public String evidenceLine(ArenaLedger arena, Window window) {
         int threadsAlive = window.threadsAlive();
         boolean closureOk = window.closureOk();

@@ -21,31 +21,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
-/**
- * The write right decision, reached from the write paths the host actually runs.
- *
- * <p>The host thread writing its own world takes the short path: one volatile read, one identity
- * compare and two counter cells, with nothing allocated and no record built. Every other writer -
- * another thread, or a thread nobody declared - takes the long path, where the attempt is named,
- * judged and remembered as the last decision of the readout.</p>
- *
- * <p>The long path never changes what a write does while enforcement and routing are off: an
- * attempt the decision point refuses is counted with its code and the write still proceeds. With
- * enforcement on the same attempt is refused for real. With routing on an undeclared write is handed
- * to the intent channel instead of being written: the channel freezes it where it arrives, and the
- * commit segment applies it when its own switch is on - while that switch is off the intent waits in
- * the channel and the depth says so.</p>
- *
- * <p>Applying a deferred write is a main thread act, and the guard enforces that instead of trusting
- * it: a thread that is not the bound server thread is refused with a code and a count, and the write
- * it carried is not performed. The same act re-checks the world generation the intent was frozen
- * under, so a write whose world has been unloaded or rebuilt since it was routed is refused with a
- * lifecycle code instead of being applied to an object that no longer is the world it names.</p>
- *
- * <p>Nothing here registers a thread on its own. An undeclared thread is remembered per thread so
- * classifying it stays allocation free, and that memory is deliberately kept outside the site
- * registry: the registry must not grow just because a thread appeared.</p>
- */
+/** The host thread writing its own world takes the short path: one volatile read, one identity
+ * compare and two counter cells, with nothing allocated and no record built. */
 public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, IntentPayload {
 
     private final WritePathCounters counters;
@@ -72,15 +49,7 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
     private volatile long tickIndex;
     private volatile WriteDecision lastDecision;
 
-    /**
-     * Creates the guard.
-     *
-     * @param counters the per-path accounting
-     * @param authority the decision point the long path asks
-     * @param intents the controlled channel a handed-over write is frozen into
-     * @param payloads the store of handed-over writes
-     * @param ledger the ledger refusal codes are counted in
-     */
+    /** Creates the guard. */
     public WorldWriteGuard(WritePathCounters counters, WriteAuthority authority, IntentQueue intents,
                            IntentPayloadDirectory payloads, WriteLedger ledger) {
         this.counters = counters;
@@ -90,18 +59,9 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
         this.ledger = ledger;
     }
 
-    /**
-     * Applies the switches the guard reads on every attempt.
-     *
-     * <p>Routing is read here on its own: a routed write is frozen into the intent channel whether or
-     * not the segment is walking, so the two switches answer different questions - which writes are
-     * deferred, and when a deferred write lands.</p>
-     *
-     * @param active       whether the write paths should judge at all
-     * @param enforce      whether an undeclared writer is refused instead of recorded
-     * @param routeIntents whether an undeclared write is handed to the intent channel
-     * @param tickIndex    tick the next attempts belong to
-     */
+    /** Routing is read here on its own: a routed write is frozen into the intent channel whether
+     * or not the segment is walking, so the two switches answer different questions - which writes
+     * are deferred, and when a deferred write lands. */
     public void refresh(boolean active, boolean enforce, boolean routeIntents, long tickIndex) {
         this.active = active;
         this.enforce = enforce;
@@ -109,64 +69,44 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
         this.tickIndex = tickIndex;
     }
 
-    /**
-     * Records the worlds the platform reports as live, so a deferred write can be checked against the
-     * world it was frozen for.
-     *
-     * @param worldIds the live worlds, in the order the platform lists them
-     */
+    /** Records the worlds the platform reports as live, so a deferred write can be checked against
+     * the world it was frozen for. */
     public void noteLiveWorlds(List<String> worldIds) {
         epochs.observe(worldIds);
     }
 
-    /** @return the world generations this guard checks deferred writes against */
     public WorldEpochs worldEpochs() {
         return epochs;
     }
 
-    /** @return whether the write paths judge at all */
     public boolean active() {
         return active;
     }
 
-    /** @return whether an undeclared writer is refused rather than recorded */
     public boolean enforcing() {
         return enforce;
     }
 
-    /** @return whether an undeclared write is handed to the intent channel */
     public boolean routing() {
         return routing;
     }
 
-    /**
-     * Names the thread the host ticks the server on.
-     *
-     * @param thread the server thread
-     * @param siteId the site identity its writes are counted under
-     */
+    /** Names the thread the host ticks the server on. */
     public void bindServerThread(Thread thread, String siteId) {
         this.serverHolder = HolderIdentity.registered(siteId);
         this.serverThread = thread;
     }
 
-    /** @return whether the server thread was named */
     public boolean serverThreadBound() {
         return serverThread != null;
     }
 
-    /**
-     * Declares a thread as a registered site.
-     *
-     * @param thread the thread
-     * @param kind   the holder kind its writes are judged as
-     * @param siteId the site identity
-     */
+    /** Declares a thread as a registered site. */
     public void registerHolder(Thread thread, HolderKind kind, String siteId) {
         declared.put(thread, new HolderIdentity(kind, siteId));
     }
 
-    /** Forgets every declared thread. Used by tests. */
+    /** Forgets every declared thread. */
     public void clearDeclaredHolders() {
         declared.clear();
     }
@@ -268,42 +208,35 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
         payloads.release(intent);
     }
 
-    /** @return the per-path accounting */
     public WritePathCounters counters() {
         return counters;
     }
 
-    /** @return the store of handed-over writes */
     public IntentPayloadDirectory payloads() {
         return payloads;
     }
 
-    /** @return the last decision a write path took, or {@code null} when none was taken */
     public WriteDecision lastDecision() {
         return lastDecision;
     }
 
-    /** @return threads that were classified without ever being declared */
     public long undeclaredThreads() {
         return undeclaredThreads.sum();
     }
 
-    /** @return threads that were declared as a site */
     public int declaredHolders() {
         return declared.size();
     }
 
-    /** @return commits attempted from a thread that is not the bound server thread */
     public long foreignCommits() {
         return foreignCommits.sum();
     }
 
-    /** @return deferred writes refused because their world was gone or rebuilt */
     public long staleWorldRefusals() {
         return staleWorldRefusals.sum();
     }
 
-    /** Clears the live counters. Used by the readout reset and by tests. */
+    /** Clears the live counters. */
     public void resetReadings() {
         counters.reset();
         nextAttemptId.set(1L);
@@ -318,14 +251,6 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
         return holder == null ? undeclared.get() : holder;
     }
 
-    /**
-     * Hands one write to the intent channel.
-     *
-     * <p>The channel freezes the order itself, so this side only names the write: an attempt refused
-     * at the depth limit leaves no gap behind it, and the cursor of the commit segment can never meet
-     * an order nobody ever queued. The world generation read here is the one the commit will compare
-     * against, so a world that changes between the two is refused rather than written to.</p>
-     */
     private RejectCode handOver(WritePath path, ThreadOrigin origin, HolderIdentity holder,
                                 String worldId, PrtsWorldWriteTaps.DeferredWrite deferred) {
         String handle = payloads.bind(path.key(), deferred);
@@ -350,5 +275,39 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
             .worldEpoch(epochs.epochOf(worldId))
             .admitted(true)
             .build();
+    }
+
+    /** Who is writing, as the write paths see them. A holder is a registered site, the kernel itself,
+     * or a thread nobody ever declared. */
+    public record HolderIdentity(HolderKind kind, String siteId) {
+
+        public HolderIdentity {
+            if (kind == null || siteId == null) {
+                throw new IllegalArgumentException("a holder needs a kind and a site identity");
+            }
+        }
+
+        public static HolderIdentity registered(String siteId) {
+            return new HolderIdentity(HolderKind.REGISTERED, siteId);
+        }
+
+        public static HolderIdentity unregistered(String siteId) {
+            return new HolderIdentity(HolderKind.UNREGISTERED, siteId);
+        }
+
+        public static HolderIdentity kernel(String siteId) {
+            return new HolderIdentity(HolderKind.KERNEL, siteId);
+        }
+
+        public boolean registered() {
+            return kind == HolderKind.REGISTERED || kind == HolderKind.KERNEL;
+        }
+    }
+
+    /** The last decision a write path took, kept for a reader of the readout. The five elements a
+     * diagnosis needs are here: the code, the site, the thread, the world and the tick. */
+    public record WriteDecision(WritePath path, ThreadOrigin origin, HolderKind holder,
+                                WriteDisposition disposition, RejectCode code, String siteId,
+                                String threadRef, String worldId, long tickIndex) {
     }
 }

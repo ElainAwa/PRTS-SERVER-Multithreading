@@ -4,7 +4,7 @@ package io.izzel.arclight.common.prts.kernel.observe;
 import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
-import io.izzel.arclight.common.prts.kernel.meter.MeterWindow;
+import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.MeterWindow;
 import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
 import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
 import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
@@ -16,30 +16,15 @@ import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * The compact kernel section the status command shows.
- *
- * <p>The section is a summary, not a second source of numbers: every value here is the same value
- * the full export publishes, so a reader can move between the two without meeting a different
- * count. The last line states that the fields are observation requests rather than an approved
- * counter table.</p>
- *
- * <p>The write path lines report what the real write paths did: how many attempts each of them
- * carried, how they left, and whether the per-path accounting closes. The intent line reports the
- * channel the same way: what was frozen into it, what the commit segment applied, and the mode the
- * segment is in - {@code hold} means nothing is consumed and the depth is what is waiting.</p>
- */
+/** The compact kernel section the status command shows. The section is a summary, not a second
+ * source of numbers: every value here is the same value the full export publishes, so a reader can
+ * move between the two without meeting a different count. */
 public final class KernelStatusLines {
 
     private KernelStatusLines() {
     }
 
-    /**
-     * Renders the status section.
-     *
-     * @param module the module to read
-     * @return the section lines, already prefixed
-     */
+    /** Renders the status section. */
     public static List<String> status(KernelModule module) {
         List<String> lines = new ArrayList<>();
         lines.add("[PRTS] kernel: category=" + KernelSettings.enabled()

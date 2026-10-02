@@ -11,47 +11,16 @@ import io.izzel.arclight.common.prts.kernel.diff.StateHasher;
 
 import java.util.ArrayList;
 import java.util.List;
+import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan.WorkTask;
 
-/**
- * The merge: the only place a dispatched result is accepted, on the thread that owns the tick.
- *
- * <p>The walk is the frozen order of the plan. A batch whose worker answered is committed once and
- * its slot is released after its values were read; a batch that was cancelled, retried, fell back,
- * lost its worker or answered with values the check refused is the tick thread's own in the same
- * position, so the order of the frame never depends on which worker was fast enough. A second commit
- * of one identity is refused and counted.</p>
- *
- * <p>The reference of a batch is computed here, in the batch's own position, and it is both the
- * serial arm the parallel frame is compared with and the side the worker's answer is judged against;
- * a batch the check refuses is redone from that same computation instead of a second one. The
- * comparison is a reader: it can refuse to call two arms equal, never make them equal.</p>
- *
- * <p>What the frame becomes is the settlement's decision and it is taken here, in the merge of the
- * tick the frame belongs to: the compute-only settlement reads the world back and lands nothing, so
- * the state stays with the host; the takeover settlement hands the batch to the intent channel. No
- * settlement carries a frame into a later tick.</p>
- */
+/** The walk is the frozen order of the plan. */
 public final class MergeSegment {
 
-    /**
-     * What one merge produced.
-     *
-     * @param tickIndex    the tick the frame belongs to
-     * @param commitSeq    how many batches were committed since the segment was created
-     * @param committed    batches committed in this frame
-     * @param redone       batches the tick thread had to redo
-     * @param cancelled    batches the deadline cancelled
-     * @param failed       batches whose worker died
-     * @param closureOk    whether both closures held for this tick
-     * @param parallelHash the hash of the parallel frame
-     * @param serialHash   the hash of the serial reference
-     * @param hashEqual    whether the two hashes were equal
-     */
+    /** What one merge produced. */
     public record Frame(long tickIndex, long commitSeq, int committed, int redone, int cancelled,
                         int failed, boolean closureOk, long parallelHash, long serialHash,
                         boolean hashEqual) {
 
-        /** @return a frame no merge produced */
         public static Frame empty() {
             return new Frame(-1L, 0L, 0, 0, 0, 0, true, 0L, 0L, false);
         }
@@ -63,30 +32,14 @@ public final class MergeSegment {
     private long hashInconsistent;
     private List<StateHasher.Slice> lastCommitted = List.of();
 
-    /**
-     * Names the thread the segment may merge on.
-     *
-     * @param thread the thread that drives the tick
-     */
+    /** Names the thread the segment may merge on. */
     public void bindOwnerThread(Thread thread) {
         if (ownerThread == null) {
             ownerThread = thread;
         }
     }
 
-    /**
-     * Merges one dispatched pass.
-     *
-     * @param pass        the pass to merge
-     * @param deadlineNanos the monotonic instant the wait for the workers ends
-     * @param arena       the arena the slots were claimed from
-     * @param readings    where the merge publishes
-     * @param probe       the comparison of the two arms
-     * @param whitelist   the fields the frame hash folds
-     * @param domainId    the domain the frame belongs to
-     * @param writeBack   the write-back leg, or {@code null} when the merge is not wired to one
-     * @return the frame, or {@code null} when the calling thread is not the owner
-     */
+    /** Merges one dispatched pass. */
     public Frame merge(DispatchPass pass, long deadlineNanos, ArenaLedger arena,
                        DispatchReadings readings, DiffProbe probe, HashWhitelist whitelist,
                        String domainId, DispatchWriteBack writeBack) {
@@ -245,12 +198,10 @@ public final class MergeSegment {
         }
     }
 
-    /** @return merges refused because the calling thread was not the owner */
     public long foreignRuns() {
         return foreignRuns;
     }
 
-    /** @return committed-frame hashes that no longer matched when re-taken */
     public long hashInconsistent() {
         return hashInconsistent;
     }

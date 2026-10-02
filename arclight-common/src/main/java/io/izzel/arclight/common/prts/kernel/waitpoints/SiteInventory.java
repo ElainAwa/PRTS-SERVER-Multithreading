@@ -8,32 +8,18 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAdder;
 
-/**
- * The explicit list of call sites a wait can happen at, and what covers each one.
- *
- * <p>The list is written down rather than discovered: a site appears here with the class, the
+/** The list is written down rather than discovered: a site appears here with the class, the
  * method, the part of the tick it runs in, the time-budget row its work belongs to, and its own
- * copy of the four elements. Registering one is the only way it can be counted as covered, so the
- * coverage report states a fact about a list instead of a guess about a jar.</p>
- *
- * <p>Sites seen at run time are noted separately. One that no row covers is listed, never refused:
- * this layer observes coverage, it does not block a wait for being undocumented.</p>
- */
+ * copy of the four elements. */
 public final class SiteInventory {
 
-    /** One entry of the written-down list. */
     private record Row(String siteId, String wpId, String classRef, String methodRef,
                        String tickPhase, String shareClass, String producer, String signalField,
                        String timeoutAction, String degradeTo, String evidence) {
     }
 
-    /**
-     * The timeout action that a forced materialization convergence would carry out.
-     *
-     * <p>A site whose row names it is one where a wait over the configured bound would have entered
-     * that action, had this build been allowed to run one. The constant is published so the reader
-     * of the wait observations asks the same question the list answers.</p>
-     */
+    /** A site whose row names it is one where a wait over the configured bound would have entered
+     * that action, had this build been allowed to run one. */
     public static final String FORCED_MATERIALIZATION = "forced materialization convergence";
 
     private static final String CHUNK_SOURCE = "chunk materialization pipeline";
@@ -134,12 +120,7 @@ public final class SiteInventory {
         }
     }
 
-    /**
-     * Registers one call site.
-     *
-     * @param site the site
-     * @return the stored site, a duplicate refusal, or the element that is missing
-     */
+    /** Registers one call site. */
     public synchronized SiteRegisterResult register(WaitSite site) {
         if (site == null || site.siteId() == null || site.siteId().isBlank()) {
             return new SiteRegisterResult.MissingElement(
@@ -156,33 +137,22 @@ public final class SiteInventory {
         return new SiteRegisterResult.Ok(site);
     }
 
-    /**
-     * Notes a call site seen at run time.
-     *
-     * @param siteId identity of the site
-     */
+    /** Notes a call site seen at run time. */
     public void noteObserved(String siteId) {
         if (siteId != null && !siteId.isBlank()) {
             observed.computeIfAbsent(siteId, ignored -> new LongAdder()).increment();
         }
     }
 
-    /**
-     * Looks a site up.
-     *
-     * @param siteId identity of the site
-     * @return the site, or {@code null}
-     */
+    /** Looks a site up. */
     public synchronized WaitSite lookup(String siteId) {
         return siteId == null ? null : sites.get(siteId);
     }
 
-    /** @return the registered sites, in the order they were written down */
     public synchronized List<WaitSite> sites() {
         return List.copyOf(sites.values());
     }
 
-    /** @return sites that are registered but miss one of the four elements; always empty here */
     public synchronized List<String> pendingElements() {
         List<String> pending = new ArrayList<>();
         for (WaitSite site : sites.values()) {
@@ -193,7 +163,6 @@ public final class SiteInventory {
         return pending;
     }
 
-    /** @return call sites the list stands for */
     public synchronized int callSites() {
         int total = 0;
         for (WaitSite site : sites.values()) {
@@ -202,7 +171,6 @@ public final class SiteInventory {
         return total;
     }
 
-    /** @return call sites seen at run time that the list does not cover */
     public synchronized List<String> observedWithoutRow() {
         List<String> unknown = new ArrayList<>();
         for (String siteId : observed.keySet()) {
@@ -214,7 +182,6 @@ public final class SiteInventory {
         return unknown;
     }
 
-    /** @return identities of the sites seen at run time */
     public synchronized List<String> observedIds() {
         List<String> ids = new ArrayList<>(observed.keySet());
         ids.sort(String::compareTo);
@@ -226,5 +193,23 @@ public final class SiteInventory {
             row.tickPhase(), row.shareClass(), row.producer(),
             new Dec19Elements.ProgressSignal(Dec19Elements.SignalKind.COUNT, row.signalField()),
             row.timeoutAction(), row.degradeTo(), row.evidence(), 1);
+    }
+
+    /** The same three outcomes a wait point row has, and the same rule: a site missing one of the four
+     * elements is named and refused, never stored, so the coverage report can trust every row it
+     * counts and can list what is still missing. */
+    public sealed interface SiteRegisterResult {
+
+        /** The site was stored. */
+        record Ok(WaitSite site) implements SiteRegisterResult {
+        }
+
+        /** The identity is already registered. */
+        record DuplicateSiteId(String siteId) implements SiteRegisterResult {
+        }
+
+        /** One of the four elements is missing. */
+        record MissingElement(String siteId, String which) implements SiteRegisterResult {
+        }
     }
 }

@@ -6,17 +6,8 @@ import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
 
 import java.util.concurrent.atomic.AtomicLongArray;
 
-/**
- * Counts every attempt a real write path makes, by point, thread and holder.
- *
- * <p>The counters are a flat array of plain long cells, so counting one attempt is a comparison and
- * an atomic add: no map lookup, no key string, nothing to allocate. That is what lets the short
- * path of the hot write path stay free of allocation.</p>
- *
- * <p>An attempt is counted when it enters and the disposition when it leaves, in two cells. A pair
- * whose three dispositions do not add up to its attempts therefore means a verdict was lost on the
- * way, which is exactly the failure the accounting check exists to see.</p>
- */
+/** The counters are a flat array of plain long cells, so counting one attempt is a comparison and
+ * an atomic add: no map lookup, no key string, nothing to allocate. */
 public final class WritePathCounters {
 
     private static final int ORIGIN_COUNT = ThreadOrigin.values().length;
@@ -30,13 +21,7 @@ public final class WritePathCounters {
     private final AtomicLongArray inFlight = new AtomicLongArray(PAIR_COUNT);
     private final AtomicLongArray versions = new AtomicLongArray(PAIR_COUNT);
 
-    /**
-     * Counts an attempt as it enters a write point.
-     *
-     * @param path   the write point
-     * @param origin thread the attempt came from
-     * @param holder where the writer comes from
-     */
+    /** Counts an attempt as it enters a write point. */
     public void noteAttempt(WritePath path, ThreadOrigin origin, HolderKind holder) {
         int index = pairIndex(path, origin, holder);
         // The update is bracketed: a reader that sees an even version on both sides of its reads saw a
@@ -47,14 +32,7 @@ public final class WritePathCounters {
         versions.incrementAndGet(index);
     }
 
-    /**
-     * Counts how an attempt left.
-     *
-     * @param path        the write point
-     * @param origin      thread the attempt came from
-     * @param holder      where the writer comes from
-     * @param disposition how the attempt left
-     */
+    /** Counts how an attempt left. */
     public void noteVerdict(WritePath path, ThreadOrigin origin, HolderKind holder,
                             WriteDisposition disposition) {
         int index = pairIndex(path, origin, holder);
@@ -64,15 +42,8 @@ public final class WritePathCounters {
         versions.incrementAndGet(index);
     }
 
-    /**
-     * Counts an attempt whose verdict will never arrive.
-     *
-     * <p>The pair then reads as a missing counter rather than staying in flight forever.</p>
-     *
-     * @param path   the write point
-     * @param origin thread the attempt came from
-     * @param holder where the writer comes from
-     */
+    /** Counts an attempt whose verdict will never arrive. The pair then reads as a missing counter
+     * rather than staying in flight forever. */
     public void noteUnjudged(WritePath path, ThreadOrigin origin, HolderKind holder) {
         int index = pairIndex(path, origin, holder);
         versions.incrementAndGet(index);
@@ -80,38 +51,18 @@ public final class WritePathCounters {
         versions.incrementAndGet(index);
     }
 
-    /**
-     * Returns the attempts one pair saw.
-     *
-     * @param path   the write point
-     * @param origin thread the attempts came from
-     * @param holder where the writers come from
-     * @return the attempt count
-     */
+    /** Returns the attempts one pair saw. */
     public long attempts(WritePath path, ThreadOrigin origin, HolderKind holder) {
         return attempts.get(pairIndex(path, origin, holder));
     }
 
-    /**
-     * Returns one disposition count.
-     *
-     * @param path        the write point
-     * @param origin      thread the attempts came from
-     * @param holder      where the writers come from
-     * @param disposition the disposition to read
-     * @return the count of that disposition
-     */
+    /** Returns one disposition count. */
     public long count(WritePath path, ThreadOrigin origin, HolderKind holder,
                       WriteDisposition disposition) {
         return verdicts.get(verdictIndex(path, origin, holder, disposition));
     }
 
-    /**
-     * Returns all attempts at one write point.
-     *
-     * @param path the write point
-     * @return the attempt count over every thread and holder
-     */
+    /** Returns all attempts at one write point. */
     public long attemptsAt(WritePath path) {
         long total = 0L;
         for (int origin = 0; origin < ORIGIN_COUNT; origin++) {
@@ -122,12 +73,7 @@ public final class WritePathCounters {
         return total;
     }
 
-    /**
-     * Returns one disposition over every write point.
-     *
-     * @param disposition the disposition to read
-     * @return the count
-     */
+    /** Returns one disposition over every write point. */
     public long total(WriteDisposition disposition) {
         long total = 0L;
         for (int path = 0; path < WritePath.values().length; path++) {
@@ -141,7 +87,6 @@ public final class WritePathCounters {
         return total;
     }
 
-    /** @return every attempt counted, over all write points */
     public long totalAttempts() {
         long total = 0L;
         for (WritePath path : WritePath.values()) {
@@ -150,7 +95,6 @@ public final class WritePathCounters {
         return total;
     }
 
-    /** @return attempts whose holder was never declared */
     public long unregisteredAttempts() {
         long total = 0L;
         for (WritePath path : WritePath.values()) {
@@ -161,15 +105,9 @@ public final class WritePathCounters {
         return total;
     }
 
-    /**
-     * Recomputes the accounting of every pair.
-     *
-     * <p>An attempt that entered and whose verdict has not landed yet is subtracted first: a writer
-     * between the two cells is in flight, not lost, so a check that runs across a concurrent writer
-     * does not read a transient state as a missing counter.</p>
-     *
-     * @return {@code true} when every pair closes
-     */
+    /** An attempt that entered and whose verdict has not landed yet is subtracted first: a writer
+     * between the two cells is in flight, not lost, so a check that runs across a concurrent
+     * writer does not read a transient state as a missing counter. */
     public boolean closureHolds() {
         for (int path = 0; path < WritePath.values().length; path++) {
             for (int origin = 0; origin < ORIGIN_COUNT; origin++) {
@@ -198,7 +136,6 @@ public final class WritePathCounters {
         return true;
     }
 
-    /** @return attempts that entered a write point and whose verdict has not landed yet */
     public long inFlightAttempts() {
         long total = 0L;
         for (int index = 0; index < PAIR_COUNT; index++) {
@@ -207,12 +144,11 @@ public final class WritePathCounters {
         return total;
     }
 
-    /** @return the pairs the closing check walks */
     public int pairsChecked() {
         return PAIR_COUNT;
     }
 
-    /** Clears every counter. Used by the readout reset and by tests. */
+    /** Clears every counter. */
     public void reset() {
         for (int index = 0; index < attempts.length(); index++) {
             attempts.set(index, 0L);

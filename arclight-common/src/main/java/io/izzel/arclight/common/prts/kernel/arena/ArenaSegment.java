@@ -5,11 +5,9 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import io.izzel.arclight.common.prts.kernel.arena.ArenaSlot.SlotGeneration;
 
-/**
- * The slots of one region of one world. Every pin has exactly one release, and a release is judged
- * against the lease it was handed, so a slot already given to the next batch is never freed here.
- */
+/** The slots of one region of one world. */
 public final class ArenaSegment {
 
     private final SegmentRef ref;
@@ -21,22 +19,18 @@ public final class ArenaSegment {
         this.ref = ref;
     }
 
-    /** @return the identity of the segment */
     public SegmentRef ref() {
         return ref;
     }
 
-    /** @return the generation of the segment */
     public long generation() {
         return generation.value();
     }
 
-    /** @return how many slots the segment ever created */
     public int slotCount() {
         return slots.size();
     }
 
-    /** @return how many slots are owned by a batch right now */
     public int pinnedCount() {
         int pinned = 0;
         for (ArenaSlot slot : slots) {
@@ -47,18 +41,11 @@ public final class ArenaSegment {
         return pinned;
     }
 
-    /** @return the slots the segment created, in creation order */
     public synchronized java.util.List<ArenaSlot> slots() {
         return java.util.List.copyOf(slots);
     }
 
-    /**
-     * Hands a free slot to one batch.
-     *
-     * @param batchId  the batch that becomes the owner
-     * @param capacity how many entity rows the batch will write
-     * @return the claimed slot, or {@code null} when the batch cannot own one
-     */
+    /** Hands a free slot to one batch. */
     synchronized ArenaSlot claim(long batchId, int capacity) {
         ArenaSlot slot = free.poll();
         if (slot == null) {
@@ -72,13 +59,7 @@ public final class ArenaSegment {
         return slot;
     }
 
-    /**
-     * Releases one slot for reuse, if and only if the lease still owns it.
-     *
-     * @param lease          the lease the caller holds
-     * @param ownerConfirmed whether the owning batch has finished its body
-     * @return what the attempt did; a stale lease never changes the current owner
-     */
+    /** Releases one slot for reuse, if and only if the lease still owns it. */
     synchronized ArenaSlot.Release release(ArenaSlot.Lease lease, boolean ownerConfirmed) {
         if (lease == null) {
             return ArenaSlot.Release.STALE_LEASE;
@@ -98,5 +79,21 @@ public final class ArenaSegment {
             free.add(slot);
         }
         return result;
+    }
+
+    /** A segment is never shared across worlds: the same region name in another world is another
+     * segment, and a claim that names a different world is refused rather than reusing the buffer. */
+    public record SegmentRef(String worldId, String regionId, int segmentKind) {
+
+        /** Validates the segment identity. */
+        public SegmentRef {
+            if (worldId == null || worldId.isEmpty() || regionId == null || regionId.isEmpty()) {
+                throw new IllegalArgumentException("a segment needs a world and a region");
+            }
+        }
+
+        public String key() {
+            return worldId + "|" + regionId + "|" + segmentKind;
+        }
     }
 }

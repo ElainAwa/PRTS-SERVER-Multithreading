@@ -11,26 +11,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
-/**
- * The per-class self timer.
- *
- * <p>Every sample is a bounded, fixed-size write into a per-thread meter: no lock, no allocation
- * and no virtual call on the recording path. A thread registers itself the first time it meters,
- * and the publication walks the registered meters; a sample taken while a window is being published
- * may land in either window, which is acceptable for a readout nothing decides on.</p>
- *
- * <p>The registry and the per-thread world lists are copy-on-write, so the meters a worker registers
- * while it works are visible to the publication without the publication needing the worker to stop,
- * and a walk over them can never meet a list that changed under it. Nothing here decides anything: a
- * failure of the timer must not change what the server does.</p>
- *
- * <p>Wait time does not belong here. It accumulates next to the classes, and the reader can see
- * that no class received it. Time spent in the observation itself is a row of its own, so the
- * budget of the observation can be read instead of guessed.</p>
- *
- * <p>The timer is read-only from the scheduler's point of view: no write path may depend on it, and
- * a failure of the timer must not change what the server does.</p>
- */
+/** The per-class self timer. Every sample is a bounded, fixed-size write into a per-thread meter:
+ * no lock, no allocation and no virtual call on the recording path. */
 public final class SelfTimers {
 
     /** Samples one class keeps per thread for the percentiles. */
@@ -47,36 +29,17 @@ public final class SelfTimers {
     public record MeterScope(SelfClass selfClass, String worldId, String dimensionRef) {
     }
 
-    /**
-     * Opens a metering scope.
-     *
-     * @param selfClass    class the batch belongs to
-     * @param worldId      world the batch belongs to
-     * @param dimensionRef decomposition reference inside the world
-     * @return the scope to hand back to {@link #close(MeterScope, long)}
-     */
+    /** Opens a metering scope. */
     public static MeterScope open(SelfClass selfClass, String worldId, String dimensionRef) {
         return new MeterScope(selfClass, worldId, dimensionRef == null ? "" : dimensionRef);
     }
 
-    /**
-     * Closes a scope and records its duration.
-     *
-     * @param scope the scope that was opened
-     * @param nanos the duration in nanoseconds; zero and negative durations are ignored
-     */
+    /** Closes a scope and records its duration. */
     public static void close(MeterScope scope, long nanos) {
         note(scope.selfClass(), scope.worldId(), scope.dimensionRef(), nanos);
     }
 
-    /**
-     * Records one batch without a scope object.
-     *
-     * @param selfClass    class the batch belongs to
-     * @param worldId      world the batch belongs to
-     * @param dimensionRef decomposition reference
-     * @param nanos        duration in nanoseconds; zero and negative durations are ignored
-     */
+    /** Records one batch without a scope object. */
     public static void note(SelfClass selfClass, String worldId, String dimensionRef, long nanos) {
         if (nanos <= 0L || selfClass == null) {
             return;
@@ -84,54 +47,25 @@ public final class SelfTimers {
         METERS.get().meter(selfClass, worldId == null ? "" : worldId).add(nanos);
     }
 
-    /**
-     * Records a wait next to the classes.
-     *
-     * <p>The value lands in the wait counters only; no self class receives it, which is the
-     * separation the whole axis depends on.</p>
-     *
-     * @param worldId     world the wait happened in
-     * @param dimensionRef decomposition reference
-     * @param waitPointId wait point that covers the wait, or {@code null} when none does
-     * @param nanos       wait duration in nanoseconds
-     */
+    /** Records a wait next to the classes. The value lands in the wait counters only; no self
+     * class receives it, which is the separation the whole axis depends on. */
     public static void noteWait(String worldId, String dimensionRef, String waitPointId, long nanos) {
         WAITS.add(worldId == null ? "" : worldId, nanos);
     }
 
-    /**
-     * Publishes the window without clearing it.
-     *
-     * @param tickIndex   current tick
-     * @param windowTicks ticks the window covers
-     * @param warmup      whether the window is still warm-up
-     * @return the published window
-     */
+    /** Publishes the window without clearing it. */
     public static MeterWindow snapshot(long tickIndex, int windowTicks, boolean warmup) {
         return collect(tickIndex, windowTicks, warmup, false);
     }
 
-    /**
-     * Publishes the window and starts a new one.
-     *
-     * @param tickIndex   current tick
-     * @param windowTicks ticks the window covered
-     * @param warmup      whether the window was warm-up
-     * @return the published window
-     */
+    /** Publishes the window and starts a new one. */
     public static MeterWindow consume(long tickIndex, int windowTicks, boolean warmup) {
         return collect(tickIndex, windowTicks, warmup, true);
     }
 
-    /**
-     * Takes the per-world tick totals and clears them.
-     *
-     * <p>The share table needs the work of one tick per world and class; the timer keeps those sums
-     * next to the window sums so no second metering point appears. The array is indexed by
-     * {@link SelfClass#ordinal()}.</p>
-     *
-     * @return world to per-class nanoseconds of the tick that just ended
-     */
+    /** Takes the per-world tick totals and clears them. The share table needs the work of one tick
+     * per world and class; the timer keeps those sums next to the window sums so no second
+     * metering point appears. */
     public static Map<String, long[]> consumeTickTotals() {
         Map<String, long[]> totals = new LinkedHashMap<>();
         for (ThreadMeters meters : ALL) {
@@ -147,13 +81,9 @@ public final class SelfTimers {
         return totals;
     }
 
-    /**
-     * Drops the per-world tick totals without publishing them.
-     *
-     * <p>Callers use this while the share table is off: the timer keeps adding to the tick totals on
-     * its recording path, and a table that is turned back on must not inherit the ticks of the whole
-     * time it was off as the work of one tick.</p>
-     */
+    /** Callers use this while the share table is off: the timer keeps adding to the tick totals on
+     * its recording path, and a table that is turned back on must not inherit the ticks of the
+     * whole time it was off as the work of one tick. */
     public static void discardTickTotals() {
         for (ThreadMeters meters : ALL) {
             for (WorldMeters world : meters.worlds) {
@@ -164,7 +94,7 @@ public final class SelfTimers {
         }
     }
 
-    /** Clears every counter. Used by the readout reset and by tests, never by the scheduler. */
+    /** Clears every counter. */
     public static void resetAll() {
         for (ThreadMeters meters : ALL) {
             for (WorldMeters world : meters.worlds) {
@@ -176,7 +106,6 @@ public final class SelfTimers {
         WAITS.clear();
     }
 
-    /** @return the number of rows the timer publishes, zero values included */
     public static int timerRows() {
         return SelfClass.rowCount();
     }
@@ -266,7 +195,6 @@ public final class SelfTimers {
         return sorted[index];
     }
 
-    /** Meters of one thread, owned by that thread. */
     private static final class ThreadMeters {
 
         private final List<WorldMeters> worlds = new CopyOnWriteArrayList<>();
@@ -288,7 +216,6 @@ public final class SelfTimers {
         }
     }
 
-    /** Meters of one thread for one world. */
     private static final class WorldMeters {
 
         private final String worldId;
@@ -302,7 +229,6 @@ public final class SelfTimers {
         }
     }
 
-    /** Wait counters, kept strictly outside the class rows. */
     private static final class WaitCounters {
 
         private final Map<String, LongAdder> byWorld = new ConcurrentHashMap<>();
@@ -325,6 +251,47 @@ public final class SelfTimers {
             totalNanos.set(0L);
             maxNanos.set(0L);
             observations.reset();
+        }
+    }
+
+    /** One published timer row. The row exists for every class even when nothing was sampled: a
+     * missing row is an observation failure, and a row of zeros is a statement. */
+    public record SelfRow(SelfClass selfClass, long totalNanos, double sharePct, long p50Nanos,
+                          long p99Nanos, long samples, long lost) {
+
+        public double totalMs() {
+            return totalNanos / 1_000_000.0;
+        }
+
+        public double p50Ms() {
+            return p50Nanos / 1_000_000.0;
+        }
+
+        public double p99Ms() {
+            return p99Nanos / 1_000_000.0;
+        }
+    }
+
+    /** The window carries the rows, the completeness count and the three self-monitoring values that
+     * prove the observation is not the bottleneck: the sample rate actually achieved, the number of
+     * samples the rings had to drop and the time observation itself spent. */
+    public record MeterWindow(long tickIndex, int windowTicks, boolean warmup, List<SelfRow> rows,
+                              int missingClasses, double sampleRate, long lostSamples, double observeMs,
+                              double unclassifiedMs, double totalMs, double waitTotalMs,
+                              double waitMaxMs, long waitObservations) {
+
+        /** Finds one row. */
+        public SelfRow row(SelfClass selfClass) {
+            for (SelfRow row : rows) {
+                if (row.selfClass() == selfClass) {
+                    return row;
+                }
+            }
+            return null;
+        }
+
+        public int rowCount() {
+            return rows.size();
         }
     }
 }
