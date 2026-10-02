@@ -3,25 +3,21 @@ package io.izzel.arclight.common.prts.kernel.waitpoints;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry.WaitPointDeclaration;
 
 /** A producer, a progress signal, a timeout action and a degradation target: a row missing any of
- * them cannot be stored, because a wait whose progress cannot be read is the failure this registry
- * exists to prevent. */
+ * them cannot be stored, because a wait whose progress cannot be read is the failure this prevents. */
 public final class Dec19Elements {
 
-    /** Kind of the progress signal of a wait point. */
     public enum SignalKind {
         COUNT,
         WATERMARK,
         HEARTBEAT
     }
 
-    /** The progress signal of a wait point. */
     public record ProgressSignal(SignalKind kind, String fieldRef) {
     }
 
     private Dec19Elements() {
     }
 
-    /** Returns the element a declaration is missing. */
     public static String missingElement(WaitPointDeclaration declaration) {
         if (declaration == null) {
             return "declaration";
@@ -30,7 +26,6 @@ public final class Dec19Elements {
             declaration.timeoutAction(), declaration.degradeTo());
     }
 
-    /** Returns the element a set of four is missing. */
     public static String missingElement(String producer, ProgressSignal signal, String timeoutAction,
                                         String degradeTo) {
         if (producer == null || producer.isBlank()) {

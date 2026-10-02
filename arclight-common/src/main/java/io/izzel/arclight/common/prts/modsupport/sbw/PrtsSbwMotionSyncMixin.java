@@ -14,9 +14,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * Spreads the motion sync of fast projectiles over several ticks. The interval question is
- * answered in the two projectile base classes, which is where a call is actually received; a
- * subclass that answers it itself keeps its own answer.
+ * Spreads the motion sync of fast projectiles over several ticks. The interval question is answered
+ * in the two projectile base classes, where a call is received; a subclass that answers it keeps its own.
  */
 @OnlyInPlatform(ArclightPlatform.NEOFORGE)
 @LoadIfMod(modid = PrtsSbwCompat.MOD_ID, condition = LoadIfMod.ModCondition.PRESENT)

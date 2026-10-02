@@ -1,11 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.support;
 
-/**
- * The seam a world write path hands a write to whoever watches write rights. The fast question costs
- * one volatile read while no watcher is installed, and the world identity and the deferred write are
- * built only on the slow path. The seam carries no kernel type on purpose.
- */
+/** The seam a world write path hands a write to whoever watches write rights; no kernel type crosses it. */
 public final class PrtsWorldWriteTaps {
 
     public interface DeferredWrite {
@@ -19,16 +15,10 @@ public final class PrtsWorldWriteTaps {
 
         int JUDGE = 1;
 
-        /**
-         * Answers whether a block write may pass without the slow path.
-         * @return {@link #PASS} or {@link #JUDGE}
-         */
+        /** @return {@link #PASS} or {@link #JUDGE} */
         int classifyBlockWrite(Object levelRef);
 
-        /**
-         * Judges a block write on the slow path.
-         * @return true when the write may proceed now; otherwise it is applied later through the deferred write
-         */
+        /** @return true when the write may proceed now; false means it is applied later through the deferred write */
         boolean admitBlockWrite(Object levelRef, String worldId, DeferredWrite deferred);
     }
 
@@ -45,11 +35,8 @@ public final class PrtsWorldWriteTaps {
         return blockWriteTap != null;
     }
 
-    /**
-     * Opens one decision against the watcher that answers the fast question. The watcher is read once
-     * here and the handle carries it, so a reload between the fast question and the slow path cannot
-     * change which watcher judges the write.
-     */
+    /** Opens one decision against the watcher read here; the handle carries it, so a reload between
+     * the fast question and the slow path cannot change which watcher judges the write. */
     public static Decision beginBlockWrite(Object levelRef) {
         BlockWriteTap tap = blockWriteTap;
         return new Decision(tap, tap == null ? BlockWriteTap.PASS : tap.classifyBlockWrite(levelRef));

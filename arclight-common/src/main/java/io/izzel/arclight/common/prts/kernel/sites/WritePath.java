@@ -1,9 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.sites;
 
-/** The set is deliberately short: the kernel judges writes at the three points a write can be
- * handed over, and each point has its own counter so a reader can tell which one a write came
- * from. */
+/** The three points a write can be handed over, each with its own counter. */
 public enum WritePath {
 
     KERNEL_COMMIT("kernel_commit"),

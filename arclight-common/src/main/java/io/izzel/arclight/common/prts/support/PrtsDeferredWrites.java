@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * The two writes the world write seam hands over: the same setter call again, run later on the thread
- * that drives the tick. They live beside the seam because a class in a mixin package that is not itself
- * a mixin cannot be referenced.
+ * that drives the tick. They live beside the seam because a class in a mixin package that is not
+ * itself a mixin cannot be referenced.
  */
 package io.izzel.arclight.common.prts.support;
 
@@ -12,13 +12,11 @@ import net.minecraft.world.level.block.state.BlockState;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.craftbukkit.v.block.CraftBlock;
 
-/** The deferred writes of {@link PrtsWorldWriteTaps}. */
 public final class PrtsDeferredWrites {
 
     private PrtsDeferredWrites() {
     }
 
-    /** One level block write, deferred until the commit segment reaches it. */
     public static final class LevelWrite implements PrtsWorldWriteTaps.DeferredWrite {
 
         private final Level level;
@@ -37,7 +35,6 @@ public final class PrtsDeferredWrites {
             this.recursionLeft = recursionLeft;
         }
 
-        /** @return the position the write was frozen at, as an immutable snapshot */
         public BlockPos position() {
             return pos;
         }
@@ -48,7 +45,6 @@ public final class PrtsDeferredWrites {
         }
     }
 
-    /** One platform block write, deferred until the commit segment reaches it. */
     public static final class PlatformWrite implements PrtsWorldWriteTaps.DeferredWrite {
 
         private final CraftBlock block;
@@ -66,7 +62,6 @@ public final class PrtsDeferredWrites {
             return data.clone();
         }
 
-        /** @return the copy of the data this write will perform */
         public BlockData data() {
             return data;
         }

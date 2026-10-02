@@ -11,13 +11,9 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 
 import java.util.Set;
 
-/**
- * Keeps {@code minecraft:block_entity_data} on an item meta that does not model it. The base
- * meta collects the declared keys of its subclasses, so a component handled by the block state
- * meta is dropped for every other meta and a CraftItemStack round trip loses it. Answering the
- * handled-tag query with false outside the block state meta routes the value into the unhandled
- * map, where it survives.
- */
+/** Keeps {@code minecraft:block_entity_data} on a meta that does not model it: the base meta
+ * collects its subclasses' declared keys, so the component is dropped on a CraftItemStack round
+ * trip unless the handled-tag query answers false outside the block state meta. */
 @Mixin(value = CraftMetaItem.class, remap = false)
 public abstract class PrtsCraftMetaItemBlockEntityDataMixin {
 

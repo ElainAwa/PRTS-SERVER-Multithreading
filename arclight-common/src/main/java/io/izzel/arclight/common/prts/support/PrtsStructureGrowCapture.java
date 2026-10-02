@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
- * Answers the block writes of a growing tree from a capture list instead of the chunk and raises
- * StructureGrowEvent with that list once the generator is done: a cancelled event leaves the world
- * untouched, so no rollback is needed. One scope on the server thread, the only writer of a level.
+ * Answers a growing tree's block writes from a capture list and raises StructureGrowEvent with it:
+ * a cancelled event leaves the world untouched, so no rollback is needed; one scope on the server
+ * thread, the only writer of a level.
  */
 package io.izzel.arclight.common.prts.support;
 
@@ -28,9 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
 
-/**
- * Dispatches StructureGrowEvent for a tree a sapling grows, with the Bukkit species the grower resolved.
- */
+/** Dispatches StructureGrowEvent for a tree a sapling grows, with the Bukkit species the grower resolved. */
 public final class PrtsStructureGrowCapture {
 
     // Bukkit names a tree by the configured feature the grower resolved (a 2x2 spruce is a mega redwood).
@@ -74,20 +72,15 @@ public final class PrtsStructureGrowCapture {
     private PrtsStructureGrowCapture() {
     }
 
-    /**
-     * Grows the tree with the block writes captured and raises the event for them.
-     * @return what the wrapped grow call returned, so the caller keeps its own behaviour
-     */
+    /** Grows with the block writes captured and raises the event for them.
+     * @return what the wrapped grow call returned, so the caller keeps its own behaviour */
     public static boolean growWithEvent(TreeGrower grower, ServerLevel level, ChunkGenerator generator,
                                         BlockPos pos, BlockState state, RandomSource random) {
         return growWithEvent(level, pos, null, () -> grower.growTree(level, generator, pos, state, random));
     }
 
-    /**
-     * Grows the tree the given call builds with the writes captured.
-     * @param species the Bukkit species, or null to take the feature the grower resolved
-     * @return what the call returned, so the caller keeps its own behaviour
-     */
+    /** Grows the tree the given call builds with the writes captured; a null species takes the feature
+     * the grower resolved, and the result is what the call returned. */
     public static boolean growWithEvent(ServerLevel level, BlockPos pos, TreeType species, BooleanSupplier grow) {
         List<org.bukkit.block.BlockState> blocks;
         boolean grown = false;
@@ -123,11 +116,8 @@ public final class PrtsStructureGrowCapture {
         return true;
     }
 
-    /**
-     * The state a captured position reads back as while a tree is built, so a generator that clears the
-     * sapling and asks whether the spot is free sees its own write.
-     * @return the captured state, or null when the growing tree did not write this position
-     */
+    /** The state a captured position reads back as while a tree is built, so a generator that clears the
+     * sapling sees its own write; null when the growing tree did not write this position. */
     public static net.minecraft.world.level.block.state.BlockState capturedState(Level target, BlockPos pos) {
         if (capturedLevel == null || capturedLevel != target) {
             return null;

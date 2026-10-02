@@ -4,12 +4,10 @@ package io.izzel.arclight.common.prts.kernel.dispatch;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaScratch;
 import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan.WorkBatch;
 
-/** The computation a worker runs for one batch. The body receives only the frozen batch, the
- * scratch it may write and the cancellation token. */
+/** The computation a worker runs for one batch; the body sees only the frozen batch, its scratch and the token. */
 @FunctionalInterface
 public interface WorkBody {
 
-    /** Runs one batch. */
     long run(WorkBatch batch, ArenaScratch target, CancelToken token) throws RetryableFault,
         NonRetryableFault, CancelledFault;
 
@@ -38,7 +36,6 @@ public interface WorkBody {
 
         private static final long serialVersionUID = 1L;
 
-        /** Creates the signal. */
         public CancelledFault() {
             super("the batch was cancelled at its checkpoint");
         }

@@ -1,9 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/*
- * The written-down list of the call-site seams the kernel needs, with what the mixin plugin decided
- * about each. It lives beside the seams rather than next to the kernel, because the world side may
- * not depend on the kernel, and a mismatch is meant to be visible in the readout instead of quiet.
- */
+/* The written-down list of the call-site seams the kernel needs, with what the mixin plugin decided
+ * about each; it lives beside the seams because the world side may not depend on the kernel, and a
+ * mismatch is meant to be visible in the readout instead of quiet. */
 package io.izzel.arclight.common.prts.support;
 
 import java.util.ArrayList;
@@ -14,10 +12,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 
 /**
- * Every seam the kernel reaches a real call site through, with whether it is actually there: a kernel
- * can read green while the bytecode that would call its watcher was never applied, because the mixin
- * carrying the call is gated by another switch. A seam whose category is off is unreachable, and a
- * kernel whose seams are not all reachable must not be judged.
+ * Every seam the kernel reaches a real call site through, with whether it is there: a kernel can read
+ * green while the mixin carrying its call was gated off, so unreachable seams must not be judged.
  */
 public final class PrtsSeams {
 
@@ -27,9 +23,7 @@ public final class PrtsSeams {
     public record Seam(String seamId, String mixinClass, String targetClass, String category) {
     }
 
-    /**
-     * What is known about one seam when it is read; {@link #reachable()} carries the verdict.
-     */
+    /** What is known about one seam when it is read; {@link #reachable()} carries the verdict. */
     public record SeamState(Seam seam, boolean categoryEnabled, boolean decisionKnown,
                             boolean decidedToApply, boolean applied) {
 

@@ -7,9 +7,6 @@ import org.bukkit.craftbukkit.v.CraftServer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 
-/**
- * Answers the Paper version readout from the running server, not from a compile-time constant.
- */
 @Mixin(value = CraftServer.class, remap = false)
 public abstract class PrtsCraftServerPaperApiMixin {
 

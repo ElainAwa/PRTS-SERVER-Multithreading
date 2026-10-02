@@ -12,15 +12,13 @@ import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.server.level.ServerLevel;
 
-/** Takes the read-only entity view of one tick. This is the one place the dispatcher reads the
- * host: it runs on the tick thread, copies plain numbers out of the live entities and never keeps
- * a reference to one. */
+/** Takes the read-only entity view of one tick, on the tick thread: it copies plain numbers out of
+ * the live entities and never keeps a reference to one. */
 public final class DispatchSnapshot {
 
     private DispatchSnapshot() {
     }
 
-    /** Copies the entity kinematics of every live world. */
     public static List<EntityCandidateView> capture(WorldEpochSource worldEpochs) {
         List<EntityCandidateView> views = new ArrayList<>();
         List<World> worlds;
@@ -86,11 +84,9 @@ public final class DispatchSnapshot {
         return EntityIntegrator.STEP_PLAIN;
     }
 
-    /** Supplies the generation of a world to a snapshot. */
     @FunctionalInterface
     public interface WorldEpochSource {
 
-        /** Answers the generation of one world. */
         long epochOf(String worldId);
     }
 

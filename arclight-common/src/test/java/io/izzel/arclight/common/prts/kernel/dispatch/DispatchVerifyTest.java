@@ -57,6 +57,37 @@ class DispatchVerifyTest {
         }
     }
 
+    /**
+     * The compute window is the wait on the workers plus the work the tick thread does inside it.
+     * A row that reports only the sum cannot say which of the two a window was spent on.
+     */
+    @Test
+    void theComputeWindowIsTheWaitPlusTheWorkDoneInIt() {
+        DispatchReadings readings = new DispatchReadings();
+        ArenaLedger arena = new ArenaLedger();
+        TaskLedger ledger = new TaskLedger(1L);
+        WorkPlan plan = WorkPlan.freeze(TICK, 1L, List.of(view(8)), 4, 1L);
+        WorkerPool pool = pool(readings, arena, 8);
+        try {
+            MergeSegment merge = new MergeSegment();
+            merge.bindOwnerThread(Thread.currentThread());
+            DispatchPass pass = DispatchPass.dispatch(plan, pool, EntityIntegrator.INSTANCE, arena,
+                readings, ledger);
+
+            merge.merge(pass, System.nanoTime() + 2_000_000_000L, arena, readings, new DiffProbe(),
+                HashWhitelist.bitexact(), "entity", writeBack(readings));
+
+            assertTrue(readings.computeFrameNanos() > 0L,
+                "collecting the frames and hashing the two arms left no reading");
+            assertEquals(readings.computeNanos(),
+                readings.computeWaitNanos() + readings.computeFrameNanos(),
+                "the two halves of the compute window do not add up to the window");
+        } finally {
+            pool.shutdown(true, true, 500L);
+            arena.reset();
+        }
+    }
+
     @Test
     void aBatchWhoseSlotWasWrittenWithAnotherValueIsRefusedAndRedoneHere() {
         DispatchReadings readings = new DispatchReadings();

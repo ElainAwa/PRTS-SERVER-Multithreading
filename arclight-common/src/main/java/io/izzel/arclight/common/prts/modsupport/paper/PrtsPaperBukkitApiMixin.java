@@ -5,10 +5,6 @@ package io.izzel.arclight.common.prts.modsupport.paper;
 import org.bukkit.Bukkit;
 import org.spongepowered.asm.mixin.Mixin;
 
-/**
- * Marks the Bukkit facade as a mixin target, so the configuration plugin is handed the class and
- * can add the static Paper version readout in its post-apply step. Declares no member of its own.
- */
 @Mixin(value = Bukkit.class, remap = false)
 public abstract class PrtsPaperBukkitApiMixin {
 }

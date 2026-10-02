@@ -1,10 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/*
- * Answers both World#generateTree overloads. The one with a BlockChangeDelegate throws on three
- * ServerLevel members this platform lacks; the plain one grows straight into the chunk and gives
- * a listener no say. PrtsGenerateTree builds the tree first and raises StructureGrowEvent, so a
- * cancel keeps the world untouched and the delegate receives the blocks instead of the world.
- */
+/* Both World#generateTree overloads: the delegate form touches ServerLevel members this platform
+ * lacks and the plain form gives a listener no say; PrtsGenerateTree builds first and raises the event. */
 package io.izzel.arclight.common.prts.fixes;
 
 import io.izzel.arclight.api.ArclightPlatform;
@@ -25,9 +21,7 @@ import java.util.Random;
 @Mixin(value = CraftWorld.class, remap = false)
 public abstract class PrtsCraftWorldGenerateTreeMixin {
 
-    // @formatter:off
     @Shadow @Final private static Random rand;
-    // @formatter:on
 
     /** @author PRTS @reason the CraftBukkit body drives three ServerLevel members this platform does not have */
     @Overwrite(remap = false)

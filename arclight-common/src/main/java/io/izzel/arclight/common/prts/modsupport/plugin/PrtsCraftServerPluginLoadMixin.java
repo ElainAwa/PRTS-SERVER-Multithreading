@@ -10,10 +10,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/**
- * Resolves the Bungee chat classes through the server class loader before the plugin class
- * loaders are built, so an isolated loader cannot resolve a second copy of the API.
- */
+/** Resolves Bungee chat classes before plugin class loaders exist, so none holds a second copy. */
 @Mixin(value = CraftServer.class, remap = false)
 public abstract class PrtsCraftServerPluginLoadMixin {
 

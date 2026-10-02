@@ -1,9 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/*
- * The CraftBukkit bone meal body writes Level#captureTreeGeneration, calls BoneMealItem#applyBonemeal
- * and reads SaplingBlock#treeType, none of which exists here, so it throws on the first field write.
- * The platform's own bone meal entry point is used instead; its tree still raises StructureGrowEvent.
- */
+/* The CraftBukkit body writes Level#captureTreeGeneration, calls BoneMealItem#applyBonemeal and reads
+ * SaplingBlock#treeType, none of which exists here; the platform entry point is used instead. */
 package io.izzel.arclight.common.prts.fixes;
 
 import io.izzel.arclight.api.ArclightPlatform;
@@ -26,10 +23,8 @@ import org.spongepowered.asm.mixin.Shadow;
 @Mixin(value = CraftBlock.class, remap = false)
 public abstract class PrtsCraftBlockBoneMealMixin {
 
-    // @formatter:off
     @Shadow public abstract BlockPos getPosition();
     @Shadow public abstract CraftWorld getCraftWorld();
-    // @formatter:on
 
     /** @author PRTS @reason the CraftBukkit body calls three members this platform does not have */
     @Overwrite(remap = false)
@@ -38,8 +33,7 @@ public abstract class PrtsCraftBlockBoneMealMixin {
         ServerLevel level = getCraftWorld().getHandle();
         BlockPos pos = getPosition();
         ItemStack stack = Items.BONE_MEAL.getDefaultInstance();
-        // The item's own useOn cannot stand in: it reports the interaction to the player that used it,
-        // and Bukkit's contract here is a call without one.
+        // the item's useOn cannot stand in: it reports the interaction to a player, and this path has none
         boolean applied = BoneMealItem.growCrop(stack, level, pos);
         if (!applied) {
             applied = BoneMealItem.growWaterPlant(stack, level, pos.relative(direction), direction);

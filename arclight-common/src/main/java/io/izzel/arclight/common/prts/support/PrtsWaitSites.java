@@ -1,10 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
- * The seam a wait call site reports through. A site opens an observation at the head of its method
- * and closes it at the return; the seam measures the call and hands the number to whoever watches,
- * never touching an upper bound or shortening, delaying or cancelling a wait. The wait sites are
- * numbered here because this is the one class both sides compile against, and the order is the
- * contract. It lives beside the write seam, since a class in a mixin package cannot be referenced.
+ * The seam a wait call site reports through: a site opens an observation at the head of its method
+ * and closes it at the return; the numbering below is shared with the mixin side and is the contract.
  */
 package io.izzel.arclight.common.prts.support;
 
@@ -12,26 +9,18 @@ import net.minecraft.world.level.Level;
 
 /**
  * The seam a wait call site opens and closes an observation through. Both calls are no-ops while no
- * watcher is installed, and the start stamp is kept per site and per thread, so a nested or re-entered
- * call cannot be charged to the wrong wait. The seam carries no kernel type, so neither side depends
- * on the other to be compiled.
+ * watcher is installed; the start stamp is kept per site and per thread, and no kernel type crosses it.
  */
 public final class PrtsWaitSites {
 
     public interface SiteWaitTap {
 
-        /**
-         * @param siteIndex index in {@link #SITE_IDS}, the identity the hooks pass
-         * @param worldId   world the call ran in, or empty when the site has none at hand
-         * @param waitNanos how long the call took, in nanoseconds
-         */
+        /** @param siteIndex index in {@link #SITE_IDS}; @param waitNanos how long the call took, in nanoseconds */
         void observed(int siteIndex, String siteId, String worldId, long waitNanos);
     }
 
-    /**
-     * Identities of the observed call sites, indexed by the constants below; index {@code n} is the
-     * site the hooks pass as {@code n}, so the order is the contract.
-     */
+    /** Identities of the observed call sites, indexed by the constants below; index {@code n} is the
+     * site the hooks pass as {@code n}, so the order is the contract. */
     public static final String[] SITE_IDS = {
         "entity_set_pos_raw",
         "block_collisions_compute_next",
@@ -93,10 +82,8 @@ public final class PrtsWaitSites {
         return tap != null;
     }
 
-    /**
-     * @return the installed watcher, or null when none is installed. A tool that borrows the seam reads
-     *     it so it can hand exactly that one back instead of clearing a seam still in use.
-     */
+    /** @return the installed watcher, or null when none is installed; a tool that borrows the seam
+     *     reads it to hand exactly that one back instead of clearing a seam still in use. */
     public static SiteWaitTap watcher() {
         return tap;
     }
@@ -112,10 +99,8 @@ public final class PrtsWaitSites {
         end(siteIndex, null);
     }
 
-    /**
-     * Closes an observation for one site, with the level the call ran in when the site holds one.
-     * Closing a site that was never opened, or closing it twice, is a no-op.
-     */
+    /** Closes an observation for one site, with the level the call ran in when the site holds one;
+     * closing a site that was never opened, or closing it twice, is a no-op. */
     public static void end(int siteIndex, Object levelRef) {
         SiteWaitTap watcher = tap;
         if (watcher == null || siteIndex < 0 || siteIndex >= SITE_IDS.length) {

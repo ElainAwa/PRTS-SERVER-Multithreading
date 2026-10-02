@@ -11,11 +11,8 @@ import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
 
-/**
- * Hands the tree search a reader that cannot leave the loaded world; the reader is replaced at
- * the head of the search, before it is captured into the mod's worker lambdas. The search
- * itself, its order and its result stay the mod's own.
- */
+/** Hands the tree search a reader that cannot leave the loaded world, replaced at the head of the
+ * search before the mod captures it; the search itself and its result stay the mod's own. */
 @OnlyInPlatform(ArclightPlatform.NEOFORGE)
 @LoadIfMod(modid = "create", condition = LoadIfMod.ModCondition.PRESENT)
 @Pseudo

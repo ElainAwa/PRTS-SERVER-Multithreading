@@ -4,26 +4,20 @@ package io.izzel.arclight.common.prts.kernel.config;
 import io.izzel.arclight.common.prts.PrtsSwitches;
 import io.izzel.arclight.common.prts.config.PrtsConfigManager;
 
-/** Settings of the kernel scaffolding layer. The names and the defaults live in the configuration
- * layer, which is the only place a generated file is rendered from. */
+/** Settings of the kernel scaffolding layer; the names and their defaults live in the configuration layer. */
 public final class KernelSettings {
 
-    /** Category the four pieces belong to; also the configuration file they are declared in. */
     public static final String CATEGORY = PrtsConfigManager.KERNEL;
 
     /** Turns the write decision point into a refusing one for unregistered writers; off. */
     public static final String ENFORCE_UNREGISTERED_WRITES = "enforce-unregistered-writes";
 
-    /** Turns the per-class self timers on; on with the category. */
     public static final String SELF_TIMERS = "self-timers";
 
-    /** Turns the per-tick share table on; on with the category. */
     public static final String SHARE_TABLE = "share-table";
 
-    /** Turns the wait point registry on; on with the category. */
     public static final String WAIT_REGISTRY = "wait-registry";
 
-    /** Watches the real world write paths; on with the category, and it only records. */
     public static final String WRITE_PATH_GUARD = "write-path-guard";
 
     /** Walks the intent channel and applies what it reaches; off, so nothing is consumed. */
@@ -86,25 +80,18 @@ public final class KernelSettings {
     /** How many retryable faults a worker attempt may carry before it falls back. */
     public static final String WORKER_RETRY_BUDGET = "worker-retry-budget";
 
-    /** Upper bound the channel depth is clamped to, whatever the file says. */
     public static final int INTENT_QUEUE_CAP_MAX = 65536;
 
-    /** Upper bound the commit budget is clamped to, whatever the file says. */
     public static final int COMMIT_BUDGET_MAX = 4096;
 
-    /** Upper bound the declared worker count is clamped to, whatever the file says. */
     public static final int WORKER_COUNT_MAX = 8;
 
-    /** Upper bound the worker queue depth is clamped to, whatever the file says. */
     public static final int WORKER_QUEUE_CAP_MAX = 256;
 
-    /** Upper bound the region span is clamped to, whatever the file says. */
     public static final int WORKER_BATCH_CHUNKS_MAX = 64;
 
-    /** Upper bound the deadline grace is clamped to, whatever the file says. */
     public static final int WORKER_DEADLINE_GRACE_MS_MAX = 1000;
 
-    /** Upper bound the worker retry budget is clamped to, whatever the file says. */
     public static final int WORKER_RETRY_BUDGET_MAX = 2;
 
     private KernelSettings() {
@@ -121,7 +108,6 @@ public final class KernelSettings {
         }
     }
 
-    /** Returns whether the kernel category is enabled. */
     public static boolean enabled() {
         try {
             return PrtsSwitches.enabled(CATEGORY);

@@ -8,17 +8,14 @@ import org.bukkit.Bukkit;
 import org.bukkit.World;
 import org.bukkit.craftbukkit.v.CraftWorld;
 
-/** The one place the write-back reaches a live entity. Everything here runs on the thread that
- * owns the tick. */
+/** The one place the write-back reaches a live entity; everything here runs on the thread that owns the tick. */
 public final class LiveEntityAccess {
 
     private LiveEntityAccess() {
     }
 
-    /** A process that has no server yet - a unit test, or a check that runs before the platform is
-     * up - answers {@code null} instead of throwing: a write-back that cannot find its world does
-     * not land, and that is a refusal the caller counts rather than a fault that breaks the tick.
-     */
+    /** A process with no server yet answers null instead of throwing: a write-back that cannot find
+     * its world does not land, and that is a refusal the caller counts rather than a fault that breaks the tick. */
     public static ServerLevel level(String worldId) {
         if (worldId == null) {
             return null;
@@ -40,9 +37,8 @@ public final class LiveEntityAccess {
         return level == null ? null : level.getEntity(entityId);
     }
 
-    /** Writes the whitelisted kinematics of one entity. The position is written through the entity
-     * itself and not by a teleport: a teleport is a different act with its own event and passenger
-     * handling, and the domain owns only the five values below. */
+    /** Writes the whitelisted kinematics of one entity: position through the entity itself, not a
+     * teleport, which is a different act with its own event and passenger handling. */
     public static void write(Entity entity, double x, double y, double z, double yaw, double pitch,
                              double velX, double velY, double velZ) {
         entity.setPos(x, y, z);
@@ -51,9 +47,8 @@ public final class LiveEntityAccess {
         entity.setDeltaMovement(velX, velY, velZ);
     }
 
-    /** Reads the whitelisted kinematics of one entity into a row. The identity fields of the row
-     * are carried over unchanged: the reader answers what the entity holds for the same entity,
-     * not who it is. */
+    /** Reads the whitelisted kinematics of one entity into a row; the identity fields of the row are
+     * carried over unchanged, so the reader answers what the entity holds, not who it is. */
     public static StateHasher.Slice read(Entity entity, StateHasher.Slice row) {
         return new StateHasher.Slice(row.worldId(), row.regionId(), row.batchId(), row.entitySeq(),
             posX(entity), posY(entity), posZ(entity), yaw(entity), pitch(entity), velX(entity),
@@ -98,14 +93,12 @@ public final class LiveEntityAccess {
         return entity.getDeltaMovement().z;
     }
 
-    /** Compares the kinematics of two rows bit by bit. The write-back leg may be narrowed to what the
-     * host itself already holds. */
+    /** The bit-exact kinematic comparison the takeover boundary rests on. */
     public static final class KinematicIdentity {
 
         private KinematicIdentity() {
         }
 
-        /** Answers whether two rows carry the same kinematics. */
         public static boolean matches(StateHasher.Slice expected, StateHasher.Slice actual) {
             return sameDouble(expected.x(), actual.x())
                 && sameDouble(expected.y(), actual.y())
@@ -117,12 +110,10 @@ public final class LiveEntityAccess {
                 && sameDouble(expected.velZ(), actual.velZ());
         }
 
-        /** Answers whether two doubles have the same raw bits. */
         public static boolean sameDouble(double left, double right) {
             return Double.doubleToRawLongBits(left) == Double.doubleToRawLongBits(right);
         }
 
-        /** Answers whether two floats have the same raw bits. */
         public static boolean sameFloat(float left, float right) {
             return Float.floatToRawIntBits(left) == Float.floatToRawIntBits(right);
         }

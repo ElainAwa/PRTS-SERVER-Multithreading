@@ -14,11 +14,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.util.Map;
 
-/**
- * Removes the Bukkit reload commands when the operator asks for it; the switch defaults to
- * keeping them, and the removal happens as the map installs its defaults so a later
- * registration cannot bring the label back.
- */
+/** Removes the Bukkit reload commands when the operator asks for it; the switch defaults to keeping
+ * them, and removal at default-install time stops a later registration from bringing the label back. */
 @Mixin(value = SimpleCommandMap.class, remap = false)
 public abstract class PrtsSimpleCommandMapMixin {
 

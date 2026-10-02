@@ -9,10 +9,6 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
 
-/**
- * Normalizes a missing recipe group to the empty group the Bukkit API declares, so plugin views and
- * recipe serialization never see {@code null}. Normalizing at the setter covers every view.
- */
 @Mixin(value = {CraftingRecipe.class, CookingRecipe.class, StonecuttingRecipe.class}, remap = false)
 public abstract class PrtsRecipeGroupMixin {
 

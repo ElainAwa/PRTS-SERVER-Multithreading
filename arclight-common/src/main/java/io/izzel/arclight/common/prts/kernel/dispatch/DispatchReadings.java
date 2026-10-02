@@ -39,6 +39,8 @@ public final class DispatchReadings {
     private final LongAdder redoNanos = new LongAdder();
     private final LongAdder verifyNanos = new LongAdder();
     private final LongAdder computeNanos = new LongAdder();
+    private final LongAdder computeWaitNanos = new LongAdder();
+    private final LongAdder computeFrameNanos = new LongAdder();
     private final LongAdder verifyRows = new LongAdder();
     private final LongAdder verifyMismatch = new LongAdder();
     private final LongAdder entityNanosSerialArm = new LongAdder();
@@ -136,6 +138,23 @@ public final class DispatchReadings {
     public void noteCompute(long nanos) {
         if (nanos > 0L) {
             computeNanos.add(nanos);
+        }
+    }
+
+    /** The part of the compute window the tick thread spends blocked on the workers. It is time the
+     * tick thread does not work in, and telling it apart from the part it does work in is what the
+     * one merged row could not answer. */
+    public void noteComputeWait(long nanos) {
+        if (nanos > 0L) {
+            computeWaitNanos.add(nanos);
+        }
+    }
+
+    /** The other part of the compute window: the tick thread walking the frozen order, collecting
+     * the frames and hashing the two arms. */
+    public void noteComputeFrame(long nanos) {
+        if (nanos > 0L) {
+            computeFrameNanos.add(nanos);
         }
     }
 
@@ -410,6 +429,14 @@ public final class DispatchReadings {
         return computeNanos.sum();
     }
 
+    public long computeWaitNanos() {
+        return computeWaitNanos.sum();
+    }
+
+    public long computeFrameNanos() {
+        return computeFrameNanos.sum();
+    }
+
     public long verifyRows() {
         return verifyRows.sum();
     }
@@ -571,6 +598,8 @@ public final class DispatchReadings {
         builder.append(" dispatch_snapshot_ms=").append(ms(snapshotNanos()));
         builder.append(" dispatch_verify_ms=").append(ms(verifyNanos()));
         builder.append(" dispatch_compute_ms=").append(ms(computeNanos()));
+        builder.append(" dispatch_compute_wait_ms=").append(ms(computeWaitNanos()));
+        builder.append(" dispatch_compute_frame_ms=").append(ms(computeFrameNanos()));
         builder.append(" dispatch_redo_ms=").append(ms(redoNanos()));
         builder.append(" entity_ms_serial_integrate=").append(ms(entityNanosSerialArm()));
         builder.append(" entity_ms_on_worker=").append(ms(entityNanos()));
@@ -641,6 +670,8 @@ public final class DispatchReadings {
         redoNanos.reset();
         verifyNanos.reset();
         computeNanos.reset();
+        computeWaitNanos.reset();
+        computeFrameNanos.reset();
         verifyRows.reset();
         verifyMismatch.reset();
         entityNanosSerialArm.reset();

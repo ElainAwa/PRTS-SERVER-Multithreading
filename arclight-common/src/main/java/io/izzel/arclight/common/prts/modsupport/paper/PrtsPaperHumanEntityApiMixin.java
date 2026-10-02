@@ -7,11 +7,7 @@ import org.bukkit.entity.HumanEntity;
 import org.bukkit.inventory.InventoryView;
 import org.spongepowered.asm.mixin.Mixin;
 
-/**
- * Declares the Paper inventory-opening methods on the human entity interface. A null location
- * means the current position, {@code force} skips the block type check, and the view is null
- * when it could not be opened; the implementations come from the CraftHumanEntity mixin.
- */
+/** Paper inventory openers; a null location means the current position and a null view means it did not open. */
 @Mixin(value = HumanEntity.class, remap = false)
 public interface PrtsPaperHumanEntityApiMixin {
 

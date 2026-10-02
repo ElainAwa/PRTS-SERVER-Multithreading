@@ -10,10 +10,8 @@ import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
-/**
- * Forces the server detection of that plugin to "no", so it registers its commands through the
- * Bukkit API instead of a Paper path this server does not implement.
- */
+/** Forces the server detection of that plugin to "no", so it registers commands through the Bukkit
+ * API instead of a Paper path this server does not implement. */
 public final class PrtsFaweCommandPatcher {
 
     private static final String COMMAND_MAP_METHOD = "getCommandMap";
@@ -25,9 +23,7 @@ public final class PrtsFaweCommandPatcher {
     private PrtsFaweCommandPatcher() {
     }
 
-    /**
-     * Replaces the server detection inside the command map lookup of the given class.
-     */
+    /** Replaces the server detection inside the command map lookup of the given class. */
     public static void handleFaweCommandRegistration(ClassNode node, PluginPatcher.ClassRepo classRepo) {
         for (MethodNode method : node.methods) {
             if (!COMMAND_MAP_METHOD.equals(method.name) || !COMMAND_MAP_DESCRIPTOR.equals(method.desc)) {

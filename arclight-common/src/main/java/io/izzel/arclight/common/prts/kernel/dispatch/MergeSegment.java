@@ -61,7 +61,10 @@ public final class MergeSegment {
         }
         long mergeStartedAt = System.nanoTime();
         List<TaskOutcome> outcomes = pass.awaitAll(deadlineNanos);
-        long computeNanos = System.nanoTime() - mergeStartedAt;
+        // The wait and the work are two different costs of the same window: the first one blocks,
+        // the second one works. They are kept apart so a window can be read as either.
+        long waitNanos = System.nanoTime() - mergeStartedAt;
+        long frameNanos = 0L;
         List<StateHasher.Slice> parallelSlices = new ArrayList<>();
         List<StateHasher.Slice> serialSlices = new ArrayList<>();
         int committed = 0;
@@ -125,7 +128,7 @@ public final class MergeSegment {
             collect(entry, scratch, batchSlices);
             parallelSlices.addAll(batchSlices);
             append(entry.batch().task(), entry.view(), reference, serialSlices);
-            computeNanos += System.nanoTime() - collectStartedAt;
+            frameNanos += System.nanoTime() - collectStartedAt;
             // The settlement of the tick the frame belongs to: compute-only samples the world back
             // and lands nothing, takeover hands the batch to the channel the commit segment drains.
             // A frame that was not handed over is not read back at the next merge, because the world
@@ -141,7 +144,7 @@ public final class MergeSegment {
                 commitSeq++;
             }
             release(entry, arena, outcome.status() == TaskOutcome.Status.EXECUTED);
-            computeNanos += System.nanoTime() - settleStartedAt;
+            frameNanos += System.nanoTime() - settleStartedAt;
         }
         long hashStartedAt = System.nanoTime();
         DomainHash parallel = StateHasher.hash(domainId, pass.plan().tickIndex(), parallelSlices,
@@ -151,8 +154,10 @@ public final class MergeSegment {
         boolean equal = parallel.comparable() && serial.comparable()
             && parallel.value() == serial.value();
         probe.compare(parallel, serial);
-        computeNanos += System.nanoTime() - hashStartedAt;
-        readings.noteCompute(computeNanos);
+        frameNanos += System.nanoTime() - hashStartedAt;
+        readings.noteComputeWait(waitNanos);
+        readings.noteComputeFrame(frameNanos);
+        readings.noteCompute(waitNanos + frameNanos);
         readings.noteHashPair(equal);
         if (!equal && probe.report().firstForkTick() < 0) {
             readings.noteForkUnattributed();

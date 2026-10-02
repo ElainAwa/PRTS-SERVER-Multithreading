@@ -7,11 +7,7 @@ import org.bukkit.permissions.PermissibleBase;
 
 import java.lang.reflect.Field;
 
-/**
- * The two non-API field handles plugin code reaches for when it injects a custom permissible. They
- * are resolved once here and handed to the plugin by the class rewriter, since the lookup rules
- * change between releases.
- */
+/** The two non-API field handles the class rewriter hands to plugins; the lookup rules change between releases. */
 public final class PrtsLuckPermsCompat {
 
     private static final Field HUMAN_ENTITY_PERMISSIBLE_FIELD = findField(CraftHumanEntity.class, "perm");
@@ -20,12 +16,10 @@ public final class PrtsLuckPermsCompat {
     private PrtsLuckPermsCompat() {
     }
 
-    /** @return the field that holds the permissible of a human entity */
     public static Field humanEntityPermissibleField() {
         return HUMAN_ENTITY_PERMISSIBLE_FIELD;
     }
 
-    /** @return the field that holds the attachments of a permissible */
     public static Field permissibleBaseAttachmentsField() {
         return PERMISSIBLE_BASE_ATTACHMENTS_FIELD;
     }

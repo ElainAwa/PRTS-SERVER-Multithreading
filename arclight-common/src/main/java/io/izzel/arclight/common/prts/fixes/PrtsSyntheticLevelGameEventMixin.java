@@ -12,11 +12,8 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/**
- * Cancels the Bukkit game-event dispatch on synthetic levels, which have no CraftWorld and would
- * throw from the world lookup. The raised priority makes this callback run before the upstream
- * injection; on a real level the condition is false and nothing changes.
- */
+/** Cancels the Bukkit game-event dispatch on synthetic levels, which have no CraftWorld; the raised
+ * priority runs this before the upstream injection, and a real level is unaffected. */
 @Mixin(value = ServerLevel.class, priority = 1500)
 public abstract class PrtsSyntheticLevelGameEventMixin {
 

@@ -12,11 +12,8 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 
 import java.util.function.BiFunction;
 
-/**
- * Falls back to the class based entity lookup when the entity type table converts to a wrapper
- * whose cast cannot hold, which would end the call in a ClassCastException. The regular path is
- * left untouched.
- */
+/** Falls back to the class based entity lookup when the type table converts to a wrapper whose cast
+ * cannot hold; the regular path is left untouched. */
 @Mixin(value = CraftEntity.class, remap = false)
 public abstract class PrtsCraftEntityTypeGuardMixin {
 

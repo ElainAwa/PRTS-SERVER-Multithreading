@@ -1,8 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * Records the Bukkit species while a grow is captured: TreeType follows the configured feature the
- * grower resolved, not the sapling block (a 2x2 spruce and a single one are one block, a mega
- * redwood and a redwood are two). Both resolutions happen before anything is placed.
+ * grower resolved, not the sapling block; both resolutions happen before anything is placed.
  */
 package io.izzel.arclight.common.prts.fixes;
 

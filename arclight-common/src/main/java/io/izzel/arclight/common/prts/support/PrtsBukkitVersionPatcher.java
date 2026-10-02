@@ -8,10 +8,8 @@ import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
-/**
- * Writes the static Paper version readout into the Bukkit facade. Mixin does not merge non-private
- * static methods, so the method is added from the post-apply step of the mixin configuration plugin.
- */
+/** Writes the static Paper version readout into the Bukkit facade; Mixin does not merge non-private
+ * static methods, so the method is added from the post-apply step of the config plugin. */
 public final class PrtsBukkitVersionPatcher {
 
     private static final String BUKKIT_CLASS = "org.bukkit.Bukkit";
@@ -23,9 +21,7 @@ public final class PrtsBukkitVersionPatcher {
     private PrtsBukkitVersionPatcher() {
     }
 
-    /**
-     * Adds the readout when the target is the Bukkit facade and does not already carry the method.
-     */
+    /** Adds the readout when the target is the Bukkit facade and does not already carry the method. */
     public static void patch(String targetClassName, ClassNode targetClass) {
         if (targetClassName == null
             || !BUKKIT_CLASS.equals(targetClassName.replace('/', '.'))

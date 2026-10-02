@@ -5,10 +5,6 @@ package io.izzel.arclight.common.prts.modsupport.paper;
 import org.bukkit.Server;
 import org.spongepowered.asm.mixin.Mixin;
 
-/**
- * Declares the Paper version readout on the server interface; plugins compiled against the Paper
- * API resolve it here and the implementation lives on CraftServer.
- */
 @Mixin(value = Server.class, remap = false)
 public interface PrtsPaperServerApiMixin {
 

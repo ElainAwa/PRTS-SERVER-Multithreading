@@ -3,9 +3,8 @@ package io.izzel.arclight.common.prts.kernel.dispatch;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** The cooperative cancellation flag of one batch. A thread cannot be stopped safely, so
- * cancellation is cooperative: the token is set by the merge when the deadline passes, and the
- * body checks it at its bounded checkpoints. */
+/** The cooperative cancellation flag of one batch: a thread cannot be stopped safely, so the merge
+ * sets the token when the deadline passes and the body checks it at its bounded checkpoints. */
 public final class CancelToken {
 
     private final long batchEpoch;
@@ -23,7 +22,6 @@ public final class CancelToken {
         return cancelled.get();
     }
 
-    /** Requests cancellation. */
     public boolean cancel() {
         return cancelled.compareAndSet(false, true);
     }

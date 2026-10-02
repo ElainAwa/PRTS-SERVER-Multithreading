@@ -8,11 +8,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
-/**
- * Counts how often a mod interoperability patch changed a decision and reports it: the first event of
- * a counter and every thousandth behind it, so a hot patch cannot fill the log. The counters are a
- * process-wide readout, never reset, and nothing here throws or blocks.
- */
+/** Process-wide mod-support counters: the first event of a counter and every thousandth behind it
+ * are logged, so a hot patch cannot fill the log; nothing here throws or blocks. */
 public final class PrtsModSupportStats {
 
     private static final Logger LOGGER = LogManager.getLogger("PRTS-modsupport");
@@ -24,23 +21,17 @@ public final class PrtsModSupportStats {
     private PrtsModSupportStats() {
     }
 
-    /** Adds one event to a counter and reports the new value when it is due. */
     public static void count(String name) {
         count(name, 1L);
     }
 
-    /**
-     * Adds events to a counter and reports the new value when it is due; a delta of zero or less
-     * changes nothing.
-     */
     public static void count(String name, long delta) {
         if (delta <= 0L) {
             return;
         }
         long value = COUNTERS.computeIfAbsent(name, key -> new AtomicLong()).addAndGet(delta);
         if (value == delta || value % REPORT_EVERY < delta) {
-            // the first event is always reported and later ones every thousand: the second test also
-            // catches a batch that jumped over a reporting boundary
+            // first event always, then every thousandth; the range test catches a batch that crossed a boundary
             LOGGER.info("[PRTS-modsupport] {}: {}", name, value);
         }
     }

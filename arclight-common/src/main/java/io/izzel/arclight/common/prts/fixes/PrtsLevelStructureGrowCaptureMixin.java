@@ -1,8 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * The write and read sides of the tree capture: while a sapling grows, a write is answered from the
- * capture list and a generator that clears the sapling must see its own write, or the tree is built
- * against a world where the sapling still stands. False for every other level write and block read.
+ * capture list so the generator sees its own write; false for every other level write and block read.
  */
 package io.izzel.arclight.common.prts.fixes;
 
@@ -47,10 +46,8 @@ public abstract class PrtsLevelStructureGrowCaptureMixin {
             new PrtsDeferredWrites.LevelWrite(level, pos, state, flags, recursionLeft));
     }
 
-    /**
-     * The read side of the capture: only the level that started the grow is answered from the capture
-     * list, so every other block read pays one field read.
-     */
+    /** The read side of the capture: only the level that started the grow answers from the capture
+     * list, so every other block read pays one field read. */
     @Inject(method = "getBlockState", cancellable = true, at = @At("HEAD"))
     private void prts$readCapturedTreeBlock(BlockPos pos, CallbackInfoReturnable<BlockState> cir) {
         BlockState captured = PrtsStructureGrowCapture.capturedState((Level) (Object) this, pos);

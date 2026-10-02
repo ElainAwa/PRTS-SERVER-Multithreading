@@ -4,11 +4,8 @@ package io.izzel.arclight.common.prts.support;
 
 import io.izzel.arclight.common.mod.server.ArclightServer;
 
-/**
- * Loads the Bungee chat API classes into the server class loader once, so plugins that send a
- * component to a proxy resolve them. A missing class is reported and stops the preload instead of
- * failing the server start.
- */
+/** Loads the Bungee chat API classes into the server class loader once, so plugins that send a
+ * component to a proxy resolve them; a missing class stops the preload instead of the server start. */
 public final class PrtsBungeeChatPreload {
 
     private static final String[] CHAT_CLASSES = {
@@ -22,7 +19,6 @@ public final class PrtsBungeeChatPreload {
     private PrtsBungeeChatPreload() {
     }
 
-    /** Loads every class of the chat API, stopping at the first one the platform does not carry. */
     public static void preload() {
         ClassLoader loader = PrtsBungeeChatPreload.class.getClassLoader();
         for (String className : CHAT_CLASSES) {

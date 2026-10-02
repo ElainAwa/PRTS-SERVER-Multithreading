@@ -2,7 +2,6 @@
 /*
  * Builds the tree World#generateTree asks for into the BlockStateListPopulator CraftBukkit uses for
  * its filtered overload: reads answer with the writes made so far and the chunk stays untouched.
- * StructureGrowEvent then decides whether the list is dropped, applied, or handed to the delegate.
  */
 package io.izzel.arclight.common.prts.support;
 
@@ -26,33 +25,27 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
-/**
- * Grows the tree and lets StructureGrowEvent decide whether it is kept; the list the event carries is
- * the list applied afterwards, so a listener that removes a block keeps it out of the world.
- */
+/** Grows the tree and lets StructureGrowEvent decide whether it is kept: the list the event carries
+ * is the list applied afterwards, so a listener that removes a block keeps it out of the world. */
 public final class PrtsGenerateTree {
 
     private PrtsGenerateTree() {
     }
 
-    /**
-     * Grows one tree and applies it to the world or hands it to the given delegate.
-     * @return true when the tree was grown and not cancelled
-     */
+    /** Grows one tree and applies it to the world or hands it to the given delegate.
+     * @return true when the tree was grown and not cancelled */
     public static boolean generateWithEvent(CraftWorld world, Location location, TreeType species,
                                             BlockChangeDelegate delegate, Random random) {
         ServerLevel level = world.getHandle();
         BlockStateListPopulator populator = new BlockStateListPopulator(level);
         BlockPos pos = CraftLocation.toBlockPosition(location);
-        // The tree type maps to the configured feature in the region accessor this call lands in,
-        // so the table of tree types lives in one place and this path cannot drift from it.
+        // the region accessor maps the tree type to the configured feature, so the type table lives in one place
         boolean grown = ((CraftRegionAccessor) world).generateTree(populator, level.getChunkSource().getGenerator(),
             pos, new RandomSourceWrapper(random), species);
         populator.refreshTiles();
         List<org.bukkit.block.BlockState> blocks = new ArrayList<>(populator.getList());
         if (grown && !blocks.isEmpty()) {
-            // A tree placed through the API has no player and no bone meal behind it, the same two
-            // values CraftBukkit hardcodes where a sapling grows by itself.
+            // no player and no bone meal behind an API-placed tree: the two values CraftBukkit hardcodes for a sapling
             StructureGrowEvent event = new StructureGrowEvent(location, species, false, null, blocks);
             Bukkit.getPluginManager().callEvent(event);
             if (event.isCancelled()) {

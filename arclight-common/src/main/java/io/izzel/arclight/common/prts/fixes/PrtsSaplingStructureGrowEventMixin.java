@@ -1,8 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
- * Wraps the one call this platform grows a tree in, SaplingBlock#advanceTree -> TreeGrower; the tree
- * is built against the capture list and StructureGrowEvent decides whether it is written. Bone meal
- * and a random tick both end up here, so both raise the event exactly once.
+ * Wraps the one call this platform grows a tree in, SaplingBlock#advanceTree -> TreeGrower: bone meal
+ * and a random tick both end up here, so the tree is built against the capture and the event decides.
  */
 package io.izzel.arclight.common.prts.fixes;
 

@@ -1,8 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
- * Hooks the platform block write path: the same question the level-side hook asks, cancelling
- * only when the decision refuses. A routed write is handed over as the same setter call and runs
- * on the tick thread, where this hook takes the short path, so it cannot be handed over twice.
+ * Hooks the platform block write path with the same question the level-side hook asks, cancelling
+ * only when the decision refuses; a routed write returns as the same setter call on the tick thread.
  */
 package io.izzel.arclight.common.prts.fixes;
 
@@ -24,9 +23,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(value = CraftBlock.class, remap = false)
 public abstract class PrtsCraftBlockWriteTapMixin {
 
-    // @formatter:off
     @Shadow public abstract CraftWorld getCraftWorld();
-    // @formatter:on
 
     @Inject(method = "setBlockData(Lorg/bukkit/block/data/BlockData;Z)V", at = @At("HEAD"),
         cancellable = true)

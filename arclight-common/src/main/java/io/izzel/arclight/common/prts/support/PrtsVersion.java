@@ -7,11 +7,8 @@ import java.net.URL;
 import java.util.jar.Attributes;
 import java.util.jar.Manifest;
 
-/**
- * The version string of the running build. Anything cached across restarts is keyed by it, so a build
- * that changed is not served artifacts of an earlier one. The string published at startup is read
- * first, the package attribute next, and the manifest of the code source last.
- */
+/** The version string of the running build, which keys everything cached across restarts: the
+ * startup property first, then the package attribute, then the manifest of the code source. */
 public final class PrtsVersion {
 
     private static final String PROPERTY = "arclight.version";

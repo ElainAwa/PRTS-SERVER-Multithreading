@@ -1,9 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/*
- * Dispatches the shear event where this platform shears: after the entity answered that it can be
- * sheared, so a right click that cannot shear raises nothing and a cancelled event leaves the
- * entity untouched because the shear itself never runs.
- */
+/* Dispatches the shear event after the entity answered that it can be sheared: a right click that
+ * cannot shear raises nothing, and a cancelled event leaves the entity untouched because the shear
+ * never runs. */
 package io.izzel.arclight.common.prts.fixes;
 
 import io.izzel.arclight.api.ArclightPlatform;

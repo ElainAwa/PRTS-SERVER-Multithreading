@@ -10,11 +10,8 @@ import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
-/**
- * Rewrites the static initializer of the permissible injector so its field handles come from
- * {@link PrtsLuckPermsCompat}. The plugin's own hard coded lookup fails on this server, which would
- * disable its permission injection.
- */
+/** Rewrites the static initializer of the permissible injector so its field handles come from
+ * {@link PrtsLuckPermsCompat}; the plugin's own lookup fails here and would disable the injection. */
 public final class PrtsLuckPermsPatcher {
 
     private static final String COMPAT_OWNER = "io/izzel/arclight/common/prts/support/PrtsLuckPermsCompat";
@@ -23,9 +20,7 @@ public final class PrtsLuckPermsPatcher {
     private PrtsLuckPermsPatcher() {
     }
 
-    /**
-     * Replaces the static initializer of the given class when it is the permissible injector.
-     */
+    /** Replaces the static initializer of the given class when it is the permissible injector. */
     public static void handlePermissibleInjector(ClassNode node, PluginPatcher.ClassRepo classRepo) {
         for (MethodNode method : node.methods) {
             if (!"<clinit>".equals(method.name) || !"()V".equals(method.desc)) {

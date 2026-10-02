@@ -3,11 +3,7 @@ package io.izzel.arclight.common.prts;
 
 import io.izzel.arclight.common.prts.config.PrtsConfigManager;
 
-/**
- * Resolves the master switch of a PRTS category in the order system property (wins), category file,
- * built-in default - so a category can be disabled even before the configuration directory is read.
- * Resolution never throws: a failure falls back to the built-in default.
- */
+/** Resolves a PRTS category master switch: system property, then category file, then built-in default. */
 public final class PrtsSwitches {
 
     public static final String FIXES = PrtsConfigManager.FIXES;
@@ -19,7 +15,6 @@ public final class PrtsSwitches {
     private PrtsSwitches() {
     }
 
-    /** @return true when the category should be applied */
     public static boolean enabled(String category) {
         String property = systemOverride(category);
         if (property != null) {
@@ -32,7 +27,6 @@ public final class PrtsSwitches {
         }
     }
 
-    /** @return the raw value of the overriding system property, or null when the file and the default decide */
     public static String systemOverride(String category) {
         try {
             return System.getProperty("arclight.prts." + category);
