@@ -57,9 +57,7 @@ public final class MergeSegment {
     private long commitSeq;
     private long foreignRuns;
     private long hashInconsistent;
-    private List<StateHasher.Slice> lastSlices = List.of();
-    private long lastHash;
-    private boolean lastHashTaken;
+    private List<StateHasher.Slice> lastCommitted = List.of();
 
     /**
      * Names the thread the segment may merge on.
@@ -82,22 +80,24 @@ public final class MergeSegment {
      * @param probe       the comparison of the two arms
      * @param whitelist   the fields the frame hash folds
      * @param domainId    the domain the frame belongs to
+     * @param writeBack   the write-back leg, or {@code null} when the merge is not wired to one
      * @return the frame, or {@code null} when the calling thread is not the owner
      */
     public Frame merge(DispatchPass pass, long deadlineNanos, ArenaLedger arena,
                        DispatchReadings readings, DiffProbe probe, HashWhitelist whitelist,
-                       String domainId) {
+                       String domainId, DispatchWriteBack writeBack) {
         Thread owner = ownerThread;
         if (owner != null && owner != Thread.currentThread()) {
             foreignRuns++;
             return null;
         }
-        // The hash of the previous frame is re-taken before the new one is built: a committed frame
-        // that no longer hashes the same is a frozen scene, not a difference to explain away.
-        if (lastHashTaken) {
-            DomainHash again = StateHasher.hash(domainId, pass.plan().tickIndex(), lastSlices,
-                whitelist);
-            if (!again.comparable() || again.value() != lastHash) {
+        // The world is asked what it holds for the frame the commit has just reached, before the new
+        // frame is built. A committed frame the world no longer agrees with is a frozen scene, not a
+        // difference to explain away; re-hashing the same in-memory list would only prove itself.
+        if (writeBack != null && !lastCommitted.isEmpty()) {
+            DispatchWriteBack.ReadBack readBack = writeBack.readBack(lastCommitted, whitelist,
+                domainId, pass.plan().tickIndex());
+            if (!readBack.equal()) {
                 hashInconsistent++;
                 readings.noteHashInconsistent();
             }
@@ -124,11 +124,18 @@ public final class MergeSegment {
             boolean workerValue = outcome.status() == TaskOutcome.Status.EXECUTED
                 && entry.slot() != null && entry.slot().state() == ArenaSlot.State.PUBLISHED;
             ArenaScratch scratch;
+            List<StateHasher.Slice> batchSlices = new ArrayList<>();
             if (workerValue) {
                 scratch = entry.slot().scratch();
             } else {
+                // Whatever kept the worker from answering - a cancel, a retry, a fallback, a full
+                // queue or a dead thread - the batch is computed here, in its own position of the
+                // frozen order, and it is written back like any other. A half applied batch does not
+                // exist: either the frame carries the values or the batch is dropped with its code.
                 redone++;
+                readings.noteTaskOnMain();
                 scratch = EntityIntegrator.mainScratch();
+                long startedAt = writeBack == null ? 0L : System.nanoTime();
                 try {
                     EntityIntegrator.integrateRangeSerial(entry.view(),
                         entry.batch().rangeStart(), entry.batch().rangeEnd(), scratch);
@@ -140,8 +147,16 @@ public final class MergeSegment {
                     release(entry, arena);
                     continue;
                 }
+                if (writeBack != null) {
+                    DispatchWriteBack.noteEntity(readings, entry.view().worldId(),
+                        entry.batch().task().regionId(), System.nanoTime() - startedAt);
+                }
             }
-            collect(entry, scratch, parallelSlices);
+            collect(entry, scratch, batchSlices);
+            parallelSlices.addAll(batchSlices);
+            if (writeBack != null) {
+                writeBack.enqueue(entry.batch(), batchSlices);
+            }
             if (!pass.ledger().markCommitted(entry.batch().batchId())) {
                 readings.noteDuplicateCommit();
             } else {
@@ -154,12 +169,20 @@ public final class MergeSegment {
         for (EntityCandidateView view : pass.plan().views()) {
             byWorld.putIfAbsent(view.worldId(), view);
         }
+        // The serial arm is the reference the parallel frame is compared with: the tick thread does
+        // the whole domain from the same frozen view. It exists only for the comparison, so its time
+        // is recorded as observation and never as entity work of the world.
         List<StateHasher.Slice> serialSlices = new ArrayList<>();
         for (WorkTask task : pass.plan().tasks()) {
             EntityCandidateView view = byWorld.get(task.worldId());
             ArenaScratch scratch = EntityIntegrator.mainScratch();
+            long startedAt = writeBack == null ? 0L : System.nanoTime();
             EntityIntegrator.integrateRangeSerial(view, task.entitySeqStart(), task.entitySeqEnd(),
                 scratch);
+            if (writeBack != null) {
+                DispatchWriteBack.noteEvidence(readings, task.worldId(),
+                    System.nanoTime() - startedAt);
+            }
             append(task, view, scratch, serialSlices);
         }
         DomainHash parallel = StateHasher.hash(domainId, pass.plan().tickIndex(), parallelSlices,
@@ -173,9 +196,7 @@ public final class MergeSegment {
         if (!equal && probe.report().firstForkTick() < 0) {
             readings.noteForkUnattributed();
         }
-        lastSlices = parallelSlices;
-        lastHash = parallel.value();
-        lastHashTaken = parallel.comparable();
+        lastCommitted = parallelSlices;
         TaskLedger.ClosureReport closure = pass.ledger().closure(pass.dispatched(), executed,
             retried, fellback, cancelled, failed);
         pass.ledger().closeWindow();
@@ -226,8 +247,6 @@ public final class MergeSegment {
         commitSeq = 0L;
         foreignRuns = 0L;
         hashInconsistent = 0L;
-        lastSlices = List.of();
-        lastHash = 0L;
-        lastHashTaken = false;
+        lastCommitted = List.of();
     }
 }

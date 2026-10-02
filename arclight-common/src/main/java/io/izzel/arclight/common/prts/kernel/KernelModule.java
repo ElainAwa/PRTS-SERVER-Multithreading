@@ -12,6 +12,7 @@ import io.izzel.arclight.common.prts.kernel.dispatch.DispatchPass;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchReadings;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchSettings;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchSnapshot;
+import io.izzel.arclight.common.prts.kernel.dispatch.DispatchWriteBack;
 import io.izzel.arclight.common.prts.kernel.dispatch.EntityCandidateView;
 import io.izzel.arclight.common.prts.kernel.dispatch.EntityIntegrator;
 import io.izzel.arclight.common.prts.kernel.dispatch.MergeSegment;
@@ -22,6 +23,7 @@ import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import io.izzel.arclight.common.prts.kernel.meter.MeterWindow;
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
+import io.izzel.arclight.common.prts.kernel.meter.SelfRow;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers;
 import io.izzel.arclight.common.prts.kernel.shares.ConservationCheck;
 import io.izzel.arclight.common.prts.kernel.shares.OverrunRecord;
@@ -92,7 +94,7 @@ public final class KernelModule {
     private final IntentQueue intents = new IntentQueue(KernelSettings::intentQueueCap,
         KernelSettings::retryBudget);
     private final CommitSegment commitSegment = new CommitSegment(intents,
-        KernelSettings::commitIntents, KernelSettings::commitBudget);
+        KernelModule::commitWanted, KernelSettings::commitBudget);
     private final WriteLedger ledger = new WriteLedger();
     private final WritePathCounters pathCounters = new WritePathCounters();
     private final IntentPayloadDirectory payloads = new IntentPayloadDirectory();
@@ -110,6 +112,8 @@ public final class KernelModule {
     private final TaskLedger dispatchLedger = new TaskLedger(0L);
     private final DiffProbe diffProbe = new DiffProbe();
     private final MergeSegment mergeSegment = new MergeSegment();
+    private final DispatchWriteBack dispatchWriteBack = new DispatchWriteBack(intents, payloads::bind,
+        payloads::drop, guard.worldEpochs()::epochOf, dispatchReadings);
     private final Map<String, Long> dispatchWorldEpochs = new HashMap<>();
     private final Set<String> dispatchLiveWorlds = new HashSet<>();
 
@@ -245,19 +249,35 @@ public final class KernelModule {
      */
     private void driveDispatch() {
         boolean parallel = KernelSettings.dispatchParallel();
+        // The line is exported before the merge of this tick and after the commit of this tick, so
+        // the orders the commit consumed account for every task the plan froze: a task is counted
+        // when its plan is built and its intent is consumed at the next commit boundary.
+        if (tickIndex - lastDispatchEvidenceTick >= DISPATCH_EVIDENCE_TICKS) {
+            lastDispatchEvidenceTick = tickIndex;
+            DispatchReadings.Window window = new DispatchReadings.Window(
+                dispatchPool == null ? 0 : dispatchPool.alive(), lastDispatchFrame.closureOk(),
+                commitSegment.cursor(), intents.depth(), intents.orderViolationCount(),
+                selfEntityMs());
+            DISPATCH_EVIDENCE.info(dispatchReadings.evidenceLine(arena, window));
+            DISPATCH_EVIDENCE.info(dispatchWriteBack.sampleLine());
+        }
         if (parallel) {
             DispatchSettings.Policy policy = DispatchSettings.resolve();
             if (pendingDispatch != null) {
                 long grace = policy.deadlineGraceMs();
                 long deadline = System.nanoTime() + grace * 1_000_000L;
                 lastDispatchFrame = mergeSegment.merge(pendingDispatch, deadline, arena,
-                    dispatchReadings, diffProbe, HashWhitelist.bitexact(), DISPATCH_DOMAIN);
+                    dispatchReadings, diffProbe, HashWhitelist.bitexact(), DISPATCH_DOMAIN,
+                    dispatchWriteBack);
                 pendingDispatch = null;
                 if (lastDispatchFrame == null) {
                     lastDispatchFrame = MergeSegment.Frame.empty();
                 }
             }
+            long snapshotStart = System.nanoTime();
             List<EntityCandidateView> views = DispatchSnapshot.capture(this::dispatchWorldEpoch);
+            DispatchWriteBack.noteSnapshot(dispatchReadings, RUNTIME_WORLD, "snapshot",
+                System.nanoTime() - snapshotStart);
             forgetAbsentDispatchWorlds(views);
             WorkPlan plan = WorkPlan.freeze(tickIndex, dispatchLedger.epoch(), views,
                 policy.batchChunks(), dispatchTaskSeq + 1L);
@@ -282,11 +302,31 @@ public final class KernelModule {
         } else if (dispatchPool != null) {
             shutdownDispatch();
         }
-        if (tickIndex - lastDispatchEvidenceTick >= DISPATCH_EVIDENCE_TICKS) {
-            lastDispatchEvidenceTick = tickIndex;
-            DISPATCH_EVIDENCE.info(dispatchReadings.evidenceLine(arena,
-                dispatchPool == null ? 0 : dispatchPool.alive(), lastDispatchFrame.closureOk()));
+    }
+
+    /**
+     * Answers whether the commit segment may walk this tick.
+     *
+     * <p>The switch that walks the channel is the one that already existed, read through the line
+     * the dispatcher adds to it: a write-back the merge froze has to land, or the values a worker
+     * computed would sit in the channel forever while the frame hash said they were committed. With
+     * the dispatcher off the expression is exactly the old switch, so an operator who never turns the
+     * dispatcher on sees the same behaviour with the same configuration.</p>
+     *
+     * @return {@code true} when a deferred write may be applied this tick
+     */
+    private static boolean commitWanted() {
+        return KernelSettings.commitIntents() || KernelSettings.dispatchParallel();
+    }
+
+    /** @return the entity row of the self timer, in milliseconds */
+    private double selfEntityMs() {
+        for (SelfRow row : window().rows()) {
+            if (row.selfClass() == SelfClass.ENTITY) {
+                return row.totalMs();
+            }
         }
+        return 0.0;
     }
 
     private synchronized long dispatchWorldEpoch(String worldId) {

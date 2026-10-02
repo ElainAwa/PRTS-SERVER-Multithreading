@@ -19,12 +19,16 @@ import io.izzel.arclight.common.prts.kernel.diff.StateHasher;
 import io.izzel.arclight.common.prts.kernel.dispatch.CancelToken;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchPass;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchReadings;
+import io.izzel.arclight.common.prts.kernel.dispatch.DispatchWriteBack;
 import io.izzel.arclight.common.prts.kernel.dispatch.EntityCandidateView;
 import io.izzel.arclight.common.prts.kernel.dispatch.EntityIntegrator;
 import io.izzel.arclight.common.prts.kernel.dispatch.MergeSegment;
 import io.izzel.arclight.common.prts.kernel.dispatch.TaskLedger;
+import io.izzel.arclight.common.prts.kernel.dispatch.WorkBatch;
+import io.izzel.arclight.common.prts.kernel.dispatch.WorkTask;
 import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan;
 import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
+import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
 import io.izzel.arclight.common.prts.kernel.codes.RejectTrigger;
 import io.izzel.arclight.common.prts.kernel.intent.CommitOrder;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
@@ -55,10 +59,12 @@ import io.izzel.arclight.common.prts.support.PrtsWaitSites;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 import java.util.function.IntSupplier;
 
@@ -617,7 +623,7 @@ public final class KernelSelfCheck {
             DispatchPass pass = DispatchPass.dispatch(plan, pool, EntityIntegrator.INSTANCE, arena,
                 readings, ledger);
             MergeSegment.Frame frame = merge.merge(pass, System.nanoTime() + 2_000_000_000L, arena,
-                readings, new DiffProbe(), HashWhitelist.bitexact(), "entity");
+                readings, new DiffProbe(), HashWhitelist.bitexact(), "entity", null);
             lines.add("selftest.dispatch_tasks=" + plan.taskCount());
             lines.add("selftest.dispatch_worker_exec=" + readings.execByThread("prts-worker-0"));
             lines.add("selftest.dispatch_executed=" + readings.executed());
@@ -650,11 +656,97 @@ public final class KernelSelfCheck {
                 failures.add("a second commit of one batch was not refused");
             }
             lines.addAll(dispatchFailureMatrix(failures, tick));
+            lines.addAll(dispatchWriteBackMatrix(failures, tick));
         } finally {
             pool.shutdown(true, true, 500L);
             arena.reset();
         }
         return lines;
+    }
+
+    /**
+     * Drives the write-back leg against a scratch channel: what the merge commits becomes one intent
+     * per batch, in the frozen order, tagged with the batch it carries, and the commit segment is
+     * what consumes the orders - with a channel at its depth refusing the write-back and counting it.
+     */
+    private static List<String> dispatchWriteBackMatrix(List<String> failures, long tick) {
+        List<String> lines = new ArrayList<>();
+        DispatchReadings readings = new DispatchReadings();
+        ArenaLedger arena = new ArenaLedger();
+        TaskLedger ledger = new TaskLedger(1L);
+        IntentQueue intents = new IntentQueue(() -> 64, () -> 1);
+        Map<String, PrtsWorldWriteTaps.DeferredWrite> store = new LinkedHashMap<>();
+        List<WriteIntent> applied = new ArrayList<>();
+        AtomicInteger handles = new AtomicInteger();
+        intents.bindPayload(intent -> {
+            applied.add(intent);
+            return IntentPayload.Outcome.APPLIED;
+        });
+        DispatchWriteBack writeBack = new DispatchWriteBack(intents, (prefix, write) -> {
+            String handle = prefix + ":" + handles.incrementAndGet();
+            store.put(handle, write);
+            return handle;
+        }, store::remove, world -> 1L, readings);
+        WorkPlan plan = WorkPlan.freeze(tick, 1L, List.of(dispatchFixture()), 4, 1L);
+        WorkerPool pool = WorkerPool.open(new WorkerPool.Spec(1, "prts-worker-", Thread.NORM_PRIORITY,
+            8, 4), 1, readings, arena);
+        try {
+            MergeSegment merge = new MergeSegment();
+            merge.bindOwnerThread(Thread.currentThread());
+            DispatchPass pass = DispatchPass.dispatch(plan, pool, EntityIntegrator.INSTANCE, arena,
+                readings, ledger);
+            merge.merge(pass, System.nanoTime() + 2_000_000_000L, arena, readings, new DiffProbe(),
+                HashWhitelist.bitexact(), "entity", writeBack);
+            CommitSegment segment = new CommitSegment(intents, () -> true, () -> 64);
+            segment.bindOwnerThread(Thread.currentThread());
+            CommitSegment.Pass walk = segment.run(tick + 1);
+            boolean tagged = applied.size() == plan.taskCount();
+            for (int index = 0; index < applied.size() && tagged; index++) {
+                tagged = applied.get(index).siteId().equals(DispatchWriteBack.SITE_PREFIX + ":"
+                    + plan.tasks().get(index).batchId());
+            }
+            lines.add("selftest.dispatch_writeback_intents=" + intents.enqueuedCount());
+            lines.add("selftest.dispatch_writeback_tagged=" + (tagged ? 1 : 0));
+            lines.add("selftest.dispatch_writeback_cursor=" + segment.cursor());
+            lines.add("selftest.dispatch_writeback_order_violations="
+                + intents.orderViolationCount());
+            if (intents.enqueuedCount() != plan.taskCount() || walk.steps() != plan.taskCount()) {
+                failures.add("a committed batch did not become exactly one write");
+            }
+            if (!tagged) {
+                failures.add("a write did not carry the identity of its batch in the frozen order");
+            }
+            if (segment.cursor() != plan.taskCount() || intents.orderViolationCount() != 0L) {
+                failures.add("the commit did not consume the frozen order of the write-backs");
+            }
+        } finally {
+            pool.shutdown(true, true, 500L);
+            arena.reset();
+        }
+        DispatchReadings refused = new DispatchReadings();
+        IntentQueue shallow = new IntentQueue(() -> 1, () -> 1);
+        Map<String, PrtsWorldWriteTaps.DeferredWrite> shallowStore = new LinkedHashMap<>();
+        AtomicInteger shallowHandles = new AtomicInteger();
+        DispatchWriteBack shallowWriteBack = new DispatchWriteBack(shallow, (prefix, write) -> {
+            String handle = prefix + ":" + shallowHandles.incrementAndGet();
+            shallowStore.put(handle, write);
+            return handle;
+        }, shallowStore::remove, world -> 1L, refused);
+        List<StateHasher.Slice> rows = List.of(dispatchSlice(1.0));
+        shallowWriteBack.enqueue(writeBackBatch(1L, rows.get(0).regionId(), rows), rows);
+        shallowWriteBack.enqueue(writeBackBatch(2L, rows.get(0).regionId(), rows), rows);
+        lines.add("selftest.dispatch_writeback_refused=" + refused.writeBackRefused());
+        if (refused.writeBackRefused() != 1L || shallowStore.size() != 1) {
+            failures.add("a write-back refused at the channel depth was not counted and forgotten");
+        }
+        return lines;
+    }
+
+    private static WorkBatch writeBackBatch(long batchId, String regionId,
+                                            List<StateHasher.Slice> rows) {
+        WorkTask task = new WorkTask(batchId, "dispatch-selftest", regionId, batchId, 0, 1, 1L, 1L, 0,
+            regionId);
+        return new WorkBatch(batchId, task, 1L, dispatchFixture());
     }
 
     private static List<String> dispatchFailureMatrix(List<String> failures, long tick) {
