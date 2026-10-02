@@ -19,6 +19,7 @@ import io.izzel.arclight.common.prts.kernel.dispatch.MergeSegment;
 import io.izzel.arclight.common.prts.kernel.dispatch.TaskLedger;
 import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan;
 import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
+import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import io.izzel.arclight.common.prts.kernel.meter.MeterWindow;
@@ -41,11 +42,8 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.EnumMap;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * The module entry: one instance per process, driven once per tick by the platform listener.
@@ -88,6 +86,7 @@ public final class KernelModule {
     private static final String DISPATCH_DOMAIN = "entity";
     private static final String DISPATCH_THREAD_PREFIX = "prts-worker-";
     private static final long DISPATCH_EVIDENCE_TICKS = 400L;
+    private static final long DISPATCH_SHUTDOWN_WAIT_MS = 250L;
     private static final Logger DISPATCH_EVIDENCE = LogManager.getLogger("PRTS");
 
     private final OwnerRegistry owners = new OwnerRegistry();
@@ -115,11 +114,7 @@ public final class KernelModule {
     private final DispatchWriteBack dispatchWriteBack = new DispatchWriteBack(intents, payloads::bind,
         payloads::drop, guard.worldEpochs()::epochOf, dispatchReadings,
         KernelSettings::dispatchTakeover);
-    private final Map<String, Long> dispatchWorldEpochs = new HashMap<>();
-    private final Set<String> dispatchLiveWorlds = new HashSet<>();
-
     private long tickIndex;
-    private long dispatchWorldEpochSeq;
     private long dispatchTaskSeq;
     private long lastDispatchEvidenceTick;
     private WorkerPool dispatchPool;
@@ -265,6 +260,8 @@ public final class KernelModule {
         if (parallel) {
             DispatchSettings.Policy policy = DispatchSettings.resolve();
             if (pendingDispatch != null) {
+                // The merge closes the window of the pass it reads; the epoch of the ledger only
+                // moves here, so a pass that is closed without a merge must move it itself.
                 long grace = policy.deadlineGraceMs();
                 long deadline = System.nanoTime() + grace * 1_000_000L;
                 lastDispatchFrame = mergeSegment.merge(pendingDispatch, deadline, arena,
@@ -276,10 +273,13 @@ public final class KernelModule {
                 }
             }
             long snapshotStart = System.nanoTime();
-            List<EntityCandidateView> views = DispatchSnapshot.capture(this::dispatchWorldEpoch);
+            // One epoch source for the freeze and the commit: the task carries the generation the
+            // write-right guard tracks, so the write-back can freeze it and the commit can compare
+            // the very same number.
+            List<EntityCandidateView> views =
+                DispatchSnapshot.capture(guard.worldEpochs()::epochOf);
             DispatchWriteBack.noteSnapshot(dispatchReadings, RUNTIME_WORLD, "snapshot",
                 System.nanoTime() - snapshotStart);
-            forgetAbsentDispatchWorlds(views);
             WorkPlan plan = WorkPlan.freeze(tickIndex, dispatchLedger.epoch(), views,
                 policy.batchChunks(), dispatchTaskSeq + 1L);
             dispatchTaskSeq += plan.taskCount();
@@ -298,9 +298,15 @@ public final class KernelModule {
                 if (dispatchPool != null) {
                     pendingDispatch = DispatchPass.dispatch(plan, dispatchPool,
                         EntityIntegrator.INSTANCE, arena, dispatchReadings, dispatchLedger);
+                } else {
+                    // No pool this tick: the plan still receives one terminal outcome per task, so
+                    // the accounting of the tick closes and the merge redos the batches on the tick
+                    // thread in the frozen order.
+                    pendingDispatch = DispatchPass.serialFallback(plan, dispatchReadings,
+                        dispatchLedger);
                 }
             }
-        } else if (dispatchPool != null) {
+        } else if (dispatchPool != null || pendingDispatch != null) {
             shutdownDispatch();
         }
     }
@@ -330,39 +336,33 @@ public final class KernelModule {
         return 0.0;
     }
 
-    private synchronized long dispatchWorldEpoch(String worldId) {
-        if (!dispatchLiveWorlds.contains(worldId)) {
-            dispatchWorldEpochSeq++;
-            dispatchWorldEpochs.put(worldId, dispatchWorldEpochSeq);
-            dispatchLiveWorlds.add(worldId);
-        }
-        return dispatchWorldEpochs.getOrDefault(worldId, dispatchWorldEpochSeq);
-    }
-
-    private synchronized void forgetAbsentDispatchWorlds(List<EntityCandidateView> views) {
-        Set<String> seen = new HashSet<>();
-        for (EntityCandidateView view : views) {
-            seen.add(view.worldId());
-        }
-        dispatchLiveWorlds.retainAll(seen);
-    }
-
     /**
-     * Stops the pool in the ordered shutdown steps and gives the arena segments back.
-     *
-     * <p>The steps are the ones world unload uses as well: stop offering work, wait for what is in
-     * flight, end the threads inside a bounded wait, and only then return the slots. A worker that
-     * answers after its handle was cancelled is refused by the handle and counted as late, never
-     * silently accepted.</p>
+     * Closes the pending pass, stops the pool and returns the slots. The pass is closed before the
+     * pool is, so switching back on cannot inherit a pending batch; an unconfirmed wait quarantines
+     * the arena instead of returning slots a worker might still hold.
      */
     private void shutdownDispatch() {
         WorkerPool current = dispatchPool;
         dispatchPool = null;
+        DispatchPass pending = pendingDispatch;
         pendingDispatch = null;
-        if (current != null) {
-            current.shutdown(true, true, 250L);
+        if (pending != null) {
+            pending.abort(RejectCode.TICK_BUDGET_EXHAUSTED.text());
         }
-        arena.releaseAll();
+        boolean confirmed = true;
+        if (current != null) {
+            WorkerPool.ShutdownReport report =
+                current.shutdown(true, true, DISPATCH_SHUTDOWN_WAIT_MS);
+            confirmed = report.terminated() && report.remainingInFlight() == 0;
+            dispatchReadings.noteShutdown(report.remainingInFlight(), report.terminated());
+        }
+        if (confirmed) {
+            arena.releaseAll();
+        } else {
+            // A worker that ignored the deadline may still hold a lease; the arena is quarantined so
+            // its slots can never be handed to the next pass.
+            arena.quarantineAll();
+        }
     }
 
     private void planBudget(List<String> worldIds) {
@@ -414,6 +414,23 @@ public final class KernelModule {
      */
     public DispatchReadings dispatchReadings() {
         return dispatchReadings;
+    }
+
+    TaskLedger dispatchLedger() {
+        return dispatchLedger;
+    }
+
+    MergeSegment.Frame lastDispatchFrame() {
+        return lastDispatchFrame;
+    }
+
+    ArenaLedger dispatchArena() {
+        return arena;
+    }
+
+    /** Hands the module the pass the next merge must close; used by the switch test, not the driver. */
+    void stagePendingDispatch(DispatchPass pass) {
+        this.pendingDispatch = pass;
     }
 
     public MeterWindow window() {

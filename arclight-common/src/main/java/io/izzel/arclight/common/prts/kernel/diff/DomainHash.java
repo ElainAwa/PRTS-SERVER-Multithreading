@@ -20,14 +20,14 @@ import java.util.Map;
  * @param failure        why not, when none was produced
  * @param worldDigests   per-world digests
  * @param regionDigests  per-region digests, keyed world then region
- * @param batchDigests   per-batch digests
- * @param entityDigests  per-entity digests
+ * @param batchDigests   per-batch digests, keyed world, region and batch
+ * @param entityDigests  per-entity digests, keyed world, region, batch and entity sequence
  * @param fieldDigests   per-field digests
  */
 public record DomainHash(String domainId, long tickIndex, String algorithmId, long value,
                          boolean available, Failure failure, Map<String, Long> worldDigests,
-                         Map<String, Long> regionDigests, Map<Long, Long> batchDigests,
-                         Map<Long, Long> entityDigests, Map<String, Long> fieldDigests) {
+                         Map<String, Long> regionDigests, Map<String, Long> batchDigests,
+                         Map<String, Long> entityDigests, Map<String, Long> fieldDigests) {
 
     /** Why a hash could not be taken. */
     public enum Failure {

@@ -68,11 +68,45 @@ public final class DispatchWriteBack {
         }
     }
 
+    /** How one batch was settled; only {@link #ACCEPTED} means it was handed to the channel. */
+    public enum Settlement {
+
+        /** The default tier read the world back in its own tick and landed nothing. */
+        COMPUTE_ONLY("compute-only"),
+        /** The values were frozen into the intent channel. */
+        ACCEPTED("accepted"),
+        /** The channel was at its depth; the payload was forgotten and the batch stayed with the host. */
+        REFUSED_QUEUE_CAP("refused-queue-cap"),
+        /** The frozen world generation is no longer the one the world has; nothing was handed over. */
+        REFUSED_WORLD_EPOCH("refused-world-epoch"),
+        /** The batch carried no row, so there was nothing to hand over. */
+        REFUSED_PAYLOAD("refused-payload");
+
+        private final String key;
+
+        Settlement(String key) {
+            this.key = key;
+        }
+
+        /** @return the stable name this settlement is published under */
+        public String key() {
+            return key;
+        }
+
+        /** @return whether the values were handed to the intent channel */
+        public boolean landed() {
+            return this == ACCEPTED;
+        }
+    }
+
     /** Prefix of the site identity every write-back intent carries. */
     public static final String SITE_PREFIX = "dispatch-batch";
 
     /** Most rows of one batch the settlement reads back from the world bit for bit. */
     public static final int SAMPLE_ROWS = 2;
+
+    /** Generation of a world the lifecycle was never told about; the dispatcher names no world type. */
+    private static final long UNTRACKED_EPOCH = 0L;
 
     private static final String PAYLOAD_PREFIX = "dispatch";
     private static final String DOMAIN_ID = "entity-kinematics";
@@ -115,23 +149,15 @@ public final class DispatchWriteBack {
     }
 
     /**
-     * Settles one batch of the frozen order at the commit point.
-     *
-     * <p>This is the one call the merge makes: the tier decides whether the values become a write the
-     * commit segment lands or a read back of the world that lands nothing. It runs in the merge of the
-     * tick the frame belongs to either way, so the settlement never carries a value across a tick.</p>
-     *
-     * @param batch the batch the values belong to
-     * @param rows  the committed rows of that batch, in the frozen order
-     * @return whether the values were handed to the intent channel
+     * Settles one batch at the commit point: the tier decides whether the values become a write the
+     * commit segment lands or a read back that lands nothing.
      */
-    public boolean settle(WorkBatch batch, List<StateHasher.Slice> rows) {
+    public Settlement settle(WorkBatch batch, List<StateHasher.Slice> rows) {
         if (takeover()) {
-            enqueue(batch, rows);
-            return true;
+            return enqueue(batch, rows);
         }
         sampleReadBack(batch, rows);
-        return false;
+        return Settlement.COMPUTE_ONLY;
     }
 
     /** @return whether this settlement may land the values it was handed */
@@ -163,7 +189,7 @@ public final class DispatchWriteBack {
      * @param rows  the committed rows of that batch, in the frozen order
      * @return how many sampled rows agreed, stayed with the host path and were gone
      */
-    private Settlement sampleReadBack(WorkBatch batch, List<StateHasher.Slice> rows) {
+    private ReadBackSample sampleReadBack(WorkBatch batch, List<StateHasher.Slice> rows) {
         long startedAt = System.nanoTime();
         int count = rows.size();
         String worldId = rows.isEmpty() ? "" : rows.get(0).worldId();
@@ -196,7 +222,7 @@ public final class DispatchWriteBack {
             readings.noteReadBackKept(kept);
         }
         noteVerify(readings, worldId, regionId, nanos);
-        return new Settlement(agreed, kept, gone);
+        return new ReadBackSample(agreed, kept, gone);
     }
 
     /**
@@ -248,13 +274,13 @@ public final class DispatchWriteBack {
     }
 
     /**
-     * What one compute-only settlement found.
+     * What one compute-only read back found.
      *
      * @param agreed rows the host already held bit for bit
      * @param kept   rows that differed and stayed with the host path
      * @param gone   rows whose entity was no longer in its level
      */
-    public record Settlement(int agreed, int kept, int gone) {
+    public record ReadBackSample(int agreed, int kept, int gone) {
     }
 
     /**
@@ -265,27 +291,39 @@ public final class DispatchWriteBack {
      * counted and the payload is forgotten: the values stay in the frame and in its hash, they are
      * simply not written to the world this tick.</p>
      *
-     * @param batch the batch the values belong to
-     * @param rows  the committed rows of that batch, in the frozen order
-     * @return how many intents were accepted
+     * <p>The generation the intent carries is the one the task froze, never the one the world has
+     * now: a world rebuilt under the same key must not have old values retagged as its current
+     * generation. The current generation is read once as a fast refusal in front of the commit
+     * segment's own final check.</p>
      */
-    public int enqueue(WorkBatch batch, List<StateHasher.Slice> rows) {
+    public Settlement enqueue(WorkBatch batch, List<StateHasher.Slice> rows) {
         if (rows.isEmpty()) {
-            return 0;
+            return Settlement.REFUSED_PAYLOAD;
         }
         WorkTask task = batch.task();
+        long frozenEpoch = task.worldEpoch();
+        if (currentEpoch(task.worldId()) != frozenEpoch) {
+            readings.noteWriteBackStale();
+            return Settlement.REFUSED_WORLD_EPOCH;
+        }
         String handle = bind.apply(PAYLOAD_PREFIX, new BatchWriteBack(rows, readings));
         WriteIntent draft = WriteIntent.draft(intents.nextIntentId(), task.worldId(), task.worldId(),
-            DOMAIN_ID, 0L, worldEpoch.apply(task.worldId()).longValue(), handle, WAIT_POINT,
+            DOMAIN_ID, 0L, frozenEpoch, handle, WAIT_POINT,
             SITE_PREFIX + ":" + task.batchId());
         IntentQueue.EnqueueResult result = intents.enqueue(draft);
         if (!result.accepted()) {
             drop.accept(handle);
             readings.noteWriteBackRefused();
-            return 0;
+            return Settlement.REFUSED_QUEUE_CAP;
         }
         readings.noteWriteBackEnqueued(rows.size());
-        return 1;
+        return Settlement.ACCEPTED;
+    }
+
+    /** @return the generation the world has now, or the untracked one when it names none */
+    private long currentEpoch(String worldId) {
+        Long epoch = worldEpoch.apply(worldId);
+        return epoch == null ? UNTRACKED_EPOCH : epoch;
     }
 
     /**

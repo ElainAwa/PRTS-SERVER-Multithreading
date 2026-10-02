@@ -5,12 +5,9 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * All segments of a process, and the pin and release pairs that prove they leak nothing.
- *
- * <p>The ledger is the only place a segment is created, claimed or released, so the invariant
- * "every pin has exactly one release" can be read instead of argued: the counters only move here.
- * A claim that names a world the segment does not belong to is refused and counted, never served
- * from another world's buffer.</p>
+ * All segments of a process and the pin and release pairs that prove they leak nothing. A release
+ * that no longer matches its lease is refused and counted; an unconfirmed segment is quarantined
+ * instead of returned.
  */
 public final class ArenaLedger {
 
@@ -20,6 +17,9 @@ public final class ArenaLedger {
     private long generationBumps;
     private long foreignWrites;
     private long refusals;
+    private long staleReleases;
+    private long repeatReleases;
+    private long quarantinedSlots;
 
     /**
      * Returns the segment of one key, creating it on first use.
@@ -60,22 +60,26 @@ public final class ArenaLedger {
     }
 
     /**
-     * Releases one slot and counts the generation bump that preceded the release.
-     *
-     * @param slot the slot to release
-     * @return whether the slot was released
+     * Releases one slot against the lease that holds it; the segment is looked up, never created.
      */
-    public boolean release(ArenaSlot slot) {
-        ArenaSegment segment = segment(slot.segment().worldId(), slot.segment().regionId(),
-            slot.segment().segmentKind());
-        if (!segment.release(slot)) {
-            return false;
-        }
+    public ArenaSlot.Release release(ArenaSlot.Lease lease, boolean ownerConfirmed) {
+        ArenaSegment segment;
         synchronized (this) {
-            releases++;
-            generationBumps++;
+            segment = lease == null ? null : segments.get(lease.segmentKey());
         }
-        return true;
+        ArenaSlot.Release result = segment == null ? ArenaSlot.Release.STALE_LEASE
+            : segment.release(lease, ownerConfirmed);
+        synchronized (this) {
+            switch (result) {
+                case RELEASED -> {
+                    releases++;
+                    generationBumps++;
+                }
+                case ALREADY_RELEASED -> repeatReleases++;
+                case STALE_LEASE, FOREIGN_SEGMENT -> staleReleases++;
+            }
+        }
+        return result;
     }
 
     /**
@@ -121,6 +125,21 @@ public final class ArenaLedger {
         return refusals;
     }
 
+    /** @return releases refused because the lease no longer owned the slot */
+    public synchronized long staleReleases() {
+        return staleReleases;
+    }
+
+    /** @return releases of a lease that was already released, which is a pairing, not a race */
+    public synchronized long repeatReleases() {
+        return repeatReleases;
+    }
+
+    /** @return slots detached by a quarantine instead of returned to the free lists */
+    public synchronized long quarantinedSlots() {
+        return quarantinedSlots;
+    }
+
     /** @return whether every pin is matched by exactly one release */
     public synchronized boolean pinPairsHold() {
         return claims == releases && pinnedCount() == 0;
@@ -134,15 +153,33 @@ public final class ArenaLedger {
         generationBumps = 0L;
         foreignWrites = 0L;
         refusals = 0L;
+        staleReleases = 0L;
+        repeatReleases = 0L;
+        quarantinedSlots = 0L;
     }
 
     /** Releases every pinned slot and forgets every segment; used by shutdown and by tests. */
     public synchronized void releaseAll() {
         for (ArenaSegment segment : segments.values()) {
             for (ArenaSlot slot : segment.slots()) {
-                if (slot.release()) {
+                if (slot.forceRelease()) {
                     releases++;
                     generationBumps++;
+                }
+            }
+        }
+        segments.clear();
+    }
+
+    /**
+     * Detaches every segment after a shutdown that did not confirm its workers ended. The slots are
+     * not released, so the unpaired pins stay readable as the reason for the quarantine.
+     */
+    public synchronized void quarantineAll() {
+        for (ArenaSegment segment : segments.values()) {
+            for (ArenaSlot slot : segment.slots()) {
+                if (slot.forceRelease()) {
+                    quarantinedSlots++;
                 }
             }
         }

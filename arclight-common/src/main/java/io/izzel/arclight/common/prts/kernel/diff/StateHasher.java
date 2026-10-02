@@ -87,8 +87,8 @@ public final class StateHasher {
         total = mixLong(total, ordered.size());
         Map<String, Long> worldDigests = new LinkedHashMap<>();
         Map<String, Long> regionDigests = new LinkedHashMap<>();
-        Map<Long, Long> batchDigests = new LinkedHashMap<>();
-        Map<Long, Long> entityDigests = new LinkedHashMap<>();
+        Map<String, Long> batchDigests = new LinkedHashMap<>();
+        Map<String, Long> entityDigests = new LinkedHashMap<>();
         Map<String, Long> fieldDigests = new LinkedHashMap<>();
         for (String field : whitelist.fields()) {
             fieldDigests.put(field, OFFSET_BASIS);
@@ -101,9 +101,11 @@ public final class StateHasher {
             String regionKey = slice.worldId() + "|" + slice.regionId();
             regionDigests.merge(regionKey, mixLong(OFFSET_BASIS, sliceDigest),
                 (left, right) -> mixLong(left, sliceDigest));
-            batchDigests.merge(slice.batchId(), mixLong(OFFSET_BASIS, sliceDigest),
+            // Context-keyed so a descent can narrow a fork to its own world, region and batch.
+            String batchKey = regionKey + "|" + slice.batchId();
+            batchDigests.merge(batchKey, mixLong(OFFSET_BASIS, sliceDigest),
                 (left, right) -> mixLong(left, sliceDigest));
-            entityDigests.put(slice.entitySeq(), sliceDigest);
+            entityDigests.put(batchKey + "|" + slice.entitySeq(), sliceDigest);
             for (String field : whitelist.fields()) {
                 fieldDigests.merge(field, fieldValue(slice, field, whitelist),
                     (left, right) -> mixLong(left, right));
@@ -130,6 +132,7 @@ public final class StateHasher {
             case "velocity" -> mixLong(mixLong(mixLong(OFFSET_BASIS, bits(slice.velX(), whitelist)),
                 bits(slice.velY(), whitelist)), bits(slice.velZ(), whitelist));
             case "flags" -> mixLong(OFFSET_BASIS, slice.flags());
+            case "entitySeq" -> mixLong(OFFSET_BASIS, slice.entitySeq());
             case "layoutVersion" -> mixLong(OFFSET_BASIS, LAYOUT_VERSION);
             case "slotGeneration" -> mixLong(OFFSET_BASIS, slice.slotGeneration());
             case "segmentRef" -> mixLong(OFFSET_BASIS, slice.segmentRef());

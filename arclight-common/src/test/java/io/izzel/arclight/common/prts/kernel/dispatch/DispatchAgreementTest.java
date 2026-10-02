@@ -102,12 +102,14 @@ class DispatchAgreementTest {
             1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0L, 0L, 0L);
 
         assertFalse(writeBack.takeover());
-        assertFalse(writeBack.settle(batch, List.of(row)), "the default settlement landed a value");
+        assertFalse(writeBack.settle(batch, List.of(row)).landed(),
+            "the default settlement landed a value");
         assertEquals(0L, intents.enqueuedCount());
         assertEquals(1L, readings.readBackPairs());
 
         takeover.set(true);
-        assertTrue(writeBack.settle(batch, List.of(row)), "the takeover settlement left the batch");
+        assertTrue(writeBack.settle(batch, List.of(row)).landed(),
+            "the takeover settlement left the batch");
         assertEquals(1L, intents.enqueuedCount());
         assertEquals(1, intents.depth(WORLD));
         assertEquals(1, store.size());

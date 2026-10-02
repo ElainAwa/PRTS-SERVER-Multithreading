@@ -20,14 +20,17 @@ import java.util.Set;
 public record HashWhitelist(List<String> fields, List<String> excludes, boolean quantized,
                             int quantumBits) {
 
-    /** The fields a hash may fold: the kinematic values and the version fields of the segment. */
+    /** The fields a hash may fold: the kinematic values, the entity identity and the segment header. */
     public static final Set<String> KNOWN_FIELDS = Set.of("position", "orientation", "velocity",
-        "flags", "layoutVersion", "slotGeneration", "segmentRef", "worldId", "regionId",
+        "flags", "entitySeq", "layoutVersion", "slotGeneration", "segmentRef", "worldId", "regionId",
         "dataVersion");
 
-    /** The default field order: position, orientation, velocity, flags, then the header versions. */
+    /**
+     * The default field order: position, orientation, velocity, flags, the entity identity, then the
+     * header versions. The identity is folded so a row cannot be substituted for another entity.
+     */
     public static final List<String> DEFAULT_FIELDS = List.of("position", "orientation", "velocity",
-        "flags", "layoutVersion", "slotGeneration", "segmentRef", "worldId", "regionId",
+        "flags", "entitySeq", "layoutVersion", "slotGeneration", "segmentRef", "worldId", "regionId",
         "dataVersion");
 
     /** The sources a hash must never read. */

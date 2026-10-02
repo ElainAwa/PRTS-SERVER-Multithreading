@@ -89,6 +89,21 @@ public final class BatchWriteBack implements PrtsWorldWriteTaps.DeferredWrite {
             readings.noteWriteBackIdentity(identical, kept);
         }
         SelfTimers.note(SelfClass.ENTITY, worldId, regionId, nanos);
+        // A batch whose world exists but that landed no row is a no-op, and it is counted as one
+        // instead of passing silently. The settlement itself is unchanged: the tiers keep their
+        // contracts, the world being there is still what "applied" means.
+        if (noRowsLanded(level != null, identicalOnly, written, identical, kept)) {
+            readings.noteWriteBackNoRows();
+        }
         return level != null;
+    }
+
+    /** @return whether the world held the batch's entities but none of them was applied */
+    static boolean noRowsLanded(boolean worldPresent, boolean identicalOnly, int written,
+                                int identical, int kept) {
+        if (!worldPresent) {
+            return false;
+        }
+        return identicalOnly ? identical + kept == 0 : written == 0;
     }
 }

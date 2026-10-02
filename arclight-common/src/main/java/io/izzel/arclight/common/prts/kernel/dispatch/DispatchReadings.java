@@ -30,11 +30,16 @@ public final class DispatchReadings {
     private final LongAdder cancelled = new LongAdder();
     private final LongAdder failed = new LongAdder();
     private final LongAdder lateResultDropped = new LongAdder();
+    private final LongAdder lateEpochDropped = new LongAdder();
     private final LongAdder backpressure = new LongAdder();
     private final LongAdder timeouts = new LongAdder();
     private final LongAdder duplicateCommit = new LongAdder();
     private final LongAdder droppedWithoutCode = new LongAdder();
     private final LongAdder poolOpenFailed = new LongAdder();
+    private final LongAdder shutdowns = new LongAdder();
+    private final LongAdder shutdownUnterminated = new LongAdder();
+    private final LongAdder shutdownDropped = new LongAdder();
+    private final AtomicInteger shutdownRemaining = new AtomicInteger();
     private final LongAdder threadsStarted = new LongAdder();
     private final LongAdder threadsRetired = new LongAdder();
     private final LongAdder entityNanos = new LongAdder();
@@ -51,6 +56,8 @@ public final class DispatchReadings {
     private final LongAdder writeBackRows = new LongAdder();
     private final LongAdder writeBackGone = new LongAdder();
     private final LongAdder writeBackRefused = new LongAdder();
+    private final LongAdder writeBackStale = new LongAdder();
+    private final LongAdder writeBackNoRows = new LongAdder();
     private final LongAdder writeBackIdentical = new LongAdder();
     private final LongAdder writeBackKept = new LongAdder();
     private final LongAdder readBackKept = new LongAdder();
@@ -109,6 +116,10 @@ public final class DispatchReadings {
     /** Counts a result that arrived after its epoch was closed. */
     public void noteLateResult() {
         lateResultDropped.increment();
+    }
+
+    public void noteLateEpochResult() {
+        lateEpochDropped.increment();
     }
 
     /** Counts one batch the tick thread had to compute itself. */
@@ -266,6 +277,18 @@ public final class DispatchReadings {
         }
     }
 
+    public void noteWriteBackStale() {
+        writeBackStale.increment();
+    }
+
+    public void noteWriteBackNoRows() {
+        writeBackNoRows.increment();
+    }
+
+    public void noteShutdownDropped() {
+        shutdownDropped.increment();
+    }
+
     /** Counts a batch that could not enter the queue because it was full. */
     public void noteBackpressure() {
         backpressure.increment();
@@ -289,6 +312,16 @@ public final class DispatchReadings {
     /** Counts a pool that could not be opened. */
     public void notePoolOpenFailed() {
         poolOpenFailed.increment();
+    }
+
+    /** Counts one bounded shutdown; a wait that did not confirm is not silent. */
+
+    public void noteShutdown(int remaining, boolean terminated) {
+        shutdowns.increment();
+        shutdownRemaining.set(Math.max(0, remaining));
+        if (!terminated || remaining > 0) {
+            shutdownUnterminated.increment();
+        }
     }
 
     /** Counts one started worker thread. */
@@ -384,6 +417,10 @@ public final class DispatchReadings {
         return lateResultDropped.sum();
     }
 
+    public long lateEpochDropped() {
+        return lateEpochDropped.sum();
+    }
+
     /** @return the batches refused by a full queue */
     public long backpressure() {
         return backpressure.sum();
@@ -407,6 +444,22 @@ public final class DispatchReadings {
     /** @return the pools that could not be opened */
     public long poolOpenFailed() {
         return poolOpenFailed.sum();
+    }
+
+    public long shutdowns() {
+        return shutdowns.sum();
+    }
+
+    public int shutdownRemaining() {
+        return shutdownRemaining.get();
+    }
+
+    public long shutdownUnterminated() {
+        return shutdownUnterminated.sum();
+    }
+
+    public long shutdownDropped() {
+        return shutdownDropped.sum();
     }
 
     /** @return the worker threads started */
@@ -492,6 +545,14 @@ public final class DispatchReadings {
     /** @return the batches whose write-back the channel refused */
     public long writeBackRefused() {
         return writeBackRefused.sum();
+    }
+
+    public long writeBackStale() {
+        return writeBackStale.sum();
+    }
+
+    public long writeBackNoRows() {
+        return writeBackNoRows.sum();
     }
 
     /** @return the rows the takeover boundary found already held by the world */
@@ -618,11 +679,16 @@ public final class DispatchReadings {
         builder.append(" cancelled=").append(cancelled());
         builder.append(" failed=").append(failed());
         builder.append(" late_dropped=").append(lateResultDropped());
+        builder.append(" late_epoch_dropped=").append(lateEpochDropped());
         builder.append(" backpressure=").append(backpressure());
         builder.append(" timeouts=").append(timeouts());
         builder.append(" duplicate_commit=").append(duplicateCommit());
         builder.append(" dropped_without_code=").append(droppedWithoutCode());
         builder.append(" pool_open_failed=").append(poolOpenFailed());
+        builder.append(" shutdowns=").append(shutdowns());
+        builder.append(" shutdown_remaining=").append(shutdownRemaining());
+        builder.append(" shutdown_unterminated=").append(shutdownUnterminated());
+        builder.append(" shutdown_dropped=").append(shutdownDropped());
         builder.append(" threads_started=").append(threadsStarted());
         builder.append(" threads_alive=").append(threadsAlive);
         builder.append(" threads_retired=").append(threadsRetired());
@@ -650,6 +716,8 @@ public final class DispatchReadings {
         builder.append(" writeback_rows=").append(writeBackEnqueued());
         builder.append(" writeback_gone=").append(writeBackGone());
         builder.append(" writeback_refused=").append(writeBackRefused());
+        builder.append(" writeback_stale=").append(writeBackStale());
+        builder.append(" writeback_no_rows=").append(writeBackNoRows());
         builder.append(" writeback_identical=").append(writeBackIdentical());
         builder.append(" writeback_kept=").append(writeBackKept());
         builder.append(" readback_pairs=").append(readBackPairs());
@@ -671,6 +739,9 @@ public final class DispatchReadings {
         builder.append(" arena_pinned=").append(arena.pinnedCount());
         builder.append(" arena_generation_bumps=").append(arena.generationBumps());
         builder.append(" arena_foreign_writes=").append(arena.foreignWrites());
+        builder.append(" arena_stale_releases=").append(arena.staleReleases());
+        builder.append(" arena_repeat_releases=").append(arena.repeatReleases());
+        builder.append(" arena_quarantined=").append(arena.quarantinedSlots());
         builder.append(" plan_clock_reads=").append(planClockReads());
         for (Map.Entry<String, Long> entry : execByThreadSnapshot().entrySet()) {
             builder.append(" exec_by_thread.").append(entry.getKey()).append("=")
@@ -689,11 +760,16 @@ public final class DispatchReadings {
         cancelled.reset();
         failed.reset();
         lateResultDropped.reset();
+        lateEpochDropped.reset();
         backpressure.reset();
         timeouts.reset();
         duplicateCommit.reset();
         droppedWithoutCode.reset();
         poolOpenFailed.reset();
+        shutdowns.reset();
+        shutdownUnterminated.reset();
+        shutdownDropped.reset();
+        shutdownRemaining.set(0);
         threadsStarted.reset();
         threadsRetired.reset();
         entityNanos.reset();
@@ -710,6 +786,8 @@ public final class DispatchReadings {
         writeBackRows.reset();
         writeBackGone.reset();
         writeBackRefused.reset();
+        writeBackStale.reset();
+        writeBackNoRows.reset();
         writeBackIdentical.reset();
         writeBackKept.reset();
         readBackKept.reset();

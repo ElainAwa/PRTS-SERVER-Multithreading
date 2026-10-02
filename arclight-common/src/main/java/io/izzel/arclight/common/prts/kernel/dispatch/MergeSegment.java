@@ -143,11 +143,11 @@ public final class MergeSegment {
             boolean workerValue = outcome.status() == TaskOutcome.Status.EXECUTED
                 && entry.slot() != null && entry.slot().state() == ArenaSlot.State.PUBLISHED;
             if (workerValue && writeBack != null) {
-                workerValue = writeBack.verify(entry.batch(), entry.slot().scratch(), reference);
+                workerValue = writeBack.verify(entry.batch(), entry.lease().scratch(), reference);
             }
             ArenaScratch scratch;
             if (workerValue) {
-                scratch = entry.slot().scratch();
+                scratch = entry.lease().scratch();
                 if (writeBack != null) {
                     DispatchWriteBack.noteEvidence(readings, entry.view().worldId(), referenceNanos);
                 }
@@ -178,7 +178,7 @@ public final class MergeSegment {
             // A frame that was not handed over is not read back at the next merge, because the world
             // was never asked to hold it.
             long settleStartedAt = System.nanoTime();
-            if (writeBack != null && writeBack.settle(entry.batch(), batchSlices)) {
+            if (writeBack != null && writeBack.settle(entry.batch(), batchSlices).landed()) {
                 landed = true;
             }
             if (!pass.ledger().markCommitted(entry.batch().batchId())) {
@@ -187,7 +187,7 @@ public final class MergeSegment {
                 committed++;
                 commitSeq++;
             }
-            release(entry, arena);
+            release(entry, arena, outcome.status() == TaskOutcome.Status.EXECUTED);
             computeNanos += System.nanoTime() - settleStartedAt;
         }
         long hashStartedAt = System.nanoTime();
@@ -213,9 +213,14 @@ public final class MergeSegment {
             closure.ok(), parallel.value(), serial.value(), equal);
     }
 
-    private static void release(DispatchPass.Entry entry, ArenaLedger arena) {
-        if (entry.slot() != null && entry.slot().state() != ArenaSlot.State.FREE) {
-            arena.release(entry.slot());
+    private static void release(DispatchPass.Entry entry, ArenaLedger arena,
+                                boolean ownerConfirmed) {
+        ArenaSlot.Lease lease = entry.lease();
+        if (lease != null) {
+            // Judged against the lease: a worker that already released is answered ALREADY_RELEASED,
+            // and a slot handed to the next batch refuses the release. A cancelled batch does not
+            // confirm its buffer, so a worker still in its body cannot write into the next owner's.
+            arena.release(lease, ownerConfirmed);
         }
     }
 

@@ -16,6 +16,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * The fixed pool of worker threads the kernel owns.
@@ -89,7 +90,7 @@ public final class WorkerPool {
     }
 
     private record Item(WorkBatch batch, CancelToken token, WorkBody body, ArenaSlot slot,
-                        long slotGeneration, WorkerHandle handle) {
+                        ArenaSlot.Lease lease, WorkerHandle handle) {
     }
 
     private final Spec spec;
@@ -99,6 +100,7 @@ public final class WorkerPool {
     private final Map<String, LinkedBlockingQueue<Item>> shards = new ConcurrentHashMap<>();
     private final Semaphore signals = new Semaphore(0);
     private final AtomicInteger inFlight = new AtomicInteger();
+    private final AtomicLong newestEpoch = new AtomicLong();
     private final AtomicInteger active = new AtomicInteger();
     private final AtomicBoolean accepting = new AtomicBoolean(true);
     private final AtomicBoolean shuttingDown = new AtomicBoolean();
@@ -165,11 +167,11 @@ public final class WorkerPool {
      * @param token      its cancellation token
      * @param body       the body to run
      * @param slot       the slot the body writes
-     * @param slotGeneration the generation the slot was claimed at
+     * @param lease      the lease the batch holds on that slot
      * @return the handle of the batch, or {@code null} when the pool refused it
      */
     public WorkerHandle submit(WorkBatch batch, CancelToken token, WorkBody body, ArenaSlot slot,
-                               long slotGeneration) {
+                               ArenaSlot.Lease lease) {
         if (!accepting.get() || active.get() <= 0) {
             return null;
         }
@@ -178,8 +180,9 @@ public final class WorkerPool {
             return null;
         }
         WorkerHandle handle = new WorkerHandle(batch.batchId(), batch.batchEpoch());
+        newestEpoch.accumulateAndGet(batch.batchEpoch(), Math::max);
         tokens.add(token);
-        Item item = new Item(batch, token, body, slot, slotGeneration, handle);
+        Item item = new Item(batch, token, body, slot, lease, handle);
         shards.computeIfAbsent(batch.task().worldId(), key -> new LinkedBlockingQueue<>())
             .offer(item);
         readings.noteQueueDepth(inFlight.get());
@@ -230,10 +233,9 @@ public final class WorkerPool {
                     if (item.token().cancelled()) {
                         throw new WorkBody.CancelledFault();
                     }
-                    long checksum = item.body().run(item.batch(), item.slot().scratch(),
+                    long checksum = item.body().run(item.batch(), item.lease().scratch(),
                         item.token());
-                    boolean published = item.slot().publish(item.batch().batchId(),
-                        item.slotGeneration());
+                    boolean published = item.slot().publish(item.lease());
                     if (!published) {
                         outcome = TaskOutcome.fellback(item.batch().batchId(), attempts, self,
                             RejectCode.WRITE_DENIED_NOT_OWNER.text());
@@ -271,12 +273,19 @@ public final class WorkerPool {
             tokens.remove(item.token());
             readings.noteQueueDepth(inFlight.get());
         }
-        boolean accepted = item.handle().complete(outcome);
-        if (!accepted) {
+        // The epoch makes a result late whether or not the merge completed the handle first; the
+        // release goes through the lease, so a reused slot refuses it instead of being freed.
+        boolean currentEpoch = item.batch().batchEpoch() >= newestEpoch.get();
+        boolean accepted = currentEpoch && item.handle().complete(outcome);
+        if (!currentEpoch) {
+            readings.noteLateEpochResult();
+        } else if (!accepted) {
             readings.noteLateResult();
-            arena.release(item.slot());
-        } else if (outcome.status() != TaskOutcome.Status.EXECUTED) {
-            arena.release(item.slot());
+        }
+        if (!accepted || outcome.status() != TaskOutcome.Status.EXECUTED) {
+            // The body has returned, so the buffer may be reused; a release the merge made first is
+            // answered ALREADY_RELEASED and changes nothing.
+            arena.release(item.lease(), true);
         }
     }
 

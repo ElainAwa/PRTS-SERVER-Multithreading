@@ -9,6 +9,7 @@ import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentPayload;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import io.izzel.arclight.common.prts.kernel.intent.WriteIntent;
+import io.izzel.arclight.common.prts.kernel.sites.WorldEpochs;
 import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
 import org.junit.jupiter.api.Test;
 
@@ -51,7 +52,7 @@ class DispatchWriteBackTest {
                 String handle = prefix + ":" + handles.incrementAndGet();
                 store.put(handle, write);
                 return handle;
-            }, store::remove, world -> 7L, readings, () -> true);
+            }, store::remove, world -> 1L, readings, () -> true);
         WorkPlan plan = WorkPlan.freeze(TICK, 1L, List.of(view(8)), 4, 1L);
         WorkerPool pool = pool(readings, arena, 8);
         try {
@@ -84,7 +85,8 @@ class DispatchWriteBackTest {
                 assertEquals(DispatchWriteBack.SITE_PREFIX + ":" + batchId,
                     applied.get(index).siteId(), "a write did not carry its batch");
                 assertEquals(WORLD, applied.get(index).dstWorldId());
-                assertEquals(7L, applied.get(index).worldEpoch());
+                assertEquals(1L, applied.get(index).worldEpoch(),
+                    "the intent did not carry the generation the task froze");
             }
         } finally {
             pool.shutdown(true, true, 500L);
@@ -199,13 +201,106 @@ class DispatchWriteBackTest {
         assertFalse(readings.hashInconsistent() > 0L);
     }
 
+    @Test
+    void staleTaskCannotRetagWithCurrentWorldEpoch() {
+        DispatchReadings readings = new DispatchReadings();
+        WorldEpochs epochs = new WorldEpochs();
+        epochs.observe(List.of(WORLD));
+        long frozen = epochs.epochOf(WORLD);
+        EntityCandidateView view = view(4, WORLD, frozen);
+        WorkPlan plan = WorkPlan.freeze(TICK, 1L, List.of(view), 4, 1L);
+        WorkBatch batch = new WorkBatch(plan.tasks().get(0).batchId(), plan.tasks().get(0),
+            plan.planEpoch(), view);
+        List<StateHasher.Slice> rows = List.of(new StateHasher.Slice(WORLD, "r0.0",
+            batch.batchId(), 1L, 1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0L, 0L, 0L));
+        IntentQueue intents = new IntentQueue(() -> 8, () -> 1);
+        Map<String, PrtsWorldWriteTaps.DeferredWrite> store = new LinkedHashMap<>();
+        DispatchWriteBack writeBack = new DispatchWriteBack(intents,
+            (prefix, write) -> {
+                store.put(prefix + ":1", write);
+                return prefix + ":1";
+            }, store::remove, epochs::epochOf, readings, () -> true);
+
+        // The world is unloaded and comes back under the same key: a new generation.
+        epochs.observe(List.of("another-world"));
+        epochs.observe(List.of(WORLD));
+        assertTrue(epochs.epochOf(WORLD) > frozen, "a world that came back is a new generation");
+
+        assertEquals(DispatchWriteBack.Settlement.REFUSED_WORLD_EPOCH,
+            writeBack.settle(batch, rows), "a stale batch was retagged with the current generation");
+        assertEquals(1L, readings.writeBackStale());
+        assertEquals(0L, readings.writeBackEnqueued());
+        assertEquals(0L, intents.enqueuedCount());
+        assertTrue(store.isEmpty(), "a refused batch bound a payload");
+    }
+
+    @Test
+    void anEnqueueRefusedAtTheDepthIsNotLanded() {
+        DispatchReadings readings = new DispatchReadings();
+        IntentQueue intents = new IntentQueue(() -> 1, () -> 1);
+        Map<String, PrtsWorldWriteTaps.DeferredWrite> store = new LinkedHashMap<>();
+        AtomicInteger handles = new AtomicInteger();
+        DispatchWriteBack writeBack = new DispatchWriteBack(intents,
+            (prefix, write) -> {
+                String handle = prefix + ":" + handles.incrementAndGet();
+                store.put(handle, write);
+                return handle;
+            }, store::remove, world -> 1L, readings, () -> true);
+
+        assertEquals(DispatchWriteBack.Settlement.ACCEPTED, writeBack.enqueue(batch(1L), rows(1L)));
+        assertEquals(DispatchWriteBack.Settlement.REFUSED_QUEUE_CAP,
+            writeBack.enqueue(batch(2L), rows(2L)),
+            "a batch refused at the depth was reported as landed");
+        assertEquals(1L, readings.writeBackRefused());
+        assertEquals(1, store.size(), "a refused payload was not forgotten");
+    }
+
+    @Test
+    void aBatchWhoseWorldIsGoneIsRefusedAndCounted() {
+        DispatchReadings readings = new DispatchReadings();
+        List<StateHasher.Slice> rows = List.of(new StateHasher.Slice("no-such-world", "r0.0", 1L,
+            5L, 1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0L, 0L, 0L));
+
+        boolean landed = new BatchWriteBack(rows, readings).apply();
+
+        assertFalse(landed, "a batch whose world is gone reported success");
+        assertEquals(1L, readings.writeBackGone());
+        assertEquals(0L, readings.writeBackNoRows(),
+            "a gone world is a different terminal state from a world that lost its rows");
+    }
+
+    @Test
+    void aBatchThatLandedNoRowIsCountedAsANoOp() {
+        assertTrue(BatchWriteBack.noRowsLanded(true, false, 0, 0, 0));
+        assertFalse(BatchWriteBack.noRowsLanded(true, false, 1, 0, 0));
+        assertTrue(BatchWriteBack.noRowsLanded(true, true, 0, 0, 0));
+        assertFalse(BatchWriteBack.noRowsLanded(true, true, 0, 1, 0));
+        assertFalse(BatchWriteBack.noRowsLanded(true, true, 0, 0, 1));
+        assertFalse(BatchWriteBack.noRowsLanded(false, false, 0, 0, 0));
+    }
+
+    private static WorkBatch batch(long batchId) {
+        EntityCandidateView view = view(4);
+        WorkTask task = new WorkTask(batchId, WORLD, "r0.0", batchId, 0, 4, 1L, 1L, 0, "r0.0");
+        return new WorkBatch(batchId, task, 1L, view);
+    }
+
+    private static List<StateHasher.Slice> rows(long batchId) {
+        return List.of(new StateHasher.Slice(WORLD, "r0.0", batchId, 1L, 1.0, 2.0, 3.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0L, 0L, 0L));
+    }
+
     private static WorkerPool pool(DispatchReadings readings, ArenaLedger arena, int queueCap) {
         return WorkerPool.open(new WorkerPool.Spec(2, "prts-worker-", Thread.NORM_PRIORITY, queueCap,
             4), 1, readings, arena);
     }
 
     private static EntityCandidateView view(int entities) {
-        EntityCandidateView.Builder builder = EntityCandidateView.builder(WORLD, 1L);
+        return view(entities, WORLD, 1L);
+    }
+
+    private static EntityCandidateView view(int entities, String worldId, long worldEpoch) {
+        EntityCandidateView.Builder builder = EntityCandidateView.builder(worldId, worldEpoch);
         for (int i = 0; i < entities; i++) {
             builder.add(i, i * 4, 0, i, 64.0, 0.0, 0.25, 0.0, 0.5, 0.0, 0.0, 0L);
         }

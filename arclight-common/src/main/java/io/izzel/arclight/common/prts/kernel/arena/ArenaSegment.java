@@ -7,11 +7,8 @@ import java.util.Deque;
 import java.util.List;
 
 /**
- * The slots of one region of one world: a free list, a segment generation and the pin bookkeeping.
- *
- * <p>The segment hands a slot to exactly one batch at a time. A slot that is not free is never
- * handed out again, which is the first half of the leak defence; the other half is that every pin
- * has exactly one release, counted by the ledger.</p>
+ * The slots of one region of one world. Every pin has exactly one release, and a release is judged
+ * against the lease it was handed, so a slot already given to the next batch is never freed here.
  */
 public final class ArenaSegment {
 
@@ -68,8 +65,7 @@ public final class ArenaSegment {
             slot = new ArenaSlot(ref.worldId(), ref.regionId(), ref.segmentKind(), slots.size());
             slots.add(slot);
         }
-        slot.scratch().reset(capacity);
-        if (!slot.claim(batchId)) {
+        if (!slot.claim(batchId, capacity)) {
             free.addFirst(slot);
             return null;
         }
@@ -77,22 +73,30 @@ public final class ArenaSegment {
     }
 
     /**
-     * Releases one slot for reuse.
+     * Releases one slot for reuse, if and only if the lease still owns it.
      *
-     * @param slot the slot to release
-     * @return whether the slot belonged to this segment and was released
+     * @param lease          the lease the caller holds
+     * @param ownerConfirmed whether the owning batch has finished its body
+     * @return what the attempt did; a stale lease never changes the current owner
      */
-    synchronized boolean release(ArenaSlot slot) {
-        if (slot.segment().segmentKind() != ref.segmentKind()
-            || !slot.segment().worldId().equals(ref.worldId())
-            || !slot.segment().regionId().equals(ref.regionId())) {
-            return false;
+    synchronized ArenaSlot.Release release(ArenaSlot.Lease lease, boolean ownerConfirmed) {
+        if (lease == null) {
+            return ArenaSlot.Release.STALE_LEASE;
         }
-        if (!slot.release()) {
-            return false;
+        if (lease.segment().segmentKind() != ref.segmentKind()
+            || !lease.segment().worldId().equals(ref.worldId())
+            || !lease.segment().regionId().equals(ref.regionId())) {
+            return ArenaSlot.Release.FOREIGN_SEGMENT;
         }
-        generation.bump();
-        free.add(slot);
-        return true;
+        if (lease.slotIndex() < 0 || lease.slotIndex() >= slots.size()) {
+            return ArenaSlot.Release.STALE_LEASE;
+        }
+        ArenaSlot slot = slots.get(lease.slotIndex());
+        ArenaSlot.Release result = slot.release(lease, ownerConfirmed);
+        if (result == ArenaSlot.Release.RELEASED) {
+            generation.bump();
+            free.add(slot);
+        }
+        return result;
     }
 }

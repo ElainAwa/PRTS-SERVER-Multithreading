@@ -105,6 +105,49 @@ class StateHasherTest {
         assertEquals(1.0, agreeing.report().rate());
     }
 
+    @Test
+    void theEntityIdentityIsPartOfTheHashAndOfTheDescent() {
+        StateHasher.Slice first = slice("world", "r0.0", 1L, 1L, 1.0, 64.0, 2.0, 10.0, 0.0);
+        StateHasher.Slice second = slice("world", "r0.0", 1L, 2L, 1.0, 64.0, 2.0, 10.0, 0.0);
+        DomainHash left = StateHasher.hash("entity", TICK, List.of(first), HashWhitelist.bitexact());
+        DomainHash right = StateHasher.hash("entity", TICK, List.of(second), HashWhitelist.bitexact());
+
+        assertNotEquals(left.value(), right.value(),
+            "two entities with the same values hashed to the same frame");
+
+        DiffProbe probe = new DiffProbe();
+        probe.compare(left, right);
+        DiffReport report = probe.report();
+        assertEquals(0L, report.unattributed());
+        assertEquals("entitySeq", report.firstForkField(),
+            "the fork was not attributed to the entity identity");
+        assertEquals(1L, report.firstForkEntitySeq());
+        assertEquals(1L, report.firstForkBatch());
+    }
+
+    @Test
+    void theDescentNarrowsToTheBatchOfTheDivergentRegion() {
+        StateHasher.Slice worldA = slice("world-a", "r0.0", 1L, 1L, 1.0, 64.0, 2.0, 0.0, 0.0);
+        StateHasher.Slice worldABatch = slice("world-a", "r1.0", 2L, 1L, 2.0, 64.0, 2.0, 0.0, 0.0);
+        StateHasher.Slice worldB = slice("world-b", "r0.0", 3L, 1L, 3.0, 64.0, 2.0, 0.0, 0.0);
+        StateHasher.Slice changed = slice("world-a", "r1.0", 2L, 1L, 2.5, 64.0, 2.0, 0.0, 0.0);
+
+        DomainHash parallel = StateHasher.hash("entity", TICK,
+            List.of(worldA, changed, worldB), HashWhitelist.bitexact());
+        DomainHash serial = StateHasher.hash("entity", TICK,
+            List.of(worldA, worldABatch, worldB), HashWhitelist.bitexact());
+
+        DiffProbe probe = new DiffProbe();
+        probe.compare(parallel, serial);
+        DiffReport report = probe.report();
+        assertEquals(0L, report.unattributed());
+        assertEquals("world-a", report.firstForkWorld());
+        assertEquals("r1.0", report.firstForkRegion());
+        assertEquals(2L, report.firstForkBatch(), "the fork was placed in the wrong batch");
+        assertEquals(1L, report.firstForkEntitySeq());
+        assertEquals("position", report.firstForkField());
+    }
+
     private static StateHasher.Slice slice(String world, String region, long batch, long seq,
                                            double x, double y, double z, double yaw,
                                            double pitch) {

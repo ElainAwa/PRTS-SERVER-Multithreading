@@ -14,6 +14,8 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -192,6 +194,59 @@ class DispatchParallelTest {
     }
 
     @Test
+    void aPlanThePoolNeverTookStillClosesInTheFrozenOrder() {
+        DispatchReadings readings = new DispatchReadings();
+        ArenaLedger arena = new ArenaLedger();
+        TaskLedger ledger = new TaskLedger(1L);
+        WorkPlan plan = WorkPlan.freeze(TICK, 1L, List.of(view("world", 8)), 4, 1L);
+
+        DispatchPass pass = DispatchPass.serialFallback(plan, readings, ledger);
+        MergeSegment merge = new MergeSegment();
+        merge.bindOwnerThread(Thread.currentThread());
+        MergeSegment.Frame frame = merge.merge(pass, System.nanoTime() + 1_000_000_000L, arena,
+            readings, new DiffProbe(), HashWhitelist.bitexact(), "entity", null);
+
+        assertTrue(frame.closureOk(), "a plan the pool never took did not close");
+        assertEquals(plan.taskCount(), frame.committed());
+        assertEquals(plan.taskCount(), frame.redone());
+        assertEquals(plan.taskCount(), readings.tasksOnMain());
+        assertEquals(plan.taskCount(), readings.fellback());
+        assertEquals(0, arena.pinnedCount(), "a serial fallback claimed a slot");
+        assertEquals(0L, ledger.pendingCount());
+    }
+
+    @Test
+    void aWorkerThatIgnoresTheDeadlineIsReportedAndItsArenaIsQuarantined() {
+        DispatchReadings readings = new DispatchReadings();
+        ArenaLedger arena = new ArenaLedger();
+        TaskLedger ledger = new TaskLedger(1L);
+        WorkPlan plan = WorkPlan.freeze(TICK, 1L, List.of(view("world", 1)), 4, 1L);
+        WorkerPool pool = pool(readings, arena, 4, 1);
+        CountDownLatch entered = new CountDownLatch(1);
+        DispatchPass pass = DispatchPass.dispatch(plan, pool, (batch, target, token) -> {
+            entered.countDown();
+            sleep(400L);
+            return EntityIntegrator.INSTANCE.run(batch, target, token);
+        }, arena, readings, ledger);
+        assertEquals(1, plan.taskCount());
+        assertEquals(1L, readings.dispatched());
+        assertNotNull(pass.entries().get(0).handle(), "the pool did not take the batch");
+        assertTrue(awaitLatch(entered), "the worker never entered its body");
+
+        WorkerPool.ShutdownReport report = pool.shutdown(true, true, 50L);
+
+        assertTrue(report.remainingInFlight() > 0 || !report.terminated(),
+            "a worker that ignored the deadline was reported as stopped: " + report
+                + " timeouts=" + readings.timeouts() + " cancelled=" + readings.cancelled());
+        readings.noteShutdown(report.remainingInFlight(), report.terminated());
+        assertEquals(1L, readings.shutdownUnterminated());
+        arena.quarantineAll();
+        assertEquals(1L, arena.quarantinedSlots());
+        assertFalse(arena.pinPairsHold(), "a quarantined pin was paired as if it were returned");
+        sleep(600L);
+    }
+
+    @Test
     void theMainSwitchIsOffAndAnEmptyPlanDispatchesNothing() {
         Boolean declared = PrtsConfigManager.entries().get(PrtsConfigManager.KERNEL)
             .features().get(KernelSettings.DISPATCH_PARALLEL);
@@ -243,6 +298,15 @@ class DispatchParallelTest {
             builder.add(i, i % 2, 0, i, 64.0, 0.0, 0.25, 0.0, 0.5, 0.0, 0.0, 0L);
         }
         return builder.build();
+    }
+
+    private static boolean awaitLatch(CountDownLatch latch) {
+        try {
+            return latch.await(2L, TimeUnit.SECONDS);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     private static void sleep(long millis) {

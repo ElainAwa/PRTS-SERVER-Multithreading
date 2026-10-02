@@ -11,10 +11,9 @@ import java.util.TreeMap;
 /**
  * Compares the two arms tick by tick and locates the first fork.
  *
- * <p>The comparison is read-only and never repairs anything. A mismatch descends six levels in the
- * fixed order - tick, world, region, batch, entity sequence, field - and only a fork that was placed
- * that far counts as attributed. A mismatch the descent cannot place is counted as unattributed and
- * still makes the pair unequal, so a comparison can never be talked into agreement.</p>
+ * <p>The comparison is read-only and never repairs anything. A mismatch descends six levels - tick,
+ * world, region, batch, entity sequence, field - each narrowed to the context above it. A mismatch
+ * the descent cannot place is counted as unattributed and still makes the pair unequal.</p>
  */
 public final class DiffProbe {
 
@@ -80,11 +79,17 @@ public final class DiffProbe {
         if (region == null) {
             return null;
         }
-        Long batch = firstDivergentLongKey(parallel.batchDigests(), serial.batchDigests());
+        String regionPrefix = world + "|" + region + "|";
+        String batchKey = firstDivergentKey(withPrefix(parallel.batchDigests(), regionPrefix),
+            withPrefix(serial.batchDigests(), regionPrefix));
+        Long batch = batchKey == null ? null : tailLong(batchKey);
         if (batch == null) {
             return null;
         }
-        Long entity = firstDivergentLongKey(parallel.entityDigests(), serial.entityDigests());
+        String batchPrefix = batchKey + "|";
+        String entityKey = firstDivergentKey(withPrefix(parallel.entityDigests(), batchPrefix),
+            withPrefix(serial.entityDigests(), batchPrefix));
+        Long entity = entityKey == null ? null : tailLong(entityKey);
         if (entity == null) {
             return null;
         }
@@ -93,6 +98,28 @@ public final class DiffProbe {
             return null;
         }
         return new Fork(world, region, batch, entity, field);
+    }
+
+    private static Map<String, Long> withPrefix(Map<String, Long> digests, String prefix) {
+        Map<String, Long> selected = new TreeMap<>();
+        for (Map.Entry<String, Long> entry : digests.entrySet()) {
+            if (entry.getKey().startsWith(prefix)) {
+                selected.put(entry.getKey(), entry.getValue());
+            }
+        }
+        return selected;
+    }
+
+    private static Long tailLong(String key) {
+        int cut = key.lastIndexOf('|');
+        if (cut < 0 || cut + 1 >= key.length()) {
+            return null;
+        }
+        try {
+            return Long.parseLong(key.substring(cut + 1));
+        } catch (NumberFormatException notANumber) {
+            return null;
+        }
     }
 
     private static Map<String, Long> regionsOf(DomainHash hash, String world) {
@@ -116,21 +143,6 @@ public final class DiffProbe {
             }
         }
         for (String key : other) {
-            if (!parallel.containsKey(key)) {
-                return key;
-            }
-        }
-        return null;
-    }
-
-    private static Long firstDivergentLongKey(Map<Long, Long> parallel, Map<Long, Long> serial) {
-        for (Long key : new TreeMap<>(parallel).keySet()) {
-            if (!serial.containsKey(key) || !java.util.Objects.equals(parallel.get(key),
-                serial.get(key))) {
-                return key;
-            }
-        }
-        for (Long key : new TreeMap<>(serial).keySet()) {
             if (!parallel.containsKey(key)) {
                 return key;
             }

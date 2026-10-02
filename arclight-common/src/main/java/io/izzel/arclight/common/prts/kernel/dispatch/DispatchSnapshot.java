@@ -46,19 +46,26 @@ public final class DispatchSnapshot {
      */
     public static List<EntityCandidateView> capture(WorldEpochSource worldEpochs) {
         List<EntityCandidateView> views = new ArrayList<>();
-        for (World world : Bukkit.getWorlds()) {
+        List<World> worlds;
+        try {
+            worlds = List.copyOf(Bukkit.getWorlds());
+        } catch (Throwable ignored) {
+            // A platform that cannot list its worlds contributes no candidates; the tick continues.
+            return views;
+        }
+        for (World world : worlds) {
             try {
-                views.add(capture(world, worldEpochs.epochOf(world.getName())));
+                String worldId = WorldKey.id(world);
+                views.add(capture(world, worldId, worldEpochs.epochOf(worldId)));
             } catch (Throwable ignored) {
-                // A world that cannot be listed contributes no candidates; the tick continues.
+                // A world that cannot be read contributes no candidates; the tick continues.
             }
         }
         return views;
     }
 
-    private static EntityCandidateView capture(World world, long worldEpoch) {
-        EntityCandidateView.Builder builder = EntityCandidateView.builder(world.getKey().toString(),
-            worldEpoch);
+    private static EntityCandidateView capture(World world, String worldId, long worldEpoch) {
+        EntityCandidateView.Builder builder = EntityCandidateView.builder(worldId, worldEpoch);
         for (Entity entity : world.getEntities()) {
             if (builder.full()) {
                 break;
@@ -120,7 +127,7 @@ public final class DispatchSnapshot {
         /**
          * Answers the generation of one world.
          *
-         * @param worldId the world name
+         * @param worldId the world key
          * @return the generation the view is stamped with
          */
         long epochOf(String worldId);
