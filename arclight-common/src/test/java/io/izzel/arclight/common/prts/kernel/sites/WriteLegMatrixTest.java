@@ -150,8 +150,9 @@ class WriteLegMatrixTest {
         private final AtomicInteger writes = new AtomicInteger();
 
         private Scratch(int capacity, boolean segmentRuns) {
-            this.intents = new IntentQueue(() -> capacity);
+            this.intents = new IntentQueue(() -> capacity, () -> 2);
             this.segment = new CommitSegment(intents, () -> segmentRuns, intents::capacity);
+            this.segment.bindOwnerThread(Thread.currentThread());
             this.authority = new WriteAuthority(new OwnerRegistry(), intents, ledger, () -> false,
                 () -> 2);
             this.guard = new WorldWriteGuard(counters, authority, intents, payloads, ledger);

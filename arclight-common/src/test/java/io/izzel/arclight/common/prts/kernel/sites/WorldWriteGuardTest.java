@@ -167,8 +167,9 @@ class WorldWriteGuardTest {
         private final WorldWriteGuard guard;
 
         private Scratch(int capacity) {
-            this.intents = new IntentQueue(() -> capacity);
+            this.intents = new IntentQueue(() -> capacity, () -> 2);
             this.segment = new CommitSegment(intents, () -> true, intents::capacity);
+            this.segment.bindOwnerThread(Thread.currentThread());
             this.authority = new WriteAuthority(new OwnerRegistry(), intents, ledger, () -> false,
                 () -> 2);
             this.guard = new WorldWriteGuard(counters, authority, intents, payloads, ledger);

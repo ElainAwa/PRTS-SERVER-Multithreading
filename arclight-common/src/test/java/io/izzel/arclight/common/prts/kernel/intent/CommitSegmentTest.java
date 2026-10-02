@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.IntSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -22,13 +23,13 @@ class CommitSegmentTest {
 
     @Test
     void theSwitchOffConsumesNothingAndLeavesTheHeadWhereItWasFrozen() {
-        IntentQueue queue = new IntentQueue(() -> 8);
+        IntentQueue queue = new IntentQueue(() -> 8, () -> 2);
         queue.bindPayload(intent -> {
             throw new IllegalStateException("a segment that is off must not apply a payload");
         });
         queue.enqueue(intent(1L, "first"));
         queue.enqueue(intent(2L, "second"));
-        CommitSegment segment = new CommitSegment(queue, () -> false, queue::capacity);
+        CommitSegment segment = segment(queue, false, queue::capacity);
 
         CommitSegment.Pass pass = segment.run(TICK);
 
@@ -46,14 +47,14 @@ class CommitSegmentTest {
     @Test
     void theSwitchOnDrainsTheFrozenOrderAndPublishesTheTick() {
         List<String> applied = new ArrayList<>();
-        IntentQueue queue = new IntentQueue(() -> 8);
+        IntentQueue queue = new IntentQueue(() -> 8, () -> 2);
         queue.bindPayload(intent -> {
             applied.add(intent.payloadHandle());
-            return null;
+            return IntentPayload.Outcome.APPLIED;
         });
         queue.enqueue(intent(1L, "first"));
         queue.enqueue(intent(2L, "second"));
-        CommitSegment segment = new CommitSegment(queue, () -> true, queue::capacity);
+        CommitSegment segment = segment(queue, true, queue::capacity);
 
         CommitSegment.Pass pass = segment.run(TICK);
 
@@ -72,13 +73,14 @@ class CommitSegmentTest {
 
     @Test
     void aRefusalEndsTheWalkAndLeavesTheHeadInPlace() {
-        IntentQueue queue = new IntentQueue(() -> 8);
+        IntentQueue queue = new IntentQueue(() -> 8, () -> 2);
         AtomicInteger attempts = new AtomicInteger();
         queue.bindPayload(intent -> attempts.incrementAndGet() == 2
-            ? RejectCode.VERSION_MISMATCH : null);
+            ? IntentPayload.Outcome.retryable(RejectCode.VERSION_MISMATCH)
+            : IntentPayload.Outcome.APPLIED);
         queue.enqueue(intent(1L, "first"));
         queue.enqueue(intent(2L, "second"));
-        CommitSegment segment = new CommitSegment(queue, () -> true, queue::capacity);
+        CommitSegment segment = segment(queue, true, queue::capacity);
 
         CommitSegment.Pass refused = segment.run(TICK);
 
@@ -100,10 +102,10 @@ class CommitSegmentTest {
         IntentPayloadDirectory payloads = new IntentPayloadDirectory();
         AtomicInteger attempts = new AtomicInteger();
         String handle = payloads.bind("block_write", () -> attempts.incrementAndGet() > 1);
-        IntentQueue queue = new IntentQueue(() -> 8);
+        IntentQueue queue = new IntentQueue(() -> 8, () -> 2);
         queue.bindPayload(payloads);
         queue.enqueue(intent(1L, handle));
-        CommitSegment segment = new CommitSegment(queue, () -> true, queue::capacity);
+        CommitSegment segment = segment(queue, true, queue::capacity);
 
         CommitSegment.Pass refused = segment.run(TICK);
 
@@ -123,11 +125,11 @@ class CommitSegmentTest {
 
     @Test
     void theBudgetEndsTheWalkWithoutLosingWhatIsLeft() {
-        IntentQueue queue = new IntentQueue(() -> 8);
-        queue.bindPayload(intent -> null);
+        IntentQueue queue = new IntentQueue(() -> 8, () -> 2);
+        queue.bindPayload(intent -> IntentPayload.Outcome.APPLIED);
         queue.enqueue(intent(1L, "first"));
         queue.enqueue(intent(2L, "second"));
-        CommitSegment segment = new CommitSegment(queue, () -> true, () -> 1);
+        CommitSegment segment = segment(queue, true, () -> 1);
 
         assertEquals(1, segment.run(TICK).steps());
         assertEquals(1, queue.depth());
@@ -138,10 +140,10 @@ class CommitSegmentTest {
 
     @Test
     void resettingReadingsDoesNotRewindTheFrozenOrder() {
-        IntentQueue queue = new IntentQueue(() -> 8);
-        queue.bindPayload(intent -> null);
+        IntentQueue queue = new IntentQueue(() -> 8, () -> 2);
+        queue.bindPayload(intent -> IntentPayload.Outcome.APPLIED);
         queue.enqueue(intent(1L, "first"));
-        CommitSegment segment = new CommitSegment(queue, () -> true, queue::capacity);
+        CommitSegment segment = segment(queue, true, queue::capacity);
 
         assertEquals(1, segment.run(TICK).steps());
         segment.reset();
@@ -154,8 +156,14 @@ class CommitSegmentTest {
         assertEquals(1L, segment.passes());
     }
 
+    private static CommitSegment segment(IntentQueue queue, boolean enabled, IntSupplier budget) {
+        CommitSegment segment = new CommitSegment(queue, () -> enabled, budget);
+        segment.bindOwnerThread(Thread.currentThread());
+        return segment;
+    }
+
     private static WriteIntent intent(long id, String handle) {
-        return WriteIntent.draft(id, "world", "world", "block_write", 0L, handle, "xdomain",
-            "site:a");
+        return WriteIntent.draft(id, "world", "world", "block_write", 0L,
+            WriteIntent.UNTRACKED_EPOCH, handle, "xdomain", "site:a");
     }
 }

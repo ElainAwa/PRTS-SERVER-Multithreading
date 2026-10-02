@@ -170,10 +170,11 @@ class WriteAuthorityTest {
         scratch.authority.authorize(attempt(2L, "unregistered:t:0", "world", "world",
             WriteLevel.REGION, "region-2", HolderKind.UNREGISTERED, true, 7L, 5L).build());
 
-        scratch.intents.bindPayload(intent -> null);
-        CommitOrder outOfOrder = scratch.intents.commit(5L, TICK);
-        CommitOrder first = scratch.intents.commit(0L, TICK);
-        CommitOrder second = scratch.intents.commit(1L, TICK);
+        scratch.intents.bindPayload(intent -> io.izzel.arclight.common.prts.kernel.intent
+            .IntentPayload.Outcome.APPLIED);
+        CommitOrder outOfOrder = scratch.intents.commit("world", 5L, TICK);
+        CommitOrder first = scratch.intents.commit("world", 0L, TICK);
+        CommitOrder second = scratch.intents.commit("world", 1L, TICK);
 
         assertEquals(RejectCode.COMMIT_ORDER_VIOLATION, outOfOrder.code());
         assertTrue(first.committed());
@@ -242,7 +243,7 @@ class WriteAuthorityTest {
         private final WriteAuthority authority;
 
         private Scratch(boolean enforce, int capacity) {
-            this.intents = new IntentQueue(() -> capacity);
+            this.intents = new IntentQueue(() -> capacity, () -> 2);
             this.authority = new WriteAuthority(owners, intents, ledger, () -> enforce, () -> 2);
         }
     }
