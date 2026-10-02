@@ -1,9 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/*
- * Ported from the FeudalKings fork of Arclight, commit a61faa4d02249a07226b7e3fc6b70525a32c9921
- * ("fix(remapper): key the plugin class cache by the version").
- * Re-expressed on the version string this server publishes while it starts. See THIRD-PARTY.md.
- */
+/* Ported from the FeudalKings fork of Arclight (commit a61faa4); see THIRD-PARTY.md. */
 package io.izzel.arclight.common.prts.support;
 
 import java.io.InputStream;
@@ -12,13 +8,9 @@ import java.util.jar.Attributes;
 import java.util.jar.Manifest;
 
 /**
- * The version string of the running build.
- *
- * <p>Anything cached across restarts has to be keyed by this string, because a build that changes
- * must not be served artifacts produced by an earlier one. The manifest of the launcher is the
- * authoritative source, but a class that is loaded from a plain mod file sees neither that manifest
- * nor the per package attributes, so the string published at startup is read first and the manifest
- * of the code source is read as a last resort.</p>
+ * The version string of the running build. Anything cached across restarts is keyed by it, so a build
+ * that changed is not served artifacts of an earlier one. The string published at startup is read
+ * first, the package attribute next, and the manifest of the code source last.
  */
 public final class PrtsVersion {
 
@@ -28,9 +20,7 @@ public final class PrtsVersion {
     private PrtsVersion() {
     }
 
-    /**
-     * @return the version of the running build, never null or empty
-     */
+    /** @return the version of the running build, never null or empty */
     public static String version() {
         String published = System.getProperty(PROPERTY);
         if (published != null && !published.isBlank()) {

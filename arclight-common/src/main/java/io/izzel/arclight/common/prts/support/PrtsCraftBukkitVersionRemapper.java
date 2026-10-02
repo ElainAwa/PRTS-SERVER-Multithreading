@@ -1,9 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/*
- * Ported from the FeudalKings fork of Arclight, commit e0b9064c8d5669f7ad340babcf9144e288f6baca
- * ("fix(remapper): normalize CraftBukkit version packages").
- * See THIRD-PARTY.md.
- */
+/* Ported from the FeudalKings fork of Arclight (commit e0b9064); see THIRD-PARTY.md. */
 package io.izzel.arclight.common.prts.support;
 
 import io.izzel.arclight.api.ArclightVersion;
@@ -18,18 +14,9 @@ import org.objectweb.asm.tree.*;
 import java.util.regex.Pattern;
 
 /**
- * Normalizes the release segment of the CraftBukkit package so that plugins compiled against
- * another server release still resolve the classes of this one.
- *
- * <p>A plugin refers to server internals through a package name that carries the release it was
- * built against. Only the release segment differs, so it is replaced with the release this
- * server actually ships, on class names, descriptors, signatures, annotations and string
- * constants alike. The replacement has to be a package the runtime provides: a bytecode
- * reference is resolved by the name written in the class file, so rewriting it to a
- * release-free form leaves it pointing at a package that does not exist.</p>
- *
- * <p>Both the release-free form and any release are accepted on input. The reverse direction
- * reports the release a plugin expects, for reflection that hands names back.</p>
+ * Replaces the release segment of the CraftBukkit package so plugins compiled against another server
+ * release resolve the classes of this one. The replacement must be a package the runtime provides:
+ * a release-free form would point at a package that does not exist. Both forms are accepted on input.
  */
 public class PrtsCraftBukkitVersionRemapper implements PluginTransformer {
 
@@ -37,15 +24,13 @@ public class PrtsCraftBukkitVersionRemapper implements PluginTransformer {
         new PrtsCraftBukkitVersionRemapper();
     private static final Marker MARKER = MarkerManager.getMarker("CBREMAPPER");
 
-    // A release segment is either the release-free form used inside the server sources or a
-    // real CraftBukkit release such as v1_21_R1. Both are rewritten to what the server ships.
+    // A release segment is the release-free form used inside the server sources or a real CraftBukkit release.
     private static final Pattern VERSION_PATTERN = Pattern.compile(
         "v(?:\\d+_\\d+_R\\d+)?"
     );
     private static final String CRAFTBUKKIT_PREFIX = "org/bukkit/craftbukkit/";
     private static final String CRAFTBUKKIT_DOT_PREFIX =
         "org.bukkit.craftbukkit.";
-    // The release-free form; accepted on input and used only for the reporting direction.
     private static final String GENERIC_VERSION = "v";
 
     public static String remapInternalName(String internalName) {
@@ -61,7 +46,6 @@ public class PrtsCraftBukkitVersionRemapper implements PluginTransformer {
         int slashIndex = afterPrefix.indexOf('/');
 
         if (slashIndex == -1) {
-            // No slash after prefix, entire string is version
             if (VERSION_PATTERN.matcher(afterPrefix).matches()) {
                 String rewritten = withServerRelease(CRAFTBUKKIT_PREFIX, "");
                 return rewritten == null ? internalName : rewritten;
@@ -86,8 +70,7 @@ public class PrtsCraftBukkitVersionRemapper implements PluginTransformer {
             return null;
         }
 
-        // Some plugins pass internal-style names (with '/')
-        // into reflection APIs that expect binary names.
+        // Some plugins pass internal-style names (with '/') into reflection APIs expecting binary names.
         binaryName = binaryName.replace('/', '.');
 
         if (!binaryName.startsWith(CRAFTBUKKIT_DOT_PREFIX)) {
@@ -180,17 +163,11 @@ public class PrtsCraftBukkitVersionRemapper implements PluginTransformer {
         );
     }
 
-    /**
-     * Prefixes the given tail with the release this server ships, or returns {@code null} while
-     * that release is still unknown, so callers keep the name they were given instead of
-     * pointing it at a package that may not exist.
-     */
     private static String withServerRelease(String prefix, String tail) {
         String release = serverRelease();
         return release == null ? null : prefix + release + tail;
     }
 
-    /** The release this server ships, or {@code null} before it has been announced. */
     private static String serverRelease() {
         try {
             String current = ArclightVersion.current().packageName();
@@ -378,7 +355,6 @@ public class PrtsCraftBukkitVersionRemapper implements PluginTransformer {
         while (i < descriptor.length()) {
             char c = descriptor.charAt(i);
             if (c == 'L') {
-                // Object type descriptor
                 int semicolon = descriptor.indexOf(';', i);
                 if (semicolon == -1) {
                     result.append(descriptor.substring(i));
@@ -421,7 +397,6 @@ public class PrtsCraftBukkitVersionRemapper implements PluginTransformer {
         if (signature == null) {
             return null;
         }
-        // Simple implementation - just remap class references in signatures
         return remapDescriptor(signature);
     }
 }

@@ -1,13 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/*
- * The entity side of the wait observations: the position write every move funnels through, and the
- * spawn position adjust a joining entity runs.
- *
- * The hook opens an observation at the head of the method and closes it at the return, and that is
- * all it does: no upper bound is read into a decision, no wait is shortened, delayed or cancelled,
- * and the call proceeds exactly as it did before. With no watcher installed both calls are a single
- * volatile read each.
- */
+/* Times the entity position write every move funnels through, and the spawn position adjust. */
 package io.izzel.arclight.common.prts.fixes.waitpoints;
 
 import io.izzel.arclight.api.ArclightPlatform;

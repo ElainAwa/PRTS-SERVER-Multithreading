@@ -1,13 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/*
- * The collision walk of a moving entity: every step of the walk may reach a block into a chunk that
- * is not in memory yet, so the step is where the wait shows up.
- *
- * The hook opens an observation at the head of the method and closes it at the return, and that is
- * all it does: no upper bound is read into a decision, no wait is shortened, delayed or cancelled,
- * and the call proceeds exactly as it did before. With no watcher installed both calls are a single
- * volatile read each.
- */
+/* Times the collision walk of a moving entity, whose steps may reach a chunk not in memory. */
 package io.izzel.arclight.common.prts.fixes.waitpoints;
 
 import io.izzel.arclight.api.ArclightPlatform;

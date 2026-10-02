@@ -19,36 +19,16 @@ import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * The {@code /prts} command: {@code reload} re-reads {@code prts-config/**} without restarting the
- * process, {@code status} prints the configuration directory, the category switches that are in
- * effect, every problem the last read found and the status lines of every registered extension.
- *
- * <p>Feature layers do not live here. A layer that has something to run or to show registers a
- * {@link PrtsCommandExtension}; the command builds its literals, dispatches it in both command
- * worlds and appends its status lines, so the configuration package stays independent of the
- * layers it serves and the package graph keeps pointing one way.</p>
- *
- * <p>The dispatcher side requires permission level 2, which the console, the remote console and
- * operators hold. The Bukkit view additionally declares and enforces the {@code prts.command}
- * permission, so the command map side answers to a permission a plugin can grant.</p>
- *
- * <p>A server command has to exist in both command worlds of this platform. The console and the
- * remote console parse the dispatcher the server owns, while players and plugins resolve commands
- * through the Bukkit command map; registering into only one of them leaves the command unreachable
- * from the other. {@link #register(CommandDispatcher)} and {@link #registerInCommandMap()} are
- * therefore both called by the platform registration hook.</p>
- *
- * <p>Lives in the configuration package on purpose: the mixin configuration declares the fixes
- * package as a mixin package, and Mixin refuses to load a class from such a package directly.</p>
+ * The {@code /prts} command: {@code reload} re-reads the configuration, {@code status} prints the
+ * directory, the switches in effect, the problems of the last read and the status lines of every
+ * registered extension. Both command worlds are served, because each reaches only one of them.
  */
 public final class PrtsCommand {
 
     private static final String NAME = "prts";
 
-    /** Permission a plugin can grant; the console and the remote console always hold it. */
     private static final String PERMISSION = "prts.command";
 
-    /** Vanilla permission level of the dispatcher side; the console and operators hold it. */
     private static final int PERMISSION_LEVEL = 2;
 
     private static final Map<String, PrtsCommandExtension> EXTENSIONS = new ConcurrentHashMap<>();
@@ -56,31 +36,21 @@ public final class PrtsCommand {
     private PrtsCommand() {
     }
 
-    /**
-     * Registers a subtree of another layer.
-     *
-     * @param extension the extension; a later registration under the same name replaces it
-     */
+    /** Registers a subtree of another layer; a later registration under the same name replaces it. */
     public static void registerExtension(PrtsCommandExtension extension) {
         if (extension != null && extension.name() != null && !extension.name().isBlank()) {
             EXTENSIONS.put(extension.name(), extension);
         }
     }
 
-    /**
-     * Adds the command to a brigadier dispatcher.
-     *
-     * @param dispatcher dispatcher of a {@code Commands} instance; every rebuild has to be fed again
-     */
+    /** Adds the command to a brigadier dispatcher; every rebuild has to be fed again. */
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(node());
     }
 
     /**
-     * Adds the command to the Bukkit command map, when a server already exists.
-     *
-     * <p>Called before the server exists this does nothing: the platform hook fires again for every
-     * later rebuild of the command dispatcher, and the command map is rebuilt from it.</p>
+     * Adds the command to the Bukkit command map; before the server exists this does nothing, and the
+     * platform hook fires again on every later rebuild of the dispatcher.
      */
     public static void registerInCommandMap() {
         try {
@@ -88,7 +58,7 @@ public final class PrtsCommand {
                 server.getCommandMap().register("arclight", new BukkitView());
             }
         } catch (Throwable ignored) {
-            // an unavailable command map must not break server start; the dispatcher keeps working
+                // An unavailable command map must not break server start; the dispatcher keeps working.
         }
     }
 
@@ -150,11 +120,6 @@ public final class PrtsCommand {
         return lines;
     }
 
-    /**
-     * Renders every category switch in a stable order, marking the ones a system property overrides.
-     *
-     * @return the single line that both command worlds print
-     */
     private static String switches() {
         StringBuilder builder = new StringBuilder("[PRTS] category switches:");
         for (String category : new TreeSet<>(PrtsConfigManager.entries().keySet())) {
@@ -168,14 +133,6 @@ public final class PrtsCommand {
         return builder.toString();
     }
 
-    /**
-     * Renders the per-feature switches of every category that declares one.
-     *
-     * <p>Each line carries the effective value, so an operator sees what the running process
-     * actually resolved instead of what the file claims.</p>
-     *
-     * @return one line per category with declared features, in category order
-     */
     private static List<String> features() {
         List<String> lines = new ArrayList<>();
         for (String category : new TreeSet<>(PrtsConfigManager.entries().keySet())) {
@@ -191,15 +148,6 @@ public final class PrtsCommand {
         return lines;
     }
 
-    /**
-     * Renders the whole-number settings of every category that declares one.
-     *
-     * <p>Shown next to the switches for the same reason: an operator sees the value the running
-     * process resolved, so a typo that was clamped or ignored is visible here instead of only in
-     * the problem lines.</p>
-     *
-     * @return one line per category with declared settings, in category order
-     */
     private static List<String> numbers() {
         List<String> lines = new ArrayList<>();
         for (String category : new TreeSet<>(PrtsConfigManager.entries().keySet())) {
@@ -215,15 +163,6 @@ public final class PrtsCommand {
         return lines;
     }
 
-    /**
-     * Renders the files this process brought up to the current configuration layout at start.
-     *
-     * <p>An upgrade rewrites a file an operator owns, so the file and what changed in it are shown
-     * here as well as in the start log. The line stays for the lifetime of the process: it is a
-     * statement about what happened to the files on disk, not about the values in effect.</p>
-     *
-     * @return the upgrade lines, empty when every file already carried the current layout
-     */
     private static List<String> upgrades() {
         List<String> lines = new ArrayList<>();
         PrtsConfigManager.upgrades().forEach((category, upgrade) ->
@@ -231,11 +170,6 @@ public final class PrtsCommand {
         return lines;
     }
 
-    /**
-     * Renders the problems of the last configuration read, one line per category.
-     *
-     * @return the problem lines, empty when the last read was clean
-     */
     private static List<String> problems() {
         List<String> lines = new ArrayList<>();
         PrtsConfigManager.problems().forEach((category, problem) ->
@@ -264,10 +198,7 @@ public final class PrtsCommand {
         return builder.toString();
     }
 
-    /**
-     * Bukkit-side view of the same command, so the command map accepts the label and checks the
-     * permission a plugin can grant.
-     */
+    /** Bukkit-side view of the same command: the command map label plus the permission a plugin can grant. */
     private static final class BukkitView extends Command {
 
         private BukkitView() {

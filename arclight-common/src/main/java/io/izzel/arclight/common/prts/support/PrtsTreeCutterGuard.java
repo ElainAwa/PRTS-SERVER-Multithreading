@@ -11,24 +11,10 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.FluidState;
 
 /**
- * Wraps the block reader of a tree search so the search cannot leave the loaded world.
- *
- * <p>The saw of the machinery mod walks the blocks around a cut with a breadth first search that
- * asks a {@link BlockGetter} for every position it reaches. Asking the world for a position of a
- * chunk that is not loaded loads that chunk synchronously, and the search has no bound, so one cut
- * next to a large connected build can pull a whole ring of chunks - with their block entities -
- * into memory on the server thread. The reader handed to the search therefore answers air for a
- * position outside the loaded world: the search treats it as "not part of the tree" and stops
- * expanding there, it does not load anything, and the next cut continues where this one stopped.</p>
- *
- * <p>The same wrapper can also bound a single search by a number of block lookups or by wall clock
- * time. Both budgets are off by default (a value of zero), because truncating a cut changes what
- * the mod does; an operator who sees a search stall can turn either one on. A search that ran out
- * of budget answers air from then on, which ends it the same way an unloaded chunk does, and the
- * partial result is what the saw cuts in this pass.</p>
- *
- * <p>The wrapper delegates everything except the block lookup, so a caller that also asks for the
- * height of the world or for a block entity sees exactly what the unwrapped reader answers.</p>
+ * Wraps the block reader of a tree search so it cannot leave the loaded world: an unbounded walk over a
+ * chunk that is not loaded would pull a whole ring of chunks onto the server thread, so the wrapper
+ * answers air outside the loaded world. Optional lookup and wall-clock budgets can end a search the
+ * same way; both are off by default, because truncating a cut changes what the mod does.
  */
 public final class PrtsTreeCutterGuard {
 
@@ -37,9 +23,6 @@ public final class PrtsTreeCutterGuard {
 
     /**
      * Wraps a reader for one tree search, or hands it back when nothing is switched on.
-     *
-     * @param reader reader the search was called with
-     * @return the reader, or a wrapper around it
      */
     public static BlockGetter guard(BlockGetter reader) {
         boolean bounds = PrtsConfigManager.feature(PrtsConfigManager.MODSUPPORT,

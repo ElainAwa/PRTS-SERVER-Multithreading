@@ -1,10 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
- * This is the totem death protection method of the shared living entity mixin, moved here so that
- * the platform whose entity cures effects by category can keep the call that third party injectors
- * anchor on. The call has to be an instruction of this method: a call reached through a helper, or
- * one written into the class after the mixins were merged, is invisible to those injectors. The
- * body is otherwise unchanged, so a change to the shared method has to be applied here as well.
+ * The totem death protection body, moved here so the method keeps the {@code removeEffectsCuredBy}
+ * call third party injectors anchor on: a call reached through a helper, or written in after the
+ * mixins were merged, is invisible to them. A change to the shared body has to be applied here too.
  */
 package io.izzel.arclight.common.prts.fixes;
 
@@ -39,10 +37,7 @@ public abstract class PrtsLivingEntityTotemMixin {
     @Shadow(remap = false)
     public abstract boolean removeEffectsCuredBy(net.neoforged.neoforge.common.EffectCure cure);
 
-    /**
-     * @author IzzelAliz
-     * @reason
-     */
+    /** @author IzzelAliz @reason the cured-by-category call has to stay an instruction of this method */
     @Overwrite
     private boolean checkTotemDeathProtection(DamageSource damageSourceIn) {
         LivingEntity self = (LivingEntity) (Object) this;
@@ -79,8 +74,7 @@ public abstract class PrtsLivingEntityTotemMixin {
                 }
 
                 self.setHealth(1.0F);
-                // The call the platform performs itself, kept because third party injectors anchor on
-                // it from inside this method.
+                // Kept for third party injectors that anchor on this call from inside the method.
                 this.removeEffectsCuredBy(net.neoforged.neoforge.common.EffectCures.PROTECTED_BY_TOTEM);
                 bridge.bridge$pushEffectCause(EntityPotionEffectEvent.Cause.TOTEM);
                 self.removeAllEffects();

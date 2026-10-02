@@ -1,13 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/*
- * The mob spawning call that reaches a chunk by block position and therefore has to have it in
- * memory before it can decide where a mob goes.
- *
- * The hook opens an observation at the head of the method and closes it at the return, and that is
- * all it does: no upper bound is read into a decision, no wait is shortened, delayed or cancelled,
- * and the call proceeds exactly as it did before. With no watcher installed both calls are a single
- * volatile read each.
- */
+/* Times the mob spawning call, which reaches a chunk by block position before it decides. */
 package io.izzel.arclight.common.prts.fixes.waitpoints;
 
 import io.izzel.arclight.api.ArclightPlatform;

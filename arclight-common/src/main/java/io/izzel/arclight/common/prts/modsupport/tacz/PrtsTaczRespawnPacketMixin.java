@@ -16,23 +16,13 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Watches the outgoing packet path for the respawn packet that breaks a gun mod's client state.
- *
- * <p>The class only applies while the gun mod is present, so a server without it pays neither the
- * injection nor the type check below. See {@link PrtsTaczGunOperatorCompat} for what is repaired
- * and why the repair has to happen after the packet was pushed rather than on the player's own
- * respawn handling, which a skin refresh does not go through.</p>
+ * Repairs the gun state when the respawn packet goes out; the repair has to run on this path
+ * because a skin refresh does not go through the player's own respawn handling.
  */
 @LoadIfMod(modid = "tacz", condition = LoadIfMod.ModCondition.PRESENT)
 @Mixin(ServerCommonPacketListenerImpl.class)
 public abstract class PrtsTaczRespawnPacketMixin {
 
-    /**
-     * Repairs the gun state of a player whose respawn packet is on its way out.
-     *
-     * @param packet packet about to be sent
-     * @param ci callback handle
-     */
     @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;)V", at = @At("HEAD"))
     private void prts$resyncGunOperatorOnRespawn(Packet<?> packet, CallbackInfo ci) {
         if (!(packet instanceof ClientboundRespawnPacket)) {

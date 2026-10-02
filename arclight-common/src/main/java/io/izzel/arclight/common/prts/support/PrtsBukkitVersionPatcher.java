@@ -1,9 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/*
- * Ported from the FeudalKings fork of Arclight, commit a349fffb97b9678b20b65a0eb1f290cc7912606f
- * ("add common Paper API compatibility").
- * See THIRD-PARTY.md.
- */
+/* Ported from the FeudalKings fork of Arclight (commit a349fff); see THIRD-PARTY.md. */
 package io.izzel.arclight.common.prts.support;
 
 import org.objectweb.asm.Opcodes;
@@ -13,11 +9,8 @@ import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
 /**
- * Adds the static Paper version readout to the Bukkit facade.
- *
- * <p>The readout has to be a static member of the facade, and Mixin does not merge non-private
- * static methods. The method is therefore written into the target class once, from the post-apply
- * step of the PRTS mixin configuration plugin.</p>
+ * Writes the static Paper version readout into the Bukkit facade. Mixin does not merge non-private
+ * static methods, so the method is added from the post-apply step of the mixin configuration plugin.
  */
 public final class PrtsBukkitVersionPatcher {
 
@@ -31,10 +24,7 @@ public final class PrtsBukkitVersionPatcher {
     }
 
     /**
-     * Adds the version readout when the given target is the Bukkit facade and lacks the method.
-     *
-     * @param targetClassName name of the class the mixin was applied to, dotted or internal
-     * @param targetClass     the class the mixin was applied to
+     * Adds the readout when the target is the Bukkit facade and does not already carry the method.
      */
     public static void patch(String targetClassName, ClassNode targetClass) {
         if (targetClassName == null

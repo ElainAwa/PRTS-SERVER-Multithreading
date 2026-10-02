@@ -1,13 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/*
- * The point of interest scan around a position: it walks a square of chunks and therefore needs
- * every one of them in memory.
- *
- * The hook opens an observation at the head of the method and closes it at the return, and that is
- * all it does: no upper bound is read into a decision, no wait is shortened, delayed or cancelled,
- * and the call proceeds exactly as it did before. With no watcher installed both calls are a single
- * volatile read each.
- */
+/* Times the point of interest scan, which walks a square of chunks around the position. */
 package io.izzel.arclight.common.prts.fixes.waitpoints;
 
 import io.izzel.arclight.api.ArclightPlatform;

@@ -27,7 +27,7 @@ class PrtsDeferredWritesTest {
     @Test
     void aLevelWriteFreezesThePositionItWasHanded() {
         BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos(1, 2, 3);
-        PrtsDeferredLevelWrite write = new PrtsDeferredLevelWrite(null, mutable, null, 3, 512);
+        PrtsDeferredWrites.LevelWrite write = new PrtsDeferredWrites.LevelWrite(null, mutable, null, 3, 512);
 
         mutable.set(9, 9, 9);
 
@@ -48,7 +48,7 @@ class PrtsDeferredWritesTest {
                 return stubAnswer(proxy, method, args, "original");
             });
 
-        BlockData returned = PrtsDeferredPlatformWrite.copyOf(original);
+        BlockData returned = PrtsDeferredWrites.PlatformWrite.copyOf(original);
 
         assertEquals(1, clones.get(), "the data is copied when the write is handed over");
         assertSame(copy, returned, "the write keeps the copy and not the caller's object");

@@ -1,23 +1,13 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/*
- * Ported from the FeudalKings fork of Arclight, commit 19f6536e3ac419c40d1b857b924bdd5c2b188f24
- * ("add optional Bungee Chat preloading").
- * See THIRD-PARTY.md.
- */
+/* Ported from the FeudalKings fork of Arclight (commit 19f6536); see THIRD-PARTY.md. */
 package io.izzel.arclight.common.prts.support;
 
 import io.izzel.arclight.common.mod.server.ArclightServer;
 
 /**
- * Loads the Bungee chat API classes into the server class loader.
- *
- * <p>The classes are loaded once and stay resolvable for the rest of the process, which is what a
- * plugin needs when it sends a component to a proxy. A missing class is reported and stops the
- * preload instead of failing the server start: a platform without the chat API keeps running, and
- * the plugin that needs it reports its own error.</p>
- *
- * <p>Helper classes live outside the mixin packages of this project, because Mixin refuses to load
- * a class from a package a mixin configuration owns.</p>
+ * Loads the Bungee chat API classes into the server class loader once, so plugins that send a
+ * component to a proxy resolve them. A missing class is reported and stops the preload instead of
+ * failing the server start.
  */
 public final class PrtsBungeeChatPreload {
 

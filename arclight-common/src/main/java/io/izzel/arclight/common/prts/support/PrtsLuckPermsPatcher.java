@@ -1,9 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/*
- * Ported from the FeudalKings fork of Arclight, commit 36adbc7b4a58afe79c6e881dc4afbfbcaa7d2c94
- * ("fix(compat): support LuckPerms permissible injection").
- * See THIRD-PARTY.md.
- */
+/* Ported from the FeudalKings fork of Arclight (commit 36adbc7); see THIRD-PARTY.md. */
 package io.izzel.arclight.common.prts.support;
 
 import io.izzel.arclight.api.PluginPatcher;
@@ -15,14 +11,9 @@ import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
 /**
- * Rewrites the static initializer of the plugin class that injects a custom permissible so that it
- * takes its field handles from {@link PrtsLuckPermsCompat} instead of resolving them itself.
- *
- * <p>The plugin resolves the handles with a hard coded field name and a plain reflective lookup. On
- * this server the permissible of a human entity is held by a field the plugin does not expect, so
- * the lookup fails and the plugin disables its permission injection. Replacing the initializer
- * keeps the plugin on its own code path while the handles come from the server, which is the only
- * side that knows the real field names.</p>
+ * Rewrites the static initializer of the permissible injector so its field handles come from
+ * {@link PrtsLuckPermsCompat}. The plugin's own hard coded lookup fails on this server, which would
+ * disable its permission injection.
  */
 public final class PrtsLuckPermsPatcher {
 
@@ -34,9 +25,6 @@ public final class PrtsLuckPermsPatcher {
 
     /**
      * Replaces the static initializer of the given class when it is the permissible injector.
-     *
-     * @param node     the class being loaded
-     * @param classRepo repository of the classes the plugin can see, unused here
      */
     public static void handlePermissibleInjector(ClassNode node, PluginPatcher.ClassRepo classRepo) {
         for (MethodNode method : node.methods) {

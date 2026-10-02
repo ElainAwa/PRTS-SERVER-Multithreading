@@ -1,15 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
- * A bone-mealed mushroom grows a huge mushroom through one ConfiguredFeature#place call, and the
- * event for it is raised here around the whole growMushroom call. The core capture injector sits at
- * that place call itself and reads the same block to name the species, so this mixin deliberately
- * wraps the caller instead of sharing the instruction - two injectors at one instruction is how a
- * redirect silently replaces another one on this platform, and the core injector has to keep
- * working.
- *
- * Capturing from before growMushroom also means the block it removes first is part of the capture:
- * a cancelled event leaves the mushroom standing, exactly like a cancelled sapling keeps its
- * sapling.
+ * Raises the event around the whole growMushroom call, not at the place call the core capture
+ * injector already sits on: two injectors at one instruction would replace each other. Capturing
+ * from before growMushroom also includes the block it removes, so a cancel leaves the mushroom.
  */
 package io.izzel.arclight.common.prts.fixes;
 
@@ -41,10 +34,7 @@ public abstract class PrtsMushroomStructureGrowEventMixin {
             () -> block.growMushroom(level, pos, state, random));
     }
 
-    /**
-     * The species of the mushroom, which is the block itself - a modded mushroom block is not one
-     * of the two and grows without an event, as it does today.
-     */
+    // A modded mushroom block is not one of the two and grows without an event, as it does today.
     @SuppressWarnings("ConstantConditions")
     private TreeType prts$species() {
         if ((Object) this == Blocks.BROWN_MUSHROOM) {

@@ -1,13 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/*
- * The biome resend: it walks the chunks of the players it is called for and reads each one's biome
- * container, which has to be in memory.
- *
- * The hook opens an observation at the head of the method and closes it at the return, and that is
- * all it does: no upper bound is read into a decision, no wait is shortened, delayed or cancelled,
- * and the call proceeds exactly as it did before. With no watcher installed both calls are a single
- * volatile read each.
- */
+/* Times the biome resend over the chunks of the players it is called for. */
 package io.izzel.arclight.common.prts.fixes.waitpoints;
 
 import io.izzel.arclight.api.ArclightPlatform;

@@ -1,9 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/*
- * Ported from the FeudalKings fork of Arclight, commit 1a39b264f9c389db6afc6f448944c0a4a5ce347e
- * ("fix(compat): patch FAWE command registration").
- * See THIRD-PARTY.md.
- */
+/* Ported from the FeudalKings fork of Arclight (commit 1a39b26); see THIRD-PARTY.md. */
 package io.izzel.arclight.common.prts.support;
 
 import io.izzel.arclight.api.PluginPatcher;
@@ -15,12 +11,8 @@ import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
 /**
- * Makes the command registration of the plugin ask for the command map of this server.
- *
- * <p>The plugin decides which command map to use by asking a library whether the server is a Paper
- * server, and takes a path this server does not implement when the answer is yes. The answer is
- * forced to no so that the plugin registers its commands through the Bukkit API like it does on any
- * other server.</p>
+ * Forces the server detection of that plugin to "no", so it registers its commands through the
+ * Bukkit API instead of a Paper path this server does not implement.
  */
 public final class PrtsFaweCommandPatcher {
 
@@ -35,9 +27,6 @@ public final class PrtsFaweCommandPatcher {
 
     /**
      * Replaces the server detection inside the command map lookup of the given class.
-     *
-     * @param node      the class being loaded
-     * @param classRepo repository of the classes the plugin can see, unused here
      */
     public static void handleFaweCommandRegistration(ClassNode node, PluginPatcher.ClassRepo classRepo) {
         for (MethodNode method : node.methods) {

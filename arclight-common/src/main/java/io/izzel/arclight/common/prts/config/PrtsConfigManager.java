@@ -19,56 +19,20 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * Single entry point for the PRTS configuration layout.
- *
- * <pre>
- * &lt;server root&gt;/prts-config/
- *   fixes.yml                  correctness fixes
- *   modsupport.yml             mod interoperability
- *   performance.yml            performance (never carries kernel-seam settings)
- *   optional/servercore.yml    optional journal layer, disabled by default
- *   kernel.yml                 placeholder for the new kernel, disabled by default
- * </pre>
- *
- * <p>Every category owns exactly one file, named after the category, so a category can be turned
- * off — or handed to the kernel — in one place. A file is generated on first start and an existing
- * file is never overwritten, which keeps operator edits authoritative; the start then brings an
- * existing file up to the layout of this build without touching a value: a key this build declares
- * and the file does not mention is appended with its default, a leading comment block written by an
- * older build is replaced, and the layout version is written back. A file that already carries this
- * layout is left alone, so a start does not touch it. {@code /prts reload} re-reads the directory
- * without restarting the process.</p>
- *
- * <p>Parsing is deliberately dependency-free: the files are written by this class and carry only
- * {@code version}, {@code enabled} and {@code features}, so no YAML library has to be present at
- * the very early point where the mixin categories are resolved.</p>
- *
- * <p>A file that is missing, unreadable, unwritable, or carries an {@code enabled} value this class
- * does not recognize never fails the start: the category falls back to its built-in default and the
- * reason is recorded, so {@link #problems()} can show why an operator edit had no effect. A file
- * that could not be brought up to this layout is used exactly as it is on disk.</p>
+ * The PRTS configuration layout: one file per category under {@code prts-config/}, generated on
+ * first start and brought up to this build's layout without touching an operator value. Never
+ * fails the start - a broken file keeps the built-in default and is reported through {@link #problems()}.
  */
 public final class PrtsConfigManager {
 
-    /** Category of correctness fixes and shared PRTS infrastructure. */
     public static final String FIXES = "fixes";
-    /** Category of interoperability work for mods on the registered mod list. */
     public static final String MODSUPPORT = "modsupport";
-    /** Category of performance work that does not land on a new-kernel seam. */
     public static final String PERFORMANCE = "performance";
-    /** Optional ServerCore layer; disabled by default. */
     public static final String OPTIONAL_SERVERCORE = "optional-servercore";
-    /** Placeholder category reserved for the new kernel; disabled by default. */
     public static final String KERNEL = "kernel";
 
-    /**
-     * Version of the generated layout, header comments included. A file that declares an older
-     * version is brought up to this one; a file that declares a newer one is left alone and
-     * reported, because only the build that wrote it knows the keys it declared.
-     */
     private static final String VERSION = "2";
 
-    /** Value of {@code enabled} that defers to the built-in default of the category. */
     private static final String AUTO = "auto";
 
     private static final String HEADER =
@@ -97,41 +61,18 @@ public final class PrtsConfigManager {
 
     private static volatile boolean loaded;
 
-    /**
-     * Describes one category file.
-     *
-     * @param file            path relative to {@code prts-config}
-     * @param defaultEnabled  value used when the file is missing or unreadable
-     * @param features        per-feature switches of the category and their built-in defaults
-     * @param numbers         per-feature whole numbers of the category and their accepted range
-     * @param comment         human-readable purpose, written into the generated file
-     */
+    /** One declared category file: its path, default switch, switches and numbers, and its purpose text. */
     public record Entry(String file, boolean defaultEnabled, Map<String, Boolean> features,
                         Map<String, IntSetting> numbers, String comment) {
 
-        /**
-         * Describes a category whose settings are all switches.
-         *
-         * @param file           path relative to {@code prts-config}
-         * @param defaultEnabled value used when the file is missing or unreadable
-         * @param features       per-feature switches of the category and their built-in defaults
-         * @param comment        human-readable purpose, written into the generated file
-         */
         public Entry(String file, boolean defaultEnabled, Map<String, Boolean> features, String comment) {
             this(file, defaultEnabled, features, Map.of(), comment);
         }
     }
 
     /**
-     * One whole-number setting of a category.
-     *
-     * <p>The range is part of the declaration because an operator edit can carry any text: a value
-     * outside the range is clamped to the closest accepted one and reported as a problem, so a typo
-     * cannot turn a flush interval into a stop-the-world stall or a zero-length cycle.</p>
-     *
-     * @param defaultValue value written into a generated file and used when the file has no entry
-     * @param min          lowest accepted value
-     * @param max          highest accepted value
+     * One whole-number setting: the default written into a generated file, and the range an operator
+     * edit is clamped to (an out-of-range value is clamped and reported, never applied as written).
      */
     public record IntSetting(int defaultValue, int min, int max) {
 
@@ -264,15 +205,6 @@ public final class PrtsConfigManager {
                 + "# as a semantic deviation (registration M4-OPEN), reachable only by this opt-in."));
     }
 
-    /**
-     * Declares the per-feature switches of the mod interoperability category.
-     *
-     * <p>A feature is an independent behaviour of the category. Declaring it here gives the
-     * generated file one commented default per behaviour and keeps operators from having to guess
-     * key names; a value that is not declared is reported as a problem and ignored.</p>
-     *
-     * @return the feature defaults, in the order they are written into the file
-     */
     private static Map<String, Boolean> modSupportFeatures() {
         Map<String, Boolean> features = new LinkedHashMap<>();
         features.put("preload-bungee-chat-classes", true);
@@ -292,15 +224,6 @@ public final class PrtsConfigManager {
         return features;
     }
 
-    /**
-     * Declares the whole-number settings of the mod interoperability category.
-     *
-     * <p>Both bounds of a tree search default to zero, which is the unbounded search of the mod:
-     * cutting a search short changes what the mod does, so that is an operator decision. The upper
-     * bounds only keep a typo from turning one search into a stop-the-world pass.</p>
-     *
-     * @return the setting declarations, in the order they are written into the file
-     */
     private static Map<String, IntSetting> modSupportNumbers() {
         Map<String, IntSetting> numbers = new LinkedHashMap<>();
         numbers.put("tree-cutter-node-budget", new IntSetting(0, 0, 65536));
@@ -308,16 +231,6 @@ public final class PrtsConfigManager {
         return numbers;
     }
 
-    /**
-     * Declares the per-feature switches of the kernel scaffolding category.
-     *
-     * <p>The category is off, so these defaults only describe what an operator gets after turning
-     * it on. The metering pieces default to on because they only read; the one switch that refuses
-     * defaults to off, so registering an unregistered write never turns into a refusal by accident.
-     * </p>
-     *
-     * @return the feature defaults, in the order they are written into the file
-     */
     private static Map<String, Boolean> kernelFeatures() {
         Map<String, Boolean> features = new LinkedHashMap<>();
         features.put("enforce-unregistered-writes", false);
@@ -333,16 +246,6 @@ public final class PrtsConfigManager {
         return features;
     }
 
-    /**
-     * Declares the whole-number settings of the kernel scaffolding category.
-     *
-     * <p>The budget numbers describe one tick: a share of eight milliseconds for a world, a
-     * reserved column of four and two milliseconds of host overhead fit inside the fifty
-     * millisecond budget for five worlds. The window floor of ten minutes is part of the
-     * declaration, so a shorter window cannot be configured at all.</p>
-     *
-     * @return the setting declarations, in the order they are written into the file
-     */
     private static Map<String, IntSetting> kernelNumbers() {
         Map<String, IntSetting> numbers = new LinkedHashMap<>();
         numbers.put("self-window-seconds", new IntSetting(600, 600, 86400));
@@ -363,31 +266,12 @@ public final class PrtsConfigManager {
         return numbers;
     }
 
-    /**
-     * Declares the per-feature switches of the optional journal layer.
-     *
-     * <p>The layer is off by default and so is the journal itself: enabling the category applies the
-     * hooks, and enabling the feature is what makes them write a journal. Both are required, which
-     * keeps an operator from starting to journal just by flipping the category.</p>
-     *
-     * @return the feature defaults, in the order they are written into the file
-     */
     private static Map<String, Boolean> journalFeatures() {
         Map<String, Boolean> features = new LinkedHashMap<>();
         features.put("reliable-chunk-save", false);
         return features;
     }
 
-    /**
-     * Declares the whole-number settings of the optional journal layer.
-     *
-     * <p>The interval floor is five seconds: a shorter cycle would journal more often than the
-     * region files are written and spend the saved work again. The per-tick cap is what keeps one
-     * tick from serializing an unbounded number of chunks (its upper bound only guards against a
-     * value that would make a single tick do the whole cycle and stall).</p>
-     *
-     * @return the setting declarations, in the order they are written into the file
-     */
     private static Map<String, IntSetting> journalNumbers() {
         Map<String, IntSetting> numbers = new LinkedHashMap<>();
         numbers.put("journal-interval-seconds", new IntSetting(30, 5, 3600));
@@ -398,46 +282,28 @@ public final class PrtsConfigManager {
     private PrtsConfigManager() {
     }
 
-    /**
-     * Returns the configuration directory, resolved against the server working directory.
-     *
-     * @return path of {@code prts-config}
-     */
+    /** @return the configuration directory, resolved against the server working directory */
     public static Path directory() {
         return Paths.get("prts-config");
     }
 
-    /**
-     * Returns the category files keyed by category name.
-     *
-     * @return an immutable view of the declared categories
-     */
+    /** @return the declared category files, keyed by category name */
     public static Map<String, Entry> entries() {
         return Map.copyOf(ENTRIES);
     }
 
     /**
-     * Generates the missing files, brings the existing ones up to this layout, and loads the
-     * directory. Never throws: a working directory this process cannot write leaves the built-in
-     * defaults in place.
+     * Generates the missing files, brings the existing ones up to this layout and loads the directory;
+     * never throws.
      */
     public static synchronized void ensureAndLoad() {
         Map<String, String> failures = ensure();
         read();
-        // read() starts a new problem list, so a file that could not be upgraded is reported after
-        // it: the values on disk still apply, and only the reason they are behind is added.
+        // read() starts a new problem list, so an upgrade failure is reported after it: the values on disk still apply.
         failures.forEach(PrtsConfigManager::problem);
         loaded = true;
     }
 
-    /**
-     * Generates the files this build does not find and brings an existing file up to this layout.
-     *
-     * <p>One file that cannot be read or written does not keep the other categories from being
-     * prepared, and nothing here throws out to the caller.</p>
-     *
-     * @return the failures, keyed by category, for the caller to report once the read is done
-     */
     private static Map<String, String> ensure() {
         Map<String, String> failures = new LinkedHashMap<>();
         UPGRADES.clear();
@@ -482,11 +348,7 @@ public final class PrtsConfigManager {
         }
     }
 
-    /**
-     * Registers a callback invoked after a successful configuration reload.
-     *
-     * @param listener callback that refreshes a runtime-facing subsystem
-     */
+    /** Registers a callback invoked after a successful configuration reload. */
     public static void addReloadListener(Runnable listener) {
         if (listener == null) {
             throw new NullPointerException("listener");
@@ -494,21 +356,12 @@ public final class PrtsConfigManager {
         RELOAD_LISTENERS.addIfAbsent(listener);
     }
 
-    /**
-     * Reports whether the configuration directory has been read at least once.
-     *
-     * @return {@code true} after {@link #ensureAndLoad()} has run
-     */
+    /** @return true after {@link #ensureAndLoad()} has run */
     public static boolean loaded() {
         return loaded;
     }
 
-    /**
-     * Resolves the switch of a category.
-     *
-     * @param category one of the category constants of this class
-     * @return {@code true} when the category is enabled
-     */
+    /** @return true when the category is enabled, from its file and its built-in default */
     public static boolean isEnabled(String category) {
         Boolean value = ENABLED.get(category);
         if (value != null) {
@@ -518,52 +371,31 @@ public final class PrtsConfigManager {
         return entry == null || entry.defaultEnabled();
     }
 
-    /**
-     * Returns the currently resolved switches.
-     *
-     * @return an immutable, category-ordered snapshot
-     */
+    /** @return the currently resolved switches, in category order */
     public static Map<String, Boolean> snapshot() {
         return Collections.unmodifiableMap(new TreeMap<>(ENABLED));
     }
 
     /**
-     * Returns the problems found by the last read, keyed by category.
-     *
-     * <p>A problem is a report and not a failure: the affected category keeps its built-in default,
-     * which is how a broken file becomes visible instead of silently effective.</p>
-     *
-     * @return an immutable, category-ordered view; empty when the last read was clean
+     * @return the problems of the last read, keyed by category; a problem is a report, not a failure,
+     *     so the affected category keeps its built-in default instead of silently taking effect
      */
     public static Map<String, String> problems() {
         return Collections.unmodifiableMap(new TreeMap<>(PROBLEMS));
     }
 
     /**
-     * Returns the files the last {@link #ensureAndLoad()} brought up to the layout of this build.
-     *
-     * <p>An upgrade changes a file an operator owns, so it is named once instead of happening
-     * quietly: the appended keys take effect with the default of this build and the comment block
-     * of an older build is gone, both of which are worth a line at start and in
-     * {@code /prts status}.</p>
-     *
-     * @return an immutable, category-ordered view; empty when every file already carried this layout
+     * @return the files the last {@link #ensureAndLoad()} upgraded, in category order; an upgrade changes
+     *     a file an operator owns, so it is named instead of happening quietly
      */
     public static Map<String, String> upgrades() {
         return Collections.unmodifiableMap(new TreeMap<>(UPGRADES));
     }
 
     /**
-     * Resolves one per-feature switch of a category.
-     *
-     * <p>The resolution never throws and never guesses: a feature the file does not mention, or
-     * mentions with a value this class does not recognize, keeps the declared built-in default, so
-     * an operator edit can only turn behaviour on or off deliberately.</p>
-     *
-     * @param category one of the category constants of this class
-     * @param name     feature name as declared by the category
+     * Resolves one per-feature switch; a feature the file does not mention, or mentions with an
+     * unrecognized value, keeps the declared built-in default.
      * @param fallback value used when the last read did not provide the feature
-     * @return {@code true} when the feature is enabled
      */
     public static boolean feature(String category, String name, boolean fallback) {
         Map<String, Boolean> features = FEATURES.get(category);
@@ -572,15 +404,8 @@ public final class PrtsConfigManager {
     }
 
     /**
-     * Resolves one per-feature switch of a category against its declaration.
-     *
-     * <p>The counterpart of {@link #number(String, String)} for switches: the declared default is
-     * the only place the default is written, so a caller does not have to repeat it and cannot
-     * drift away from the generated file.</p>
-     *
-     * @param category one of the category constants of this class
-     * @param name     feature name as declared by the category
-     * @return the value in effect
+     * Resolves one per-feature switch against its declaration, so a caller cannot drift from the
+     * generated file.
      * @throws IllegalArgumentException when the category does not declare the name
      */
     public static boolean feature(String category, String name) {
@@ -597,30 +422,16 @@ public final class PrtsConfigManager {
         return declared;
     }
 
-    /**
-     * Returns the per-feature switches of one category as they were last read.
-     *
-     * @param category one of the category constants of this class
-     * @return an immutable view; empty when the category declares no feature
-     */
+    /** @return the per-feature switches of one category as last read; empty when it declares none */
     public static Map<String, Boolean> features(String category) {
         Map<String, Boolean> features = FEATURES.get(category);
         return features == null ? Map.of() : features;
     }
 
     /**
-     * Resolves one whole-number setting of a category.
-     *
-     * <p>The default is not repeated by the caller: the declaration in {@link #entries()} is the
-     * only place a default is written, and a category whose file was never read falls back to it.
-     * An operator edit outside the declared range was already clamped and reported by the last
-     * read, so what comes back here is always inside the range.</p>
-     *
-     * @param category one of the category constants of this class
-     * @param name     setting name as declared by the category
-     * @return the value in effect
-     * @throws IllegalArgumentException when the category does not declare the name, which is a
-     *         mistake in the code that reads it rather than an operator input
+     * Resolves one whole-number setting against its declaration; an operator edit outside the declared
+     * range was already clamped and reported by the last read.
+     * @throws IllegalArgumentException when the category does not declare the name
      */
     public static int number(String category, String name) {
         Map<String, Integer> numbers = NUMBERS.get(category);
@@ -636,23 +447,13 @@ public final class PrtsConfigManager {
         return setting.defaultValue();
     }
 
-    /**
-     * Returns the whole-number settings of one category as they were last read.
-     *
-     * @param category one of the category constants of this class
-     * @return an immutable view; empty when the category declares no setting
-     */
+    /** @return the whole-number settings of one category as last read; empty when it declares none */
     public static Map<String, Integer> numbers(String category) {
         Map<String, Integer> numbers = NUMBERS.get(category);
         return numbers == null ? Map.of() : numbers;
     }
 
-    /**
-     * Renders the default content of one category file.
-     *
-     * @param entry the category to render
-     * @return the generated file content, including its header comments
-     */
+    /** @return the generated content of one category file, header comments included */
     public static String defaults(Entry entry) {
         StringBuilder builder = new StringBuilder(HEADER)
             .append(entry.comment()).append('\n')
@@ -669,39 +470,17 @@ public final class PrtsConfigManager {
         return builder.toString();
     }
 
-    /**
-     * Result of bringing one file up to the layout of this build.
-     *
-     * @param content the content to write; the content of the file when nothing changes
-     * @param detail  what changed, or {@code null} when the file already carries this layout
-     */
+    /** @param detail what changed, or null when the file already carries this layout */
     record Upgraded(String content, String detail) {
     }
 
-    /** One insertion into a file: {@code lines} added at {@code index}. */
     private record Edit(int index, List<String> lines) {
     }
 
     /**
-     * Brings one file up to the layout of this build without touching a value the operator set.
-     *
-     * <p>Three changes are possible. A key this build declares and the file does not mention is
-     * appended to the end of its group, carrying the default of this build and the version that
-     * added it. A leading comment block that is not the block of this build is replaced, which is
-     * how the text of an older build leaves a file. The layout version is written back. Every other
-     * line, and in particular every value, is carried over unchanged, and a file that already
-     * carries this layout comes back as the same string, which is what keeps a start from touching
-     * it.</p>
-     *
-     * <p>A file that declares a version newer than this build is not changed at all: only the build
-     * that wrote it knows the keys it declared, and taking the version back would hide that.</p>
-     *
-     * <p>Visible to the tests of this package, which drive a file content through it directly.</p>
-     *
-     * @param entry   the category the file belongs to
-     * @param content the file as it is on disk
-     * @return the content to write and what changed; the input and a {@code null} detail when the
-     *         file already carries this layout
+     * Brings one file up to the layout of this build without touching a value the operator set: it
+     * appends the keys this build declares, replaces the comment block of an older build and writes
+     * the layout version back. A file that declares a newer version is left alone.
      */
     static Upgraded upgrade(Entry entry, String content) {
         List<String> lines = new ArrayList<>(Arrays.asList(content.split("\n", -1)));
@@ -728,7 +507,6 @@ public final class PrtsConfigManager {
         Map<String, Integer> keys = topLevelKeys(lines, headerRefreshed ? expected.size() : headerEnd);
         Integer versionIndex = keys.get("version");
         if (versionIndex == null) {
-            // the key is written with the other appended keys, below
         } else {
             String current = value(lines.get(versionIndex));
             if (!VERSION.equals(current)) {
@@ -777,14 +555,14 @@ public final class PrtsConfigManager {
             }
             if (!missing.isEmpty()) {
                 if (lines.get(featuresIndex).trim().endsWith("{}")) {
-                    // an empty flow mapping carries no block entries, so the header becomes a block
+                    // An empty flow mapping carries no block entries, so the header becomes a block.
                     lines.set(featuresIndex, "features:");
                 }
                 edits.add(new Edit(featuresEnd(lines, featuresIndex), missing));
             }
         }
         if (!appended.isEmpty()) {
-            // without a features line to sit above, everything this build adds ends the file
+            // Without a features line to sit above, everything this build adds ends the file.
             edits.add(new Edit(featuresIndex == null ? endOfFile(lines) : featuresIndex, appended));
         }
 
@@ -810,16 +588,6 @@ public final class PrtsConfigManager {
         return new Upgraded(upgraded, changes.isEmpty() ? "layout" : String.join(", ", changes));
     }
 
-    /**
-     * Renders every setting a category declares, as name to default text.
-     *
-     * <p>Switches come first and whole numbers behind them, which is the order the generated file
-     * uses, so a key added by a later build lands in the same place whether the file was generated
-     * or upgraded.</p>
-     *
-     * @param entry the category to render
-     * @return setting name to the text of its default, in declaration order
-     */
     private static Map<String, String> declaredEntries(Entry entry) {
         Map<String, String> declared = new LinkedHashMap<>();
         entry.features().forEach((name, value) -> declared.put(name, String.valueOf(value)));
@@ -827,27 +595,14 @@ public final class PrtsConfigManager {
         return declared;
     }
 
-    /**
-     * Renders the comment block this build writes above the keys of a file.
-     *
-     * @param entry the category the file belongs to
-     * @return the header and the category comment, one element per line
-     */
     private static List<String> headerLines(Entry entry) {
         List<String> lines = new ArrayList<>(
             Arrays.asList((HEADER + entry.comment() + "\n").split("\n", -1)));
-        // the split keeps the empty element behind the final newline; it is not a line of the block
+        // The split keeps the empty element behind the final newline; it is not a line of the block.
         lines.remove(lines.size() - 1);
         return lines;
     }
 
-    /**
-     * Finds the top-level keys of a file, ignoring the indented entries of the features block.
-     *
-     * @param lines the file content
-     * @param from  index of the first line after the leading comment block
-     * @return key name to line index, for the first line that declares it
-     */
     private static Map<String, Integer> topLevelKeys(List<String> lines, int from) {
         Map<String, Integer> keys = new LinkedHashMap<>();
         for (int index = from; index < lines.size(); index++) {
@@ -867,16 +622,6 @@ public final class PrtsConfigManager {
         return keys;
     }
 
-    /**
-     * Returns the index after the last line of the features block.
-     *
-     * <p>A blank line inside the block does not end it, so a new entry lands behind the entries that
-     * are there instead of in the middle of them.</p>
-     *
-     * @param lines  the file content
-     * @param header index of the {@code features} line
-     * @return the index a new entry of the block is appended at
-     */
     private static int featuresEnd(List<String> lines, int header) {
         int end = header + 1;
         for (int index = header + 1; index < lines.size(); index++) {
@@ -889,13 +634,6 @@ public final class PrtsConfigManager {
         return end;
     }
 
-    /**
-     * Collects the feature names a file already mentions.
-     *
-     * @param lines  the file content
-     * @param header index of the {@code features} line
-     * @return the names, in file order
-     */
     private static Set<String> featureNames(List<String> lines, int header) {
         Set<String> names = new LinkedHashSet<>();
         int end = featuresEnd(lines, header);
@@ -912,12 +650,6 @@ public final class PrtsConfigManager {
         return names;
     }
 
-    /**
-     * Returns the index a new last line is appended at, in front of the newline that ends the file.
-     *
-     * @param lines the file content
-     * @return the index of the trailing empty element, or the size when the file has none
-     */
     private static int endOfFile(List<String> lines) {
         int last = lines.size() - 1;
         return last >= 0 && lines.get(last).isEmpty() ? last : lines.size();
@@ -932,17 +664,6 @@ public final class PrtsConfigManager {
         return !line.isEmpty() && (line.charAt(0) == ' ' || line.charAt(0) == '\t');
     }
 
-    /**
-     * Reports whether a comment block already carries every line of this build, in order.
-     *
-     * <p>An operator may add a line of their own to the block; as long as the text of this build is
-     * still in it, the block is not rewritten. A block an older build wrote does not carry those
-     * lines, which is how the text of that build leaves the file.</p>
-     *
-     * @param block    the comment block at the top of the file
-     * @param expected the block this build writes
-     * @return {@code true} when the block does not have to be replaced
-     */
     private static boolean inOrder(List<String> block, List<String> expected) {
         int index = 0;
         for (String line : block) {
@@ -953,29 +674,17 @@ public final class PrtsConfigManager {
         return index == expected.size();
     }
 
-    /**
-     * Reads the value of a scalar line.
-     *
-     * @param line a line of a generated file
-     * @return the value without surrounding quotes, or an empty string when the line carries none
-     */
     private static String value(String line) {
         String trimmed = line.trim();
         int colon = trimmed.indexOf(':');
         return colon < 0 ? "" : unquote(trimmed.substring(colon + 1).trim());
     }
 
-    /**
-     * Reports whether a declared layout version was written by a build newer than this one.
-     *
-     * @param declared the value of the {@code version} key
-     * @return {@code true} when the file belongs to a newer build and has to be left alone
-     */
     private static boolean isNewerVersion(String declared) {
         try {
             return Integer.parseInt(declared) > Integer.parseInt(VERSION);
         } catch (NumberFormatException notANumber) {
-            // a value that is not a number is not a claim about a newer build
+            // A value that is not a number is not a claim about a newer build.
             return false;
         }
     }
@@ -990,13 +699,6 @@ public final class PrtsConfigManager {
         }
     }
 
-    /**
-     * Reads one category file and records every problem it shows.
-     *
-     * @param category category name, used when a problem is recorded
-     * @param entry    the file to read
-     * @return the switch of the file, or the built-in default when the file cannot be trusted
-     */
     private static boolean read(String category, Entry entry) {
         Path file = directory().resolve(entry.file());
         if (!Files.exists(file)) {
@@ -1071,20 +773,7 @@ public final class PrtsConfigManager {
         return parsed;
     }
 
-    /**
-     * Reads one indented line of the {@code features} block.
-     *
-     * <p>Which kind of value the line carries is decided by the declaration, not by its text: a
-     * name the category declares as a whole number is parsed as one, everything else as a switch.
-     * That keeps {@code true} from being read as a number and a number from being reported as an
-     * unrecognized switch.</p>
-     *
-     * @param category category name, used when a problem is recorded
-     * @param entry    the category the file belongs to, which declares the names
-     * @param trimmed  the line without surrounding blanks
-     * @param features collected switches, written into
-     * @param numbers  collected whole numbers, written into
-     */
+    // Which kind of value a line carries is decided by the declaration, not by its text: a declared
     private static void readFeature(String category, Entry entry, String trimmed,
                                     Map<String, Boolean> features, Map<String, Integer> numbers) {
         int colon = trimmed.indexOf(':');
@@ -1108,15 +797,6 @@ public final class PrtsConfigManager {
         features.put(name, value);
     }
 
-    /**
-     * Reads the value of one whole-number setting and records what is wrong with it.
-     *
-     * @param category category name, used when a problem is recorded
-     * @param name     setting name as declared by the category
-     * @param raw      the text the file carries
-     * @param setting  the declared range
-     * @param numbers  collected values, written into
-     */
     private static void readNumber(String category, String name, String raw, IntSetting setting,
                                    Map<String, Integer> numbers) {
         int value;

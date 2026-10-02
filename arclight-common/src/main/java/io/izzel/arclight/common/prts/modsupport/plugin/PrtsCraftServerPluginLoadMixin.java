@@ -1,9 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/*
- * Ported from the FeudalKings fork of Arclight, commit 19f6536e3ac419c40d1b857b924bdd5c2b188f24
- * ("add optional Bungee Chat preloading").
- * Reworked as a standalone mixin of the prts.modsupport category; see THIRD-PARTY.md.
- */
+/* Ported from the FeudalKings fork of Arclight, commit 19f6536e3ac419c40d1b857b924bdd5c2b188f24; see THIRD-PARTY.md. */
 package io.izzel.arclight.common.prts.modsupport.plugin;
 
 import io.izzel.arclight.common.prts.config.PrtsConfigManager;
@@ -15,11 +11,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Resolves the Bungee chat classes before the plugin class loaders are built.
- *
- * <p>Plugins that send Bungee chat components need those classes to come from the server class
- * loader. Loading them here, at the moment plugin loading starts, keeps an isolated plugin class
- * loader from resolving a second copy of the API.</p>
+ * Resolves the Bungee chat classes through the server class loader before the plugin class
+ * loaders are built, so an isolated loader cannot resolve a second copy of the API.
  */
 @Mixin(value = CraftServer.class, remap = false)
 public abstract class PrtsCraftServerPluginLoadMixin {

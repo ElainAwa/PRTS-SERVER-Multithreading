@@ -22,17 +22,10 @@ import org.spongepowered.asm.mixin.Overwrite;
 import java.util.UUID;
 
 /**
- * Two send paths of the optional vehicle mod, narrowed for a server with many players.
- *
- * <p>The friend-or-foe update is sent for every player on every tick; it only goes out every few
- * ticks now, and only while the operator left the mod setting at the value the mod ships. Every
- * other payload keeps its path unchanged. The vehicle shoot broadcast goes to the players tracking
- * the vehicle instead of the whole server, and falls back to the broadcast whenever the vehicle
- * cannot be resolved - an unloaded or already removed vehicle must not lose the message.</p>
- *
- * <p>Nothing here is compiled against the mod: the payload kinds are recognised by class name and
- * the one value read from the mod is read reflectively. A server without the mod never loads this
- * class, and a value that cannot be read keeps the mod's own behaviour.</p>
+ * Narrows two send paths for a server with many players: the friend-or-foe update goes out
+ * every few ticks while the operator left the mod setting at the shipped value, and the vehicle
+ * shoot broadcast goes to the trackers instead of the whole server, falling back to the
+ * broadcast whenever the vehicle cannot be resolved.
  */
 @OnlyInPlatform(ArclightPlatform.NEOFORGE)
 @LoadIfMod(modid = PrtsSbwCompat.MOD_ID, condition = LoadIfMod.ModCondition.PRESENT)
@@ -40,16 +33,7 @@ import java.util.UUID;
 @Mixin(targets = "com.atsuishio.superbwarfare.tools.MinecraftUtil", remap = false)
 public abstract class PrtsSbwMinecraftUtilMixin {
 
-    /**
-     * Sends a payload to one player, spreading the friend-or-foe update over several ticks.
-     *
-     * @param player receiver
-     * @param packet payload to send
-     */
-    /**
-     * @author PRTS
-     * @reason the friend-or-foe update is sent on every tick of every player
-     */
+    /** @author PRTS @reason the friend-or-foe update is sent on every tick of every player */
     @Overwrite(remap = false)
     public static void sendPacketTo(Player player, CustomPacketPayload packet) {
         if (!(player instanceof ServerPlayer serverPlayer)) {
@@ -66,15 +50,7 @@ public abstract class PrtsSbwMinecraftUtilMixin {
         PacketDistributor.sendToPlayer(serverPlayer, packet);
     }
 
-    /**
-     * Sends a payload to the whole server, narrowing the vehicle shoot broadcast to its trackers.
-     *
-     * @param packet payload to send
-     */
-    /**
-     * @author PRTS
-     * @reason the shoot broadcast goes to the whole server instead of the trackers
-     */
+    /** @author PRTS @reason the shoot broadcast goes to the whole server instead of the trackers */
     @Overwrite(remap = false)
     public static void sendPacketToAll(CustomPacketPayload packet) {
         if (PrtsConfigManager.feature(PrtsConfigManager.MODSUPPORT, "narrow-sbw-vehicle-shoot")

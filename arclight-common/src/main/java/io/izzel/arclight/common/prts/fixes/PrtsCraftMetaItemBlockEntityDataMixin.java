@@ -12,31 +12,15 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 import java.util.Set;
 
 /**
- * Keeps {@code minecraft:block_entity_data} on an item meta that does not model it.
- *
- * <p>The block state meta declares that component, and the base meta collects the declared keys of
- * its subclasses into one handled-tag set. The base component-patch constructor then stores only
- * what that set does not contain, so a component handled by the subclass is skipped for every other
- * item meta as well: no field and no unhandled tag takes it, and the value is gone.</p>
- *
- * <p>The loss is observable for modded block items whose data lives in the block entity component,
- * a container item for example. A round trip through {@code CraftItemStack} - the copy a plugin or a
- * creative inventory slot performs - silently drops the component, so the item arrives without its
- * contents. The redirect below answers the handled-tag query with {@code false} for that one
- * component when the meta being built is not the block state meta, which routes the value into the
- * unhandled-tag map where it survives the round trip. Every other component keeps the set answer.</p>
+ * Keeps {@code minecraft:block_entity_data} on an item meta that does not model it. The base
+ * meta collects the declared keys of its subclasses, so a component handled by the block state
+ * meta is dropped for every other meta and a CraftItemStack round trip loses it. Answering the
+ * handled-tag query with false outside the block state meta routes the value into the unhandled
+ * map, where it survives.
  */
 @Mixin(value = CraftMetaItem.class, remap = false)
 public abstract class PrtsCraftMetaItemBlockEntityDataMixin {
 
-    /**
-     * Answers the handled-tag query of the component-patch constructor.
-     *
-     * @param handled the set the constructor asks
-     * @param componentType the component being classified
-     * @return {@code false} for the block entity component outside the block state meta, the answer
-     *     of the set otherwise
-     */
     @Redirect(method = "<init>(Lnet/minecraft/core/component/DataComponentPatch;)V",
         at = @At(value = "INVOKE", target = "Ljava/util/Set;contains(Ljava/lang/Object;)Z"))
     private boolean prts$keepBlockEntityData(Set<DataComponentType<?>> handled, Object componentType) {

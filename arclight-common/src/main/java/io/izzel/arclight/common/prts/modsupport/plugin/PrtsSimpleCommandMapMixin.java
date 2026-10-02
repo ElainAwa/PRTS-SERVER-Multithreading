@@ -1,9 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/*
- * Ported from the FeudalKings fork of Arclight, commit 381ee59959b966e43a6685f85e79855c73e927f9
- * ("control Bukkit reload commands").
- * Reworked as a standalone mixin of the prts.modsupport category; see THIRD-PARTY.md.
- */
+/* Ported from the FeudalKings fork of Arclight, commit 381ee59959b966e43a6685f85e79855c73e927f9; see THIRD-PARTY.md. */
 package io.izzel.arclight.common.prts.modsupport.plugin;
 
 import io.izzel.arclight.common.prts.config.PrtsConfigManager;
@@ -19,13 +15,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import java.util.Map;
 
 /**
- * Removes the Bukkit reload commands when the operator asks for it.
- *
- * <p>A Bukkit reload re-enters plugin loading without restarting the process, which leaves the
- * hybrid server in a state that neither the platform nor the installed mods expect. The switch
- * defaults to keeping the commands: removing them is a deliberate operator decision, and the
- * removal happens as the command map installs its defaults, so a later registration cannot bring
- * the label back.</p>
+ * Removes the Bukkit reload commands when the operator asks for it; the switch defaults to
+ * keeping them, and the removal happens as the map installs its defaults so a later
+ * registration cannot bring the label back.
  */
 @Mixin(value = SimpleCommandMap.class, remap = false)
 public abstract class PrtsSimpleCommandMapMixin {

@@ -12,13 +12,8 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Mixin plugin shared by every PRTS category.
- *
- * <p>The category is derived from the mixin package
- * ({@code io.izzel.arclight.common.prts.<category>[.<layer>]}), so each {@code prts-*.mixins.json}
- * gets its own master switch without needing one plugin class per category. A category that is
- * disabled is skipped as a whole, which is what makes "hand this seam to the kernel" a one-line
- * configuration change.</p>
+ * Mixin plugin shared by every PRTS category: the category is derived from the mixin package, so each
+ * {@code prts-*.mixins.json} gets its own master switch.
  */
 public class PrtsMixinPlugin implements IMixinConfigPlugin {
 
@@ -32,10 +27,7 @@ public class PrtsMixinPlugin implements IMixinConfigPlugin {
     }
 
     /**
-     * Maps a mixin package to its category name.
-     *
-     * @param mixinPackage package declared by the mixin configuration
-     * @return the category name, defaulting to {@link PrtsSwitches#FIXES} for unknown packages
+     * Maps a mixin package to its category name; unknown packages fall back to {@link PrtsSwitches#FIXES}.
      */
     static String categoryOf(String mixinPackage) {
         if (mixinPackage == null || !mixinPackage.startsWith(ROOT + ".")) {
@@ -60,14 +52,10 @@ public class PrtsMixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
-        // A category member that declares a platform is dropped on the other platform, the same way
-        // the shared configuration does it. The class is then never loaded, so a member may refer to
-        // a type only its own platform has.
+        // A platform-declaring member is dropped on the other platform, so it may refer to its own types.
         boolean apply = PrtsSwitches.enabled(this.category)
             && ShouldApplyProcessor.shouldApply(mixinClassName);
-        // A seam the kernel reaches a real call site through is gated here and nowhere else, so the
-        // answer is recorded: a kernel whose seam was refused can say so instead of publishing a
-        // green readout over a call site that never reaches it.
+        // The gate for a kernel seam, recorded so a refused seam cannot be published as a green readout.
         PrtsSeams.noteDecision(mixinClassName, apply);
         return apply;
     }
@@ -88,9 +76,7 @@ public class PrtsMixinPlugin implements IMixinConfigPlugin {
     @Override
     public void postApply(String targetClassName, ClassNode targetClass, String mixinClassName, IMixinInfo mixinInfo) {
         PrtsSeams.noteApplied(mixinClassName);
-        // Some API members cannot be expressed as a mixin, a static method on a facade for
-        // example, so they are written into the target right here: the last point where the
-        // transformed type is still open for changes.
+        // API members that cannot be a mixin are written into the target here, the last open point.
         PrtsBukkitVersionPatcher.patch(targetClassName, targetClass);
     }
 }

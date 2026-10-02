@@ -1,9 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/*
- * Ported from the FeudalKings fork of Arclight, commit e195f79e06113774502c4986da0b3e63150f1455
- * ("add player attempt pickup event").
- * Reworked as a standalone mixin of the prts.modsupport category; see THIRD-PARTY.md.
- */
+/* Ported from the FeudalKings fork of Arclight, commit e195f79e06113774502c4986da0b3e63150f1455; see THIRD-PARTY.md. */
 package io.izzel.arclight.common.prts.modsupport.paper;
 
 import io.izzel.arclight.common.bridge.core.entity.EntityBridge;
@@ -23,12 +19,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Fires the attempt-pickup event before an item stack is taken from the ground.
- *
- * <p>The event belongs to the plugin API surface this server advertises; plugins that listen to it
- * expect it for every pickup attempt, including the attempts the inventory would refuse. The
- * callback runs at the head of {@code ItemEntity#playerTouch} and therefore before the pickup
- * logic, which keeps the upstream pickup path untouched when no listener cancels.</p>
+ * Fires the attempt-pickup event at the head of the pickup, before the pickup logic, so the
+ * upstream path is untouched unless a listener cancels.
  */
 @Mixin(ItemEntity.class)
 public abstract class PrtsItemPickupAttemptMixin {

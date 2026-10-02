@@ -1,9 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
- * The Bukkit species of a tree (TreeType) is decided by the configured feature the grower resolved,
- * not by the sapling block: a 2x2 spruce and a single one are the same block but a mega redwood and
- * a redwood to Bukkit. Both resolutions happen inside TreeGrower#growTree before it places
- * anything, so their return values are read here while a grow is being captured.
+ * Records the Bukkit species while a grow is captured: TreeType follows the configured feature the
+ * grower resolved, not the sapling block (a 2x2 spruce and a single one are one block, a mega
+ * redwood and a redwood are two). Both resolutions happen before anything is placed.
  */
 package io.izzel.arclight.common.prts.fixes;
 

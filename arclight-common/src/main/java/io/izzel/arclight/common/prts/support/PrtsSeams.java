@@ -1,13 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
- * The written-down list of the call-site seams the kernel needs, together with what the mixin plugin
- * decided about each of them. It lives beside the two seams rather than next to the kernel, because
- * the world side may not depend on the kernel: a mixin that carries the seam knows only this file,
- * and the kernel reads it the same way.
- *
- * The list is written down, not discovered. A seam the kernel needs but that is not in this list is a
- * seam nobody watches, so the list is a contract between the two sides and a mismatch is meant to be
- * visible in the readout instead of quiet.
+ * The written-down list of the call-site seams the kernel needs, with what the mixin plugin decided
+ * about each. It lives beside the seams rather than next to the kernel, because the world side may
+ * not depend on the kernel, and a mismatch is meant to be visible in the readout instead of quiet.
  */
 package io.izzel.arclight.common.prts.support;
 
@@ -19,49 +14,25 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 
 /**
- * The seams the kernel reaches the real call sites through, and whether they are actually there.
- *
- * <p>A kernel can be enabled, its watcher installed and its readout green while the bytecode that
- * would call the watcher was never applied, because the mixin that carries the call is gated by a
- * different switch than the kernel category. That is a false green: the readout reports a working
- * kernel over a call site that never reaches it. This class is what makes that state readable. Every
- * seam the kernel depends on is declared here with the category that gates it, the mixin plugin
- * records what it decided for that mixin and whether the mixin was applied, and a reader can compare
- * the two against the category switch.</p>
- *
- * <p>A seam whose category is off is reported as unreachable, and a kernel whose seams are not all
- * reachable must not be judged: the state carries that verdict instead of leaving it to a reader to
- * notice.</p>
+ * Every seam the kernel reaches a real call site through, with whether it is actually there: a kernel
+ * can read green while the bytecode that would call its watcher was never applied, because the mixin
+ * carrying the call is gated by another switch. A seam whose category is off is unreachable, and a
+ * kernel whose seams are not all reachable must not be judged.
  */
 public final class PrtsSeams {
 
-    /** Category that gates the correctness fixes and, with them, the write path and wait seams. */
     public static final String FIXES_CATEGORY = "fixes";
 
-    /**
-     * One seam of the kernel.
-     *
-     * @param seamId      readable identity of the seam
-     * @param mixinClass  mixin that carries it
-     * @param targetClass class the mixin is applied to
-     * @param category    category switch the mixin is gated by
-     */
+    /** One declared seam: readable identity, carrying mixin, target class and gating category. */
     public record Seam(String seamId, String mixinClass, String targetClass, String category) {
     }
 
     /**
-     * What is known about one seam at the moment it is read.
-     *
-     * @param seam            the declaration
-     * @param categoryEnabled whether the gating category is on
-     * @param decisionKnown   whether the mixin plugin was asked about this mixin
-     * @param decidedToApply  what the plugin answered, meaningful only when {@code decisionKnown}
-     * @param applied         whether the mixin was applied to its target
+     * What is known about one seam when it is read; {@link #reachable()} carries the verdict.
      */
     public record SeamState(Seam seam, boolean categoryEnabled, boolean decisionKnown,
                             boolean decidedToApply, boolean applied) {
 
-        /** @return whether the call sites of this seam can reach the kernel at all */
         public boolean reachable() {
             return categoryEnabled && (!decisionKnown || decidedToApply);
         }
@@ -102,40 +73,24 @@ public final class PrtsSeams {
     private PrtsSeams() {
     }
 
-    /** @return the seams the kernel depends on, in the order they are declared */
+    /** @return the seams the kernel depends on, in declaration order */
     public static List<Seam> kernelSeams() {
         return KERNEL_SEAMS;
     }
 
-    /**
-     * Records what the mixin plugin decided about one mixin.
-     *
-     * @param mixinClass the mixin the plugin was asked about
-     * @param apply      the answer it gave
-     */
     public static void noteDecision(String mixinClass, boolean apply) {
         if (mixinClass != null) {
             DECISIONS.put(mixinClass, apply);
         }
     }
 
-    /**
-     * Records that one mixin was applied to its target.
-     *
-     * @param mixinClass the mixin that was applied
-     */
     public static void noteApplied(String mixinClass) {
         if (mixinClass != null) {
             APPLIED.put(mixinClass, Boolean.TRUE);
         }
     }
 
-    /**
-     * Renders the state of every declared seam.
-     *
-     * @param categoryEnabled resolves a category name to its switch
-     * @return one state per declared seam, in declaration order
-     */
+    /** @return one state per declared seam, in declaration order */
     public static List<SeamState> states(Predicate<String> categoryEnabled) {
         List<SeamState> states = new ArrayList<>(KERNEL_SEAMS.size());
         for (Seam seam : KERNEL_SEAMS) {
@@ -147,12 +102,7 @@ public final class PrtsSeams {
         return states;
     }
 
-    /**
-     * Returns the seams whose call sites cannot reach the kernel.
-     *
-     * @param categoryEnabled resolves a category name to its switch
-     * @return the unreachable seams, in declaration order
-     */
+    /** @return the seams whose call sites cannot reach the kernel, in declaration order */
     public static List<SeamState> gaps(Predicate<String> categoryEnabled) {
         List<SeamState> gaps = new ArrayList<>();
         for (SeamState state : states(categoryEnabled)) {
@@ -163,12 +113,7 @@ public final class PrtsSeams {
         return gaps;
     }
 
-    /**
-     * Groups the states by the category that gates them.
-     *
-     * @param categoryEnabled resolves a category name to its switch
-     * @return category to its states, in declaration order
-     */
+    /** @return the states grouped by gating category, in declaration order */
     public static Map<String, List<SeamState>> byCategory(Predicate<String> categoryEnabled) {
         Map<String, List<SeamState>> grouped = new LinkedHashMap<>();
         for (SeamState state : states(categoryEnabled)) {

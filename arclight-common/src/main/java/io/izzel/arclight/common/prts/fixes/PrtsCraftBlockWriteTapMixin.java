@@ -1,20 +1,14 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
- * The platform side of the block write path: every write a plugin or an event performs through the
- * block API funnels through the data setter, so one hook covers all of them. The hook asks the same
- * question the level-side hook asks and cancels the write only when the decision refuses it - with
- * enforcement and routing off it only records, and the write proceeds untouched.
- *
- * A routed write is handed over as the same setter call again, not as a copy of what the setter
- * does: the deferred call runs on the thread that drives the tick, where the hook above takes the
- * short path, so the write lands through the one write path this class hooks and cannot be handed
- * over a second time.
+ * Hooks the platform block write path: the same question the level-side hook asks, cancelling
+ * only when the decision refuses. A routed write is handed over as the same setter call and runs
+ * on the tick thread, where this hook takes the short path, so it cannot be handed over twice.
  */
 package io.izzel.arclight.common.prts.fixes;
 
 import io.izzel.arclight.api.ArclightPlatform;
 import io.izzel.arclight.common.mod.mixins.annotation.OnlyInPlatform;
-import io.izzel.arclight.common.prts.support.PrtsDeferredPlatformWrite;
+import io.izzel.arclight.common.prts.support.PrtsDeferredWrites;
 import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
 import net.minecraft.server.level.ServerLevel;
 import org.bukkit.block.data.BlockData;
@@ -43,7 +37,7 @@ public abstract class PrtsCraftBlockWriteTapMixin {
             return;
         }
         if (!decision.admit(level, level.dimension().location().toString(),
-            new PrtsDeferredPlatformWrite((CraftBlock) (Object) this, data, applyPhysics))) {
+            new PrtsDeferredWrites.PlatformWrite((CraftBlock) (Object) this, data, applyPhysics))) {
             ci.cancel();
         }
     }

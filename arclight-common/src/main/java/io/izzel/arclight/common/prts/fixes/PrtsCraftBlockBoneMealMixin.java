@@ -1,12 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
- * Block#applyBoneMeal is answered by the CraftBukkit class this server ships, and that class was
- * written against a server that carries the Spigot patches: it writes Level#captureTreeGeneration,
- * calls BoneMealItem#applyBonemeal and reads SaplingBlock#treeType, and none of the three exists
- * here, so the very first field write throws NoSuchFieldError and no bone meal is applied at all.
- * The platform's own bone meal entry point is used instead - the one a player's item use runs
- * through - and the tree it grows raises StructureGrowEvent on the path this category installs, so
- * dropping the Spigot capture loses nothing.
+ * The CraftBukkit bone meal body writes Level#captureTreeGeneration, calls BoneMealItem#applyBonemeal
+ * and reads SaplingBlock#treeType, none of which exists here, so it throws on the first field write.
+ * The platform's own bone meal entry point is used instead; its tree still raises StructureGrowEvent.
  */
 package io.izzel.arclight.common.prts.fixes;
 
@@ -35,18 +31,15 @@ public abstract class PrtsCraftBlockBoneMealMixin {
     @Shadow public abstract CraftWorld getCraftWorld();
     // @formatter:on
 
-    /**
-     * @author PRTS
-     * @reason the CraftBukkit body calls three members this platform does not have
-     */
+    /** @author PRTS @reason the CraftBukkit body calls three members this platform does not have */
     @Overwrite(remap = false)
     public boolean applyBoneMeal(BlockFace face) {
         Direction direction = CraftBlock.blockFaceToNotch(face);
         ServerLevel level = getCraftWorld().getHandle();
         BlockPos pos = getPosition();
         ItemStack stack = Items.BONE_MEAL.getDefaultInstance();
-        // The item's own useOn cannot stand in for this: it reports the interaction to the player
-        // that used it, and Bukkit's contract here is a call without one.
+        // The item's own useOn cannot stand in: it reports the interaction to the player that used it,
+        // and Bukkit's contract here is a call without one.
         boolean applied = BoneMealItem.growCrop(stack, level, pos);
         if (!applied) {
             applied = BoneMealItem.growWaterPlant(stack, level, pos.relative(direction), direction);

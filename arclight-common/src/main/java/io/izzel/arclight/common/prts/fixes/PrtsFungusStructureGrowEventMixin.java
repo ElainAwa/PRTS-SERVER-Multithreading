@@ -1,10 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
- * A bone-mealed fungus grows a huge fungus through the same one ConfiguredFeature#place call a
- * mushroom uses, but the call sits in a lambda that FungusBlock#performBonemeal hands to
- * Optional#ifPresent. The event is raised here around that call, which is the only instruction in
- * the method where the growth can be wrapped; the core injector sits at the head of the method and
- * reads the same block for the species, so the two never share an instruction.
+ * A bone-mealed fungus grows through the same ConfiguredFeature#place call a mushroom uses, but
+ * inside a lambda handed to Optional#ifPresent; the event is raised around that call, the only
+ * instruction of the method that can carry it.
  */
 package io.izzel.arclight.common.prts.fixes;
 
@@ -42,10 +40,7 @@ public abstract class PrtsFungusStructureGrowEventMixin {
         });
     }
 
-    /**
-     * The species of the fungus, which is the block itself - a modded fungus block is not one of
-     * the two and grows without an event, as it does today.
-     */
+    // A modded fungus block is not one of the two and grows without an event, as it does today.
     @SuppressWarnings("ConstantConditions")
     private TreeType prts$species() {
         if ((Object) this == Blocks.WARPED_FUNGUS) {

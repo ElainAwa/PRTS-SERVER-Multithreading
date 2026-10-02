@@ -15,14 +15,9 @@ import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.Overwrite;
 
 /**
- * Sends a particle only to the players that are close enough to see it.
- *
- * <p>The mod walks every player of the level for each particle call, and its callers are frequent
- * enough that the walk dominates the cost. The packet the mod ultimately sends is unchanged, and
- * the per viewer call is the exact call the mod itself makes, so a viewer inside the radius sees
- * byte for byte what it saw before; only viewers beyond it stop receiving the packet.</p>
- *
- * <p>Only applied while the mod is present; the radius is a constant of this class.</p>
+ * Sends a particle only to the players close enough to see it. The per-viewer packet is the
+ * exact call the mod makes, so a viewer inside the radius sees what it saw before; only
+ * viewers beyond it stop receiving it.
  */
 @OnlyInPlatform(ArclightPlatform.NEOFORGE)
 @LoadIfMod(modid = PrtsSbwCompat.MOD_ID, condition = LoadIfMod.ModCondition.PRESENT)
@@ -30,25 +25,7 @@ import org.spongepowered.asm.mixin.Overwrite;
 @Mixin(targets = "com.atsuishio.superbwarfare.tools.ParticleTool", remap = false)
 public abstract class PrtsSbwParticleToolMixin {
 
-    /**
-     * Sends one particle to the players within the radius.
-     *
-     * @param level level the particle belongs to
-     * @param particle particle to send
-     * @param x particle position
-     * @param y particle position
-     * @param z particle position
-     * @param count particle count
-     * @param xOffset spread
-     * @param yOffset spread
-     * @param zOffset spread
-     * @param speed particle speed
-     * @param force whether the particle is forced
-     */
-    /**
-     * @author PRTS
-     * @reason the mod walks every player of the level for each particle call
-     */
+    /** @author PRTS @reason the mod walks every player of the level for each particle call */
     @Overwrite(remap = false)
     public static <T extends ParticleOptions> void sendParticle(
             ServerLevel level, T particle, double x, double y, double z, int count,

@@ -21,17 +21,9 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 /**
- * Keeps a funnel pickup from throwing when the funnel has no filtering behaviour.
- *
- * <p>The mod asks its block entity for the filtering behaviour and calls the answer without a null
- * check. When that lookup answers null (the block entity is not there, or is already gone) the
- * following call throws out of the block tick and takes the server down. The guard skips that one
- * pickup attempt, which the next tick retries anyway.</p>
- *
- * <p>The switch is off by default: the null answer was observed on a server whose funnels were
- * ticked off the main thread, and a stock server has no reading that would justify changing the
- * behaviour of a funnel. The mod is optional, so every lookup here is reflective and a mod build
- * whose internals differ simply leaves the block to its own code.</p>
+ * Skips the funnel pickup when the mod's filtering behaviour cannot be read: the mod calls
+ * the null answer without a check and the throw would end the block tick. Off by default, and
+ * fully reflective, so a different mod build keeps the mod's own behaviour.
  */
 @OnlyInPlatform(ArclightPlatform.NEOFORGE)
 @LoadIfMod(modid = "create", condition = LoadIfMod.ModCondition.PRESENT)
@@ -48,15 +40,6 @@ public abstract class PrtsCreateFunnelPickupGuardMixin {
     private static Object filteringType;
     private static boolean resolved;
 
-    /**
-     * Skips a pickup whose filtering behaviour cannot be read.
-     *
-     * @param state block state of the funnel
-     * @param level level the funnel is in
-     * @param pos position of the funnel
-     * @param entity entity standing inside the funnel
-     * @param ci callback handle
-     */
     @Inject(method = "entityInside", at = @At("HEAD"), cancellable = true,
         remap = false)
     private void prts$skipPickupWithoutBehaviour(BlockState state, Level level, BlockPos pos, Entity entity,

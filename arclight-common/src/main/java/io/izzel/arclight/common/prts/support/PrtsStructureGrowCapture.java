@@ -1,16 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
- * The blocks a tree is made of are written by the world generator, so there is no single call a
- * listener could sit in front of: by the time the generator returns, the tree is already in the
- * chunk. CraftBukkit solves this by answering the block writes themselves while a sapling grows -
- * they go into a capture list instead of the chunk - and by raising StructureGrowEvent with that
- * list once the generator is done. The list is written to the chunk only when the event was not
- * cancelled, so a cancelled event leaves the world exactly as it was and no rollback is needed.
- *
- * The capture is one scope on the server thread: begin() before TreeGrower#growTree, the writes
- * arrive in capture(), and growWithEvent() raises the event and either applies or drops the list.
- * A tree grow never starts another one and no other thread may write a level, so the slots below
- * have exactly one owner - the server thread, between those two calls - and no synchronisation.
+ * Answers the block writes of a growing tree from a capture list instead of the chunk and raises
+ * StructureGrowEvent with that list once the generator is done: a cancelled event leaves the world
+ * untouched, so no rollback is needed. One scope on the server thread, the only writer of a level.
  */
 package io.izzel.arclight.common.prts.support;
 
@@ -37,18 +29,11 @@ import java.util.Map;
 import java.util.function.BooleanSupplier;
 
 /**
- * Dispatches {@link StructureGrowEvent} for a tree that a sapling grows.
- *
- * <p>Only the platform that places a tree through {@link TreeGrower} has a caller worth wrapping,
- * and the Bukkit species of the tree is the one the grower resolved, so both are provided by the
- * mixins in this package.</p>
+ * Dispatches StructureGrowEvent for a tree a sapling grows, with the Bukkit species the grower resolved.
  */
 public final class PrtsStructureGrowCapture {
 
-    /**
-     * Bukkit names a tree by the configured feature the grower resolved, and the tree it grows
-     * differs per feature (a 2x2 spruce is a mega redwood), so the feature path is the key here.
-     */
+    // Bukkit names a tree by the configured feature the grower resolved (a 2x2 spruce is a mega redwood).
     private static final Map<String, TreeType> SPECIES = Map.ofEntries(
         Map.entry("oak", TreeType.TREE),
         Map.entry("oak_bees_0002", TreeType.TREE),
@@ -91,8 +76,7 @@ public final class PrtsStructureGrowCapture {
 
     /**
      * Grows the tree with the block writes captured and raises the event for them.
-     *
-     * @return what {@link TreeGrower#growTree} returned, so the caller keeps its own behaviour
+     * @return what the wrapped grow call returned, so the caller keeps its own behaviour
      */
     public static boolean growWithEvent(TreeGrower grower, ServerLevel level, ChunkGenerator generator,
                                         BlockPos pos, BlockState state, RandomSource random) {
@@ -100,11 +84,8 @@ public final class PrtsStructureGrowCapture {
     }
 
     /**
-     * Grows the tree the given call builds with the block writes captured, and raises the event for
-     * them.
-     *
-     * @param species the Bukkit species when the caller knows which tree it is growing, or null to
-     *                take the feature the grower resolved
+     * Grows the tree the given call builds with the writes captured.
+     * @param species the Bukkit species, or null to take the feature the grower resolved
      * @return what the call returned, so the caller keeps its own behaviour
      */
     public static boolean growWithEvent(ServerLevel level, BlockPos pos, TreeType species, BooleanSupplier grow) {
@@ -121,18 +102,13 @@ public final class PrtsStructureGrowCapture {
             reset();
         }
         if (grown && !blocks.isEmpty()) {
-            // Only a tree that was actually grown has blocks worth an event: a feature that failed
-            // puts back what it removed, and a list of restored blocks is not a tree.
+            // Only a grown tree has blocks worth an event: a failed feature puts back what it removed.
             dispatch(level, pos, species, blocks);
         }
         return grown;
     }
 
-    /**
-     * Answers a block write made while a tree grows.
-     *
-     * @return true when the write was captured and must not reach the chunk
-     */
+    /** @return true when the write was captured and must not reach the chunk */
     public static boolean capture(Level target, BlockPos pos, BlockState state, int flags) {
         if (capturedLevel == null || capturedLevel != target) {
             return false;
@@ -148,11 +124,9 @@ public final class PrtsStructureGrowCapture {
     }
 
     /**
-     * The state a captured position reads back as while a tree is being built. A generator that
-     * clears the sapling and then asks whether the spot is free has to see its own write, exactly
-     * as it would in the chunk.
-     *
-     * @return the captured state, or null when this position was not written by the growing tree
+     * The state a captured position reads back as while a tree is built, so a generator that clears the
+     * sapling and asks whether the spot is free sees its own write.
+     * @return the captured state, or null when the growing tree did not write this position
      */
     public static net.minecraft.world.level.block.state.BlockState capturedState(Level target, BlockPos pos) {
         if (capturedLevel == null || capturedLevel != target) {
@@ -162,9 +136,7 @@ public final class PrtsStructureGrowCapture {
         return captured == null ? null : captured.getHandle();
     }
 
-    /**
-     * Records the feature {@link TreeGrower#growTree} resolved, which is the species of the tree.
-     */
+    /** Records the feature the grower resolved, which is the species of the tree. */
     public static void recordSpecies(ResourceKey<ConfiguredFeature<?, ?>> species) {
         if (capturedLevel != null) {
             capturedSpecies = species;
@@ -190,8 +162,7 @@ public final class PrtsStructureGrowCapture {
         String path = capturedSpecies.location().getPath();
         TreeType species = SPECIES.get(path);
         if (species == null) {
-            // Keep the tree, but say so: an unknown species is a gap in the table above, not a
-            // reason to drop what the generator already built.
+            // Keep the tree and say so: an unknown species is a gap in the table, not a reason to drop it.
             ArclightServer.LOGGER.debug("No TreeType for configured feature {}, growing without an event", path);
         }
         return species;
@@ -200,8 +171,7 @@ public final class PrtsStructureGrowCapture {
     private static void dispatch(ServerLevel level, BlockPos pos, TreeType species,
                                  List<org.bukkit.block.BlockState> blocks) {
         if (species != null) {
-            // A sapling cannot tell who asked it to grow, which is why CraftBukkit raises this
-            // event without a player and without the bone meal flag on this path.
+            // CraftBukkit raises this event without a player and without the bone meal flag on this path.
             StructureGrowEvent event = new StructureGrowEvent(CraftBlock.at(level, pos).getLocation(),
                 species, false, null, blocks);
             Bukkit.getPluginManager().callEvent(event);

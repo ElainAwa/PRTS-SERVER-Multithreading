@@ -35,59 +35,31 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Write-ahead journal for chunk saves, opt-in through {@link JournalSettings}.
- *
- * <p>A cycle walks the chunks the server already keeps, takes the unsaved ones and serializes them
- * into {@code journal/<dimension>.jrn}, a few per tick, so the work is spread over the cycle instead
- * of landing in one tick. The file is fsynced and moved into place only when the whole cycle has
- * been serialized, which is what makes it a usable snapshot after an unclean exit: the region files
- * may be minutes behind, the journal is at most one interval behind. On the next start the journal
- * is replayed, and only entries whose {@code LastUpdate} is newer than what the region file already
- * holds are written back, so a replay can never replace newer data with an older snapshot. After a
- * successful replay the file is renamed to {@code .jrn.applied} and kept until the next cycle has
- * been published, which leaves the evidence of one unclean exit in place without replaying it twice
- * on purpose; a clean shutdown removes both files.</p>
- *
- * <p><b>Ownership and threading.</b> Every entry point runs on the server thread: the server tick
- * event that drives a cycle, the level-load event that replays, and the server-stopping event that
- * drops the files of a clean shutdown. The cycle state below is therefore owned by that thread, and
- * it is static because a dedicated server runs one set of levels per process. Serialization and the
- * file writes that finish a cycle do block that thread (disk I/O), which is bounded by the per-tick
- * budget and the fsync of one file, and is one of the reasons this layer is opt-in.</p>
- *
- * <p><b>Kernel seam.</b> The class occupies no tick-loop, world-lifecycle or shutdown seam: it is
- * driven by platform events, so a kernel that rewrites those methods keeps it running. The seam it
- * does sit on is storage and serialization, which is owned by the kernel; when the kernel takes it
- * over, this whole subtree is meant to be deleted. The journal writes only under its own
- * {@code journal} directory and never touches the region layout, so dropping it leaves nothing
- * behind.</p>
+ * Write-ahead journal for chunk saves, opt-in through {@link JournalSettings}: a cycle serializes the
+ * unsaved chunks of every level into a journal a few per tick and publishes it only when the cycle is
+ * done. On the next start entries newer than the region file are replayed, so a replay never replaces
+ * newer data with an older snapshot, and a clean shutdown drops the files. Driven by platform events,
+ * so it occupies no tick-loop, world-lifecycle or shutdown seam.
  */
 public final class ChunkJournal {
 
     private static final Logger LOGGER = LogUtils.getLogger();
 
-    /** Header of a journal file; a file without it is not ours and is dropped. */
     private static final String MAGIC = "PRTSJRNL";
 
-    /** Layout version of the entries behind the header. */
     private static final int VERSION = 1;
 
-    /** Directory the layer owns, relative to the server working directory. */
     private static final Path DIR = Path.of("journal");
 
     private static final String SUFFIX = ".jrn";
     private static final String TMP_SUFFIX = ".jrn.tmp";
     private static final String APPLIED_SUFFIX = ".jrn.applied";
 
-    /** Upper bound of one serialized chunk; a longer entry means the file is not a journal. */
     private static final int MAX_ENTRY_BYTES = 64 * 1024 * 1024;
 
     /**
-     * Cycle state, owned by the server thread.
-     *
-     * <p>{@code flushing} is true from the moment a cycle opened its files until the cycle has been
-     * published or abandoned; {@code PENDING} holds one entry per level that has work, and a level
-     * whose journal file could not be opened never enters it.</p>
+     * Cycle state, owned by the server thread: {@code flushing} between the first serialization and
+     * publication, {@code PENDING} one entry per level that has work.
      */
     private static final List<PendingLevel> PENDING = new ArrayList<>();
     private static boolean flushing;
@@ -95,11 +67,7 @@ public final class ChunkJournal {
     private ChunkJournal() {
     }
 
-    /**
-     * Returns whether a cycle is in progress.
-     *
-     * @return {@code true} between the first serialization of a cycle and its publication
-     */
+    /** @return true between the first serialization of a cycle and its publication */
     public static boolean isFlushing() {
         return flushing;
     }
@@ -107,12 +75,10 @@ public final class ChunkJournal {
     /**
      * Opens a cycle: takes stock of the unsaved chunks of every level and opens one journal file per
      * level that has work. Called on the server thread.
-     *
-     * @param levels the levels to walk
      */
     public static void beginFlush(Iterable<ServerLevel> levels) {
-        // a cycle that could not be published leaves its files behind; they are dropped rather than
-        // published now, because the region files may have moved on since they were serialized
+        // A cycle that could not be published leaves its files behind; they are dropped, not published now,
+        // because the region files may have moved on since they were serialized.
         for (PendingLevel leftover : PENDING) {
             leftover.discard();
         }
@@ -137,10 +103,8 @@ public final class ChunkJournal {
     }
 
     /**
-     * Serializes at most {@code perTick} chunks of the current cycle and publishes it when nothing
-     * is left. Called on the server thread once per tick.
-     *
-     * @param perTick how many chunks this call may serialize; at least one
+     * Serializes at most {@code perTick} chunks of the current cycle and publishes it when nothing is
+     * left. Called on the server thread once per tick.
      */
     public static void flushTick(int perTick) {
         if (!flushing) {
@@ -152,8 +116,8 @@ public final class ChunkJournal {
                 Entry entry = pending.dirty.remove(pending.dirty.size() - 1);
                 budget--;
                 if (!entry.chunk.isUnsaved()) {
-                    // vanilla saved this chunk after the cycle took stock of it: journaling the
-                    // in-memory state now would publish a snapshot the region file has overtaken
+                    // Vanilla saved this chunk after the cycle took stock of it; journaling the in-memory
+                    // state now would publish a snapshot the region file has overtaken.
                     continue;
                 }
                 try {
@@ -176,15 +140,6 @@ public final class ChunkJournal {
         flushing = false;
     }
 
-    /**
-     * Returns the fully loaded chunk of a holder, or {@code null} while it is not there yet.
-     *
-     * <p>A chunk that is still being generated or that failed to load is simply not part of this
-     * cycle; the next one picks it up if it is unsaved by then.</p>
-     *
-     * @param holder a chunk holder of the level being walked
-     * @return the loaded chunk, or {@code null}
-     */
     private static ChunkAccess fullChunkOrNull(ChunkHolder holder) {
         try {
             ChunkResult<LevelChunk> result = holder.getFullChunkFuture().getNow(null);
@@ -194,10 +149,7 @@ public final class ChunkJournal {
         }
     }
 
-    /**
-     * Finishes every open journal file: flush, fsync, close and publish, then drop the evidence of
-     * the previous replay. Called on the server thread.
-     */
+    /** Flushes, fsyncs, closes and publishes every open journal file, then drops the previous replay evidence. */
     private static void finishCycle() {
         for (PendingLevel pending : PENDING) {
             pending.finish();
@@ -206,15 +158,9 @@ public final class ChunkJournal {
     }
 
     /**
-     * Replays the journal of one level after an unclean exit. Called on the server thread while the
-     * levels are being created, before any chunk of this level is loaded.
-     *
-     * <p>An entry is written back only when the journal is newer than the region file: the region
-     * file can be ahead of the journal when vanilla saved between the last cycle and the crash, and
-     * a replay must never undo that. The write itself goes through the level's own storage, so the
-     * region layout stays the platform's.</p>
-     *
-     * @param level the level to replay into
+     * Replays the journal of one level after an unclean exit, before any chunk of it is loaded. An entry
+     * is written back only when the journal is newer than the region file, so a replay can never undo a
+     * save that happened after the cycle.
      */
     public static void recover(ServerLevel level) {
         Path journal = journalPath(level);
@@ -225,8 +171,8 @@ public final class ChunkJournal {
             source = journal;
             wasJournal = true;
         } else if (Files.exists(applied)) {
-            // an unclean exit inside the verification window: the applied file is the same
-            // snapshot as the journal it came from, so replaying it again is idempotent
+            // An unclean exit inside the verification window: the applied file is the same snapshot, so a
+            // replay of it is idempotent.
             source = applied;
             wasJournal = false;
         } else {
@@ -264,16 +210,16 @@ public final class ChunkJournal {
                     inspected++;
                     ChunkPos pos = new ChunkPos(x, z);
                     if (tag != null && shouldReplay(storage, pos, tag)) {
-                        // the storage future is completed on the I/O thread; waiting here is
-                        // startup work, before any player can join
+                        // The storage future completes on the I/O thread; waiting here is startup work,
+                        // before any player can join.
                         storage.write(pos, tag).join();
                         recovered++;
                     }
                 }
             }
             if (wasJournal) {
-                // two-phase delete: keep the evidence of this replay until the next cycle has been
-                // published, which is the point where the region files are safe to trust again
+                // Two-phase delete: keep the evidence of this replay until the next cycle has been published,
+                // which is the point where the region files are safe to trust again.
                 try {
                     Files.deleteIfExists(applied);
                     Files.move(source, applied, StandardCopyOption.ATOMIC_MOVE);
@@ -290,18 +236,7 @@ public final class ChunkJournal {
         }
     }
 
-    /**
-     * Decides whether one journal entry is newer than the region file.
-     *
-     * <p>{@code LastUpdate} is the game time the snapshot was serialized at, so it orders the two
-     * copies without any extra bookkeeping. A region file that cannot be read makes the replay
-     * conservative: writing the journal back is the safe direction there.</p>
-     *
-     * @param storage the level's own storage
-     * @param pos     chunk the entry belongs to
-     * @param journalTag the snapshot from the journal
-     * @return {@code true} when the snapshot has to be written back
-     */
+    // LastUpdate orders a snapshot against the region file; an unreadable region file makes the replay conservative.
     private static boolean shouldReplay(ChunkStorage storage, ChunkPos pos, CompoundTag journalTag) {
         try {
             CompoundTag existing = storage.read(pos).join().orElse(null);
@@ -316,37 +251,23 @@ public final class ChunkJournal {
         }
     }
 
-    /**
-     * Returns the game time a serialized chunk was written at.
-     *
-     * @param tag a serialized chunk
-     * @return the {@code LastUpdate} value, zero when it carries none
-     */
     private static long lastUpdate(CompoundTag tag) {
         return tag.getLong("LastUpdate");
     }
 
-    /**
-     * Removes the evidence of the previous replay once a new cycle has been published.
-     *
-     * <p>Called after every published cycle: from that moment on the region files hold at least as
-     * much as the applied file did, so keeping it would only make the next start replay old data.</p>
-     */
     private static void cleanupApplied() {
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(DIR, "*" + APPLIED_SUFFIX)) {
             for (Path path : stream) {
                 deleteQuietly(path);
             }
         } catch (IOException ignored) {
-            // nothing to clean up when the directory does not exist yet
+            // Nothing to clean up when the directory does not exist yet.
         }
     }
 
     /**
-     * Removes the journal of one level on a clean shutdown, where the normal save has already
-     * written everything the journal would have protected.
-     *
-     * @param level the level whose files are dropped
+     * Removes the journal of one level on a clean shutdown, where the normal save already wrote everything
+     * it protected.
      */
     public static void markClean(ServerLevel level) {
         int removed = 0;
@@ -361,32 +282,14 @@ public final class ChunkJournal {
         }
     }
 
-    /**
-     * Returns the journal file of one level.
-     *
-     * @param level the level
-     * @return {@code journal/<dimension>.jrn}
-     */
     private static Path journalPath(ServerLevel level) {
         return DIR.resolve(name(level) + SUFFIX);
     }
 
-    /**
-     * Returns the applied file of one level.
-     *
-     * @param level the level
-     * @return {@code journal/<dimension>.jrn.applied}
-     */
     private static Path appliedPath(ServerLevel level) {
         return DIR.resolve(name(level) + APPLIED_SUFFIX);
     }
 
-    /**
-     * Returns the temporary file of one level.
-     *
-     * @param level the level
-     * @return {@code journal/<dimension>.jrn.tmp}
-     */
     private static Path tmpPath(ServerLevel level) {
         return DIR.resolve(name(level) + TMP_SUFFIX);
     }
@@ -403,20 +306,12 @@ public final class ChunkJournal {
         }
     }
 
-    /**
-     * Serializes a chunk tag into the journal entry form.
-     *
-     * @param tag a serialized chunk
-     * @return the unnamed NBT form of the tag
-     * @throws IOException when the tag cannot be written
-     */
     private static byte[] toBytes(CompoundTag tag) throws IOException {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         NbtIo.writeUnnamedTag(tag, new DataOutputStream(buffer));
         return buffer.toByteArray();
     }
 
-    /** One level of the current cycle: the work left, the file being written and what went in. */
     private static final class PendingLevel {
 
         private final ServerLevel level;
@@ -434,11 +329,6 @@ public final class ChunkJournal {
             this.target = journalPath(level);
         }
 
-        /**
-         * Opens the temporary file of this level and writes its header.
-         *
-         * @return {@code true} when the file is ready; the caller drops the level otherwise
-         */
         private boolean open() {
             try {
                 Files.createDirectories(DIR);
@@ -456,13 +346,6 @@ public final class ChunkJournal {
             }
         }
 
-        /**
-         * Appends one serialized chunk to the open file.
-         *
-         * @param pos  chunk the entry belongs to
-         * @param tag  the serialized chunk
-         * @throws IOException when the entry cannot be written
-         */
         private void append(ChunkPos pos, CompoundTag tag) throws IOException {
             byte[] bytes = toBytes(tag);
             out.writeInt(pos.x);
@@ -472,10 +355,7 @@ public final class ChunkJournal {
             written++;
         }
 
-        /**
-         * Publishes the file: flush, fsync, close and move into place. A level that produced no
-         * entry drops its file instead of publishing an empty journal.
-         */
+        /** Publishes the file: flush, fsync, close and move into place; a level with no entry drops its file. */
         private void finish() {
             try {
                 out.flush();
@@ -488,7 +368,7 @@ public final class ChunkJournal {
             try {
                 channel.close();
             } catch (IOException ignored) {
-                // the file is already on disk; a failed close does not invalidate it
+                // The file is already on disk; a failed close does not invalidate it.
             }
             if (written == 0) {
                 deleteQuietly(tmp);
@@ -510,20 +390,19 @@ public final class ChunkJournal {
                     out.close();
                 }
             } catch (IOException ignored) {
-                // the handle is closed below in any case
+                // The handle is closed below in any case.
             }
             try {
                 if (channel != null && channel.isOpen()) {
                     channel.close();
                 }
             } catch (IOException ignored) {
-                // nothing is read back from a file that is being dropped
+                // Nothing is read back from a file that is being dropped.
             }
             deleteQuietly(tmp);
         }
     }
 
-    /** One chunk the cycle took stock of. */
     private static final class Entry {
 
         private final ChunkPos pos;

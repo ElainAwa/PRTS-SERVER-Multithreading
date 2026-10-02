@@ -1,15 +1,14 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
- * The write side of the tree capture: while a sapling grows, a block write is answered from the
- * capture list and never reaches the chunk. The check is one identity compare on the level that
- * started the grow, and it is false for every other write - block edits of players, ticks and
- * worldgen included - so the hot path only pays for the field read.
+ * The write and read sides of the tree capture: while a sapling grows, a write is answered from the
+ * capture list and a generator that clears the sapling must see its own write, or the tree is built
+ * against a world where the sapling still stands. False for every other level write and block read.
  */
 package io.izzel.arclight.common.prts.fixes;
 
 import io.izzel.arclight.api.ArclightPlatform;
 import io.izzel.arclight.common.mod.mixins.annotation.OnlyInPlatform;
-import io.izzel.arclight.common.prts.support.PrtsDeferredLevelWrite;
+import io.izzel.arclight.common.prts.support.PrtsDeferredWrites;
 import io.izzel.arclight.common.prts.support.PrtsStructureGrowCapture;
 import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
 import net.minecraft.core.BlockPos;
@@ -38,12 +37,6 @@ public abstract class PrtsLevelStructureGrowCaptureMixin {
         }
     }
 
-    /**
-     * Hands the block write to whoever watches write rights.
-     *
-     * <p>The fast question costs one volatile read while no watcher is installed, and the world identity is
-     * only built on the slow path, so an unwatched or short-path write allocates nothing here.</p>
-     */
     private boolean prts$admitWorldWrite(BlockPos pos, BlockState state, int flags, int recursionLeft) {
         Level level = (Level) (Object) this;
         PrtsWorldWriteTaps.Decision decision = PrtsWorldWriteTaps.beginBlockWrite(level);
@@ -51,14 +44,12 @@ public abstract class PrtsLevelStructureGrowCaptureMixin {
             return true;
         }
         return decision.admit(level, level.dimension().location().toString(),
-            new PrtsDeferredLevelWrite(level, pos, state, flags, recursionLeft));
+            new PrtsDeferredWrites.LevelWrite(level, pos, state, flags, recursionLeft));
     }
 
     /**
-     * The read side of the same capture: a generator that clears the sapling and then asks whether
-     * the spot is free must see its own write, otherwise the tree is built against a world where
-     * the sapling is still standing and no tree is placed at all. The check is one field read for
-     * every other block read on the server.
+     * The read side of the capture: only the level that started the grow is answered from the capture
+     * list, so every other block read pays one field read.
      */
     @Inject(method = "getBlockState", cancellable = true, at = @At("HEAD"))
     private void prts$readCapturedTreeBlock(BlockPos pos, CallbackInfoReturnable<BlockState> cir) {

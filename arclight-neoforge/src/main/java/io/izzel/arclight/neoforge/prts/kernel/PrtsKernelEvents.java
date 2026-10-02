@@ -13,17 +13,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Drives the kernel scaffolding from the platform tick event.
- *
- * <p>{@link ServerTickEvent.Post} is fired at the end of the server tick, immediately before that
- * method returns. The driver advances the observable kernel and, when the commit switch is enabled,
- * applies deferred writes on the server thread. It occupies no mixin tick-loop anchor.</p>
- *
- * <p>The kernel category owns the listener and the write/wait taps. They are installed only while the
- * category is enabled, and a configuration reload can add or remove them without restarting the
- * process.</p>
- *
- * <p>PRTS category: kernel, NeoForge platform module.</p>
+ * Drives the kernel scaffolding from the platform tick event; listener and write/wait taps exist only
+ * while the category is enabled, and a reload can add or remove them without restarting the process.
  */
 public final class PrtsKernelEvents {
 
@@ -34,13 +25,7 @@ public final class PrtsKernelEvents {
     private PrtsKernelEvents() {
     }
 
-    /**
-     * Installs the configuration reload hook and synchronizes the platform subscription once.
-     *
-     * <p>The hook remains registered while the category is off, but the tick listener and write/wait
-     * taps are absent until the category is enabled. A later reload can therefore turn the layer on
-     * or off without requiring a process restart.</p>
-     */
+    /** Installs the configuration reload hook and synchronizes the platform subscription once. */
     public static synchronized void register() {
         if (!reloadHookInstalled) {
             PrtsConfigManager.addReloadListener(PrtsKernelEvents::syncSubscription);
@@ -68,11 +53,7 @@ public final class PrtsKernelEvents {
         subscribed = false;
     }
 
-    /**
-     * Advances the kernel by one tick.
-     *
-     * @param event the platform's end-of-tick event
-     */
+    /** Advances the kernel by one tick. */
     @SubscribeEvent
     public void onServerTick(ServerTickEvent.Post event) {
         List<String> worlds = new ArrayList<>();

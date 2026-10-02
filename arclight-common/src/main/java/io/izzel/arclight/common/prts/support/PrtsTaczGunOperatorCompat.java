@@ -18,24 +18,15 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Runtime bridge that re-syncs a gun mod's per-player state after a respawn packet.
- *
- * <p>A skin plugin refreshes a player by pushing a same-level, keep-data respawn packet. The client
- * no longer runs its own respawn recovery for that shape, while the gun mod only re-sends a value it
- * considers changed. A value the respawn swallows stays stale on the client, and the weapon stops
- * firing although reloading still works. Re-initialising the operator and then sending the full
- * state once more - after the client had time to finish the respawn - clears that state.</p>
- *
- * <p>Every call is reflective on purpose: the mod is optional, so nothing here may become a compile
- * time or class-loading dependency of the server. When the mod is absent, or one of its signatures
- * moved, each entry point reports and returns instead of failing. The thread below is a daemon, so
- * it never keeps the process alive, and it only exists once a player actually respawns.</p>
+ * Re-syncs a gun mod's per-player state after a skin plugin pushed a same-level respawn packet: the
+ * client does not run its own respawn recovery for that shape, so a value the respawn swallowed would
+ * leave the weapon unable to fire. Every call is reflective, because the mod is optional; a missing
+ * or moved signature reports and returns instead of failing.
  */
 public final class PrtsTaczGunOperatorCompat {
 
     private static final Logger LOGGER = LogManager.getLogger("PRTS-TACZ");
 
-    /** Wall-clock delay given to the client to finish handling the respawn before the re-send. */
     private static final long RESYNC_DELAY_MS = 200L;
 
     private static final ScheduledExecutorService SCHEDULER =
@@ -48,11 +39,7 @@ public final class PrtsTaczGunOperatorCompat {
     private PrtsTaczGunOperatorCompat() {
     }
 
-    /**
-     * Re-initialises the player's gun operator and schedules the full state re-send.
-     *
-     * @param player player the respawn packet was pushed to
-     */
+    /** Re-initialises the player's gun operator and schedules the full state re-send. */
     public static void resetAndResync(ServerPlayer player) {
         if (player == null || !player.isAlive()) {
             return;
@@ -72,11 +59,6 @@ public final class PrtsTaczGunOperatorCompat {
         SCHEDULER.schedule(() -> resyncLater(player), RESYNC_DELAY_MS, TimeUnit.MILLISECONDS);
     }
 
-    /**
-     * Marshals the delayed re-send back onto the server thread and performs it.
-     *
-     * @param player player whose state is re-sent
-     */
     private static void resyncLater(ServerPlayer player) {
         MinecraftServer server = player.getServer();
         if (server == null) {
@@ -90,11 +72,6 @@ public final class PrtsTaczGunOperatorCompat {
         });
     }
 
-    /**
-     * Sends the player the full synced state the mod would otherwise only send on a change.
-     *
-     * @param player player to send to
-     */
     private static void sendFullState(ServerPlayer player) {
         try {
             Class<?> dataClass = Class.forName("com.tacz.guns.entity.sync.core.SyncedEntityData");
@@ -119,10 +96,8 @@ public final class PrtsTaczGunOperatorCompat {
     }
 
     /**
-     * Reads the four synced cooldown values the mod keeps for a living entity.
-     *
-     * @param player player to read
-     * @return a one line readout, or an explanation when the mod is not readable
+     * @return a one line readout of the four synced cooldown values, or an explanation when the mod is
+     *     not readable
      */
     public static String snapshot(LivingEntity player) {
         try {

@@ -11,28 +11,8 @@ import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
 /**
- * Drives the optional recovery journal from platform events instead of mixin anchors.
- *
- * <p>The three events carry exactly the three moments the journal needs, and the platform fires
- * them itself, so the layer occupies no mixin anchor and no kernel seam:</p>
- * <ul>
- *   <li>{@link ServerTickEvent.Post} is fired at the end of {@code MinecraftServer#tickServer},
- *       immediately before that method returns - the per-tick moment a flush cycle moves on;</li>
- *   <li>{@link LevelEvent.Load} is fired by {@code MinecraftServer#createLevels} for every level
- *       once it has been constructed and registered, before the spawn chunks are prepared - the
- *       moment a journal left by an unclean exit is replayed, still before any chunk of that level
- *       is read;</li>
- *   <li>{@link ServerStoppingEvent} is fired on the shutdown path immediately before
- *       {@code MinecraftServer#stopServer} saves the world - the moment the files of a clean
- *       shutdown are dropped.</li>
- * </ul>
- *
- * <p>The listeners are subscribed only while the optional category is enabled, so a server that
- * leaves the layer off pays nothing at all and never loads the journal. With the category on, every
- * callback asks {@link JournalSettings} first, so a server that enables the layer but not the
- * journal pays one configuration lookup per tick and nothing else.</p>
- *
- * <p>PRTS category: optional, NeoForge platform module.</p>
+ * Drives the recovery journal from the platform's own events, so the layer occupies no mixin anchor;
+ * every callback asks {@link JournalSettings} first.
  */
 public final class PrtsJournalEvents {
 
@@ -47,11 +27,7 @@ public final class PrtsJournalEvents {
         NeoForge.EVENT_BUS.register(new PrtsJournalEvents());
     }
 
-    /**
-     * Advances the current cycle, or opens the next one when the interval has passed.
-     *
-     * @param event the platform's end-of-tick event
-     */
+    /** Advances the current cycle, or opens the next one when the interval has passed. */
     @SubscribeEvent
     public void onServerTick(ServerTickEvent.Post event) {
         if (!JournalSettings.reliableChunkSave()) {
@@ -70,11 +46,7 @@ public final class PrtsJournalEvents {
         ChunkJournal.flushTick(perTick);
     }
 
-    /**
-     * Replays the journal of the level that was just created.
-     *
-     * @param event the platform's level-load event
-     */
+    /** Replays the journal of the level that was just created. */
     @SubscribeEvent
     public void onLevelLoad(LevelEvent.Load event) {
         if (!JournalSettings.reliableChunkSave()) {
@@ -85,11 +57,7 @@ public final class PrtsJournalEvents {
         }
     }
 
-    /**
-     * Drops the journal files of every level on the shutdown path.
-     *
-     * @param event the platform's server-stopping event
-     */
+    /** Drops the journal files of every level on the shutdown path. */
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
         if (!JournalSettings.reliableChunkSave()) {

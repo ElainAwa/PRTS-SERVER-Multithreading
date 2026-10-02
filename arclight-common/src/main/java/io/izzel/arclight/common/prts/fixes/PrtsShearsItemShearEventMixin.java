@@ -1,10 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
- * The shear event for the platform that moves the shearing of every shearable entity out of the
- * entity interaction and into the shears item: the entity is asked whether it can be sheared and,
- * only when the answer is yes, the shear runs. The event is dispatched at that second step, so a
- * right click that cannot shear anything does not raise it, and a cancelled event leaves the entity
- * untouched because the shear itself never runs.
+ * Dispatches the shear event where this platform shears: after the entity answered that it can be
+ * sheared, so a right click that cannot shear raises nothing and a cancelled event leaves the
+ * entity untouched because the shear itself never runs.
  */
 package io.izzel.arclight.common.prts.fixes;
 

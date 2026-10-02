@@ -1,55 +1,36 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
- * The seam a wait call site reports through. The site opens an observation at the head of its
- * method and closes it at the return; the seam only measures how long the call took and hands the
- * number to whoever watches. It never touches an upper bound, never shortens a wait and never
- * cancels one, and while nothing watches it costs a single volatile read per call.
- *
- * The wait sites are numbered here because this is the one class both sides compile against: the
- * hooks on the world side know only this seam, and the observation layer reads the same table, so
- * a site cannot be numbered one way on one side and named another way on the other. The list is
- * written down, not discovered, and the order is part of the contract.
- *
- * This lives beside the world write seam rather than next to the hooks, because a class in a mixin
- * package cannot be referenced at all.
+ * The seam a wait call site reports through. A site opens an observation at the head of its method
+ * and closes it at the return; the seam measures the call and hands the number to whoever watches,
+ * never touching an upper bound or shortening, delaying or cancelling a wait. The wait sites are
+ * numbered here because this is the one class both sides compile against, and the order is the
+ * contract. It lives beside the write seam, since a class in a mixin package cannot be referenced.
  */
 package io.izzel.arclight.common.prts.support;
 
 import net.minecraft.world.level.Level;
 
 /**
- * The seam a wait call site opens and closes an observation through.
- *
- * <p>A site reports with {@link #begin(int)} at the head of its method and {@link #end(int)} at the
- * return. Both are no-ops while no watcher is installed, so a build that does not observe pays two
- * volatile reads per call and nothing else. The start stamp is kept per site and per thread, so a
- * call nested inside another site, or the same site re-entered, cannot be charged to the wrong
- * wait.</p>
- *
- * <p>The seam carries no kernel type: it sits below both the call sites and the watcher, so neither
- * side depends on the other to be compiled.</p>
+ * The seam a wait call site opens and closes an observation through. Both calls are no-ops while no
+ * watcher is installed, and the start stamp is kept per site and per thread, so a nested or re-entered
+ * call cannot be charged to the wrong wait. The seam carries no kernel type, so neither side depends
+ * on the other to be compiled.
  */
 public final class PrtsWaitSites {
 
-    /** Receives one finished observation. */
     public interface SiteWaitTap {
 
         /**
-         * Notes one wait a call site produced.
-         *
-         * @param siteIndex index of the site in {@link #SITE_IDS}
-         * @param siteId    identity of that site
-         * @param worldId   world the call ran in, or an empty string when the site has none at hand
+         * @param siteIndex index in {@link #SITE_IDS}, the identity the hooks pass
+         * @param worldId   world the call ran in, or empty when the site has none at hand
          * @param waitNanos how long the call took, in nanoseconds
          */
         void observed(int siteIndex, String siteId, String worldId, long waitNanos);
     }
 
     /**
-     * Identities of the observed call sites, indexed by the numbers below.
-     *
-     * <p>The order is the contract: index {@code n} is the site the hooks pass as {@code n}, and the
-     * observation layer reads the identity from the same slot.</p>
+     * Identities of the observed call sites, indexed by the constants below; index {@code n} is the
+     * site the hooks pass as {@code n}, so the order is the contract.
      */
     public static final String[] SITE_IDS = {
         "entity_set_pos_raw",
@@ -74,45 +55,25 @@ public final class PrtsWaitSites {
         "entity_adjust_spawn_location"
     };
 
-    /** Index of the entity position write in {@link #SITE_IDS}. */
     public static final int ENTITY_SET_POS_RAW = 0;
-    /** Index of the collision walk step in {@link #SITE_IDS}. */
     public static final int BLOCK_COLLISIONS_COMPUTE_NEXT = 1;
-    /** Index of the mob spawning call in {@link #SITE_IDS}. */
     public static final int NATURAL_SPAWNER_SPAWN_CATEGORY = 2;
-    /** Index of the block face spread in {@link #SITE_IDS}. */
     public static final int MULTIFACE_SPREADER_SPREAD_TO_FACE = 3;
-    /** Index of the end gateway teleport search in {@link #SITE_IDS}. */
     public static final int END_GATEWAY_FIND_TELEPORT_POS = 4;
-    /** Index of the end gateway chunk check in {@link #SITE_IDS}. */
     public static final int END_GATEWAY_IS_CHUNK_EMPTY = 5;
-    /** Index of the exit portal presence check in {@link #SITE_IDS}. */
     public static final int END_DRAGON_FIGHT_HAS_ACTIVE_EXIT_PORTAL = 6;
-    /** Index of the exit portal search in {@link #SITE_IDS}. */
     public static final int END_DRAGON_FIGHT_FIND_EXIT_PORTAL = 7;
-    /** Index of the arena readiness check in {@link #SITE_IDS}. */
     public static final int END_DRAGON_FIGHT_IS_ARENA_LOADED = 8;
-    /** Index of the held map redraw in {@link #SITE_IDS}. */
     public static final int MAP_ITEM_UPDATE = 9;
-    /** Index of the point of interest scan in {@link #SITE_IDS}. */
     public static final int POI_MANAGER_ENSURE_LOADED_AND_VALID = 10;
-    /** Index of the structure lookup by chunk in {@link #SITE_IDS}. */
     public static final int STRUCTURE_MANAGER_STARTS_FOR_CHUNK_POS = 11;
-    /** Index of the structure lookup by section in {@link #SITE_IDS}. */
     public static final int STRUCTURE_MANAGER_STARTS_FOR_SECTION = 12;
-    /** Index of the structure reference fill in {@link #SITE_IDS}. */
     public static final int STRUCTURE_MANAGER_FILL_STARTS = 13;
-    /** Index of the structure presence check in {@link #SITE_IDS}. */
     public static final int STRUCTURE_MANAGER_HAS_ANY_STRUCTURE_AT = 14;
-    /** Index of the structure map lookup in {@link #SITE_IDS}. */
     public static final int STRUCTURE_MANAGER_GET_ALL_STRUCTURES_AT = 15;
-    /** Index of the overworld respawn search in {@link #SITE_IDS}. */
     public static final int PLAYER_RESPAWN_LOGIC_GET_OVERWORLD_RESPAWN_POS = 16;
-    /** Index of the forced chunk command in {@link #SITE_IDS}. */
     public static final int SERVER_LEVEL_SET_CHUNK_FORCED = 17;
-    /** Index of the biome resend in {@link #SITE_IDS}. */
     public static final int CHUNK_MAP_RESEND_BIOMES_FOR_CHUNKS = 18;
-    /** Index of the spawn position adjust in {@link #SITE_IDS}. */
     public static final int ENTITY_ADJUST_SPAWN_LOCATION = 19;
 
     /** One start stamp per site and per thread; a slot of zero means nothing is open there. */
@@ -124,38 +85,22 @@ public final class PrtsWaitSites {
     private PrtsWaitSites() {
     }
 
-    /**
-     * Installs the watcher.
-     *
-     * @param watcher the watcher, or {@code null} to remove it
-     */
     public static void install(SiteWaitTap watcher) {
         tap = watcher;
     }
 
-    /** @return whether a watcher is installed */
     public static boolean installed() {
         return tap != null;
     }
 
     /**
-     * Returns the installed watcher.
-     *
-     * <p>A tool that borrows the seam - the self check is one - reads the watcher that is installed
-     * now so it can hand exactly that one back when it is done, instead of clearing a seam the rest of
-     * the process is still observing through.</p>
-     *
-     * @return the watcher, or {@code null} when none is installed
+     * @return the installed watcher, or null when none is installed. A tool that borrows the seam reads
+     *     it so it can hand exactly that one back instead of clearing a seam still in use.
      */
     public static SiteWaitTap watcher() {
         return tap;
     }
 
-    /**
-     * Opens an observation for one site.
-     *
-     * @param siteIndex index of the site in {@link #SITE_IDS}
-     */
     public static void begin(int siteIndex) {
         if (tap == null || siteIndex < 0 || siteIndex >= SITE_IDS.length) {
             return;
@@ -163,25 +108,13 @@ public final class PrtsWaitSites {
         OPEN.get()[siteIndex] = System.nanoTime();
     }
 
-    /**
-     * Closes an observation for one site without naming the world.
-     *
-     * @param siteIndex index of the site in {@link #SITE_IDS}
-     */
     public static void end(int siteIndex) {
         end(siteIndex, null);
     }
 
     /**
-     * Closes an observation for one site.
-     *
-     * <p>A site that already holds a level hands it over so the reading carries the world; a site
-     * that does not passes nothing and the reading states an empty world. Closing a site that was
-     * never opened, or closing it twice, is a no-op: the injection at the return runs for every
-     * return of the method, and the first one consumes the stamp.</p>
-     *
-     * @param siteIndex index of the site in {@link #SITE_IDS}
-     * @param levelRef  the level the call ran in, or {@code null} when the site has none at hand
+     * Closes an observation for one site, with the level the call ran in when the site holds one.
+     * Closing a site that was never opened, or closing it twice, is a no-op.
      */
     public static void end(int siteIndex, Object levelRef) {
         SiteWaitTap watcher = tap;

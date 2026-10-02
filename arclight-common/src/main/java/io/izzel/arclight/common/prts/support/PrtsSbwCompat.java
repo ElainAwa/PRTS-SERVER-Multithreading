@@ -6,34 +6,22 @@ import java.lang.reflect.Method;
 import java.util.UUID;
 
 /**
- * What this server knows about an optional vehicle mod, expressed as strings and reflection.
- *
- * <p>The mod is optional, so nothing here may become a compile time or class loading dependency of
- * the server. Every name is a string, and every lookup is made on first use only. A lookup that
- * fails reports "unknown", and each caller then keeps the behaviour of the mod instead of guessing:
- * an unreadable setting must never change how a packet is sent.</p>
- *
- * <p>Two payload kinds are recognised by the name of their class. Both are final classes, so a
- * name comparison is exact for them and does not load anything.</p>
+ * What this server knows about the optional vehicle mod, as strings and reflection: nothing here may
+ * become a compile time or class loading dependency, and a lookup that fails reports "unknown" so
+ * the caller keeps the mod's own behaviour instead of guessing.
  */
 public final class PrtsSbwCompat {
 
-    /** Mod id the members of this class are written for; the mixins are gated on it. */
     public static final String MOD_ID = "superbwarfare";
 
-    /** Tick interval the fast projectile motion sync is spread over. */
     public static final int MOTION_SYNC_INTERVAL = 3;
 
-    /** Tick interval the friend-or-foe update is spread over. */
     public static final int IFF_THROTTLE_TICKS = 3;
 
-    /** Squared distance a particle is still sent within. */
     public static final double PARTICLE_RADIUS_SQ = 96.0 * 96.0;
 
-    /** Lifetime the mod ships for a projectile; only that value is answered differently. */
     public static final int PROJECTILE_LIFE_DEFAULT = 400;
 
-    /** Lifetime answered for a projectile whose stored value is still the default of the mod. */
     public static final int PROJECTILE_LIFE_TICKS = 60;
 
     private static final String CLASS_ENTITY_RELATION_SYNC =
@@ -47,7 +35,6 @@ public final class PrtsSbwCompat {
     private static final String FIELD_SYNC_ENTITY_INTERVAL = "SYNC_ENTITY_INTERVAL";
     private static final String METHOD_GET_VEHICLE = "getVehicle";
 
-    /** Default the mod ships for the interval setting; only that value is improved here. */
     private static final int SYNC_ENTITY_INTERVAL_DEFAULT = 1;
 
     private static volatile boolean intervalResolved;
@@ -59,48 +46,26 @@ public final class PrtsSbwCompat {
     private PrtsSbwCompat() {
     }
 
-    /**
-     * Reports whether the payload is one of the friend-or-foe updates.
-     *
-     * @param payload payload being sent
-     * @return true when the payload is one of the two relation updates
-     */
+    /** @return true when the payload is one of the two friend-or-foe relation updates */
     public static boolean isIffPayload(Object payload) {
         String name = payload.getClass().getName();
         return CLASS_ENTITY_RELATION_SYNC.equals(name) || CLASS_PLAYER_INFO_SYNC.equals(name);
     }
 
-    /**
-     * Reports whether the payload is the vehicle shoot broadcast.
-     *
-     * @param payload payload being sent
-     * @return true when the payload is the vehicle shoot message
-     */
+    /** @return true when the payload is the vehicle shoot broadcast */
     public static boolean isVehicleShootPayload(Object payload) {
         return CLASS_VEHICLE_SHOOT.equals(payload.getClass().getName());
     }
 
     /**
-     * Reports whether the friend-or-foe update may be spread over several ticks.
-     *
-     * <p>The setting keeps the operator in charge: as long as it still holds the value the mod
-     * ships, updates go out every {@link #IFF_THROTTLE_TICKS} ticks instead of every tick. A value
-     * the operator changed is respected without a second filter, and a value that cannot be read
-     * counts as changed.</p>
-     *
-     * @param anchor payload whose class loader can reach the mod, used only for the first lookup
-     * @return true when the update should be spread over ticks
+     * Reports whether the friend-or-foe update may be spread over ticks: only while the setting still
+     * holds the value the mod ships. A value the operator changed is respected, and a value that
+     * cannot be read counts as changed.
      */
     public static boolean iffThrottleApplies(Object anchor) {
         return configuredInterval(anchor) == SYNC_ENTITY_INTERVAL_DEFAULT;
     }
 
-    /**
-     * Reads the configured sync interval of the mod.
-     *
-     * @param anchor payload whose class loader can reach the mod
-     * @return the configured value, or {@code -1} when it cannot be read
-     */
     private static int configuredInterval(Object anchor) {
         try {
             if (!intervalResolved) {
@@ -138,12 +103,7 @@ public final class PrtsSbwCompat {
         intervalResolved = true;
     }
 
-    /**
-     * Reads the vehicle identifier a shoot broadcast was built for.
-     *
-     * @param payload payload being sent
-     * @return the identifier, or {@code null} when it cannot be read
-     */
+    /** @return the vehicle identifier of a shoot broadcast, or null when it cannot be read */
     public static UUID vehicleId(Object payload) {
         try {
             if (!vehicleGetterResolved) {
@@ -172,13 +132,6 @@ public final class PrtsSbwCompat {
         vehicleGetterResolved = true;
     }
 
-    /**
-     * Loads a mod class through the loader of a class that certainly comes from the same mod.
-     *
-     * @param name class to load
-     * @param anchor instance of a class of the same mod
-     * @return the class, or {@code null} when it cannot be loaded
-     */
     private static Class<?> load(String name, Object anchor) {
         try {
             return Class.forName(name, false, anchor.getClass().getClassLoader());

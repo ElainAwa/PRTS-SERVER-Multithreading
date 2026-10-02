@@ -14,18 +14,9 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * Spreads the motion sync of fast projectiles over several ticks instead of every tick.
- *
- * <p>The interval question lives in a shared default implementation, but the two projectile base
- * classes answer it with their own method that only delegates to that implementation, so the answer
- * has to be raised where a call is actually received: in those two methods. Subclasses inherit
- * either one of them, which is every fast projectile of the mod. A future class that answers the
- * question itself keeps its own answer, and one that delegates is covered by the same two methods
- * only if it extends one of these bases.</p>
- *
- * <p>Nothing is captured from the target: the handler only replaces the returned value, which keeps
- * the mod's own types off the compile class path entirely. The class is only applied while the mod
- * is present, so a server without it neither loads this class nor changes anything.</p>
+ * Spreads the motion sync of fast projectiles over several ticks. The interval question is
+ * answered in the two projectile base classes, which is where a call is actually received; a
+ * subclass that answers it itself keeps its own answer.
  */
 @OnlyInPlatform(ArclightPlatform.NEOFORGE)
 @LoadIfMod(modid = PrtsSbwCompat.MOD_ID, condition = LoadIfMod.ModCondition.PRESENT)
@@ -36,15 +27,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 }, remap = false)
 public abstract class PrtsSbwMotionSyncMixin {
 
-    /**
-     * Answers the interval question of a projectile that delegates it to the shared default.
-     *
-     * @param cir callback handle carrying the answer
-     */
     @Inject(method = "syncMotionInterval()I", at = @At("HEAD"), cancellable = true, remap = false)
     private static void prts$spreadMotionSync(CallbackInfoReturnable<Integer> cir) {
         if (!PrtsConfigManager.feature(PrtsConfigManager.MODSUPPORT, "spread-sbw-motion-sync")) {
-            // The switch is off: the answer of the mod stands.
             return;
         }
         PrtsModSupportStats.count("sbw-motion-sync-answered");

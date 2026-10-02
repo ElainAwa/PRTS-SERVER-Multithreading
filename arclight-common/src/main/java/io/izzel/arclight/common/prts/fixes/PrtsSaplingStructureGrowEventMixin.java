@@ -1,10 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
- * The sapling is where the platform actually grows a tree, and this platform grows it in one call:
- * SaplingBlock#advanceTree hands the sapling over to its TreeGrower. The call is wrapped so the
- * tree is built against the capture list of PrtsStructureGrowCapture instead of the chunk and
- * StructureGrowEvent decides whether it is written. Bone meal on a sapling and a random tick both
- * end up in advanceTree, so both raise the event exactly once.
+ * Wraps the one call this platform grows a tree in, SaplingBlock#advanceTree -> TreeGrower; the tree
+ * is built against the capture list and StructureGrowEvent decides whether it is written. Bone meal
+ * and a random tick both end up here, so both raise the event exactly once.
  */
 package io.izzel.arclight.common.prts.fixes;
 
