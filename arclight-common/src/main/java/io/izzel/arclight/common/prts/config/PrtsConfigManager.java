@@ -248,7 +248,14 @@ public final class PrtsConfigManager {
                 + "# region covers, 'worker-deadline-grace-ms' is how long the merge waits past the\n"
                 + "# tick boundary (zero cancels immediately), and 'worker-retry-budget' is how many\n"
                 + "# retryable faults a worker attempt carries before it falls back; it is never\n"
-                + "# larger than 'retry-budget' above."));
+                + "# larger than 'retry-budget' above.\n"
+                + "# 'dispatch-identical-only: false' is the takeover boundary of the write-back leg -\n"
+                + "# off, the leg lands every value the domain computed, so the open tier owns the\n"
+                + "# kinematics it froze; on, it may only take over a row whose position, orientation\n"
+                + "# and velocity are bit-identical to what the world already holds (the host path's\n"
+                + "# own result for that tick) - an agreeing row is counted and left untouched, a\n"
+                + "# differing row stays with the host path. The open tier changes no host semantics\n"
+                + "# only in that mode."));
     }
 
     /**
@@ -315,6 +322,7 @@ public final class PrtsConfigManager {
         features.put("commit-intents", false);
         features.put("route-unregistered-writes", false);
         features.put("dispatch-parallel", false);
+        features.put("dispatch-identical-only", false);
         return features;
     }
 

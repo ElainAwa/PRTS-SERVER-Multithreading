@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.dispatch;
 
+import io.izzel.arclight.common.prts.kernel.diff.StateHasher;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import org.bukkit.Bukkit;
@@ -86,6 +87,36 @@ public final class LiveEntityAccess {
         entity.setYRot((float) yaw);
         entity.setXRot((float) pitch);
         entity.setDeltaMovement(velX, velY, velZ);
+    }
+
+    /**
+     * Reads the whitelisted kinematics of one entity into a row.
+     *
+     * <p>The identity fields of the row are carried over unchanged: the reader answers what the
+     * entity holds for the same entity, not who it is.</p>
+     *
+     * @param entity the entity to read
+     * @param row    the row whose identity the answer keeps
+     * @return the row the world holds
+     */
+    public static StateHasher.Slice read(Entity entity, StateHasher.Slice row) {
+        return new StateHasher.Slice(row.worldId(), row.regionId(), row.batchId(), row.entitySeq(),
+            posX(entity), posY(entity), posZ(entity), yaw(entity), pitch(entity), velX(entity),
+            velY(entity), velZ(entity), row.flags(), row.slotGeneration(), row.segmentRef());
+    }
+
+    /**
+     * Answers whether the world already holds exactly the kinematics of one row.
+     *
+     * <p>This is the predicate of the takeover boundary: only a row the host itself already holds,
+     * bit for bit, may be taken over without changing host semantics.</p>
+     *
+     * @param entity the entity the row names
+     * @param row    the row the domain computed
+     * @return whether every value of the row is already the value of the world
+     */
+    public static boolean identical(Entity entity, StateHasher.Slice row) {
+        return KinematicIdentity.matches(row, read(entity, row));
     }
 
     /** @param entity the entity to read @return position on x */

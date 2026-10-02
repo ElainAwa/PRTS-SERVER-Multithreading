@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.dispatch;
 
+import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.diff.DomainHash;
 import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
 import io.izzel.arclight.common.prts.kernel.diff.StateHasher;
@@ -141,7 +142,9 @@ public final class DispatchWriteBack {
         long startedAt = System.nanoTime();
         List<StateHasher.Slice> expected = new ArrayList<>(committed.size());
         List<StateHasher.Slice> found = new ArrayList<>(committed.size());
+        boolean identicalOnly = KernelSettings.dispatchIdenticalOnly();
         int gone = 0;
+        int kept = 0;
         for (StateHasher.Slice row : committed) {
             ServerLevel level = LiveEntityAccess.level(row.worldId());
             Entity entity = LiveEntityAccess.entity(level, (int) row.entitySeq());
@@ -149,13 +152,22 @@ public final class DispatchWriteBack {
                 gone++;
                 continue;
             }
+            if (identicalOnly && !LiveEntityAccess.identical(entity, row)) {
+                // The takeover boundary kept this row with the host path, so the world is not
+                // asked to agree with a value the leg deliberately did not land.
+                kept++;
+                continue;
+            }
             expected.add(row);
-            found.add(read(entity, row));
+            found.add(LiveEntityAccess.read(entity, row));
         }
         boolean equal = expected.isEmpty() || hash(found, whitelist, domainId, tickIndex)
             == hash(expected, whitelist, domainId, tickIndex);
         long nanos = System.nanoTime() - startedAt;
         readings.noteReadBack(found.size(), gone, equal);
+        if (identicalOnly) {
+            readings.noteReadBackKept(kept);
+        }
         SelfTimers.note(SelfClass.OBSERVE, committed.get(0).worldId(), "dispatch-readback", nanos);
         if (!found.isEmpty()) {
             sample = render(found.get(0), expected.get(0), found.size(), gone, equal);
@@ -199,15 +211,6 @@ public final class DispatchWriteBack {
         return String.format(Locale.ROOT, "(%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f)", slice.x(),
             slice.y(), slice.z(), slice.yaw(), slice.pitch(), slice.velX(), slice.velY(),
             slice.velZ());
-    }
-
-    private static StateHasher.Slice read(Entity entity, StateHasher.Slice row) {
-        return new StateHasher.Slice(row.worldId(), row.regionId(), row.batchId(), row.entitySeq(),
-            LiveEntityAccess.posX(entity), LiveEntityAccess.posY(entity),
-            LiveEntityAccess.posZ(entity), LiveEntityAccess.yaw(entity),
-            LiveEntityAccess.pitch(entity), LiveEntityAccess.velX(entity),
-            LiveEntityAccess.velY(entity), LiveEntityAccess.velZ(entity), row.flags(),
-            row.slotGeneration(), row.segmentRef());
     }
 
     private static long hash(List<StateHasher.Slice> slices, HashWhitelist whitelist,

@@ -79,6 +79,9 @@ public final class KernelSettings {
     /** Turns the parallel dispatch of the first domain on; off, so nothing is dispatched. */
     public static final String DISPATCH_PARALLEL = "dispatch-parallel";
 
+    /** Narrows the write-back to the kinematics the host itself already holds; off. */
+    public static final String DISPATCH_IDENTICAL_ONLY = "dispatch-identical-only";
+
     /** How many worker threads the pool holds; zero means derive it from the machine. */
     public static final String WORKER_COUNT = "worker-count";
 
@@ -254,6 +257,22 @@ public final class KernelSettings {
     /** @return whether the parallel dispatch of the first domain is on */
     public static boolean dispatchParallel() {
         return feature(DISPATCH_PARALLEL);
+    }
+
+    /**
+     * Answers whether the write-back may only take over kinematics the host already holds.
+     *
+     * <p>On, the leg lands nothing it cannot prove the host path itself produced: a row whose
+     * position, orientation and velocity are bit-identical to the world's own values is counted as
+     * taken over and left untouched (writing it would be the same value through a setter with side
+     * effects), and a row that differs is counted and stays with the host path. Off, the leg lands
+     * every value the domain computed. The open tier runs without changing host semantics only with
+     * this on.</p>
+     *
+     * @return whether only bit-identical kinematics may be taken over
+     */
+    public static boolean dispatchIdenticalOnly() {
+        return feature(DISPATCH_IDENTICAL_ONLY);
     }
 
     /** @return the declared worker count, zero meaning derive it from the machine */

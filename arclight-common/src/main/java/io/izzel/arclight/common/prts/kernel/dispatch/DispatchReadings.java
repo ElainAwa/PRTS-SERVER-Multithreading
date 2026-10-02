@@ -47,6 +47,9 @@ public final class DispatchReadings {
     private final LongAdder writeBackRows = new LongAdder();
     private final LongAdder writeBackGone = new LongAdder();
     private final LongAdder writeBackRefused = new LongAdder();
+    private final LongAdder writeBackIdentical = new LongAdder();
+    private final LongAdder writeBackKept = new LongAdder();
+    private final LongAdder readBackKept = new LongAdder();
     private final LongAdder readBackPairs = new LongAdder();
     private final LongAdder readBackEqual = new LongAdder();
     private final LongAdder readBackRows = new LongAdder();
@@ -156,6 +159,32 @@ public final class DispatchReadings {
     /** Counts a batch whose write-back the channel refused at its depth limit. */
     public void noteWriteBackRefused() {
         writeBackRefused.increment();
+    }
+
+    /**
+     * Counts the rows of one commit the takeover boundary decided about.
+     *
+     * @param identical rows the world already held bit for bit and the leg left untouched
+     * @param kept      rows that differed and stayed with the host path
+     */
+    public void noteWriteBackIdentity(int identical, int kept) {
+        if (identical > 0) {
+            writeBackIdentical.add(identical);
+        }
+        if (kept > 0) {
+            writeBackKept.add(kept);
+        }
+    }
+
+    /**
+     * Counts the rows one read back left out because the takeover boundary kept them.
+     *
+     * @param kept rows the world was not asked about
+     */
+    public void noteReadBackKept(int kept) {
+        if (kept > 0) {
+            readBackKept.add(kept);
+        }
     }
 
     /**
@@ -377,6 +406,16 @@ public final class DispatchReadings {
         return writeBackRefused.sum();
     }
 
+    /** @return the rows the takeover boundary found already held by the world */
+    public long writeBackIdentical() {
+        return writeBackIdentical.sum();
+    }
+
+    /** @return the rows the takeover boundary left with the host path */
+    public long writeBackKept() {
+        return writeBackKept.sum();
+    }
+
     /** @return the committed frames the world was asked about */
     public long readBackPairs() {
         return readBackPairs.sum();
@@ -395,6 +434,11 @@ public final class DispatchReadings {
     /** @return the rows whose entity was gone when the read back looked */
     public long readBackGone() {
         return readBackGone.sum();
+    }
+
+    /** @return the rows the takeover boundary left out of the read back */
+    public long readBackKept() {
+        return readBackKept.sum();
     }
 
     /** @return the pairs of hashes compared */
@@ -511,10 +555,13 @@ public final class DispatchReadings {
         builder.append(" writeback_rows=").append(writeBackEnqueued());
         builder.append(" writeback_gone=").append(writeBackGone());
         builder.append(" writeback_refused=").append(writeBackRefused());
+        builder.append(" writeback_identical=").append(writeBackIdentical());
+        builder.append(" writeback_kept=").append(writeBackKept());
         builder.append(" readback_pairs=").append(readBackPairs());
         builder.append(" readback_equal=").append(readBackEqual());
         builder.append(" readback_rows=").append(readBackRows());
         builder.append(" readback_gone=").append(readBackGone());
+        builder.append(" readback_kept=").append(readBackKept());
         builder.append(" tasks_last_plan=").append(lastPlanTasks);
         builder.append(" commit_cursor=").append(window.commitCursor());
         builder.append(" intent_pending=").append(window.intentPending());
@@ -564,6 +611,9 @@ public final class DispatchReadings {
         writeBackRows.reset();
         writeBackGone.reset();
         writeBackRefused.reset();
+        writeBackIdentical.reset();
+        writeBackKept.reset();
+        readBackKept.reset();
         readBackPairs.reset();
         readBackEqual.reset();
         readBackRows.reset();
