@@ -53,7 +53,7 @@ class DispatchParallelTest {
             DispatchPass pass = DispatchPass.dispatch(plan, pool, EntityIntegrator.INSTANCE, arena,
                 readings, ledger);
             MergeSegment.Frame frame = merge.merge(pass, System.nanoTime() + 2_000_000_000L, arena,
-                readings, new DiffProbe(), HashWhitelist.bitexact(), "entity");
+                readings, new DiffProbe(), HashWhitelist.bitexact(), "entity", null);
 
             assertNotNull(frame);
             assertEquals(plan.taskCount(), frame.committed());
@@ -86,7 +86,7 @@ class DispatchParallelTest {
                 return EntityIntegrator.INSTANCE.run(batch, target, token);
             }, arena, readings, ledger);
             MergeSegment.Frame frame = merge.merge(pass, System.nanoTime() + 1_000_000L, arena,
-                readings, new DiffProbe(), HashWhitelist.bitexact(), "entity");
+                readings, new DiffProbe(), HashWhitelist.bitexact(), "entity", null);
 
             assertEquals(1L, readings.timeouts());
             assertEquals(1L, readings.cancelled());
@@ -175,7 +175,7 @@ class DispatchParallelTest {
             DispatchPass pass = DispatchPass.dispatch(plan, pool, EntityIntegrator.INSTANCE, arena,
                 readings, ledger);
             MergeSegment.Frame frame = merge.merge(pass, System.nanoTime() + 2_000_000_000L, arena,
-                readings, new DiffProbe(), HashWhitelist.bitexact(), "entity");
+                readings, new DiffProbe(), HashWhitelist.bitexact(), "entity", null);
             assertTrue(frame.closureOk());
 
             long batchId = plan.tasks().get(0).batchId() + 1000L;
