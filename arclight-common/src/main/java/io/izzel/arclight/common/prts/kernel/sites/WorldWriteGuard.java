@@ -14,6 +14,7 @@ import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import io.izzel.arclight.common.prts.kernel.intent.WriteIntent;
 import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -35,6 +36,12 @@ import java.util.concurrent.atomic.LongAdder;
  * commit segment applies it when its own switch is on - while that switch is off the intent waits in
  * the channel and the depth says so.</p>
  *
+ * <p>Applying a deferred write is a main thread act, and the guard enforces that instead of trusting
+ * it: a thread that is not the bound server thread is refused with a code and a count, and the write
+ * it carried is not performed. The same act re-checks the world generation the intent was frozen
+ * under, so a write whose world has been unloaded or rebuilt since it was routed is refused with a
+ * lifecycle code instead of being applied to an object that no longer is the world it names.</p>
+ *
  * <p>Nothing here registers a thread on its own. An undeclared thread is remembered per thread so
  * classifying it stays allocation free, and that memory is deliberately kept outside the site
  * registry: the registry must not grow just because a thread appeared.</p>
@@ -46,9 +53,12 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
     private final IntentQueue intents;
     private final IntentPayloadDirectory payloads;
     private final WriteLedger ledger;
+    private final WorldEpochs epochs = new WorldEpochs();
     private final AtomicLong nextAttemptId = new AtomicLong(1L);
     private final Map<Thread, HolderIdentity> declared = new ConcurrentHashMap<>();
     private final LongAdder undeclaredThreads = new LongAdder();
+    private final LongAdder foreignCommits = new LongAdder();
+    private final LongAdder staleWorldRefusals = new LongAdder();
     private final ThreadLocal<HolderIdentity> undeclared = ThreadLocal.withInitial(() -> {
         undeclaredThreads.increment();
         return HolderIdentity.unregistered("UNREGISTERED:" + Thread.currentThread().getName() + ":0");
@@ -97,6 +107,21 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
         this.enforce = enforce;
         this.routing = routeIntents;
         this.tickIndex = tickIndex;
+    }
+
+    /**
+     * Records the worlds the platform reports as live, so a deferred write can be checked against the
+     * world it was frozen for.
+     *
+     * @param worldIds the live worlds, in the order the platform lists them
+     */
+    public void noteLiveWorlds(List<String> worldIds) {
+        epochs.observe(worldIds);
+    }
+
+    /** @return the world generations this guard checks deferred writes against */
+    public WorldEpochs worldEpochs() {
+        return epochs;
     }
 
     /** @return whether the write paths judge at all */
@@ -189,7 +214,14 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
                 code = RejectCode.WRITE_DENIED_NOT_OWNER;
             }
         } else {
-            WriteVerdict verdict = authority.authorize(attemptOf(path, origin, holder, worldId));
+            WriteVerdict verdict;
+            try {
+                verdict = authority.authorize(attemptOf(path, origin, holder, worldId));
+            } catch (Throwable thrown) {
+                // The decision point left the attempt without a verdict; the pair has to say so.
+                counters.noteUnjudged(path, origin, holder.kind());
+                throw thrown;
+            }
             disposition = verdict.disposition();
             code = verdict.code();
         }
@@ -203,11 +235,23 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
     }
 
     @Override
-    public RejectCode apply(WriteIntent intent) {
+    public Outcome apply(WriteIntent intent) {
         Thread thread = Thread.currentThread();
         ThreadOrigin origin = thread == serverThread ? ThreadOrigin.MAIN : ThreadOrigin.WORKER;
         counters.noteAttempt(WritePath.KERNEL_COMMIT, origin, HolderKind.KERNEL);
-        RejectCode code = payloads.apply(intent);
+        Outcome outcome;
+        Thread owner = serverThread;
+        if (owner != null && thread != owner) {
+            foreignCommits.increment();
+            outcome = Outcome.retryable(RejectCode.WRITE_DENIED_NOT_OWNER);
+        } else if (epochs.epochOf(intent.dstWorldId()) != intent.worldEpoch()) {
+            staleWorldRefusals.increment();
+            payloads.release(intent);
+            outcome = Outcome.rejected(RejectCode.WORLD_LIFECYCLE_DENIED);
+        } else {
+            outcome = payloads.apply(intent);
+        }
+        RejectCode code = outcome.code();
         counters.noteVerdict(WritePath.KERNEL_COMMIT, origin, HolderKind.KERNEL,
             code == null ? WriteDisposition.GRANT : WriteDisposition.DENY);
         if (code != null) {
@@ -216,7 +260,12 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
         lastDecision = new WriteDecision(WritePath.KERNEL_COMMIT, origin, HolderKind.KERNEL,
             code == null ? WriteDisposition.GRANT : WriteDisposition.DENY, code, intent.siteId(),
             thread.getName(), intent.dstWorldId(), tickIndex);
-        return code;
+        return outcome;
+    }
+
+    @Override
+    public void release(WriteIntent intent) {
+        payloads.release(intent);
     }
 
     /** @return the per-path accounting */
@@ -244,6 +293,16 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
         return declared.size();
     }
 
+    /** @return commits attempted from a thread that is not the bound server thread */
+    public long foreignCommits() {
+        return foreignCommits.sum();
+    }
+
+    /** @return deferred writes refused because their world was gone or rebuilt */
+    public long staleWorldRefusals() {
+        return staleWorldRefusals.sum();
+    }
+
     /** Clears the live counters. Used by the readout reset and by tests. */
     public void resetReadings() {
         counters.reset();
@@ -264,13 +323,14 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
      *
      * <p>The channel freezes the order itself, so this side only names the write: an attempt refused
      * at the depth limit leaves no gap behind it, and the cursor of the commit segment can never meet
-     * an order nobody ever queued.</p>
+     * an order nobody ever queued. The world generation read here is the one the commit will compare
+     * against, so a world that changes between the two is refused rather than written to.</p>
      */
     private RejectCode handOver(WritePath path, ThreadOrigin origin, HolderIdentity holder,
                                 String worldId, PrtsWorldWriteTaps.DeferredWrite deferred) {
         String handle = payloads.bind(path.key(), deferred);
         WriteIntent draft = WriteIntent.draft(intents.nextIntentId(), worldId, worldId, path.key(),
-            0L, handle, "xdomain", holder.siteId());
+            0L, epochs.epochOf(worldId), handle, "xdomain", holder.siteId());
         IntentQueue.EnqueueResult result = intents.enqueue(draft);
         if (result.accepted()) {
             return null;
@@ -287,6 +347,7 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
             .target(WriteLevel.REGION, path.key())
             .domains(domains, domains)
             .version(0L, tickIndex, 0L)
+            .worldEpoch(epochs.epochOf(worldId))
             .admitted(true)
             .build();
     }

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.observe;
 
+import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerToken;
 import io.izzel.arclight.common.prts.kernel.auth.WriteAttempt;
@@ -14,6 +15,7 @@ import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.codes.RejectTrigger;
 import io.izzel.arclight.common.prts.kernel.intent.CommitOrder;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
+import io.izzel.arclight.common.prts.kernel.intent.IntentPayload;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import io.izzel.arclight.common.prts.kernel.intent.WriteIntent;
 import io.izzel.arclight.common.prts.kernel.sites.IntentPayloadDirectory;
@@ -44,6 +46,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
+import java.util.function.IntSupplier;
 
 /**
  * A self-check that drives the decision matrix of the four pieces on scratch objects.
@@ -78,7 +82,7 @@ public final class KernelSelfCheck {
         lines.add("selftest.new_codes=0");
 
         OwnerRegistry owners = new OwnerRegistry();
-        IntentQueue intents = new IntentQueue(() -> 2);
+        IntentQueue intents = new IntentQueue(() -> 2, () -> 0);
         WriteLedger ledger = new WriteLedger();
         WriteAuthority authority = new WriteAuthority(owners, intents, ledger, () -> false, () -> 2);
         long tick = 100L;
@@ -147,18 +151,18 @@ public final class KernelSelfCheck {
         }
 
         WriteLedger enforcedLedger = new WriteLedger();
-        WriteAuthority enforced = new WriteAuthority(new OwnerRegistry(), new IntentQueue(() -> 8),
-            enforcedLedger, () -> true, () -> 0);
+        WriteAuthority enforced = new WriteAuthority(new OwnerRegistry(),
+            new IntentQueue(() -> 8, () -> 0), enforcedLedger, () -> true, () -> 0);
         WriteVerdict refused = enforced.authorize(attempt(20L, "unregistered:t:1", "world", "world",
             WriteLevel.REGION, "region-9", HolderKind.UNREGISTERED, true, 1L, tick, 0L));
         if (refused.disposition() != WriteDisposition.DENY
             || refused.code() != RejectCode.WRITE_DENIED_NOT_OWNER) {
             failures.add("enforcement did not refuse an unregistered write");
         }
-        intents.bindPayload(intent -> null);
-        CommitOrder outOfOrder = intents.commit(1L, tick);
-        CommitOrder first = intents.commit(0L, tick);
-        CommitOrder second = intents.commit(1L, tick);
+        intents.bindPayload(intent -> IntentPayload.Outcome.APPLIED);
+        CommitOrder outOfOrder = intents.commit("world", 1L, tick);
+        CommitOrder first = intents.commit("world", 0L, tick);
+        CommitOrder second = intents.commit("world", 1L, tick);
         if (outOfOrder.code() != RejectCode.COMMIT_ORDER_VIOLATION) {
             failures.add("an out-of-order commit was not refused");
         }
@@ -228,6 +232,7 @@ public final class KernelSelfCheck {
         }
 
         lines.addAll(commitSegmentMatrix(failures, tick));
+        lines.addAll(retryAndLifecycleMatrix(failures, tick));
         lines.addAll(writePathMatrix(failures, tick));
         lines.addAll(siteCoverage(failures, waits));
         lines.addAll(waitSiteMatrix(failures, tick));
@@ -247,11 +252,11 @@ public final class KernelSelfCheck {
         WriteLedger ledger = new WriteLedger();
         OwnerRegistry owners = new OwnerRegistry();
         IntentPayloadDirectory payloads = new IntentPayloadDirectory();
-        IntentQueue intents = new IntentQueue(() -> 8);
+        IntentQueue intents = new IntentQueue(() -> 8, () -> 2);
         WriteAuthority authority = new WriteAuthority(owners, intents, ledger, () -> true, () -> 2);
         WorldWriteGuard guard = new WorldWriteGuard(counters, authority, intents, payloads, ledger);
         intents.bindPayload(guard);
-        CommitSegment segment = new CommitSegment(intents, () -> true, intents::capacity);
+        CommitSegment segment = segment(intents, () -> true, intents::capacity);
         guard.bindServerThread(Thread.currentThread(), "host:server-thread");
         guard.refresh(true, false, false, tick);
         Object levelRef = new Object();
@@ -319,15 +324,15 @@ public final class KernelSelfCheck {
      */
     private static List<String> commitSegmentMatrix(List<String> failures, long tick) {
         List<String> lines = new ArrayList<>();
-        IntentQueue queue = new IntentQueue(() -> 8);
+        IntentQueue queue = new IntentQueue(() -> 8, () -> 2);
         List<String> applied = new ArrayList<>();
         queue.bindPayload(intent -> {
             applied.add(intent.payloadHandle());
-            return null;
+            return IntentPayload.Outcome.APPLIED;
         });
         queue.enqueue(intent(1L, "first"));
         queue.enqueue(intent(2L, "second"));
-        CommitSegment holding = new CommitSegment(queue, () -> false, queue::capacity);
+        CommitSegment holding = segment(queue, () -> false, queue::capacity);
 
         CommitSegment.Pass held = holding.run(tick);
         int heldDepth = queue.depth();
@@ -337,7 +342,7 @@ public final class KernelSelfCheck {
         lines.add("selftest.intent_hold_mode=" + holding.mode());
         lines.add("selftest.intent_hold_executed=" + heldExecuted);
 
-        CommitSegment walking = new CommitSegment(queue, () -> true, queue::capacity);
+        CommitSegment walking = segment(queue, () -> true, queue::capacity);
         CommitSegment.Pass walked = walking.run(tick);
         lines.add("selftest.intent_walk_steps=" + walked.steps());
         lines.add("selftest.intent_walk_executed=" + queue.executedCount());
@@ -360,7 +365,7 @@ public final class KernelSelfCheck {
             failures.add("the commit segment did not publish the tick it executed on");
         }
         queue.enqueue(intent(3L, "third"));
-        CommitOrder outOfOrder = queue.commit(7L, tick);
+        CommitOrder outOfOrder = queue.commit("world", 7L, tick);
         if (outOfOrder.code() != RejectCode.COMMIT_ORDER_VIOLATION || queue.orderViolationCount() != 1L) {
             failures.add("an order the channel never froze was not refused");
         }
@@ -368,8 +373,130 @@ public final class KernelSelfCheck {
     }
 
     private static WriteIntent intent(long id, String handle) {
-        return WriteIntent.draft(id, "world", "world", "block_write", 0L, handle, "xdomain",
-            "site:a");
+        return WriteIntent.draft(id, "world", "world", "block_write", 0L,
+            WriteIntent.UNTRACKED_EPOCH, handle, "xdomain", "site:a");
+    }
+
+    /**
+     * Drives the bounded refusal, the per-world isolation and the two runtime ownership checks.
+     *
+     * <p>One world carries an intent whose payload never lands: the channel offers it again until the
+     * retry budget is spent, releases it with its code, and the intent behind it still lands. A second
+     * world carries a write that lands while that happens, which is what per-world isolation means in
+     * numbers. The same scratch objects then show a write whose world was unloaded, a commit asked for
+     * from a thread that is not the owner, and the seam the wait observation was borrowed from.</p>
+     */
+    private static List<String> retryAndLifecycleMatrix(List<String> failures, long tick) {
+        List<String> lines = new ArrayList<>();
+        IntentPayloadDirectory payloads = new IntentPayloadDirectory();
+        String failing = payloads.bind("block_write", () -> false);
+        String landing = payloads.bind("block_write", () -> true);
+        String landingElsewhere = payloads.bind("block_write", () -> true);
+        IntentQueue queue = new IntentQueue(() -> 8, () -> 1);
+        queue.bindPayload(payloads);
+        CommitSegment segment = segment(queue, () -> true, queue::capacity);
+        queue.enqueue(WriteIntent.draft(1L, "world-a", "world-a", "block_write", 0L,
+            WriteIntent.UNTRACKED_EPOCH, failing, "xdomain", "site:a"));
+        queue.enqueue(WriteIntent.draft(2L, "world-a", "world-a", "block_write", 0L,
+            WriteIntent.UNTRACKED_EPOCH, landing, "xdomain", "site:a"));
+        queue.enqueue(WriteIntent.draft(3L, "world-b", "world-b", "block_write", 0L,
+            WriteIntent.UNTRACKED_EPOCH, landingElsewhere, "xdomain", "site:a"));
+
+        CommitSegment.Pass first = segment.run(tick);
+        int depthAfterFirst = queue.depth("world-a");
+        CommitSegment.Pass second = segment.run(tick + 1L);
+        lines.add("selftest.retry_budget=" + queue.retryBudget());
+        lines.add("selftest.retry_first_code=" + (first.code() == null ? "none" : first.code().text()));
+        lines.add("selftest.retry_second_code=" + (second.code() == null ? "none" : second.code().text()));
+        lines.add("selftest.retry_first_steps=" + first.steps());
+        lines.add("selftest.retry_first_depth=" + depthAfterFirst);
+        lines.add("selftest.retry_exhausted=" + queue.retryExhaustedCount());
+        lines.add("selftest.retry_released=" + queue.releasedCount());
+        lines.add("selftest.retry_pending_payload=" + payloads.pendingCount());
+        lines.add("selftest.shard_worlds=" + queue.shardCount());
+        lines.add("selftest.shard_depth_a=" + queue.depth("world-a"));
+        lines.add("selftest.shard_depth_b=" + queue.depth("world-b"));
+        lines.add("selftest.shard_applied=" + payloads.appliedCount());
+        lines.add("selftest.shard_abandoned=" + payloads.abandonedCount());
+
+        if (first.code() != RejectCode.VERSION_MISMATCH || first.steps() != 0
+            || depthAfterFirst != 2) {
+            failures.add("a retryable refusal was not left in place for a second attempt"
+                + " (code=" + first.code() + " steps=" + first.steps()
+                + " depth=" + depthAfterFirst + ")");
+        }
+        if (second.code() != RejectCode.VERSION_MISMATCH || segment.released() != 1L
+            || queue.retryExhaustedCount() != 1L) {
+            failures.add("a payload past its retry budget was not released with its code");
+        }
+        if (queue.depth("world-a") != 0 || queue.depth("world-b") != 0) {
+            failures.add("a failing write held the shard behind it");
+        }
+        if (payloads.appliedCount() != 2L || payloads.abandonedCount() != 1L) {
+            failures.add("the shard did not apply the intents behind the released one");
+        }
+
+        WritePathCounters counters = new WritePathCounters();
+        WriteLedger ledger = new WriteLedger();
+        OwnerRegistry owners = new OwnerRegistry();
+        IntentPayloadDirectory handovers = new IntentPayloadDirectory();
+        IntentQueue epochs = new IntentQueue(() -> 8, () -> 2);
+        WriteAuthority authority = new WriteAuthority(owners, epochs, ledger, () -> false, () -> 2);
+        WorldWriteGuard guard = new WorldWriteGuard(counters, authority, epochs, handovers, ledger);
+        epochs.bindPayload(guard);
+        CommitSegment owned = segment(epochs, () -> true, epochs::capacity);
+        guard.bindServerThread(Thread.currentThread(), "host:server-thread");
+        guard.noteLiveWorlds(List.of("world-a", "world-b"));
+        guard.refresh(true, false, true, tick);
+        WorkerWrite handedOver = new WorkerWrite(guard, new Object(), "world-a");
+        runOnWorker(handedOver);
+        guard.noteLiveWorlds(List.of("world-b"));
+        CommitSegment.Pass unloaded = owned.run(tick);
+        lines.add("selftest.world_epoch_refusal="
+            + (unloaded.code() == null ? "none" : unloaded.code().text()));
+        lines.add("selftest.world_epoch_stale=" + guard.staleWorldRefusals());
+        lines.add("selftest.world_epoch_abandoned=" + handovers.abandonedCount());
+        lines.add("selftest.world_epoch_depth=" + epochs.depth("world-a"));
+        if (unloaded.code() != RejectCode.WORLD_LIFECYCLE_DENIED
+            || guard.staleWorldRefusals() != 1L) {
+            failures.add("a write whose world was unloaded was not refused with its code");
+        }
+
+        IntentQueue foreignQueue = new IntentQueue(() -> 8, () -> 2);
+        foreignQueue.bindPayload(intent -> IntentPayload.Outcome.APPLIED);
+        foreignQueue.enqueue(WriteIntent.draft(9L, "world-a", "world-a", "block_write", 0L,
+            WriteIntent.UNTRACKED_EPOCH, "handle", "xdomain", "site:a"));
+        CommitSegment binding = new CommitSegment(foreignQueue, () -> true, foreignQueue::capacity);
+        binding.bindOwnerThread(Thread.currentThread());
+        CommitSegment.Pass[] foreign = new CommitSegment.Pass[1];
+        Thread worker = new Thread(() -> foreign[0] = binding.run(tick), "worker-self-check");
+        worker.start();
+        join(worker);
+        lines.add("selftest.commit_foreign_refused="
+            + (foreign[0] == null || foreign[0].code() == null ? "none" : foreign[0].code().text()));
+        lines.add("selftest.commit_foreign_runs=" + binding.foreignRuns());
+        lines.add("selftest.commit_foreign_depth=" + foreignQueue.depth("world-a"));
+        if (foreign[0] == null || foreign[0].code() != RejectCode.WRITE_DENIED_NOT_OWNER
+            || binding.foreignRuns() != 1L || foreignQueue.depth("world-a") != 1) {
+            failures.add("a commit asked for from a foreign thread was not refused");
+        }
+        return lines;
+    }
+
+    private static void join(Thread thread) {
+        try {
+            thread.join();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(interrupted);
+        }
+    }
+
+    private static CommitSegment segment(IntentQueue queue, BooleanSupplier enabled,
+                                         IntSupplier budget) {
+        CommitSegment segment = new CommitSegment(queue, enabled, budget);
+        segment.bindOwnerThread(Thread.currentThread());
+        return segment;
     }
 
     /**
@@ -385,12 +512,19 @@ public final class KernelSelfCheck {
         WaitPointRegistry registry = new WaitPointRegistry(() -> 50);
         WaitSiteObserver observer = new WaitSiteObserver(registry, () -> tick, () -> 50);
 
+        // The seam is borrowed, not taken over: the watcher that was installed before the check is
+        // read first and handed back in every path out of here, and the module that owns the
+        // production watcher is told to look at the seam again. Without this the check would leave the
+        // twenty real call sites reporting into nothing while the module still believed its own
+        // watcher was installed.
+        PrtsWaitSites.SiteWaitTap previous = PrtsWaitSites.watcher();
         PrtsWaitSites.install(observer);
         try {
             PrtsWaitSites.begin(PrtsWaitSites.SERVER_LEVEL_SET_CHUNK_FORCED);
             PrtsWaitSites.end(PrtsWaitSites.SERVER_LEVEL_SET_CHUNK_FORCED);
         } finally {
-            PrtsWaitSites.install(null);
+            PrtsWaitSites.install(previous);
+            KernelModule.instance().resyncWaitSiteTap();
         }
         observer.observed(PrtsWaitSites.ENTITY_SET_POS_RAW,
             PrtsWaitSites.SITE_IDS[PrtsWaitSites.ENTITY_SET_POS_RAW], "world", 60_000_000L);
@@ -440,6 +574,10 @@ public final class KernelSelfCheck {
         }
         if (registry.reportCoverage().siteUnregistered() != 0) {
             failures.add("an observed call site was not resolved to its row");
+        }
+        lines.add("selftest.wait_watcher_restored=" + (PrtsWaitSites.watcher() == previous ? 1 : 0));
+        if (PrtsWaitSites.watcher() != previous) {
+            failures.add("the wait observation seam was not handed back after the check");
         }
         return lines;
     }
@@ -496,19 +634,25 @@ public final class KernelSelfCheck {
 
         private final WorldWriteGuard guard;
         private final Object levelRef;
+        private final String worldId;
         private int verdict = -1;
         private boolean proceeded;
         private volatile boolean deferredApplied;
 
         private WorkerWrite(WorldWriteGuard guard, Object levelRef) {
+            this(guard, levelRef, "world");
+        }
+
+        private WorkerWrite(WorldWriteGuard guard, Object levelRef, String worldId) {
             this.guard = guard;
             this.levelRef = levelRef;
+            this.worldId = worldId;
         }
 
         @Override
         public void run() {
             verdict = guard.classifyBlockWrite(levelRef);
-            proceeded = guard.admitBlockWrite(levelRef, "world", () -> {
+            proceeded = guard.admitBlockWrite(levelRef, worldId, () -> {
                 deferredApplied = true;
                 return true;
             });

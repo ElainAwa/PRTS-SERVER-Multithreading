@@ -27,6 +27,8 @@ public final class WritePathCounters {
 
     private final AtomicLongArray attempts = new AtomicLongArray(PAIR_COUNT);
     private final AtomicLongArray verdicts = new AtomicLongArray(PAIR_COUNT * DISPOSITION_COUNT);
+    private final AtomicLongArray inFlight = new AtomicLongArray(PAIR_COUNT);
+    private final AtomicLongArray versions = new AtomicLongArray(PAIR_COUNT);
 
     /**
      * Counts an attempt as it enters a write point.
@@ -36,7 +38,13 @@ public final class WritePathCounters {
      * @param holder where the writer comes from
      */
     public void noteAttempt(WritePath path, ThreadOrigin origin, HolderKind holder) {
-        attempts.incrementAndGet(pairIndex(path, origin, holder));
+        int index = pairIndex(path, origin, holder);
+        // The update is bracketed: a reader that sees an even version on both sides of its reads saw a
+        // pair no writer was inside.
+        versions.incrementAndGet(index);
+        inFlight.incrementAndGet(index);
+        attempts.incrementAndGet(index);
+        versions.incrementAndGet(index);
     }
 
     /**
@@ -49,7 +57,27 @@ public final class WritePathCounters {
      */
     public void noteVerdict(WritePath path, ThreadOrigin origin, HolderKind holder,
                             WriteDisposition disposition) {
+        int index = pairIndex(path, origin, holder);
+        versions.incrementAndGet(index);
         verdicts.incrementAndGet(verdictIndex(path, origin, holder, disposition));
+        inFlight.decrementAndGet(index);
+        versions.incrementAndGet(index);
+    }
+
+    /**
+     * Counts an attempt whose verdict will never arrive.
+     *
+     * <p>The pair then reads as a missing counter rather than staying in flight forever.</p>
+     *
+     * @param path   the write point
+     * @param origin thread the attempt came from
+     * @param holder where the writer comes from
+     */
+    public void noteUnjudged(WritePath path, ThreadOrigin origin, HolderKind holder) {
+        int index = pairIndex(path, origin, holder);
+        versions.incrementAndGet(index);
+        inFlight.decrementAndGet(index);
+        versions.incrementAndGet(index);
     }
 
     /**
@@ -136,6 +164,10 @@ public final class WritePathCounters {
     /**
      * Recomputes the accounting of every pair.
      *
+     * <p>An attempt that entered and whose verdict has not landed yet is subtracted first: a writer
+     * between the two cells is in flight, not lost, so a check that runs across a concurrent writer
+     * does not read a transient state as a missing counter.</p>
+     *
      * @return {@code true} when every pair closes
      */
     public boolean closureHolds() {
@@ -143,17 +175,36 @@ public final class WritePathCounters {
             for (int origin = 0; origin < ORIGIN_COUNT; origin++) {
                 for (int holder = 0; holder < HOLDER_COUNT; holder++) {
                     int index = path * PAIRS_PER_PATH + origin * HOLDER_COUNT + holder;
+                    long before = versions.get(index);
+                    if ((before & 1L) != 0L) {
+                        // A writer is inside this pair right now; that window is not a failure.
+                        continue;
+                    }
                     long seen = 0L;
                     for (int disposition = 0; disposition < DISPOSITION_COUNT; disposition++) {
                         seen += verdicts.get(index * DISPOSITION_COUNT + disposition);
                     }
-                    if (seen != attempts.get(index)) {
+                    long counted = attempts.get(index);
+                    long flying = inFlight.get(index);
+                    if (versions.get(index) != before) {
+                        continue;
+                    }
+                    if (counted < seen || counted - seen > flying) {
                         return false;
                     }
                 }
             }
         }
         return true;
+    }
+
+    /** @return attempts that entered a write point and whose verdict has not landed yet */
+    public long inFlightAttempts() {
+        long total = 0L;
+        for (int index = 0; index < PAIR_COUNT; index++) {
+            total += inFlight.get(index);
+        }
+        return total;
     }
 
     /** @return the pairs the closing check walks */
@@ -168,6 +219,12 @@ public final class WritePathCounters {
         }
         for (int index = 0; index < verdicts.length(); index++) {
             verdicts.set(index, 0L);
+        }
+        for (int index = 0; index < inFlight.length(); index++) {
+            inFlight.set(index, 0L);
+        }
+        for (int index = 0; index < versions.length(); index++) {
+            versions.set(index, 0L);
         }
     }
 

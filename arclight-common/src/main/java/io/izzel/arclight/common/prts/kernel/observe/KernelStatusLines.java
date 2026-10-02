@@ -9,7 +9,9 @@ import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
 import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
 import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
 import io.izzel.arclight.common.prts.kernel.waitpoints.CoverageReport;
+import io.izzel.arclight.common.prts.support.PrtsSeams;
 import io.izzel.arclight.common.prts.support.PrtsWaitSites;
+import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -48,6 +50,44 @@ public final class KernelStatusLines {
             + " write-path-guard=" + KernelSettings.writePathGuard()
             + " commit-intents=" + KernelSettings.commitIntents()
             + " route-unregistered-writes=" + KernelSettings.routeUnregisteredWrites());
+        List<PrtsSeams.SeamState> seams = PrtsSeams.states(KernelSettings::categoryEnabled);
+        int reachable = 0;
+        int applied = 0;
+        int decidedOff = 0;
+        List<String> gaps = new ArrayList<>();
+        List<String> gapCategories = new ArrayList<>();
+        for (PrtsSeams.SeamState state : seams) {
+            if (state.reachable()) {
+                reachable++;
+            } else {
+                gaps.add(state.seam().seamId());
+                if (!gapCategories.contains(state.seam().category())) {
+                    gapCategories.add(state.seam().category());
+                }
+            }
+            if (state.applied()) {
+                applied++;
+            }
+            if (state.decisionKnown() && !state.decidedToApply()) {
+                decidedOff++;
+            }
+        }
+        boolean judgeable = KernelSettings.enabled() && gaps.isEmpty();
+        lines.add("[PRTS] kernel: seams declared=" + seams.size()
+            + " reachable=" + reachable + " applied=" + applied + " refused=" + decidedOff
+            + " gaps=" + gaps.size()
+            + " write_path_tap=" + (PrtsWorldWriteTaps.installed() ? 1 : 0)
+            + " wait_watcher=" + (PrtsWaitSites.installed() ? 1 : 0)
+            + " judgeable=" + (judgeable ? 1 : 0));
+        if (!gaps.isEmpty()) {
+            lines.add("[PRTS] kernel: seam gap " + String.join(",", gaps)
+                + " - category " + String.join(",", gapCategories)
+                + " is off, so the real call sites do not reach the kernel:"
+                + " the kernel readings are not evidence until that category is on");
+        } else if (!KernelSettings.enabled() && applied > 0) {
+            lines.add("[PRTS] kernel: " + applied + " call-site seams are applied while the kernel"
+                + " category is off: every call site pays one volatile read and reaches no kernel");
+        }
         WriteLedger ledger = module.ledger();
         lines.add("[PRTS] kernel: write attempts=" + ledger.totalAttempts()
             + " granted=" + ledger.totalGranted() + " intent=" + ledger.totalIntent()

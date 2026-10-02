@@ -68,7 +68,14 @@ public final class WriteAuthority {
      */
     public WriteVerdict authorize(WriteAttempt attempt) {
         ledger.noteAttempt(attempt);
-        WriteVerdict verdict = decide(attempt);
+        WriteVerdict verdict;
+        try {
+            verdict = decide(attempt);
+        } catch (Throwable thrown) {
+            // No verdict is coming: the attempt leaves flight and the closure reports it.
+            ledger.noteUnjudged(attempt);
+            throw thrown;
+        }
         ledger.noteVerdict(attempt, verdict);
         return verdict;
     }
@@ -142,7 +149,7 @@ public final class WriteAuthority {
                                      String waitPoint) {
         long intentId = intents.nextIntentId();
         WriteIntent intent = new WriteIntent(intentId, attempt.declaredWorldId(), attempt.worldId(),
-            attempt.domainId(), attempt.expectedVersion(), attempt.planOrder(),
+            attempt.domainId(), attempt.expectedVersion(), attempt.worldEpoch(), attempt.planOrder(),
             "arena:" + attempt.attemptId(), waitPoint, attempt.holderSiteId());
         IntentQueue.EnqueueResult result = intents.enqueue(intent);
         if (!result.accepted()) {

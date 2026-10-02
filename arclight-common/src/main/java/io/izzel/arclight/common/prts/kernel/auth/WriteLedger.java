@@ -29,6 +29,9 @@ public final class WriteLedger {
         private final LongAdder granted = new LongAdder();
         private final LongAdder intent = new LongAdder();
         private final LongAdder denied = new LongAdder();
+        private final LongAdder inFlight = new LongAdder();
+        private final java.util.concurrent.atomic.AtomicLong version =
+            new java.util.concurrent.atomic.AtomicLong();
 
         /** @return write attempts of this pair */
         public long attempts() {
@@ -48,6 +51,24 @@ public final class WriteLedger {
         /** @return refusals of this pair */
         public long denied() {
             return denied.sum();
+        }
+
+        /** @return attempts of this pair that were counted and not yet judged */
+        public long inFlight() {
+            return inFlight.sum();
+        }
+
+        /** @return the version of the pair, odd while a writer is inside it */
+        long version() {
+            return version.get();
+        }
+
+        private void enter() {
+            version.incrementAndGet();
+        }
+
+        private void leave() {
+            version.incrementAndGet();
         }
     }
 
@@ -75,7 +96,13 @@ public final class WriteLedger {
             readGrants.increment();
             return;
         }
-        pair(attempt.worldId(), attempt.holderSiteId()).attempts.increment();
+        Pair pair = pair(attempt.worldId(), attempt.holderSiteId());
+        // The whole update happens inside the version bracket, so a reader that sees an even version
+        // on both sides of its reads saw a pair no writer was inside.
+        pair.enter();
+        pair.inFlight.increment();
+        pair.attempts.increment();
+        pair.leave();
         if (attempt.holderKind() == HolderKind.UNREGISTERED) {
             unregisteredAttempts.increment();
         }
@@ -92,12 +119,18 @@ public final class WriteLedger {
             return;
         }
         Pair pair = pair(attempt.worldId(), attempt.holderSiteId());
+        pair.enter();
         switch (verdict.disposition()) {
             case GRANT -> pair.granted.increment();
             case INTENT -> pair.intent.increment();
             case DENY -> pair.denied.increment();
-            default -> throw new IllegalStateException("unknown disposition " + verdict.disposition());
+            default -> {
+                pair.leave();
+                throw new IllegalStateException("unknown disposition " + verdict.disposition());
+            }
         }
+        pair.inFlight.decrement();
+        pair.leave();
         if (verdict.code() != null) {
             codes.get(verdict.code()).increment();
         }
@@ -105,6 +138,26 @@ public final class WriteLedger {
             && verdict.disposition() == WriteDisposition.GRANT) {
             unregisteredGrants.increment();
         }
+    }
+
+    /**
+     * Counts an attempt that will never receive a verdict.
+     *
+     * <p>A judgement that fails before it produces a verdict - an error on the way, a caller that
+     * never returned - takes the attempt out of flight. The accounting check then sees it as a
+     * missing counter, which is what it is, instead of leaving it in flight forever where the check
+     * would politely subtract it for the rest of the process.</p>
+     *
+     * @param attempt the attempt that will not be judged
+     */
+    public void noteUnjudged(WriteAttempt attempt) {
+        if (attempt.op() == WriteOp.READ) {
+            return;
+        }
+        Pair pair = pair(attempt.worldId(), attempt.holderSiteId());
+        pair.enter();
+        pair.inFlight.decrement();
+        pair.leave();
     }
 
     /**
@@ -126,19 +179,47 @@ public final class WriteLedger {
     /**
      * Recomputes the closure of every pair.
      *
+     * <p>An attempt that was counted and not yet judged is subtracted first. A writer that is between
+     * the two updates is in flight, not missing: the check reads the closure of the pairs whose
+     * judgement has landed, so a walk that happens to run across a concurrent writer cannot record a
+     * transient state as a permanent accounting failure.</p>
+     *
      * @return {@code true} when every pair closes; a failure also counts a missing counter
      */
     public boolean verifyClosure() {
         boolean ok = true;
         for (Pair pair : pairs.values()) {
             checkedPairs.increment();
-            if (pair.attempts() != pair.granted() + pair.intent() + pair.denied()) {
+            long before = pair.version();
+            if ((before & 1L) != 0L) {
+                // A writer is inside this pair right now; that window is not a failure.
+                continue;
+            }
+            long seen = pair.granted() + pair.intent() + pair.denied();
+            long counted = pair.attempts();
+            long inFlight = pair.inFlight();
+            if (pair.version() != before) {
+                // A writer entered and left while these numbers were being read; check it next time.
+                continue;
+            }
+            // No verdict without an attempt, and every attempt that has no verdict yet is covered by
+            // the in-flight cell.
+            if (counted < seen || counted - seen > inFlight) {
                 accountingFailures.increment();
                 codes.get(RejectCode.COUNTER_MISSING).increment();
                 ok = false;
             }
         }
         return ok;
+    }
+
+    /** @return attempts that were counted and not yet judged */
+    public long inFlightAttempts() {
+        long total = 0L;
+        for (Pair pair : pairs.values()) {
+            total += pair.inFlight();
+        }
+        return total;
     }
 
     /** @return {@code true} when no closure has failed in this process */

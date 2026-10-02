@@ -23,6 +23,8 @@ import java.util.Set;
  * @param declaredDomains  domain set the job declared at planning time
  * @param observedDomains  domain set the access actually touches
  * @param expectedVersion  version the writer expects in the version slot; zero means none
+ * @param worldEpoch       generation of the target world the caller froze the attempt under; zero
+ *                         means the world lifecycle was never tracked
  * @param tickIndex        tick the attempt belongs to
  * @param planOrder        position in the order frozen at planning time
  * @param siteAdmitted     whether the site carries a complete admission record
@@ -33,7 +35,7 @@ import java.util.Set;
 public record WriteAttempt(long attemptId, HolderKind holderKind, String holderSiteId, String threadRef,
                            String worldId, String declaredWorldId, WriteLevel level, String domainId,
                            WriteOp op, Set<String> declaredDomains, Set<String> observedDomains,
-                           long expectedVersion, long tickIndex, long planOrder,
+                           long expectedVersion, long worldEpoch, long tickIndex, long planOrder,
                            boolean siteAdmitted, boolean lifecycleChange, boolean lifecycleOwner,
                            boolean wallClockRead) {
 
@@ -69,6 +71,7 @@ public record WriteAttempt(long attemptId, HolderKind holderKind, String holderS
         builder.declaredDomains = declaredDomains;
         builder.observedDomains = observedDomains;
         builder.expectedVersion = expectedVersion;
+        builder.worldEpoch = worldEpoch;
         builder.tickIndex = tickIndex;
         builder.planOrder = planOrder;
         builder.siteAdmitted = siteAdmitted;
@@ -93,6 +96,7 @@ public record WriteAttempt(long attemptId, HolderKind holderKind, String holderS
         private Set<String> declaredDomains = Set.of();
         private Set<String> observedDomains = Set.of();
         private long expectedVersion;
+        private long worldEpoch;
         private long tickIndex;
         private long planOrder;
         private boolean siteAdmitted;
@@ -132,6 +136,11 @@ public record WriteAttempt(long attemptId, HolderKind holderKind, String holderS
             return this;
         }
 
+        public Builder worldEpoch(long worldEpoch) {
+            this.worldEpoch = worldEpoch;
+            return this;
+        }
+
         public Builder tick(long tickIndex) {
             this.tickIndex = tickIndex;
             return this;
@@ -166,7 +175,7 @@ public record WriteAttempt(long attemptId, HolderKind holderKind, String holderS
         public WriteAttempt build() {
             return new WriteAttempt(attemptId, holderKind, holderSiteId, threadRef, worldId,
                 declaredWorldId, level, domainId, op, declaredDomains, observedDomains,
-                expectedVersion, tickIndex, planOrder, siteAdmitted, lifecycleChange,
+                expectedVersion, worldEpoch, tickIndex, planOrder, siteAdmitted, lifecycleChange,
                 lifecycleOwner, wallClockRead);
         }
     }

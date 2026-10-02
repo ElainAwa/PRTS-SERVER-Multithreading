@@ -139,6 +139,19 @@ public final class PrtsWaitSites {
     }
 
     /**
+     * Returns the installed watcher.
+     *
+     * <p>A tool that borrows the seam - the self check is one - reads the watcher that is installed
+     * now so it can hand exactly that one back when it is done, instead of clearing a seam the rest of
+     * the process is still observing through.</p>
+     *
+     * @return the watcher, or {@code null} when none is installed
+     */
+    public static SiteWaitTap watcher() {
+        return tap;
+    }
+
+    /**
      * Opens an observation for one site.
      *
      * @param siteIndex index of the site in {@link #SITE_IDS}

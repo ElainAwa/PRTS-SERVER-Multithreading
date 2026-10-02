@@ -30,6 +30,7 @@ import io.izzel.arclight.common.prts.kernel.waitpoints.CoverageReport;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSite;
 import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteReadings;
+import io.izzel.arclight.common.prts.support.PrtsSeams;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -91,11 +92,57 @@ public final class KernelReadings {
         add(lines, "kernel.reserve_ms", format(KernelSettings.reserveMs()));
         add(lines, "kernel.host_overhead_ms", format(KernelSettings.hostOverheadMs()));
         add(lines, "kernel.intent_queue_cap", KernelSettings.intentQueueCap());
+        add(lines, "kernel.commit_budget", KernelSettings.commitBudget());
+        add(lines, "kernel.commit_budget_max", KernelSettings.COMMIT_BUDGET_MAX);
         add(lines, "kernel.wait_bound_ms", KernelSettings.waitBoundMs());
         add(lines, "kernel.retry_budget", KernelSettings.retryBudget());
         add(lines, "kernel.self_window_ticks", KernelSettings.selfWindowTicks());
         add(lines, "kernel.self_warmup_ticks", KernelSettings.selfWarmupTicks());
         add(lines, "kernel.tick_index", module.tickIndex());
+        seams(lines);
+    }
+
+    /**
+     * Publishes every call-site seam the kernel depends on, and whether it is actually there.
+     *
+     * <p>A kernel can be enabled and its watcher installed while the bytecode that would call the
+     * watcher was never applied, because the seam is gated by a different category. The state of each
+     * declared seam is published here - the category that gates it, whether that category is on,
+     * whether the mixin plugin decided to apply it, and whether the application was seen - together
+     * with the one verdict a reader needs: whether the kernel may be judged at all.</p>
+     */
+    private static void seams(List<String> lines) {
+        List<PrtsSeams.SeamState> states = PrtsSeams.states(KernelSettings::categoryEnabled);
+        int reachable = 0;
+        int applied = 0;
+        List<String> gaps = new ArrayList<>();
+        List<String> gapCategories = new ArrayList<>();
+        for (PrtsSeams.SeamState state : states) {
+            String prefix = "kernel.seam." + state.seam().seamId() + ".";
+            add(lines, prefix + "category", state.seam().category());
+            add(lines, prefix + "category_enabled", state.categoryEnabled() ? 1 : 0);
+            add(lines, prefix + "decided", state.decisionKnown() ? (state.decidedToApply() ? 1 : 0) : -1);
+            add(lines, prefix + "applied", state.applied() ? 1 : 0);
+            add(lines, prefix + "reachable", state.reachable() ? 1 : 0);
+            if (state.reachable()) {
+                reachable++;
+            } else {
+                gaps.add(state.seam().seamId());
+                if (!gapCategories.contains(state.seam().category())) {
+                    gapCategories.add(state.seam().category());
+                }
+            }
+            if (state.applied()) {
+                applied++;
+            }
+        }
+        add(lines, "kernel.seam_declared", states.size());
+        add(lines, "kernel.seam_reachable", reachable);
+        add(lines, "kernel.seam_applied", applied);
+        add(lines, "kernel.seam_gap", gaps.size());
+        add(lines, "kernel.seam_gap_list", join(gaps));
+        add(lines, "kernel.seam_gap_categories", join(gapCategories));
+        add(lines, "kernel.judgeable", KernelSettings.enabled() && gaps.isEmpty() ? 1 : 0);
     }
 
     private static void writeRights(List<String> lines, KernelModule module) {
@@ -110,6 +157,7 @@ public final class KernelReadings {
         add(lines, "write.accounting_ok", ledger.accountingOk() ? 1 : 0);
         add(lines, "write.accounting_checked", ledger.checkedPairs());
         add(lines, "write.accounting_failures", ledger.accountingFailures());
+        add(lines, "write.accounting_in_flight", ledger.inFlightAttempts());
         add(lines, "write.closure_pairs", ledger.pairCount());
         add(lines, "site.registry_entries", ledger.pairCount());
         add(lines, "site.registry_growth", 0);
@@ -174,7 +222,14 @@ public final class KernelReadings {
         add(lines, "write.payload_threw", guard.payloads().threwCount());
         add(lines, "write.payload_unbound", guard.payloads().unboundCount());
         add(lines, "write.payload_dropped", guard.payloads().droppedCount());
+        add(lines, "write.payload_abandoned", guard.payloads().abandonedCount());
         add(lines, "write.payload_pending", guard.payloads().pendingCount());
+        add(lines, "write.payload_world_stale", guard.staleWorldRefusals());
+        add(lines, "write.commit_foreign_thread", guard.foreignCommits());
+        add(lines, "write.world_epochs_tracked", guard.worldEpochs().tracking() ? 1 : 0);
+        add(lines, "write.world_epochs_live", guard.worldEpochs().liveWorlds());
+        add(lines, "write.world_epochs_changes", guard.worldEpochs().epochChanges());
+        add(lines, "write.path_accounting_in_flight", counters.inFlightAttempts());
     }
 
     private static void intentQueue(List<String> lines, KernelModule module) {
@@ -195,6 +250,24 @@ public final class KernelReadings {
         add(lines, "intent.commit_steps", segment.steps());
         add(lines, "intent.commit_cursor", segment.cursor());
         add(lines, "intent.commit_refusals", segment.refusals());
+        add(lines, "intent.released", intents.releasedCount());
+        add(lines, "intent.retry_exhausted", intents.retryExhaustedCount());
+        add(lines, "intent.retry_budget", intents.retryBudget());
+        add(lines, "intent.shards", intents.shardCount());
+        add(lines, "intent.commit_released", segment.released());
+        add(lines, "intent.commit_foreign_thread", segment.foreignRuns());
+        add(lines, "intent.commit_owner_bound", segment.ownerBound() ? 1 : 0);
+        add(lines, "intent.commit_owner_conflicts", segment.ownerConflicts());
+        add(lines, "intent.commit_budget", segment.lastBudget());
+        add(lines, "intent.commit_budget_stops", segment.budgetStops());
+        add(lines, "intent.commit_last_steps", segment.lastSteps());
+        add(lines, "intent.commit_last_pending", segment.lastPending());
+        add(lines, "intent.commit_last_truncated", segment.lastTruncated() ? 1 : 0);
+        for (String world : intents.worlds()) {
+            String prefix = "intent.world." + safe(world) + ".";
+            add(lines, prefix + "depth", intents.depth(world));
+            add(lines, prefix + "cursor", segment.cursor(world));
+        }
     }
 
     private static void tokens(List<String> lines, KernelModule module) {
@@ -204,6 +277,7 @@ public final class KernelReadings {
         add(lines, "token.released", owners.releasedCount());
         add(lines, "token.expired_reclaimed", owners.expiredReclaimedCount());
         add(lines, "token.double_holder", owners.doubleHolderCount());
+        add(lines, "token.reclaim_passes", owners.reclaimPasses());
     }
 
     private static void rejectCodes(List<String> lines, KernelModule module) {

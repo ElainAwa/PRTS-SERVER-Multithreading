@@ -38,10 +38,11 @@ public abstract class PrtsCraftBlockWriteTapMixin {
         cancellable = true)
     private void prts$admitPlatformBlockWrite(BlockData data, boolean applyPhysics, CallbackInfo ci) {
         ServerLevel level = getCraftWorld().getHandle();
-        if (PrtsWorldWriteTaps.classifyBlockWrite(level) == PrtsWorldWriteTaps.BlockWriteTap.PASS) {
+        PrtsWorldWriteTaps.Decision decision = PrtsWorldWriteTaps.beginBlockWrite(level);
+        if (!decision.judge()) {
             return;
         }
-        if (!PrtsWorldWriteTaps.admitBlockWrite(level, level.dimension().location().toString(),
+        if (!decision.admit(level, level.dimension().location().toString(),
             new PrtsDeferredPlatformWrite((CraftBlock) (Object) this, data, applyPhysics))) {
             ci.cancel();
         }

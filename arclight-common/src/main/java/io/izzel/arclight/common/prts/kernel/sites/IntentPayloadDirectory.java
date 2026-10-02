@@ -15,10 +15,12 @@ import java.util.concurrent.atomic.LongAdder;
  * Holds the writes that were handed over, so the commit segment can apply them in order.
  *
  * <p>A deferred write is stored under the handle its intent carries. A successful application consumes
- * it exactly once; a write whose action reports that it did not land, or throws, remains pending so the
- * queue can retry it instead of retaining an unprocessable intent head with no payload. A handle nobody
- * registered, and a write that ultimately reports failure, are both refusals with a code - never a quiet
- * success.</p>
+ * it exactly once; a write whose action reports that it did not land, or throws, remains pending and
+ * its refusal is marked retryable, so the channel may offer it again until the retry budget is spent.
+ * A handle nobody registered is a final refusal - there is nothing left to retry - and the channel
+ * releases the intent instead of keeping a head that can never land. A handle the channel released is
+ * forgotten here as well, so the store does not keep a write for an intent nobody will ever reach
+ * again.</p>
  */
 public final class IntentPayloadDirectory implements IntentPayload {
 
@@ -29,6 +31,7 @@ public final class IntentPayloadDirectory implements IntentPayload {
     private final LongAdder threw = new LongAdder();
     private final LongAdder unbound = new LongAdder();
     private final LongAdder dropped = new LongAdder();
+    private final LongAdder abandoned = new LongAdder();
 
     /**
      * Stores a deferred write and returns the handle its intent carries.
@@ -55,25 +58,31 @@ public final class IntentPayloadDirectory implements IntentPayload {
     }
 
     @Override
-    public synchronized RejectCode apply(WriteIntent intent) {
+    public synchronized Outcome apply(WriteIntent intent) {
         PrtsWorldWriteTaps.DeferredWrite write = pending.get(intent.payloadHandle());
         if (write == null) {
             unbound.increment();
-            return RejectCode.NATIVE_UNDECLARED;
+            return Outcome.rejected(RejectCode.NATIVE_UNDECLARED);
         }
         try {
             if (!write.apply()) {
                 failed.increment();
-                return RejectCode.VERSION_MISMATCH;
+                return Outcome.retryable(RejectCode.VERSION_MISMATCH);
             }
         } catch (Throwable thrown) {
-            // Keep the payload paired with the queue head so a transient failure can be retried.
             this.threw.increment();
-            return RejectCode.VERSION_MISMATCH;
+            return Outcome.retryable(RejectCode.VERSION_MISMATCH);
         }
         pending.remove(intent.payloadHandle());
         applied.increment();
-        return null;
+        return Outcome.APPLIED;
+    }
+
+    @Override
+    public synchronized void release(WriteIntent intent) {
+        if (intent != null && pending.remove(intent.payloadHandle()) != null) {
+            abandoned.increment();
+        }
     }
 
     /** @return deferred writes that were applied */
@@ -99,6 +108,11 @@ public final class IntentPayloadDirectory implements IntentPayload {
     /** @return deferred writes dropped before they were enqueued */
     public long droppedCount() {
         return dropped.sum();
+    }
+
+    /** @return deferred writes forgotten because the channel released their intent */
+    public long abandonedCount() {
+        return abandoned.sum();
     }
 
     /** @return deferred writes still waiting for their commit */

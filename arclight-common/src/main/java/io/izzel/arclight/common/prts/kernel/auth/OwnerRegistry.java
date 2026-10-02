@@ -24,6 +24,7 @@ public final class OwnerRegistry {
     private final AtomicLong acquired = new AtomicLong();
     private final AtomicLong released = new AtomicLong();
     private final AtomicLong expiredReclaimed = new AtomicLong();
+    private final AtomicLong reclaimPasses = new AtomicLong();
     private final AtomicLong doubleHolder = new AtomicLong();
 
     /**
@@ -84,6 +85,7 @@ public final class OwnerRegistry {
      * @return the number of reclaimed tokens, also added to the readout
      */
     public int reclaimExpired(long tickIndex) {
+        reclaimPasses.incrementAndGet();
         int reclaimed = 0;
         for (Map.Entry<OwnershipDomain, OwnerToken> entry : tokens.entrySet()) {
             if (!entry.getValue().expiredAt(tickIndex)) {
@@ -122,6 +124,19 @@ public final class OwnerRegistry {
     /** @return tokens reclaimed because they expired */
     public long expiredReclaimedCount() {
         return expiredReclaimed.get();
+    }
+
+    /**
+     * Returns how often the expiry sweep ran.
+     *
+     * <p>Reclaiming belongs to the write-right lifecycle and not to the observation of it, so this
+     * count keeps moving while the metering switches are off; a readout that shows it standing still
+     * is showing that the kernel is not being driven at all.</p>
+     *
+     * @return sweeps since the process started
+     */
+    public long reclaimPasses() {
+        return reclaimPasses.get();
     }
 
     /** @return acquisitions refused because another holder was still valid; must stay zero */

@@ -27,8 +27,26 @@ public final class PrtsDeferredPlatformWrite implements PrtsWorldWriteTaps.Defer
      */
     public PrtsDeferredPlatformWrite(CraftBlock block, BlockData data, boolean applyPhysics) {
         this.block = block;
-        this.data = data;
+        this.data = copyOf(data);
         this.applyPhysics = applyPhysics;
+    }
+
+    /**
+     * Copies the data a platform write will perform.
+     *
+     * <p>A caller that reuses or edits its {@code BlockData} after handing the write over must not
+     * change what the commit segment writes, so the deferred write keeps a copy of its own.</p>
+     *
+     * @param data the data the caller handed over
+     * @return a copy of it
+     */
+    public static BlockData copyOf(BlockData data) {
+        return data.clone();
+    }
+
+    /** @return the copy of the data this write will perform */
+    public BlockData data() {
+        return data;
     }
 
     @Override

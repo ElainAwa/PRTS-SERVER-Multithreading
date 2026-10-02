@@ -64,8 +64,11 @@ public final class KernelSettings {
     /** Fixed part of the budget the classes may never borrow. */
     public static final String HOST_OVERHEAD_MS = "host-overhead-ms";
 
-    /** Depth at which the intent channel refuses instead of queueing. */
+    /** Depth at which one world's intent shard refuses instead of queueing. */
     public static final String INTENT_QUEUE_CAP = "intent-queue-cap";
+
+    /** How many intents one tick's commit walk may reach. */
+    public static final String COMMIT_BUDGET = "commit-budget";
 
     /** Upper bound of one wait, in milliseconds. */
     public static final String WAIT_BOUND_MS = "wait-bound-ms";
@@ -73,7 +76,31 @@ public final class KernelSettings {
     /** Number of retries one attempt carries before a refusal is final. */
     public static final String RETRY_BUDGET = "retry-budget";
 
+    /** Upper bound the channel depth is clamped to, whatever the file says. */
+    public static final int INTENT_QUEUE_CAP_MAX = 65536;
+
+    /** Upper bound the commit budget is clamped to, whatever the file says. */
+    public static final int COMMIT_BUDGET_MAX = 4096;
+
     private KernelSettings() {
+    }
+
+    /**
+     * Returns whether one PRTS category is enabled.
+     *
+     * <p>A piece of the kernel can be gated by a category other than its own - the call-site seams
+     * live in the correctness-fixes category - so a reader that wants to know whether such a seam is
+     * even in the bytecode asks the category switch through here.</p>
+     *
+     * @param category the category name
+     * @return {@code true} when that category is enabled
+     */
+    public static boolean categoryEnabled(String category) {
+        try {
+            return PrtsSwitches.enabled(category);
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     /**
@@ -154,9 +181,31 @@ public final class KernelSettings {
         return number(HOST_OVERHEAD_MS);
     }
 
-    /** @return the intent channel depth at which it refuses */
+    /** @return the intent channel depth at which one world's shard refuses */
     public static int intentQueueCap() {
-        return number(INTENT_QUEUE_CAP);
+        return clamp(number(INTENT_QUEUE_CAP), 1, INTENT_QUEUE_CAP_MAX);
+    }
+
+    /** @return how many intents one tick's commit walk may reach */
+    public static int commitBudget() {
+        return clamp(number(COMMIT_BUDGET), 1, COMMIT_BUDGET_MAX);
+    }
+
+    /**
+     * Clamps one whole-number setting into its accepted range.
+     *
+     * <p>The configuration layer already clamps what it reads against the declared range; this is the
+     * second bound, at the point a piece of the kernel turns the setting into work. A depth limit and
+     * a per-tick budget are what keep one tick from doing an unbounded amount of synchronous work, so
+     * neither of them is ever used unclamped.</p>
+     *
+     * @param value the value read from the configuration layer
+     * @param low   lower bound, applied first
+     * @param high  upper bound
+     * @return the value inside the range
+     */
+    public static int clamp(int value, int low, int high) {
+        return Math.min(high, Math.max(low, value));
     }
 
     /** @return the upper bound of one wait, in milliseconds */

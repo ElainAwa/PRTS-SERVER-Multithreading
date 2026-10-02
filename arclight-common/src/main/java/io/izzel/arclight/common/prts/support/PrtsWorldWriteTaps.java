@@ -68,26 +68,48 @@ public final class PrtsWorldWriteTaps {
     }
 
     /**
-     * Probes a block write.
+     * Opens one decision against the watcher that answers the fast question.
+     *
+     * <p>The watcher is read once, here, and the handle that comes back carries it. A configuration
+     * reload that removes or replaces the watcher between the fast question and the slow path
+     * therefore cannot change which watcher judges the write: the handle decides, either with the
+     * watcher that admitted the attempt or with no watcher at all, and never with a third one that
+     * happened to be installed in between.</p>
      *
      * @param levelRef the level the write targets
-     * @return {@link BlockWriteTap#PASS} when the write may pass at once, otherwise the slow path
+     * @return the handle of this decision
      */
-    public static int classifyBlockWrite(Object levelRef) {
+    public static Decision beginBlockWrite(Object levelRef) {
         BlockWriteTap tap = blockWriteTap;
-        return tap == null ? BlockWriteTap.PASS : tap.classifyBlockWrite(levelRef);
+        return new Decision(tap, tap == null ? BlockWriteTap.PASS : tap.classifyBlockWrite(levelRef));
     }
 
-    /**
-     * Judges a block write on the slow path.
-     *
-     * @param levelRef the level the write targets
-     * @param worldId  readable identity of that level
-     * @param deferred the write itself, applied later when it is handed over
-     * @return {@code true} when the write may proceed now
-     */
-    public static boolean admitBlockWrite(Object levelRef, String worldId, DeferredWrite deferred) {
-        BlockWriteTap tap = blockWriteTap;
-        return tap == null || tap.admitBlockWrite(levelRef, worldId, deferred);
+    /** One write decision, bound to the watcher that answered its fast question. */
+    public static final class Decision {
+
+        private final BlockWriteTap tap;
+        private final int verdict;
+
+        private Decision(BlockWriteTap watcher, int verdict) {
+            this.tap = watcher;
+            this.verdict = verdict;
+        }
+
+        /** @return whether the caller has to run the slow path */
+        public boolean judge() {
+            return verdict != BlockWriteTap.PASS;
+        }
+
+        /**
+         * Judges the write on the slow path.
+         *
+         * @param levelRef the level the write targets
+         * @param worldId  readable identity of that level
+         * @param deferred the write itself, applied later when it is handed over
+         * @return {@code true} when the write may proceed now
+         */
+        public boolean admit(Object levelRef, String worldId, DeferredWrite deferred) {
+            return tap == null || tap.admitBlockWrite(levelRef, worldId, deferred);
+        }
     }
 }

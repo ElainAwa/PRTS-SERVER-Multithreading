@@ -231,9 +231,12 @@ public final class PrtsConfigManager {
                 + "# one world inside it, 'reserve-ms' is the single column only a forced\n"
                 + "# materialization or a migration wait may draw from, and 'host-overhead-ms' is the\n"
                 + "# part the class rows may not borrow.\n"
-                + "# 'intent-queue-cap' is the depth at which the intent channel refuses instead of\n"
-                + "# growing, 'wait-bound-ms' is the upper bound of one wait, and 'retry-budget' is\n"
-                + "# how many retries one attempt carries before a refusal is final."));
+                + "# 'intent-queue-cap' is the depth at which one world's intent shard refuses instead\n"
+                + "# of growing and 'commit-budget' is how many intents one tick's commit walk may\n"
+                + "# reach, so a large queue cannot turn one tick into a long synchronous drain.\n"
+                + "# 'wait-bound-ms' is the upper bound of one wait, and 'retry-budget' is how many\n"
+                + "# retries one failing intent carries before its refusal is final and the channel\n"
+                + "# releases it."));
     }
 
     /**
@@ -321,6 +324,7 @@ public final class PrtsConfigManager {
         numbers.put("reserve-ms", new IntSetting(4, 0, 500));
         numbers.put("host-overhead-ms", new IntSetting(2, 0, 500));
         numbers.put("intent-queue-cap", new IntSetting(256, 1, 65536));
+        numbers.put("commit-budget", new IntSetting(64, 1, 4096));
         numbers.put("wait-bound-ms", new IntSetting(50, 1, 60000));
         numbers.put("retry-budget", new IntSetting(2, 0, 16));
         return numbers;

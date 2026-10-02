@@ -46,10 +46,11 @@ public abstract class PrtsLevelStructureGrowCaptureMixin {
      */
     private boolean prts$admitWorldWrite(BlockPos pos, BlockState state, int flags, int recursionLeft) {
         Level level = (Level) (Object) this;
-        if (PrtsWorldWriteTaps.classifyBlockWrite(level) == PrtsWorldWriteTaps.BlockWriteTap.PASS) {
+        PrtsWorldWriteTaps.Decision decision = PrtsWorldWriteTaps.beginBlockWrite(level);
+        if (!decision.judge()) {
             return true;
         }
-        return PrtsWorldWriteTaps.admitBlockWrite(level, level.dimension().location().toString(),
+        return decision.admit(level, level.dimension().location().toString(),
             new PrtsDeferredLevelWrite(level, pos, state, flags, recursionLeft));
     }
 

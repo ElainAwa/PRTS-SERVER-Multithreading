@@ -35,9 +35,15 @@ import java.util.Map;
  * has passed. It occupies no world write path and no lock, and the platform subscriber exists only
  * while the kernel category is on.</p>
  *
+ * <p>Reclaiming an expired owner token belongs to the write-right lifecycle, not to the observation
+ * of it: it runs on every driven tick whether or not the self timers are on, so a token can never
+ * outlive its expiry just because an operator turned a metering switch off.</p>
+ *
  * <p>The one world write the module can perform is the commit segment: it walks the intent channel
  * and applies what a routed write was deferred into. Its switch is off by default, and while it is
- * off the module only observes - nothing is consumed from the channel and no deferred write lands.</p>
+ * off the module only observes - nothing is consumed from the channel and no deferred write lands.
+ * The walk belongs to the thread that drives the tick, and the segment carries that thread, so a
+ * worker that reaches the segment is refused instead of draining the channel.</p>
  *
  * <p>The only clock read here is the one that measures the driver itself, so the cost of the
  * observation can be published as a row of its own. Planning reads the tick index and the metered
@@ -61,9 +67,10 @@ public final class KernelModule {
     private static final String SERVER_SITE = "host:server-thread";
 
     private final OwnerRegistry owners = new OwnerRegistry();
-    private final IntentQueue intents = new IntentQueue(KernelSettings::intentQueueCap);
+    private final IntentQueue intents = new IntentQueue(KernelSettings::intentQueueCap,
+        KernelSettings::retryBudget);
     private final CommitSegment commitSegment = new CommitSegment(intents,
-        KernelSettings::commitIntents, intents::capacity);
+        KernelSettings::commitIntents, KernelSettings::commitBudget);
     private final WriteLedger ledger = new WriteLedger();
     private final WritePathCounters pathCounters = new WritePathCounters();
     private final IntentPayloadDirectory payloads = new IntentPayloadDirectory();
@@ -110,25 +117,30 @@ public final class KernelModule {
             started = true;
             windowStartTick = tickIndex;
         }
+        commitSegment.bindOwnerThread(Thread.currentThread());
         if (!guard.serverThreadBound()) {
             guard.bindServerThread(Thread.currentThread(), SERVER_SITE);
         }
+        guard.noteLiveWorlds(worldIds);
         guard.refresh(KernelSettings.writePathGuard(),
             KernelSettings.enforceUnregisteredWrites(),
             KernelSettings.routeUnregisteredWrites(), tickIndex);
         syncWaitSiteTap(KernelSettings.waitRegistry());
         commitSegment.run(tickIndex);
-        if (KernelSettings.selfTimers()) {
-            owners.reclaimExpired(tickIndex);
-        }
+        owners.reclaimExpired(tickIndex);
         if (KernelSettings.shareTable()) {
             planBudget(worldIds);
+        } else {
+            SelfTimers.discardTickTotals();
         }
         if (KernelSettings.selfTimers()) {
             publishWindowIfDue();
         }
         ledger.verifyClosure();
-        SelfTimers.note(SelfClass.OBSERVE, RUNTIME_WORLD, "runtime", System.nanoTime() - startedAt);
+        if (KernelSettings.selfTimers()) {
+            SelfTimers.note(SelfClass.OBSERVE, RUNTIME_WORLD, "runtime",
+                System.nanoTime() - startedAt);
+        }
     }
 
     /**
@@ -159,6 +171,21 @@ public final class KernelModule {
     /** Removes the wait observation watcher. */
     public void removeWaitSiteTap() {
         syncWaitSiteTap(false);
+    }
+
+    /**
+     * Puts the wait observation seam back to the watcher the configuration asks for.
+     *
+     * <p>A tool that borrows the seam - the self check is one - hands it back here instead of leaving
+     * the process with whatever it installed last: the module forgets what it believed was installed
+     * and installs the configured watcher again, so a borrowed seam cannot silently end the
+     * observation of the twenty real call sites.</p>
+     */
+    public synchronized void resyncWaitSiteTap() {
+        // What is installed now is read first: a tool that handed the seam back leaves the module
+        // agreeing with it instead of installing its own watcher over a seam somebody else owns.
+        waitSiteTapInstalled = PrtsWaitSites.watcher() == waitSites;
+        syncWaitSiteTap(KernelSettings.enabled() && KernelSettings.waitRegistry());
     }
 
     private void syncWaitSiteTap(boolean wanted) {

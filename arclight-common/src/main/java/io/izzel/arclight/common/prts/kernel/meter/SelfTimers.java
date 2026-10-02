@@ -6,9 +6,8 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -19,6 +18,11 @@ import java.util.concurrent.atomic.LongAdder;
  * and no virtual call on the recording path. A thread registers itself the first time it meters,
  * and the publication walks the registered meters; a sample taken while a window is being published
  * may land in either window, which is acceptable for a readout nothing decides on.</p>
+ *
+ * <p>The registry and the per-thread world lists are copy-on-write, so the meters a worker registers
+ * while it works are visible to the publication without the publication needing the worker to stop,
+ * and a walk over them can never meet a list that changed under it. Nothing here decides anything: a
+ * failure of the timer must not change what the server does.</p>
  *
  * <p>Wait time does not belong here. It accumulates next to the classes, and the reader can see
  * that no class received it. Time spent in the observation itself is a row of its own, so the
@@ -33,7 +37,7 @@ public final class SelfTimers {
     public static final int RING = 256;
 
     private static final ThreadLocal<ThreadMeters> METERS = ThreadLocal.withInitial(ThreadMeters::new);
-    private static final Queue<ThreadMeters> ALL = new ConcurrentLinkedQueue<>();
+    private static final List<ThreadMeters> ALL = new CopyOnWriteArrayList<>();
     private static final WaitCounters WAITS = new WaitCounters();
 
     private SelfTimers() {
@@ -143,6 +147,23 @@ public final class SelfTimers {
         return totals;
     }
 
+    /**
+     * Drops the per-world tick totals without publishing them.
+     *
+     * <p>Callers use this while the share table is off: the timer keeps adding to the tick totals on
+     * its recording path, and a table that is turned back on must not inherit the ticks of the whole
+     * time it was off as the work of one tick.</p>
+     */
+    public static void discardTickTotals() {
+        for (ThreadMeters meters : ALL) {
+            for (WorldMeters world : meters.worlds) {
+                for (SelfTimer meter : world.meters) {
+                    meter.clearTick();
+                }
+            }
+        }
+    }
+
     /** Clears every counter. Used by the readout reset and by tests, never by the scheduler. */
     public static void resetAll() {
         for (ThreadMeters meters : ALL) {
@@ -248,7 +269,7 @@ public final class SelfTimers {
     /** Meters of one thread, owned by that thread. */
     private static final class ThreadMeters {
 
-        private final List<WorldMeters> worlds = new ArrayList<>(2);
+        private final List<WorldMeters> worlds = new CopyOnWriteArrayList<>();
 
         private ThreadMeters() {
             ALL.add(this);

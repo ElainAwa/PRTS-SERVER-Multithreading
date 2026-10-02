@@ -31,10 +31,18 @@ public final class PrtsDeferredLevelWrite implements PrtsWorldWriteTaps.Deferred
     public PrtsDeferredLevelWrite(Level level, BlockPos pos, BlockState state, int flags,
                                   int recursionLeft) {
         this.level = level;
-        this.pos = pos;
+        // The caller keeps its own position object - a mutable one on many world-side paths - so the
+        // snapshot is taken here: what is written later is the position the write was frozen at, not
+        // whatever the caller moved it to afterwards.
+        this.pos = pos.immutable();
         this.state = state;
         this.flags = flags;
         this.recursionLeft = recursionLeft;
+    }
+
+    /** @return the position the write was frozen at, as an immutable snapshot */
+    public BlockPos position() {
+        return pos;
     }
 
     @Override

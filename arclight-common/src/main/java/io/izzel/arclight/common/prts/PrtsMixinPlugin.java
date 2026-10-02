@@ -3,6 +3,7 @@ package io.izzel.arclight.common.prts;
 
 import io.izzel.arclight.common.mod.mixins.ShouldApplyProcessor;
 import io.izzel.arclight.common.prts.support.PrtsBukkitVersionPatcher;
+import io.izzel.arclight.common.prts.support.PrtsSeams;
 import org.objectweb.asm.tree.ClassNode;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigPlugin;
 import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
@@ -62,7 +63,13 @@ public class PrtsMixinPlugin implements IMixinConfigPlugin {
         // A category member that declares a platform is dropped on the other platform, the same way
         // the shared configuration does it. The class is then never loaded, so a member may refer to
         // a type only its own platform has.
-        return PrtsSwitches.enabled(this.category) && ShouldApplyProcessor.shouldApply(mixinClassName);
+        boolean apply = PrtsSwitches.enabled(this.category)
+            && ShouldApplyProcessor.shouldApply(mixinClassName);
+        // A seam the kernel reaches a real call site through is gated here and nowhere else, so the
+        // answer is recorded: a kernel whose seam was refused can say so instead of publishing a
+        // green readout over a call site that never reaches it.
+        PrtsSeams.noteDecision(mixinClassName, apply);
+        return apply;
     }
 
     @Override
@@ -80,6 +87,7 @@ public class PrtsMixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public void postApply(String targetClassName, ClassNode targetClass, String mixinClassName, IMixinInfo mixinInfo) {
+        PrtsSeams.noteApplied(mixinClassName);
         // Some API members cannot be expressed as a mixin, a static method on a facade for
         // example, so they are written into the target right here: the last point where the
         // transformed type is still open for changes.
