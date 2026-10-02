@@ -23,8 +23,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The write-back leg: one intent per committed batch, in the frozen order, tagged with the batch it
- * carries, drained by the commit segment and read back from the world afterwards.
+ * The takeover settlement of the write-back leg: one intent per committed batch, in the frozen order,
+ * tagged with the batch it carries, drained by the commit segment and read back from the world
+ * afterwards. The opt-in switch is what makes a batch take that path; the default settlement is
+ * compute-only and is pinned in {@link DispatchAgreementTest}.
  */
 class DispatchWriteBackTest {
 
@@ -49,7 +51,7 @@ class DispatchWriteBackTest {
                 String handle = prefix + ":" + handles.incrementAndGet();
                 store.put(handle, write);
                 return handle;
-            }, store::remove, world -> 7L, readings);
+            }, store::remove, world -> 7L, readings, () -> true);
         WorkPlan plan = WorkPlan.freeze(TICK, 1L, List.of(view(8)), 4, 1L);
         WorkerPool pool = pool(readings, arena, 8);
         try {
@@ -103,7 +105,7 @@ class DispatchWriteBackTest {
                 String handle = prefix + ":" + handles.incrementAndGet();
                 store.put(handle, write);
                 return handle;
-            }, store::remove, world -> 1L, readings);
+            }, store::remove, world -> 1L, readings, () -> true);
         WorkPlan plan = WorkPlan.freeze(TICK, 1L, List.of(view(4)), 4, 1L);
         WorkerPool pool = pool(readings, arena, 4);
         try {
@@ -151,7 +153,7 @@ class DispatchWriteBackTest {
                 String handle = prefix + ":" + handles.incrementAndGet();
                 store.put(handle, write);
                 return handle;
-            }, store::remove, world -> 1L, readings);
+            }, store::remove, world -> 1L, readings, () -> true);
         WorkPlan plan = WorkPlan.freeze(TICK, 1L, List.of(view(8)), 4, 1L);
         WorkerPool pool = pool(readings, arena, 8);
         try {
@@ -181,7 +183,7 @@ class DispatchWriteBackTest {
             (prefix, write) -> {
                 store.put(prefix + ":1", write);
                 return prefix + ":1";
-            }, store::remove, world -> 0L, readings);
+            }, store::remove, world -> 0L, readings, () -> true);
         List<StateHasher.Slice> row = List.of(new StateHasher.Slice("no-such-world", "r0.0", 1L,
             5L, 1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0L, 0L, 0L));
 

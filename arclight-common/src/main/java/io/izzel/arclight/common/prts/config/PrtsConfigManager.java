@@ -255,7 +255,13 @@ public final class PrtsConfigManager {
                 + "# and velocity are bit-identical to what the world already holds (the host path's\n"
                 + "# own result for that tick) - an agreeing row is counted and left untouched, a\n"
                 + "# differing row stays with the host path. The open tier changes no host semantics\n"
-                + "# only in that mode."));
+                + "# only in that mode.\n"
+                + "# 'dispatch-takeover: false' keeps the domain compute-only: the merge settles a batch\n"
+                + "# by reading the world back in the same tick and counting which rows the host path\n"
+                + "# itself produced, and it lands nothing, so every position, orientation and velocity\n"
+                + "# stays with the host. On, the leg hands the batch to the intent channel and the\n"
+                + "# commit segment lands it - the tier the controlled three-probe comparison registered\n"
+                + "# as a semantic deviation (registration M4-OPEN), reachable only by this opt-in."));
     }
 
     /**
@@ -323,6 +329,7 @@ public final class PrtsConfigManager {
         features.put("route-unregistered-writes", false);
         features.put("dispatch-parallel", false);
         features.put("dispatch-identical-only", false);
+        features.put("dispatch-takeover", false);
         return features;
     }
 

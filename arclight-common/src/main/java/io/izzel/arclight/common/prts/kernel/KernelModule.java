@@ -113,7 +113,8 @@ public final class KernelModule {
     private final DiffProbe diffProbe = new DiffProbe();
     private final MergeSegment mergeSegment = new MergeSegment();
     private final DispatchWriteBack dispatchWriteBack = new DispatchWriteBack(intents, payloads::bind,
-        payloads::drop, guard.worldEpochs()::epochOf, dispatchReadings);
+        payloads::drop, guard.worldEpochs()::epochOf, dispatchReadings,
+        KernelSettings::dispatchTakeover);
     private final Map<String, Long> dispatchWorldEpochs = new HashMap<>();
     private final Set<String> dispatchLiveWorlds = new HashSet<>();
 
@@ -308,15 +309,15 @@ public final class KernelModule {
      * Answers whether the commit segment may walk this tick.
      *
      * <p>The switch that walks the channel is the one that already existed, read through the line
-     * the dispatcher adds to it: a write-back the merge froze has to land, or the values a worker
-     * computed would sit in the channel forever while the frame hash said they were committed. With
-     * the dispatcher off the expression is exactly the old switch, so an operator who never turns the
-     * dispatcher on sees the same behaviour with the same configuration.</p>
+     * the takeover tier adds to it: a write-back the merge handed over has to land, or the values a
+     * worker computed would sit in the channel forever while the frame hash said they were committed.
+     * The compute-only tier - the default - hands nothing over, so it does not make the segment walk;
+     * with the dispatcher off the expression is exactly the old switch.</p>
      *
      * @return {@code true} when a deferred write may be applied this tick
      */
     private static boolean commitWanted() {
-        return KernelSettings.commitIntents() || KernelSettings.dispatchParallel();
+        return KernelSettings.commitIntents() || KernelSettings.dispatchTakeover();
     }
 
     /** @return the entity row of the self timer, in milliseconds */

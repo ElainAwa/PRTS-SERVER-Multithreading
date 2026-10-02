@@ -17,18 +17,27 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.BiFunction;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
- * The write-back leg of the merge: what a worker computed becomes a write the commit segment lands.
+ * The write-back leg of the merge: it settles what a worker computed at the commit point.
  *
- * <p>The merge never writes the world. For every batch of the frozen order it builds one payload out
- * of the values it just read and hands it to the intent channel under the identity of that batch, so
- * the order the channel freezes is the order the plan froze and the commit segment - the only drainer
- * of the channel, owned by the server thread - is what applies the values. A batch that had to be
- * redone on the tick thread produces its payload in the same position, so a fallback changes who
- * computed the values and never whether they land.</p>
+ * <p>There are two settlements and the tier decides which one runs. Compute-only - the default - reads
+ * the world back in the tick the frame belongs to and counts how many rows the host path itself
+ * produced; it lands nothing, so the position, orientation and velocity of every entity stay with the
+ * host and the domain cannot move the state it froze. Takeover - the opt-in tier - builds one payload
+ * per batch out of the values the merge read and hands it to the intent channel under the identity of
+ * that batch, so the order the channel freezes is the order the plan froze and the commit segment -
+ * the only drainer of the channel, owned by the server thread - is what applies the values. A batch
+ * that had to be redone on the tick thread is settled in the same position, so a fallback changes who
+ * computed the values and never whether they are settled.</p>
+ *
+ * <p>Whichever settlement runs, it runs on the thread that owns the tick and inside the merge of the
+ * tick the frame belongs to: no value a worker computed from one tick's view is ever written in a
+ * later tick, and a result that is not ready falls back to the tick thread's own computation before
+ * the merge commits the batch.</p>
  *
  * <p>The read back is the other half: at the next commit boundary the world is asked what it holds
  * for the rows the previous frame committed, and the answer is hashed with the same fold and the same
@@ -62,6 +71,7 @@ public final class DispatchWriteBack {
     private final Consumer<String> drop;
     private final Function<String, Long> worldEpoch;
     private final DispatchReadings readings;
+    private final BooleanSupplier takeover;
     private volatile String sample = "readback=none";
 
     /**
@@ -77,16 +87,108 @@ public final class DispatchWriteBack {
      * @param drop       forgets a payload that was never enqueued
      * @param worldEpoch answers the generation of a world, as the world lifecycle tracks it
      * @param readings   where the leg publishes
+     * @param takeover   answers whether this settlement may land the values, read per merge so a
+     *                   reload applies without a restart
      */
     public DispatchWriteBack(IntentQueue intents,
                              BiFunction<String, PrtsWorldWriteTaps.DeferredWrite, String> bind,
                              Consumer<String> drop, Function<String, Long> worldEpoch,
-                             DispatchReadings readings) {
+                             DispatchReadings readings, BooleanSupplier takeover) {
         this.intents = intents;
         this.bind = bind;
         this.drop = drop;
         this.worldEpoch = worldEpoch;
         this.readings = readings;
+        this.takeover = takeover;
+    }
+
+    /**
+     * Settles one batch of the frozen order at the commit point.
+     *
+     * <p>This is the one call the merge makes: the tier decides whether the values become a write the
+     * commit segment lands or a read back of the world that lands nothing. It runs in the merge of the
+     * tick the frame belongs to either way, so the settlement never carries a value across a tick.</p>
+     *
+     * @param batch the batch the values belong to
+     * @param rows  the committed rows of that batch, in the frozen order
+     * @return whether the values were handed to the intent channel
+     */
+    public boolean settle(WorkBatch batch, List<StateHasher.Slice> rows) {
+        if (takeover()) {
+            enqueue(batch, rows);
+            return true;
+        }
+        agree(rows);
+        return false;
+    }
+
+    /** @return whether this settlement may land the values it was handed */
+    public boolean takeover() {
+        try {
+            return takeover != null && takeover.getAsBoolean();
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * Settles one batch by reading the world back in the same tick and landing nothing.
+     *
+     * <p>Every row is compared with what the entity holds right now, bit for bit: a row the host
+     * already holds is the host path's own result for this tick and is counted as produced by both
+     * arms, and a row that differs is counted and stays with the host path. Neither branch calls a
+     * setter, so this settlement cannot move an entity - which is what makes the compute-only tier
+     * bit-identical with the host: the domain observes, it never owns the state.</p>
+     *
+     * <p>The read back is taken in the tick the frame belongs to and before the next tick's systems
+     * observe anything, which is the boundary that keeps a stale value from ever reaching the world:
+     * there is no value to reach it.</p>
+     *
+     * @param rows the committed rows of one batch, in the frozen order
+     * @return how many rows agreed, stayed with the host path and were gone
+     */
+    public Settlement agree(List<StateHasher.Slice> rows) {
+        long startedAt = System.nanoTime();
+        String worldId = rows.isEmpty() ? "" : rows.get(0).worldId();
+        String regionId = rows.isEmpty() ? "" : rows.get(0).regionId();
+        ServerLevel level = LiveEntityAccess.level(worldId);
+        int agreed = 0;
+        int kept = 0;
+        int gone = 0;
+        if (level == null) {
+            gone = rows.size();
+        } else {
+            for (StateHasher.Slice row : rows) {
+                Entity entity = LiveEntityAccess.entity(level, (int) row.entitySeq());
+                if (entity == null) {
+                    gone++;
+                    continue;
+                }
+                if (LiveEntityAccess.identical(entity, row)) {
+                    agreed++;
+                } else {
+                    kept++;
+                }
+            }
+        }
+        long nanos = System.nanoTime() - startedAt;
+        readings.noteWriteBackIdentity(agreed, kept);
+        readings.noteReadBack(agreed, gone, kept == 0);
+        if (kept > 0) {
+            readings.noteReadBackKept(kept);
+        }
+        noteEntity(readings, worldId, regionId, nanos);
+        return new Settlement(agreed, kept, gone);
+    }
+
+    /**
+     * What one compute-only settlement found.
+     *
+     * @param agreed rows the host already held bit for bit
+     * @param kept   rows that differed and stayed with the host path
+     * @param gone   rows whose entity was no longer in its level
+     */
+    public record Settlement(int agreed, int kept, int gone) {
     }
 
     /**

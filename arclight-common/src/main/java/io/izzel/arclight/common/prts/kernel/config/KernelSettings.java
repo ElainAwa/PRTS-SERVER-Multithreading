@@ -82,6 +82,9 @@ public final class KernelSettings {
     /** Narrows the write-back to the kinematics the host itself already holds; off. */
     public static final String DISPATCH_IDENTICAL_ONLY = "dispatch-identical-only";
 
+    /** Lets the write-back own the kinematics it lands; off, so the domain only computes. */
+    public static final String DISPATCH_TAKEOVER = "dispatch-takeover";
+
     /** How many worker threads the pool holds; zero means derive it from the machine. */
     public static final String WORKER_COUNT = "worker-count";
 
@@ -273,6 +276,21 @@ public final class KernelSettings {
      */
     public static boolean dispatchIdenticalOnly() {
         return feature(DISPATCH_IDENTICAL_ONLY);
+    }
+
+    /**
+     * Answers whether the write-back may own the kinematics it lands.
+     *
+     * <p>Off, the domain only computes: the merge settles each batch by reading the world back in
+     * the same tick, counting how many rows the host path itself produced, and landing nothing, so
+     * every state change stays with the host. On, the leg hands each batch to the intent channel and
+     * the commit segment lands it, which is the tier the controlled comparison registered as a
+     * semantic deviation; the switch keeps that tier reachable, it does not widen the default.</p>
+     *
+     * @return whether the write-back leg may land the kinematics it computed
+     */
+    public static boolean dispatchTakeover() {
+        return feature(DISPATCH_TAKEOVER);
     }
 
     /** @return the declared worker count, zero meaning derive it from the machine */

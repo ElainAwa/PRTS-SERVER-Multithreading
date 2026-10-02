@@ -26,6 +26,11 @@ import java.util.Map;
  *
  * <p>Merging also hashes the frame and compares it with the serial reference taken from the same
  * view. The comparison is a reader: it can refuse to call two arms equal, never make them equal.</p>
+ *
+ * <p>What the frame becomes is the settlement's decision and it is taken here, in the merge of the
+ * tick the frame belongs to: the compute-only settlement reads the world back and lands nothing, so
+ * the state stays with the host; the takeover settlement hands the batch to the intent channel. No
+ * settlement carries a frame into a later tick.</p>
  */
 public final class MergeSegment {
 
@@ -111,6 +116,7 @@ public final class MergeSegment {
         int executed = 0;
         int retried = 0;
         int fellback = 0;
+        boolean landed = false;
         for (int i = 0; i < pass.entries().size(); i++) {
             DispatchPass.Entry entry = pass.entries().get(i);
             TaskOutcome outcome = outcomes.get(i);
@@ -154,8 +160,12 @@ public final class MergeSegment {
             }
             collect(entry, scratch, batchSlices);
             parallelSlices.addAll(batchSlices);
-            if (writeBack != null) {
-                writeBack.enqueue(entry.batch(), batchSlices);
+            // The settlement of the tick the frame belongs to: compute-only reads the world back and
+            // lands nothing, takeover hands the batch to the channel the commit segment drains. A
+            // frame that was not handed over is not read back at the next merge, because the world
+            // was never asked to hold it.
+            if (writeBack != null && writeBack.settle(entry.batch(), batchSlices)) {
+                landed = true;
             }
             if (!pass.ledger().markCommitted(entry.batch().batchId())) {
                 readings.noteDuplicateCommit();
@@ -196,7 +206,7 @@ public final class MergeSegment {
         if (!equal && probe.report().firstForkTick() < 0) {
             readings.noteForkUnattributed();
         }
-        lastCommitted = parallelSlices;
+        lastCommitted = landed ? parallelSlices : List.of();
         TaskLedger.ClosureReport closure = pass.ledger().closure(pass.dispatched(), executed,
             retried, fellback, cancelled, failed);
         pass.ledger().closeWindow();

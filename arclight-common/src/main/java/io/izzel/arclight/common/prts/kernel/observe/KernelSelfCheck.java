@@ -686,7 +686,7 @@ public final class KernelSelfCheck {
             String handle = prefix + ":" + handles.incrementAndGet();
             store.put(handle, write);
             return handle;
-        }, store::remove, world -> 1L, readings);
+        }, store::remove, world -> 1L, readings, () -> true);
         WorkPlan plan = WorkPlan.freeze(tick, 1L, List.of(dispatchFixture()), 4, 1L);
         WorkerPool pool = WorkerPool.open(new WorkerPool.Spec(1, "prts-worker-", Thread.NORM_PRIORITY,
             8, 4), 1, readings, arena);
@@ -731,13 +731,25 @@ public final class KernelSelfCheck {
             String handle = prefix + ":" + shallowHandles.incrementAndGet();
             shallowStore.put(handle, write);
             return handle;
-        }, shallowStore::remove, world -> 1L, refused);
+        }, shallowStore::remove, world -> 1L, refused, () -> true);
         List<StateHasher.Slice> rows = List.of(dispatchSlice(1.0));
         shallowWriteBack.enqueue(writeBackBatch(1L, rows.get(0).regionId(), rows), rows);
         shallowWriteBack.enqueue(writeBackBatch(2L, rows.get(0).regionId(), rows), rows);
         lines.add("selftest.dispatch_writeback_refused=" + refused.writeBackRefused());
         if (refused.writeBackRefused() != 1L || shallowStore.size() != 1) {
             failures.add("a write-back refused at the channel depth was not counted and forgotten");
+        }
+        // The default settlement is compute-only: the same rows are read back against the world and
+        // nothing is handed to the channel, which is what keeps the domain from owning the state.
+        DispatchReadings computeOnly = new DispatchReadings();
+        IntentQueue idle = new IntentQueue(() -> 64, () -> 1);
+        DispatchWriteBack computeLeg = new DispatchWriteBack(idle, (prefix, write) -> prefix,
+            handle -> { }, world -> 1L, computeOnly, () -> false);
+        computeLeg.settle(writeBackBatch(9L, rows.get(0).regionId(), rows), rows);
+        lines.add("selftest.dispatch_settle_landed=" + idle.enqueuedCount());
+        lines.add("selftest.dispatch_settle_readback=" + computeOnly.readBackPairs());
+        if (idle.enqueuedCount() != 0L || computeOnly.readBackPairs() != 1L) {
+            failures.add("the compute-only settlement landed a value or skipped its read back");
         }
         return lines;
     }
