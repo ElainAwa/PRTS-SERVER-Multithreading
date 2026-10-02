@@ -39,7 +39,11 @@ public final class DispatchReadings {
     private final LongAdder threadsRetired = new LongAdder();
     private final LongAdder entityNanos = new LongAdder();
     private final LongAdder tasksOnMain = new LongAdder();
-    private final LongAdder entityNanosMain = new LongAdder();
+    private final LongAdder redoNanos = new LongAdder();
+    private final LongAdder verifyNanos = new LongAdder();
+    private final LongAdder computeNanos = new LongAdder();
+    private final LongAdder verifyRows = new LongAdder();
+    private final LongAdder verifyMismatch = new LongAdder();
     private final LongAdder entityNanosSerialArm = new LongAdder();
     private final LongAdder snapshotNanos = new LongAdder();
     private final LongAdder writeBackNanos = new LongAdder();
@@ -112,11 +116,70 @@ public final class DispatchReadings {
         tasksOnMain.increment();
     }
 
-    /** Counts the time the tick thread spent computing a batch itself. */
-    public void noteEntityMain(long nanos) {
+    /**
+     * Counts the time the tick thread spent recomputing one batch itself.
+     *
+     * <p>This is the fallback row and nothing else: a batch the worker did not answer is computed
+     * here, in its own position of the frozen order. The equivalence check of an answered batch is
+     * a different job and is counted by {@link #noteVerify(long)}, so a reading of this row is a
+     * statement about fallbacks rather than about the cost of the check.</p>
+     *
+     * @param nanos the duration
+     */
+    public void noteRedo(long nanos) {
         if (nanos > 0L) {
-            entityNanosMain.add(nanos);
+            redoNanos.add(nanos);
         }
+    }
+
+    /**
+     * Counts the time the tick thread spent checking what a worker answered.
+     *
+     * <p>The check runs in the merge of the tick the frame belongs to and on the thread that owns
+     * the tick, so it is main-thread work of the entity domain like the fallback; keeping the two
+     * in one row is what left the cost of the check unreadable.</p>
+     *
+     * @param nanos the duration
+     */
+    public void noteVerify(long nanos) {
+        if (nanos > 0L) {
+            verifyNanos.add(nanos);
+        }
+    }
+
+    /**
+     * Counts the time the tick thread spent waiting for and merging the frame.
+     *
+     * <p>It is the wait for the workers plus the frozen-order walk and the two hashes. The wait is
+     * deliberately not added to any self class row: a wait is not work the entity domain did, and
+     * the class rows are where the share of the tick is accounted.</p>
+     *
+     * @param nanos the duration
+     */
+    public void noteCompute(long nanos) {
+        if (nanos > 0L) {
+            computeNanos.add(nanos);
+        }
+    }
+
+    /**
+     * Counts the rows one batch check folded.
+     *
+     * <p>The rows are what the check's time is spent on, so a window that reports the check and its
+     * rows can be read as a cost per row instead of as a total that depends on how long the window
+     * happened to be.</p>
+     *
+     * @param rows the rows of the batch the check folded
+     */
+    public void noteVerifyRows(int rows) {
+        if (rows > 0) {
+            verifyRows.add(rows);
+        }
+    }
+
+    /** Counts one batch the check refused and the tick thread therefore recomputed. */
+    public void noteVerifyMismatch() {
+        verifyMismatch.increment();
     }
 
     /** Counts the time the tick thread spent computing the serial arm of the comparison. */
@@ -366,9 +429,34 @@ public final class DispatchReadings {
         return tasksOnMain.sum();
     }
 
-    /** @return the nanoseconds the tick thread spent computing batches itself */
+    /** @return the nanoseconds the tick thread spent recomputing batches itself */
+    public long redoNanos() {
+        return redoNanos.sum();
+    }
+
+    /** @return the nanoseconds the tick thread spent checking what the workers answered */
+    public long verifyNanos() {
+        return verifyNanos.sum();
+    }
+
+    /** @return the nanoseconds the tick thread spent waiting for and merging the frame */
+    public long computeNanos() {
+        return computeNanos.sum();
+    }
+
+    /** @return the rows the checks folded */
+    public long verifyRows() {
+        return verifyRows.sum();
+    }
+
+    /** @return the batches the check refused and the tick thread recomputed */
+    public long verifyMismatch() {
+        return verifyMismatch.sum();
+    }
+
+    /** @return the nanoseconds the tick thread spent recomputing and checking batches itself */
     public long entityNanosMain() {
-        return entityNanosMain.sum();
+        return redoNanos() + verifyNanos();
     }
 
     /** @return the nanoseconds the tick thread spent computing the serial arm */
@@ -546,7 +634,14 @@ public final class DispatchReadings {
             + writeBackNanos()));
         builder.append(" entity_ms_serial_arm=").append(ms(entityNanosSerialArm() + snapshotNanos()
             + writeBackNanos()));
-        builder.append(" entity_ms_redo=").append(ms(entityNanosMain()));
+        builder.append(" entity_ms_redo=").append(ms(redoNanos()));
+        builder.append(" entity_ms_verify=").append(ms(verifyNanos()));
+        builder.append(" verify_rows=").append(verifyRows());
+        builder.append(" verify_mismatch=").append(verifyMismatch());
+        builder.append(" dispatch_snapshot_ms=").append(ms(snapshotNanos()));
+        builder.append(" dispatch_verify_ms=").append(ms(verifyNanos()));
+        builder.append(" dispatch_compute_ms=").append(ms(computeNanos()));
+        builder.append(" dispatch_redo_ms=").append(ms(redoNanos()));
         builder.append(" entity_ms_serial_integrate=").append(ms(entityNanosSerialArm()));
         builder.append(" entity_ms_on_worker=").append(ms(entityNanos()));
         builder.append(" entity_ms_snapshot=").append(ms(snapshotNanos()));
@@ -603,7 +698,11 @@ public final class DispatchReadings {
         threadsRetired.reset();
         entityNanos.reset();
         tasksOnMain.reset();
-        entityNanosMain.reset();
+        redoNanos.reset();
+        verifyNanos.reset();
+        computeNanos.reset();
+        verifyRows.reset();
+        verifyMismatch.reset();
         entityNanosSerialArm.reset();
         snapshotNanos.reset();
         writeBackNanos.reset();

@@ -4,28 +4,27 @@ package io.izzel.arclight.common.prts.kernel.dispatch;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaScratch;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaSlot;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
-import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
 import io.izzel.arclight.common.prts.kernel.diff.DomainHash;
 import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
 import io.izzel.arclight.common.prts.kernel.diff.StateHasher;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * The merge: the only place a dispatched result is accepted, on the thread that owns the tick.
  *
  * <p>The walk is the frozen order of the plan. A batch whose worker answered is committed once and
- * its slot is released after its values were read; a batch that was cancelled, retried, fell back
- * or lost its worker is redone on the tick thread in the same position, so the order of the frame
- * never depends on which worker was fast enough. A second commit of one identity is refused and
- * counted.</p>
+ * its slot is released after its values were read; a batch that was cancelled, retried, fell back,
+ * lost its worker or answered with values the check refused is the tick thread's own in the same
+ * position, so the order of the frame never depends on which worker was fast enough. A second commit
+ * of one identity is refused and counted.</p>
  *
- * <p>Merging also hashes the frame and compares it with the serial reference taken from the same
- * view. The comparison is a reader: it can refuse to call two arms equal, never make them equal.</p>
+ * <p>The reference of a batch is computed here, in the batch's own position, and it is both the
+ * serial arm the parallel frame is compared with and the side the worker's answer is judged against;
+ * a batch the check refuses is redone from that same computation instead of a second one. The
+ * comparison is a reader: it can refuse to call two arms equal, never make them equal.</p>
  *
  * <p>What the frame becomes is the settlement's decision and it is taken here, in the merge of the
  * tick the frame belongs to: the compute-only settlement reads the world back and lands nothing, so
@@ -107,8 +106,11 @@ public final class MergeSegment {
                 readings.noteHashInconsistent();
             }
         }
+        long mergeStartedAt = System.nanoTime();
         List<TaskOutcome> outcomes = pass.awaitAll(deadlineNanos);
+        long computeNanos = System.nanoTime() - mergeStartedAt;
         List<StateHasher.Slice> parallelSlices = new ArrayList<>();
+        List<StateHasher.Slice> serialSlices = new ArrayList<>();
         int committed = 0;
         int redone = 0;
         int cancelled = 0;
@@ -127,43 +129,55 @@ public final class MergeSegment {
                 case CANCELLED -> cancelled++;
                 case FAILED -> failed++;
             }
+            // The reference of this batch: the tick thread runs the same pure step the worker ran,
+            // over the same rows of the same frozen view. It is the serial arm of the comparison and
+            // at once the side a worker's answer is judged against, so the check and the comparison
+            // can never read two different inputs. It exists only for the comparison and, when it
+            // turns out to be the frame's own values, for the fallback below; either way its time
+            // lands in the row of the work it actually did.
+            ArenaScratch reference = EntityIntegrator.referenceScratch();
+            long referenceStartedAt = System.nanoTime();
+            EntityIntegrator.integrateRangeSerial(entry.view(), entry.batch().rangeStart(),
+                entry.batch().rangeEnd(), reference);
+            long referenceNanos = System.nanoTime() - referenceStartedAt;
             boolean workerValue = outcome.status() == TaskOutcome.Status.EXECUTED
                 && entry.slot() != null && entry.slot().state() == ArenaSlot.State.PUBLISHED;
+            if (workerValue && writeBack != null) {
+                workerValue = writeBack.verify(entry.batch(), entry.slot().scratch(), reference);
+            }
             ArenaScratch scratch;
-            List<StateHasher.Slice> batchSlices = new ArrayList<>();
             if (workerValue) {
                 scratch = entry.slot().scratch();
+                if (writeBack != null) {
+                    DispatchWriteBack.noteEvidence(readings, entry.view().worldId(), referenceNanos);
+                }
             } else {
                 // Whatever kept the worker from answering - a cancel, a retry, a fallback, a full
-                // queue or a dead thread - the batch is computed here, in its own position of the
-                // frozen order, and it is written back like any other. A half applied batch does not
-                // exist: either the frame carries the values or the batch is dropped with its code.
+                // queue, a dead thread, or a check that refused the values it answered with - the
+                // batch is the tick thread's own here, in its own position of the frozen order. The
+                // reference pass above already computed exactly the values this step produces, so
+                // the frame carries those instead of computing them a second time. A half applied
+                // batch does not exist: either the frame carries the values or the batch is dropped
+                // with its code.
                 redone++;
                 readings.noteTaskOnMain();
-                scratch = EntityIntegrator.mainScratch();
-                long startedAt = writeBack == null ? 0L : System.nanoTime();
-                try {
-                    EntityIntegrator.integrateRangeSerial(entry.view(),
-                        entry.batch().rangeStart(), entry.batch().rangeEnd(), scratch);
-                } catch (Throwable t) {
-                    if (!pass.ledger().markDropped(entry.batch().batchId(),
-                        RejectCode.PROGRESS_UNOBSERVED.text())) {
-                        readings.noteDroppedWithoutCode();
-                    }
-                    release(entry, arena);
-                    continue;
-                }
+                scratch = reference;
                 if (writeBack != null) {
-                    DispatchWriteBack.noteEntity(readings, entry.view().worldId(),
-                        entry.batch().task().regionId(), System.nanoTime() - startedAt);
+                    DispatchWriteBack.noteRedo(readings, entry.view().worldId(),
+                        entry.batch().task().regionId(), referenceNanos);
                 }
             }
+            long collectStartedAt = System.nanoTime();
+            List<StateHasher.Slice> batchSlices = new ArrayList<>();
             collect(entry, scratch, batchSlices);
             parallelSlices.addAll(batchSlices);
-            // The settlement of the tick the frame belongs to: compute-only reads the world back and
-            // lands nothing, takeover hands the batch to the channel the commit segment drains. A
-            // frame that was not handed over is not read back at the next merge, because the world
+            append(entry.batch().task(), entry.view(), reference, serialSlices);
+            computeNanos += System.nanoTime() - collectStartedAt;
+            // The settlement of the tick the frame belongs to: compute-only samples the world back
+            // and lands nothing, takeover hands the batch to the channel the commit segment drains.
+            // A frame that was not handed over is not read back at the next merge, because the world
             // was never asked to hold it.
+            long settleStartedAt = System.nanoTime();
             if (writeBack != null && writeBack.settle(entry.batch(), batchSlices)) {
                 landed = true;
             }
@@ -174,27 +188,9 @@ public final class MergeSegment {
                 commitSeq++;
             }
             release(entry, arena);
+            computeNanos += System.nanoTime() - settleStartedAt;
         }
-        Map<String, EntityCandidateView> byWorld = new LinkedHashMap<>();
-        for (EntityCandidateView view : pass.plan().views()) {
-            byWorld.putIfAbsent(view.worldId(), view);
-        }
-        // The serial arm is the reference the parallel frame is compared with: the tick thread does
-        // the whole domain from the same frozen view. It exists only for the comparison, so its time
-        // is recorded as observation and never as entity work of the world.
-        List<StateHasher.Slice> serialSlices = new ArrayList<>();
-        for (WorkTask task : pass.plan().tasks()) {
-            EntityCandidateView view = byWorld.get(task.worldId());
-            ArenaScratch scratch = EntityIntegrator.mainScratch();
-            long startedAt = writeBack == null ? 0L : System.nanoTime();
-            EntityIntegrator.integrateRangeSerial(view, task.entitySeqStart(), task.entitySeqEnd(),
-                scratch);
-            if (writeBack != null) {
-                DispatchWriteBack.noteEvidence(readings, task.worldId(),
-                    System.nanoTime() - startedAt);
-            }
-            append(task, view, scratch, serialSlices);
-        }
+        long hashStartedAt = System.nanoTime();
         DomainHash parallel = StateHasher.hash(domainId, pass.plan().tickIndex(), parallelSlices,
             whitelist);
         DomainHash serial = StateHasher.hash(domainId, pass.plan().tickIndex(), serialSlices,
@@ -202,6 +198,8 @@ public final class MergeSegment {
         boolean equal = parallel.comparable() && serial.comparable()
             && parallel.value() == serial.value();
         probe.compare(parallel, serial);
+        computeNanos += System.nanoTime() - hashStartedAt;
+        readings.noteCompute(computeNanos);
         readings.noteHashPair(equal);
         if (!equal && probe.report().firstForkTick() < 0) {
             readings.noteForkUnattributed();

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.dispatch;
 
+import io.izzel.arclight.common.prts.kernel.arena.ArenaScratch;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.diff.DomainHash;
 import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
@@ -39,11 +40,19 @@ import java.util.function.Function;
  * later tick, and a result that is not ready falls back to the tick thread's own computation before
  * the merge commits the batch.</p>
  *
- * <p>The read back is the other half: at the next commit boundary the world is asked what it holds
- * for the rows the previous frame committed, and the answer is hashed with the same fold and the same
- * whitelist as the frame itself. That is what turns "the two arms agree in memory" into "the world
- * holds what the parallel arm computed", and it is also what a mismatch is reported against instead
- * of the tautology of re-hashing the same list.</p>
+ * <p>The check of an answered batch is a batch level fold, not a row by row walk: the values the
+ * worker wrote into its slot are folded into one digest and the same pure step is folded from the
+ * frozen view on the thread that owns the tick, so a worker that answered from another view, cut
+ * another range or left a half written slot cannot pass. The two digests are compared once per
+ * batch and a bounded sample of the rows is compared bit for bit besides, and a batch the check
+ * refuses is recomputed on the tick thread in its own position of the frozen order, like every
+ * other fallback.</p>
+ *
+ * <p>The world is read back on a bounded sample of the rows, not on all of them: the settlement
+ * asks the world what it holds for the first row of every batch and for one row spread over the
+ * batch by its identity, and reports what those rows answered. That keeps the external witness the
+ * read back is - the world's own values against the values the frame committed - while leaving the
+ * per-row comparison to the fold, which reads no entity and allocates nothing.</p>
  *
  * <p>Every value the leg publishes is readable at zero: a pool that never started, a channel that
  * never drained and a world that was never read all render as numbers rather than as absent rows.</p>
@@ -61,6 +70,9 @@ public final class DispatchWriteBack {
 
     /** Prefix of the site identity every write-back intent carries. */
     public static final String SITE_PREFIX = "dispatch-batch";
+
+    /** Most rows of one batch the settlement reads back from the world bit for bit. */
+    public static final int SAMPLE_ROWS = 2;
 
     private static final String PAYLOAD_PREFIX = "dispatch";
     private static final String DOMAIN_ID = "entity-kinematics";
@@ -118,7 +130,7 @@ public final class DispatchWriteBack {
             enqueue(batch, rows);
             return true;
         }
-        agree(rows);
+        sampleReadBack(batch, rows);
         return false;
     }
 
@@ -132,23 +144,28 @@ public final class DispatchWriteBack {
     }
 
     /**
-     * Settles one batch by reading the world back in the same tick and landing nothing.
+     * Settles one batch by sampling the world in the same tick and landing nothing.
      *
-     * <p>Every row is compared with what the entity holds right now, bit for bit: a row the host
-     * already holds is the host path's own result for this tick and is counted as produced by both
-     * arms, and a row that differs is counted and stays with the host path. Neither branch calls a
-     * setter, so this settlement cannot move an entity - which is what makes the compute-only tier
-     * bit-identical with the host: the domain observes, it never owns the state.</p>
+     * <p>The sample is the first row of the batch and one row spread over it by the batch identity,
+     * so over a window every position of a batch is asked at some point instead of only its head.
+     * A sampled row the host already holds is the host path's own result for this tick and is counted
+     * as produced by both arms, and a row that differs is counted and stays with the host path.
+     * Neither branch calls a setter, so this settlement cannot move an entity - which is what makes
+     * the compute-only tier bit-identical with the host: the domain observes, it never owns the
+     * state.</p>
      *
-     * <p>The read back is taken in the tick the frame belongs to and before the next tick's systems
+     * <p>The sample is taken in the tick the frame belongs to and before the next tick's systems
      * observe anything, which is the boundary that keeps a stale value from ever reaching the world:
-     * there is no value to reach it.</p>
+     * there is no value to reach it. A world that is not loaded answers for every row of the batch
+     * as gone rather than as absent, so the reading is a number in every process.</p>
      *
-     * @param rows the committed rows of one batch, in the frozen order
-     * @return how many rows agreed, stayed with the host path and were gone
+     * @param batch the batch the sample belongs to
+     * @param rows  the committed rows of that batch, in the frozen order
+     * @return how many sampled rows agreed, stayed with the host path and were gone
      */
-    public Settlement agree(List<StateHasher.Slice> rows) {
+    private Settlement sampleReadBack(WorkBatch batch, List<StateHasher.Slice> rows) {
         long startedAt = System.nanoTime();
+        int count = rows.size();
         String worldId = rows.isEmpty() ? "" : rows.get(0).worldId();
         String regionId = rows.isEmpty() ? "" : rows.get(0).regionId();
         ServerLevel level = LiveEntityAccess.level(worldId);
@@ -156,9 +173,10 @@ public final class DispatchWriteBack {
         int kept = 0;
         int gone = 0;
         if (level == null) {
-            gone = rows.size();
+            gone = count;
         } else {
-            for (StateHasher.Slice row : rows) {
+            for (int sample = 0; sample < SAMPLE_ROWS && sample < count; sample++) {
+                StateHasher.Slice row = rows.get(sample == 0 ? 0 : spread(batch, count));
                 Entity entity = LiveEntityAccess.entity(level, (int) row.entitySeq());
                 if (entity == null) {
                     gone++;
@@ -177,8 +195,56 @@ public final class DispatchWriteBack {
         if (kept > 0) {
             readings.noteReadBackKept(kept);
         }
-        noteEntity(readings, worldId, regionId, nanos);
+        noteVerify(readings, worldId, regionId, nanos);
         return new Settlement(agreed, kept, gone);
+    }
+
+    /**
+     * Checks what a worker answered for one batch against the same step recomputed here.
+     *
+     * <p>Both sides of the comparison are folds over the values of the batch, so the verdict is one
+     * comparison per batch and no entity is looked up and no object is built while it is taken. The
+     * slot side is what the worker wrote, the reference side is the pure step this thread just
+     * computed from the frozen view, and the row count is part of the verdict: a slot shorter than
+     * the range it was handed is a half written answer and is refused like a differing one.</p>
+     *
+     * <p>A bounded sample of the rows is compared bit for bit besides the fold, so a batch cannot
+     * pass on a collision of the fold alone. The sample index is derived from the batch identity and
+     * never from a clock, so the same batch is checked at the same row on every run.</p>
+     *
+     * @param batch     the batch the values belong to
+     * @param slot      the scratch the worker wrote
+     * @param reference the scratch the same step was recomputed into
+     * @return whether the worker's values are the ones the pure step produces for this batch
+     */
+    public boolean verify(WorkBatch batch, ArenaScratch slot, ArenaScratch reference) {
+        long startedAt = System.nanoTime();
+        int rows = Math.min(slot.filled(), reference.filled());
+        boolean trusted = slot.filled() == reference.filled()
+            && EntityIntegrator.foldRange(slot, rows) == EntityIntegrator.foldRange(reference, rows);
+        if (trusted && rows > 0) {
+            trusted = sameRow(slot, reference, 0)
+                && (rows < 2 || sameRow(slot, reference, spread(batch, rows)));
+        }
+        long nanos = System.nanoTime() - startedAt;
+        readings.noteVerifyRows(rows);
+        WorkTask task = batch.task();
+        noteVerify(readings, task.worldId(), task.regionId(), nanos);
+        if (!trusted) {
+            readings.noteVerifyMismatch();
+        }
+        return trusted;
+    }
+
+    /** @return whether one row of the two scratches carries the same raw bits */
+    private static boolean sameRow(ArenaScratch left, ArenaScratch right, int index) {
+        return EntityIntegrator.foldRow(left, index, 0L)
+            == EntityIntegrator.foldRow(right, index, 0L);
+    }
+
+    /** @return the row of a batch the sample of that batch looks at */
+    private static int spread(WorkBatch batch, int rows) {
+        return (int) Math.floorMod(batch.batchId(), (long) rows);
     }
 
     /**
@@ -322,16 +388,34 @@ public final class DispatchWriteBack {
     }
 
     /**
-     * Records work the tick thread did for the entity domain.
+     * Records work the tick thread did for the entity domain by recomputing a batch itself.
      *
      * @param readings  where the leg publishes
      * @param worldId   the world the work belongs to
      * @param regionRef the region the work belongs to
      * @param nanos     the duration
      */
-    public static void noteEntity(DispatchReadings readings, String worldId, String regionRef,
+    public static void noteRedo(DispatchReadings readings, String worldId, String regionRef,
+                                long nanos) {
+        readings.noteRedo(nanos);
+        SelfTimers.note(SelfClass.ENTITY, worldId, regionRef, nanos);
+    }
+
+    /**
+     * Records the work of checking what a worker answered.
+     *
+     * <p>The check is main-thread work of the entity domain - it reads the same view the worker read
+     * and samples the world - so it lands in the entity row and in the check row, never in the row
+     * of the observation's own evidence.</p>
+     *
+     * @param readings  where the leg publishes
+     * @param worldId   the world the work belongs to
+     * @param regionRef the region the work belongs to
+     * @param nanos     the duration
+     */
+    public static void noteVerify(DispatchReadings readings, String worldId, String regionRef,
                                   long nanos) {
-        readings.noteEntityMain(nanos);
+        readings.noteVerify(nanos);
         SelfTimers.note(SelfClass.ENTITY, worldId, regionRef, nanos);
     }
 

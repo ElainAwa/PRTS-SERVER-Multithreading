@@ -412,6 +412,10 @@ public final class KernelModule {
      *
      * @return the last completed window, or a live view when none has completed yet
      */
+    public DispatchReadings dispatchReadings() {
+        return dispatchReadings;
+    }
+
     public MeterWindow window() {
         if (lastWindow != null) {
             return lastWindow;

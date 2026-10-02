@@ -8,6 +8,7 @@ import io.izzel.arclight.common.prts.kernel.codes.DegradeLevel;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.codes.RejectTrigger;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
+import io.izzel.arclight.common.prts.kernel.dispatch.DispatchReadings;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import io.izzel.arclight.common.prts.kernel.meter.MeterWindow;
@@ -384,6 +385,27 @@ public final class KernelReadings {
             add(lines, "self." + key + "_p99_ms", format(row.p99Ms()));
         }
         add(lines, "self.asserted_classes", SelfClass.assertedCount());
+        dispatchCost(lines, module);
+    }
+
+    /**
+     * Publishes the four segments of the dispatcher's own cost inside the self domain.
+     *
+     * <p>The rows are the dispatcher's decomposition of its main-thread work, printed next to the
+     * class rows because that is where a reader looks for the cost of the entity domain. Only the
+     * snapshot, the check and the fallback are work of that domain; the wait for the workers is a
+     * wait and is published here as a number of its own, never added to a class row.</p>
+     *
+     * @param lines  the lines of the export
+     * @param module the kernel the readings come from
+     */
+    private static void dispatchCost(List<String> lines, KernelModule module) {
+        DispatchReadings readings = module.dispatchReadings();
+        add(lines, "self.dispatch_snapshot_ms", format(readings.snapshotNanos() / 1_000_000.0));
+        add(lines, "self.dispatch_verify_ms", format(readings.verifyNanos() / 1_000_000.0));
+        add(lines, "self.dispatch_verify_rows", readings.verifyRows());
+        add(lines, "self.dispatch_compute_ms", format(readings.computeNanos() / 1_000_000.0));
+        add(lines, "self.dispatch_redo_ms", format(readings.redoNanos() / 1_000_000.0));
     }
 
     private static void waitPoints(List<String> lines, KernelModule module) {
