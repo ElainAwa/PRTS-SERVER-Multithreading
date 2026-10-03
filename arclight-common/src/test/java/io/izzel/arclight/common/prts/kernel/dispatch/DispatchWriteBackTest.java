@@ -284,6 +284,192 @@ class DispatchWriteBackTest {
         assertFalse(BatchWriteBack.noRowsLanded(false, false, 0, 0, 0));
     }
 
+    /**
+     * A frame that landed is the only thing the next merge reads back, and the world answering for
+     * exactly those rows is what keeps the pair and the equal counter together. No loaded world
+     * answers a unit test, so every row of the set is counted gone and the comparison is equal.
+     */
+    @Test
+    void aLandedFrameIsReadBackAgainstTheRowsItLanded() {
+        DispatchReadings readings = new DispatchReadings();
+        ArenaLedger arena = new ArenaLedger();
+        TaskLedger ledger = new TaskLedger(1L);
+        DispatchWriteBack writeBack = takeoverLeg(readings, world -> 1L);
+        WorkerPool pool = pool(readings, arena, 8);
+        try {
+            MergeSegment segment = new MergeSegment();
+            segment.bindOwnerThread(Thread.currentThread());
+            merge(segment, readings, arena, ledger, pool, plan(TICK, 1L, view(8)), writeBack);
+            long landed = readings.writeBackEnqueued();
+            assertTrue(landed > 0L, "the frame enqueued no row");
+            assertEquals(0L, readings.writeBackNotLanded(), "a landed frame counted a row as not landed");
+            assertEquals(0L, readings.readBackPairs(), "a frame with nothing before it was read back");
+
+            merge(segment, readings, arena, ledger, pool, plan(TICK + 1, 100L, view(8)), writeBack);
+
+            assertEquals(1L, readings.readBackPairs(), "the landed frame was not read back");
+            assertEquals(1L, readings.readBackEqual(), "the read back of a landed frame was not equal");
+            assertEquals(landed, readings.readBackGone(),
+                "the read back did not cover exactly the rows the frame landed");
+            assertEquals(0L, readings.writeBackNotLanded());
+            assertEquals(0L, readings.hashInconsistent());
+        } finally {
+            pool.shutdown(true, true, 500L);
+            arena.reset();
+        }
+    }
+
+    /**
+     * The refused half of a frame must not be read back: it never reached the world, so a read back
+     * that folded it in would judge the world by rows it was never asked to hold. The negative leg
+     * is a frame that lands one world while another world's batch is refused at the generation
+     * check; only the landed world's rows may reach the next read back.
+     */
+    @Test
+    void aFrameThatLandedOneWorldAndRefusedAnotherIsReadBackForTheLandedRowsOnly() {
+        String refusedWorld = "minecraft:prts-refused";
+        DispatchReadings readings = new DispatchReadings();
+        ArenaLedger arena = new ArenaLedger();
+        TaskLedger ledger = new TaskLedger(1L);
+        DispatchWriteBack writeBack = takeoverLeg(readings, world -> WORLD.equals(world) ? 1L : 2L);
+        WorkerPool pool = pool(readings, arena, 8);
+        try {
+            MergeSegment segment = new MergeSegment();
+            segment.bindOwnerThread(Thread.currentThread());
+            merge(segment, readings, arena, ledger, pool,
+                plan(TICK, 1L, view(8, WORLD, 1L), view(8, refusedWorld, 1L)), writeBack);
+
+            long landed = readings.writeBackEnqueued();
+            assertTrue(landed > 0L, "the frame landed nothing");
+            assertTrue(readings.writeBackNotLanded() > 0L, "the frame refused nothing");
+            assertTrue(readings.writeBackStale() > 0L,
+                "the stale batch was not refused at the generation check");
+
+            merge(segment, readings, arena, ledger, pool, plan(TICK + 1, 100L, view(8, WORLD, 1L)),
+                writeBack);
+
+            assertEquals(1L, readings.readBackPairs(), "the refused rows were read back");
+            assertEquals(1L, readings.readBackEqual(), "a refused row was counted equal");
+            assertEquals(landed, readings.readBackGone(),
+                "the read back did not cover exactly the rows the frame landed");
+            assertEquals(0L, readings.hashInconsistent(), "a refused row raised the inconsistency counter");
+        } finally {
+            pool.shutdown(true, true, 500L);
+            arena.reset();
+        }
+    }
+
+    /**
+     * A frame whose every batch was refused hands over an empty set, so it moves neither the pair
+     * nor the equal counter nor the inconsistency counter; its rows are counted as not landed
+     * instead, and the frame after it reads only the landed frames back.
+     */
+    @Test
+    void aFrameWhoseBatchesWereAllRefusedMovesNoReadBackCounter() {
+        DispatchReadings readings = new DispatchReadings();
+        ArenaLedger arena = new ArenaLedger();
+        TaskLedger ledger = new TaskLedger(1L);
+        java.util.concurrent.atomic.AtomicLong epoch = new java.util.concurrent.atomic.AtomicLong(1L);
+        DispatchWriteBack writeBack = takeoverLeg(readings, world -> epoch.get());
+        WorkerPool pool = pool(readings, arena, 8);
+        try {
+            MergeSegment segment = new MergeSegment();
+            segment.bindOwnerThread(Thread.currentThread());
+            merge(segment, readings, arena, ledger, pool, plan(TICK, 1L, view(8, WORLD, 1L)), writeBack);
+
+            epoch.set(2L);
+            WorkPlan refusedPlan = plan(TICK + 1, 100L, view(8, WORLD, 1L));
+            merge(segment, readings, arena, ledger, pool, refusedPlan, writeBack);
+
+            assertEquals(entityRows(refusedPlan), readings.writeBackNotLanded(),
+                "the refused rows were not counted as not landed");
+            long pairs = readings.readBackPairs();
+            long equal = readings.readBackEqual();
+            assertEquals(1L, pairs, "the landed frame before the refusal was not read back");
+            assertEquals(1L, equal);
+
+            merge(segment, readings, arena, ledger, pool, plan(TICK + 2, 200L, view(8, WORLD, 2L)),
+                writeBack);
+
+            assertEquals(pairs, readings.readBackPairs(), "a frame with no landed row was read back");
+            assertEquals(equal, readings.readBackEqual(), "a frame with no landed row was counted equal");
+            assertEquals(0L, readings.hashInconsistent());
+        } finally {
+            pool.shutdown(true, true, 500L);
+            arena.reset();
+        }
+    }
+
+    /**
+     * The check belongs to the frame the commit has just reached: a tick that closed without a merge
+     * (a held pass, a switch that is off, an empty plan) leaves the world to run on by itself, so the
+     * frame before it is not judged and the skip is counted. The frame that merge itself lands is
+     * read back on the next merge as usual.
+     */
+    @Test
+    void aFrameTheWorldHasRunPastIsCountedSkippedAndNotJudged() {
+        DispatchReadings readings = new DispatchReadings();
+        ArenaLedger arena = new ArenaLedger();
+        TaskLedger ledger = new TaskLedger(1L);
+        DispatchWriteBack writeBack = takeoverLeg(readings, world -> 1L);
+        WorkerPool pool = pool(readings, arena, 8);
+        try {
+            MergeSegment segment = new MergeSegment();
+            segment.bindOwnerThread(Thread.currentThread());
+            merge(segment, readings, arena, ledger, pool, plan(TICK, 1L, view(8)), writeBack);
+            assertEquals(0L, readings.readBackPairs());
+
+            // A tick that closed without a merge: the held pass is still pending.
+            segment.noteSkippedMerge();
+            merge(segment, readings, arena, ledger, pool, plan(TICK + 1, 100L, view(8)), writeBack);
+            assertEquals(0L, readings.readBackPairs(), "a frame the world ran past was judged");
+            assertEquals(1L, readings.readBackSkipped(), "the skipped read back was not counted");
+            assertEquals(0L, readings.hashInconsistent());
+
+            merge(segment, readings, arena, ledger, pool, plan(TICK + 2, 200L, view(8)), writeBack);
+            assertEquals(1L, readings.readBackPairs(), "the frame after the gap was not read back");
+            assertEquals(1L, readings.readBackEqual());
+            assertEquals(1L, readings.readBackSkipped());
+            assertEquals(0L, readings.hashInconsistent());
+        } finally {
+            pool.shutdown(true, true, 500L);
+            arena.reset();
+        }
+    }
+
+    private static DispatchWriteBack takeoverLeg(DispatchReadings readings,
+                                                 java.util.function.Function<String, Long> epoch) {
+        IntentQueue intents = new IntentQueue(() -> 64, () -> 1);
+        Map<String, PrtsWorldWriteTaps.DeferredWrite> store = new LinkedHashMap<>();
+        AtomicInteger handles = new AtomicInteger();
+        return new DispatchWriteBack(intents, (prefix, write) -> {
+            String handle = prefix + ":" + handles.incrementAndGet();
+            store.put(handle, write);
+            return handle;
+        }, store::remove, epoch, readings, () -> true);
+    }
+
+    private static WorkPlan plan(long tick, long firstTaskId, EntityCandidateView... views) {
+        return WorkPlan.freeze(tick, 1L, List.of(views), 4, firstTaskId);
+    }
+
+    private static int entityRows(WorkPlan plan) {
+        int rows = 0;
+        for (WorkTask task : plan.tasks()) {
+            rows += task.entityCount();
+        }
+        return rows;
+    }
+
+    private static MergeSegment.Frame merge(MergeSegment segment, DispatchReadings readings,
+                                            ArenaLedger arena, TaskLedger ledger, WorkerPool pool,
+                                            WorkPlan plan, DispatchWriteBack writeBack) {
+        DispatchPass pass = DispatchPass.dispatch(plan, pool, EntityIntegrator.INSTANCE, arena,
+            readings, ledger);
+        return segment.merge(pass, System.nanoTime() + 2_000_000_000L, arena, readings,
+            new DiffProbe(), HashWhitelist.bitexact(), "entity", writeBack);
+    }
+
     private static WorkBatch batch(long batchId) {
         EntityCandidateView view = view(4);
         WorkTask task = new WorkTask(batchId, WORLD, "r0.0", batchId, 0, 4, 1L, 1L, 0, "r0.0");

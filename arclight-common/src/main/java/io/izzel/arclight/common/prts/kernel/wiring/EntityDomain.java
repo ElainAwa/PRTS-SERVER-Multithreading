@@ -87,6 +87,7 @@ public final class EntityDomain implements KernelDomain {
             if (pool != null || pending != null) {
                 shutdown();
             }
+            merge.noteSkippedMerge();
             return;
         }
         DispatchSettings.Policy policy = DispatchSettings.resolve();
@@ -94,6 +95,9 @@ public final class EntityDomain implements KernelDomain {
             // A declared fault keeps this pass pending and stops the next plan until its world is
             // reloaded, so the generation refusal of the stale batch happens on the live path.
             if (FaultInjection.holdsMerge(pending.plan(), module.guard().worldEpochs()::epochOf)) {
+                // The pass is held, so this tick closes without a merge and the world runs on: the
+                // frame the merge still holds is not the frame the next commit reaches.
+                merge.noteSkippedMerge();
                 return;
             }
             // The merge closes the window of the pass it reads; the epoch of the ledger only moves
@@ -105,7 +109,10 @@ public final class EntityDomain implements KernelDomain {
             pending = null;
             if (lastFrame == null) {
                 lastFrame = MergeSegment.Frame.empty();
+                merge.noteSkippedMerge();
             }
+        } else {
+            merge.noteSkippedMerge();
         }
         long snapshotStart = System.nanoTime();
         // One epoch source for the freeze and the commit: the task carries the generation the

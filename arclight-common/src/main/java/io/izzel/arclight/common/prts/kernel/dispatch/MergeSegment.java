@@ -33,6 +33,13 @@ public final class MergeSegment {
     private long foreignRuns;
     private long hashInconsistent;
     private List<StateHasher.Slice> lastCommitted = List.of();
+    private boolean mergeSkipped;
+
+    /** Names a tick that closed without a merge: the frame the segment still holds belongs to an
+     * older tick, so the next read back counts it as skipped instead of judging a world left running. */
+    public void noteSkippedMerge() {
+        mergeSkipped = true;
+    }
 
     /** Names the thread the segment may merge on. */
     public void bindOwnerThread(Thread thread) {
@@ -50,17 +57,23 @@ public final class MergeSegment {
             foreignRuns++;
             return null;
         }
-        // The world is asked what it holds for the frame the commit has just reached, before the new
-        // frame is built. A committed frame the world no longer agrees with is a frozen scene, not a
-        // difference to explain away; re-hashing the same in-memory list would only prove itself.
+        // The world is asked what it holds for the frame the commit has just reached: a committed
+        // frame the world no longer agrees with is a frozen scene, not a difference to explain away.
+        // Only the frame of the immediately preceding merge is judged - a tick without a merge left
+        // the world to run on by itself, and that movement is not the settlement's difference.
         if (writeBack != null && !lastCommitted.isEmpty()) {
-            DispatchWriteBack.ReadBack readBack = writeBack.readBack(lastCommitted, whitelist,
-                domainId, pass.plan().tickIndex());
-            if (!readBack.equal()) {
-                hashInconsistent++;
-                readings.noteHashInconsistent();
+            if (mergeSkipped) {
+                readings.noteReadBackSkipped();
+            } else {
+                DispatchWriteBack.ReadBack readBack = writeBack.readBack(lastCommitted, whitelist,
+                    domainId, pass.plan().tickIndex());
+                if (!readBack.equal()) {
+                    hashInconsistent++;
+                    readings.noteHashInconsistent();
+                }
             }
         }
+        mergeSkipped = false;
         long mergeStartedAt = System.nanoTime();
         List<TaskOutcome> outcomes = pass.awaitAll(deadlineNanos);
         // The wait and the work are two different costs of the same window: the first one blocks,
@@ -69,6 +82,10 @@ public final class MergeSegment {
         long frameNanos = 0L;
         List<StateHasher.Slice> parallelSlices = new ArrayList<>();
         List<StateHasher.Slice> serialSlices = new ArrayList<>();
+        // The read-back set of the next frame: only a batch the settlement handed to the world is
+        // in it, so every collected row is either landed and read back next frame or counted as not
+        // landed; a refused row reaches neither the equal count nor the inconsistency count.
+        List<StateHasher.Slice> landedSlices = new ArrayList<>();
         int committed = 0;
         int redone = 0;
         int cancelled = 0;
@@ -76,7 +93,6 @@ public final class MergeSegment {
         int executed = 0;
         int retried = 0;
         int fellback = 0;
-        boolean landed = false;
         for (int i = 0; i < pass.entries().size(); i++) {
             DispatchPass.Entry entry = pass.entries().get(i);
             TaskOutcome outcome = outcomes.get(i);
@@ -111,12 +127,10 @@ public final class MergeSegment {
                 }
             } else {
                 // Whatever kept the worker from answering - a cancel, a retry, a fallback, a full
-                // queue, a dead thread, or a check that refused the values it answered with - the
-                // batch is the tick thread's own here, in its own position of the frozen order. The
-                // reference pass above already computed exactly the values this step produces, so
-                // the frame carries those instead of computing them a second time. A half applied
-                // batch does not exist: either the frame carries the values or the batch is dropped
-                // with its code.
+                // queue, a dead thread, or a check that refused its values - the batch is the tick
+                // thread's own here, in its own position of the frozen order, and the reference pass
+                // above already computed exactly the values this step produces. A half applied batch
+                // does not exist: either the frame carries the values or the batch is dropped.
                 redone++;
                 readings.noteTaskOnMain();
                 scratch = reference;
@@ -133,11 +147,17 @@ public final class MergeSegment {
             frameNanos += System.nanoTime() - collectStartedAt;
             // The settlement of the tick the frame belongs to: compute-only samples the world back
             // and lands nothing, takeover hands the batch to the channel the commit segment drains.
-            // A frame that was not handed over is not read back at the next merge, because the world
-            // was never asked to hold it.
+            // What was not handed over is not read back next merge - the world was never asked to
+            // hold it - and its rows are counted as not landed instead.
             long settleStartedAt = System.nanoTime();
-            if (writeBack != null && writeBack.settle(entry.batch(), batchSlices).landed()) {
-                landed = true;
+            if (writeBack != null) {
+                if (writeBack.settle(entry.batch(), batchSlices).landed()) {
+                    landedSlices.addAll(batchSlices);
+                } else {
+                    readings.noteWriteBackNotLanded(batchSlices.size());
+                }
+            } else {
+                readings.noteWriteBackNotLanded(batchSlices.size());
             }
             if (!pass.ledger().markCommitted(entry.batch().batchId())) {
                 readings.noteDuplicateCommit();
@@ -164,7 +184,7 @@ public final class MergeSegment {
         if (!equal && probe.report().firstForkTick() < 0) {
             readings.noteForkUnattributed();
         }
-        lastCommitted = landed ? parallelSlices : List.of();
+        lastCommitted = landedSlices;
         TaskLedger.ClosureReport closure = pass.ledger().closure(pass.dispatched(), executed,
             retried, fellback, cancelled, failed);
         pass.ledger().closeWindow();
@@ -219,5 +239,6 @@ public final class MergeSegment {
         foreignRuns = 0L;
         hashInconsistent = 0L;
         lastCommitted = List.of();
+        mergeSkipped = false;
     }
 }

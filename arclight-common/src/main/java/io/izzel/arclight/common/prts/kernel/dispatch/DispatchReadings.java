@@ -53,9 +53,11 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
     private final LongAdder writeBackRefused = new LongAdder();
     private final LongAdder writeBackStale = new LongAdder();
     private final LongAdder writeBackNoRows = new LongAdder();
+    private final LongAdder writeBackNotLanded = new LongAdder();
     private final LongAdder writeBackIdentical = new LongAdder();
     private final LongAdder writeBackKept = new LongAdder();
     private final LongAdder readBackKept = new LongAdder();
+    private final LongAdder readBackSkipped = new LongAdder();
     private final LongAdder readBackPairs = new LongAdder();
     private final LongAdder readBackEqual = new LongAdder();
     private final LongAdder readBackRows = new LongAdder();
@@ -226,6 +228,12 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
         }
     }
 
+    /** Counts a merge that did not judge the frame before it: the world was left to run on by
+     * itself (a held or skipped merge), so the frame is no longer what the world was asked to hold. */
+    public void noteReadBackSkipped() {
+        readBackSkipped.increment();
+    }
+
     /** Counts one read back of a committed frame. */
     public void noteReadBack(int rows, int gone, boolean equal) {
         readBackPairs.increment();
@@ -242,6 +250,15 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
 
     public void noteWriteBackNoRows() {
         writeBackNoRows.increment();
+    }
+
+    /** Counts the rows of one frame that never reached the world: a batch the settlement refused,
+     * or a tier that lands nothing. They are not read back at the next merge, so a read back that
+     * counted them would judge the world against rows the world was never asked to hold. */
+    public void noteWriteBackNotLanded(int rows) {
+        if (rows > 0) {
+            writeBackNotLanded.add(rows);
+        }
     }
 
     public void noteShutdownDropped() {
@@ -486,6 +503,10 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
         return writeBackNoRows.sum();
     }
 
+    public long writeBackNotLanded() {
+        return writeBackNotLanded.sum();
+    }
+
     public long writeBackIdentical() {
         return writeBackIdentical.sum();
     }
@@ -512,6 +533,10 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
 
     public long readBackKept() {
         return readBackKept.sum();
+    }
+
+    public long readBackSkipped() {
+        return readBackSkipped.sum();
     }
 
     public long hashPairs() {
@@ -612,10 +637,12 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
         builder.append(" writeback_refused=").append(writeBackRefused());
         builder.append(" writeback_stale=").append(writeBackStale());
         builder.append(" writeback_no_rows=").append(writeBackNoRows());
+        builder.append(" writeback_not_landed=").append(writeBackNotLanded());
         builder.append(" writeback_identical=").append(writeBackIdentical());
         builder.append(" writeback_kept=").append(writeBackKept());
         builder.append(" readback_pairs=").append(readBackPairs());
         builder.append(" readback_equal=").append(readBackEqual());
+        builder.append(" readback_skipped=").append(readBackSkipped());
         builder.append(" readback_rows=").append(readBackRows());
         builder.append(" readback_gone=").append(readBackGone());
         builder.append(" readback_kept=").append(readBackKept());
@@ -684,9 +711,11 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
         writeBackRefused.reset();
         writeBackStale.reset();
         writeBackNoRows.reset();
+        writeBackNotLanded.reset();
         writeBackIdentical.reset();
         writeBackKept.reset();
         readBackKept.reset();
+        readBackSkipped.reset();
         readBackPairs.reset();
         readBackEqual.reset();
         readBackRows.reset();
