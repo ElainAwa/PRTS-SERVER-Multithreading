@@ -16,6 +16,7 @@ public final class WaitSiteReadings {
     private final String[] siteIds;
     private final IntSupplier boundMs;
     private final LongAdder[] observed;
+    private final LongAdder[] observedNanos;
     private final LongAdder[] overOneTick;
     private final LongAdder[] convergenceCandidates;
     private final AtomicLongArray maxMs;
@@ -29,9 +30,25 @@ public final class WaitSiteReadings {
         this.boundMs = boundMs;
         int count = siteIds.length;
         this.observed = adders(count);
+        this.observedNanos = adders(count);
         this.overOneTick = adders(count);
         this.convergenceCandidates = adders(count);
         this.maxMs = new AtomicLongArray(count);
+    }
+
+    /** Keeps the exact duration of one observed wait beside its millisecond verdict: the wait
+     * counter truncates to whole milliseconds, so a site whose calls are shorter than one
+     * millisecond would otherwise report a count with no time next to it. Observation only. */
+    public void noteNanos(int siteIndex, long waitNanos) {
+        if (siteIndex < 0 || siteIndex >= siteIds.length || waitNanos <= 0L) {
+            return;
+        }
+        observedNanos[siteIndex].add(waitNanos);
+    }
+
+    /** Returns the exact observed duration of one site, in nanoseconds. */
+    public long observedNanos(int siteIndex) {
+        return siteIndex >= 0 && siteIndex < siteIds.length ? observedNanos[siteIndex].sum() : 0L;
     }
 
     /** Notes one observed wait. */
@@ -57,6 +74,7 @@ public final class WaitSiteReadings {
     public void reset() {
         for (int index = 0; index < siteIds.length; index++) {
             observed[index].reset();
+            observedNanos[index].reset();
             overOneTick[index].reset();
             convergenceCandidates[index].reset();
             maxMs.set(index, 0L);

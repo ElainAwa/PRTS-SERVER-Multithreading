@@ -42,6 +42,7 @@ class CommitSegmentTest {
         assertEquals(0L, queue.executedCount());
         assertEquals(0L, queue.committedCount());
         assertEquals(2L, queue.enqueuedCount());
+        assertEquals(0L, segment.walkNanos(), "a segment that held still was timed as walking");
     }
 
     @Test
@@ -69,6 +70,7 @@ class CommitSegmentTest {
         assertEquals(1L, segment.passes());
         assertEquals(TICK, queue.lastExecTick());
         assertEquals(0L, queue.orderViolationCount());
+        assertTrue(segment.walkNanos() > 0L, "the walk left no reading of its own duration");
     }
 
     @Test

@@ -191,6 +191,8 @@ public final class EntityDomain implements KernelDomain {
         sink.add("self.dispatch_verify_rows", readings.verifyRows());
         sink.add("self.dispatch_compute_ms", readings.computeNanos() / 1_000_000.0);
         sink.add("self.dispatch_redo_ms", readings.redoNanos() / 1_000_000.0);
+        sink.add("self.dispatch_rows", readings.rowsTotal());
+        sink.add("self.dispatch_commit_channel_ms", readings.commitChannelNanos() / 1_000_000.0);
     }
 
     @Override

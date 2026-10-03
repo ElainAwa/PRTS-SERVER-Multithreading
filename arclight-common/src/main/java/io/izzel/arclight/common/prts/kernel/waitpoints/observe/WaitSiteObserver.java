@@ -53,6 +53,7 @@ public final class WaitSiteObserver implements PrtsWaitSites.SiteWaitTap {
             return;
         }
         long waitMs = Math.max(0L, waitNanos / 1_000_000L);
+        readings.noteNanos(siteIndex, waitNanos);
         readings.note(siteIndex, waitMs, convergenceCandidates[siteIndex]);
         registry.observeWait(waitPointIds[siteIndex],
             new WaitSpan(waitPointIds[siteIndex], callSiteRefs[siteIndex], siteId,

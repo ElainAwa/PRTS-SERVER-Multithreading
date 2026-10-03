@@ -46,6 +46,8 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
     private final LongAdder verifyMismatch = new LongAdder();
     private final LongAdder entityNanosSerialArm = new LongAdder();
     private final LongAdder snapshotNanos = new LongAdder();
+    private final LongAdder rowsTotal = new LongAdder();
+    private final LongAdder commitChannelNanos = new LongAdder();
     private final LongAdder writeBackNanos = new LongAdder();
     private final LongAdder writeBackBatches = new LongAdder();
     private final LongAdder writeBackRows = new LongAdder();
@@ -186,6 +188,24 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
     public void noteSnapshot(long nanos) {
         if (nanos > 0L) {
             snapshotNanos.add(nanos);
+        }
+    }
+
+    /** Counts the rows one frame collected. Rows are what every per-row cost of this domain is
+     * divided by, so a window that reports them can be read as a cost per row instead of as a
+     * total that depends on how long the window happened to be. Observation only. */
+    public void noteRows(int rows) {
+        if (rows > 0) {
+            rowsTotal.add(rows);
+        }
+    }
+
+    /** Counts the time the tick thread spent handing one settled batch to the intent channel. It
+     * is the channel half of the commit; the segment that later lands the batch is timed where it
+     * walks. Observation only. */
+    public void noteCommitChannel(long nanos) {
+        if (nanos > 0L) {
+            commitChannelNanos.add(nanos);
         }
     }
 
@@ -475,6 +495,14 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
         return snapshotNanos.sum();
     }
 
+    public long rowsTotal() {
+        return rowsTotal.sum();
+    }
+
+    public long commitChannelNanos() {
+        return commitChannelNanos.sum();
+    }
+
     public long writeBackNanos() {
         return writeBackNanos.sum();
     }
@@ -627,6 +655,8 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
         builder.append(" dispatch_compute_wait_ms=").append(ms(computeWaitNanos()));
         builder.append(" dispatch_compute_frame_ms=").append(ms(computeFrameNanos()));
         builder.append(" dispatch_redo_ms=").append(ms(redoNanos()));
+        builder.append(" dispatch_rows=").append(rowsTotal());
+        builder.append(" dispatch_commit_channel_ms=").append(ms(commitChannelNanos()));
         builder.append(" entity_ms_serial_integrate=").append(ms(entityNanosSerialArm()));
         builder.append(" entity_ms_on_worker=").append(ms(entityNanos()));
         builder.append(" entity_ms_snapshot=").append(ms(snapshotNanos()));
@@ -704,6 +734,8 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
         verifyMismatch.reset();
         entityNanosSerialArm.reset();
         snapshotNanos.reset();
+        rowsTotal.reset();
+        commitChannelNanos.reset();
         writeBackNanos.reset();
         writeBackBatches.reset();
         writeBackRows.reset();

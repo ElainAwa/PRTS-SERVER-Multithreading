@@ -70,6 +70,10 @@ class WaitSiteObserverTest {
         assertEquals(1L, observer.readings().overOneTickTotal());
         assertEquals(1L, observer.readings().convergenceCandidateTotal());
         assertEquals(60L, observer.readings().maxMs());
+        // The millisecond verdict truncates, so a site whose calls stay under a millisecond would
+        // report a count with no time beside it; the exact duration is kept for that case.
+        assertEquals(120_000_000L,
+            observer.readings().observedNanos(PrtsWaitSites.SERVER_LEVEL_SET_CHUNK_FORCED));
         assertEquals(1L, registry.waitOverrunCount());
         assertNotNull(registry.lookup("chunk"));
         assertEquals(SiteInventory.FORCED_MATERIALIZATION,
@@ -90,6 +94,7 @@ class WaitSiteObserverTest {
         assertEquals(0L, observer.readings().maxMs());
         for (int index = 0; index < observer.readings().siteCount(); index++) {
             assertEquals(0L, observer.readings().observed(index));
+            assertEquals(0L, observer.readings().observedNanos(index));
             assertEquals(0L, observer.readings().maxMs(index));
             assertEquals(0L, observer.readings().overOneTick(index));
             assertEquals(0L, observer.readings().convergenceCandidates(index));

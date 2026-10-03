@@ -91,6 +91,38 @@ class DispatchVerifyTest {
         }
     }
 
+    /**
+     * The rows of a frame are what every per-row cost of this domain is divided by, and the
+     * channel half of the commit is timed where a settled batch is handed over. Both are
+     * observations: neither changes what the merge collects or where a batch is settled.
+     */
+    @Test
+    void theFrameCountsItsRowsAndTimesTheChannelItHandsThemTo() {
+        DispatchReadings readings = new DispatchReadings();
+        ArenaLedger arena = new ArenaLedger();
+        TaskLedger ledger = new TaskLedger(1L);
+        WorkPlan plan = WorkPlan.freeze(TICK, 1L, List.of(view(8)), 4, 1L);
+        WorkerPool pool = pool(readings, arena, 8);
+        try {
+            MergeSegment merge = new MergeSegment();
+            merge.bindOwnerThread(Thread.currentThread());
+            DispatchPass pass = DispatchPass.dispatch(plan, pool, EntityIntegrator.INSTANCE, arena,
+                readings, ledger);
+
+            merge.merge(pass, System.nanoTime() + 2_000_000_000L, arena, readings, new DiffProbe(),
+                HashWhitelist.bitexact(), "entity", writeBack(readings, true));
+
+            assertEquals(8L, readings.rowsTotal(), "the frame did not count the rows it collected");
+            assertEquals(8L, readings.writeBackEnqueued(),
+                "the takeover leg did not hand its rows to the channel");
+            assertTrue(readings.commitChannelNanos() > 0L,
+                "handing a batch to the channel left no reading of its own duration");
+        } finally {
+            pool.shutdown(true, true, 500L);
+            arena.reset();
+        }
+    }
+
     @Test
     void aBatchWhoseSlotWasWrittenWithAnotherValueIsRefusedAndRedoneHere() {
         DispatchReadings readings = new DispatchReadings();
@@ -211,6 +243,10 @@ class DispatchVerifyTest {
     }
 
     private static DispatchWriteBack writeBack(DispatchReadings readings) {
+        return writeBack(readings, false);
+    }
+
+    private static DispatchWriteBack writeBack(DispatchReadings readings, boolean takeover) {
         IntentQueue intents = new IntentQueue(() -> 64, () -> 1);
         Map<String, PrtsWorldWriteTaps.DeferredWrite> store = new LinkedHashMap<>();
         AtomicInteger handles = new AtomicInteger();
@@ -218,7 +254,7 @@ class DispatchVerifyTest {
             String handle = prefix + ":" + handles.incrementAndGet();
             store.put(handle, write);
             return handle;
-        }, store::remove, world -> 1L, readings, () -> false);
+        }, store::remove, world -> 1L, readings, () -> takeover);
     }
 
     private static WorkerPool pool(DispatchReadings readings, ArenaLedger arena, int queueCap) {

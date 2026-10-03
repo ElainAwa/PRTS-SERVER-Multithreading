@@ -229,6 +229,7 @@ public final class KernelReadings {
         add(lines, "intent.commit_mode", segment.mode());
         add(lines, "intent.commit_passes", segment.passes());
         add(lines, "intent.commit_steps", segment.steps());
+        add(lines, "intent.commit_ms", format(segment.walkNanos() / 1_000_000.0));
         add(lines, "intent.commit_cursor", segment.cursor());
         add(lines, "intent.commit_refusals", segment.refusals());
         add(lines, "intent.released", intents.releasedCount());
@@ -434,6 +435,8 @@ public final class KernelReadings {
             String siteId = safe(readings.siteIds()[index]);
             String prefix = "wait.site." + siteId + ".";
             add(lines, "wait.observed_by_site." + siteId, readings.observed(index));
+            add(lines, "wait.ms_by_site." + siteId,
+                format(readings.observedNanos(index) / 1_000_000.0));
             add(lines, prefix + "wait_point",
                 module.waitSites().waitPointId(index) == null ? "UNREGISTERED"
                     : module.waitSites().waitPointId(index));

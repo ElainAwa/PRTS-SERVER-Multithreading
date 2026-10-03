@@ -142,6 +142,7 @@ public final class MergeSegment {
             long collectStartedAt = System.nanoTime();
             List<StateHasher.Slice> batchSlices = new ArrayList<>();
             collect(entry, scratch, batchSlices);
+            readings.noteRows(batchSlices.size());
             parallelSlices.addAll(batchSlices);
             append(entry.batch().task(), entry.view(), reference, serialSlices);
             frameNanos += System.nanoTime() - collectStartedAt;

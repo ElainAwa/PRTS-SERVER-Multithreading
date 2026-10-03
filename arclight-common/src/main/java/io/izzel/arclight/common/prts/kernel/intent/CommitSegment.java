@@ -41,6 +41,7 @@ public final class CommitSegment {
     private volatile long cursor;
     private volatile long passes;
     private volatile long steps;
+    private volatile long walkNanos;
     private volatile long refusals;
     private volatile long released;
     private volatile long foreignRuns;
@@ -87,6 +88,7 @@ public final class CommitSegment {
             return Pass.foreign(RejectCode.WRITE_DENIED_NOT_OWNER);
         }
         passes++;
+        long startedAt = System.nanoTime();
         int limit = Math.max(1, budget.getAsInt());
         lastBudget = limit;
         lastTruncated = false;
@@ -133,6 +135,7 @@ public final class CommitSegment {
             }
         }
         steps += applied;
+        walkNanos += System.nanoTime() - startedAt;
         lastSteps = applied;
         lastPending = queue.depth();
         if (refusal != null) {
@@ -168,6 +171,12 @@ public final class CommitSegment {
 
     public long steps() {
         return steps;
+    }
+
+    /** The wall time the walks spent applying intents to the world; observation only, it takes
+     * part in no decision. */
+    public long walkNanos() {
+        return walkNanos;
     }
 
     public long refusals() {
@@ -210,6 +219,7 @@ public final class CommitSegment {
     public void reset() {
         passes = 0L;
         steps = 0L;
+        walkNanos = 0L;
         refusals = 0L;
         released = 0L;
         budgetStops = 0L;

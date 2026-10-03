@@ -102,7 +102,10 @@ public final class DispatchWriteBack {
      * the commit segment lands or a read back that lands nothing. */
     public Settlement settle(WorkBatch batch, List<StateHasher.Slice> rows) {
         if (takeover()) {
-            return enqueue(batch, rows);
+            long channelStartedAt = System.nanoTime();
+            Settlement settlement = enqueue(batch, rows);
+            readings.noteCommitChannel(System.nanoTime() - channelStartedAt);
+            return settlement;
         }
         sampleReadBack(batch, rows);
         return Settlement.COMPUTE_ONLY;
