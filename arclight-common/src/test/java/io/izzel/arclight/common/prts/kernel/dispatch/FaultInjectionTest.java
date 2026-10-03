@@ -34,6 +34,9 @@ class FaultInjectionTest {
             assertTrue(spec.holdWorlds().isEmpty());
             assertEquals(0L, FaultInjection.workerDelayNanos(spec));
             assertFalse(FaultInjection.holdsMerge(spec, plan(task(WORLD, 7L)), world -> 7L));
+            assertFalse(FaultInjection.ownershipFails(spec));
+            assertEquals(0L, FaultInjection.ownershipDelayNanos(spec));
+            assertFalse(FaultInjection.ownershipEpochBreak(spec));
         }
         assertFalse(FaultInjection.enabled(), "the process carries no directive in a test run");
     }
@@ -50,6 +53,25 @@ class FaultInjectionTest {
         FaultInjection.pauseWorker(spec);
         assertTrue(System.nanoTime() - startedAt < 20_000_000L,
             "a spent pause still waited in the worker");
+    }
+
+    @Test
+    void theOwnershipFaultsAreSpentExactlyOnTheDeclaredRows() {
+        FaultInjection.Spec spec = FaultInjection.Spec.parse(
+            "ownFail=2,ownDelayMs=40,ownDelayRows=1,ownEpochBreak=1");
+        assertTrue(spec.enabled());
+        assertTrue(FaultInjection.ownershipFails(spec));
+        assertTrue(FaultInjection.ownershipFails(spec));
+        assertFalse(FaultInjection.ownershipFails(spec), "more rows failed than were declared");
+        assertEquals(40_000_000L, FaultInjection.ownershipDelayNanos(spec));
+        assertEquals(0L, FaultInjection.ownershipDelayNanos(spec),
+            "the ownership pause covered more rows than were declared");
+        assertTrue(FaultInjection.ownershipEpochBreak(spec));
+        assertFalse(FaultInjection.ownershipEpochBreak(spec),
+            "more revalidations were broken than were declared");
+        assertFalse(FaultInjection.ownershipFails(),
+            "the process carries no ownership fault in a test run");
+        assertFalse(FaultInjection.ownershipEpochBreak());
     }
 
     @Test

@@ -25,6 +25,12 @@ import java.util.function.Function;
  * it runs a batch, {@code delayBatches=<n>} is how many batches take that wait (default one), and
  * {@code holdWorld=<id>|<id>} names the worlds one pending plan is held for. A token that cannot be
  * parsed is ignored, so a malformed directive disables the injection instead of failing a tick.
+ *
+ * <p>The same directive carries the faults of the ownership fixture: {@code ownFail=<n>} makes the
+ * first n ownership rows fail in the worker, {@code ownDelayMs=<n>} with {@code ownDelayRows=<n>}
+ * makes its first rows answer too late to be used, and {@code ownEpochBreak=<n>} fails the token
+ * revalidation of the first n rows at the host entry. All four default to zero, so a process that
+ * declares nothing runs every row through the original path.
  */
 public final class FaultInjection {
 
@@ -32,6 +38,7 @@ public final class FaultInjection {
     private static final Spec LIVE = Spec.parse(System.getProperty(KEY));
     private static final long DELAY_MAX_MS = 5_000L;
     private static final int BATCHES_MAX = 4_096;
+    private static final int ROWS_MAX = 1_000_000;
 
     private FaultInjection() {
     }
@@ -118,21 +125,38 @@ public final class FaultInjection {
         private final long delayNanos;
         private final int delayBatches;
         private final Set<String> holdWorlds;
+        private final int ownFail;
+        private final long ownDelayNanos;
+        private final int ownDelayRows;
+        private final int ownEpochBreak;
         private final AtomicLong delayTaken = new AtomicLong();
+        private final AtomicLong ownFailTaken = new AtomicLong();
+        private final AtomicLong ownDelayTaken = new AtomicLong();
+        private final AtomicLong ownEpochTaken = new AtomicLong();
         private final Map<String, WorkPlan> holding = new ConcurrentHashMap<>();
         private final Set<String> holdSpent = ConcurrentHashMap.newKeySet();
 
-        private Spec(long delayNanos, int delayBatches, Set<String> holdWorlds) {
+        private Spec(long delayNanos, int delayBatches, Set<String> holdWorlds, int ownFail,
+            long ownDelayNanos, int ownDelayRows, int ownEpochBreak) {
             this.delayNanos = delayNanos;
             this.delayBatches = delayBatches;
             this.holdWorlds = Set.copyOf(holdWorlds);
-            this.enabled = delayNanos > 0L || !holdWorlds.isEmpty();
+            this.ownFail = ownFail;
+            this.ownDelayNanos = ownDelayNanos;
+            this.ownDelayRows = ownDelayRows;
+            this.ownEpochBreak = ownEpochBreak;
+            this.enabled = delayNanos > 0L || !holdWorlds.isEmpty() || ownFail > 0
+                || ownDelayNanos > 0L || ownEpochBreak > 0;
         }
 
         static Spec parse(String directive) {
             long delayMs = 0L;
             int batches = 1;
             Set<String> worlds = new LinkedHashSet<>();
+            int ownFail = 0;
+            long ownDelayMs = 0L;
+            int ownDelayRows = 1;
+            int ownEpochBreak = 0;
             if (directive != null) {
                 for (String token : directive.split(",")) {
                     String trimmed = token.trim();
@@ -152,10 +176,19 @@ public final class FaultInjection {
                                 worlds.add(world.trim());
                             }
                         }
+                    } else if ("ownFail".equals(name)) {
+                        ownFail = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
+                    } else if ("ownDelayMs".equals(name)) {
+                        ownDelayMs = clampNumber(value, 0L, DELAY_MAX_MS, 0L);
+                    } else if ("ownDelayRows".equals(name)) {
+                        ownDelayRows = (int) clampNumber(value, 1L, ROWS_MAX, 1L);
+                    } else if ("ownEpochBreak".equals(name)) {
+                        ownEpochBreak = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
                     }
                 }
             }
-            return new Spec(delayMs * 1_000_000L, batches, worlds);
+            return new Spec(delayMs * 1_000_000L, batches, worlds, ownFail, ownDelayMs * 1_000_000L,
+                ownDelayRows, ownEpochBreak);
         }
 
         private static long clampNumber(String value, long low, long high, long fallback) {
@@ -181,5 +214,53 @@ public final class FaultInjection {
         Set<String> holdWorlds() {
             return holdWorlds;
         }
+
+        int ownFail() {
+            return ownFail;
+        }
+
+        long ownDelayNanos() {
+            return ownDelayNanos;
+        }
+
+        int ownDelayRows() {
+            return ownDelayRows;
+        }
+
+        int ownEpochBreak() {
+            return ownEpochBreak;
+        }
+    }
+
+    /** Whether the ownership row this worker is about to run must fail; off unless declared. */
+    public static boolean ownershipFails() {
+        return ownershipFails(LIVE);
+    }
+
+    static boolean ownershipFails(Spec spec) {
+        return spec.ownFail > 0 && spec.ownFailTaken.getAndIncrement() < spec.ownFail;
+    }
+
+    /** How long the ownership row this worker is about to run waits before it answers; the wait is
+     * spent outside the execution clock, so a delayed row is a row that answered too late. */
+    public static long ownershipDelayNanos() {
+        return ownershipDelayNanos(LIVE);
+    }
+
+    static long ownershipDelayNanos(Spec spec) {
+        if (spec.ownDelayNanos <= 0L
+            || spec.ownDelayTaken.getAndIncrement() >= spec.ownDelayRows) {
+            return 0L;
+        }
+        return spec.ownDelayNanos;
+    }
+
+    /** Whether the revalidation of this host entry is forced to fail; off unless declared. */
+    public static boolean ownershipEpochBreak() {
+        return ownershipEpochBreak(LIVE);
+    }
+
+    static boolean ownershipEpochBreak(Spec spec) {
+        return spec.ownEpochBreak > 0 && spec.ownEpochTaken.getAndIncrement() < spec.ownEpochBreak;
     }
 }

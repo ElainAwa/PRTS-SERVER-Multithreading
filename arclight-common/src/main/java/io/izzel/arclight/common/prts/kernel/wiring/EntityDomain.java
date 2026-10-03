@@ -18,6 +18,7 @@ import io.izzel.arclight.common.prts.kernel.dispatch.MergeSegment;
 import io.izzel.arclight.common.prts.kernel.dispatch.TaskLedger;
 import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
 import io.izzel.arclight.common.prts.kernel.domain.entity.DispatchSnapshot;
+import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityCandidateView;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
@@ -94,6 +95,11 @@ public final class EntityDomain implements KernelDomain {
                 EVIDENCE.info(PrtsEntityRescope.censusLine());
                 EVIDENCE.info(PrtsEntityRescope.classLine());
                 EVIDENCE.info(PrtsEntityRescope.reasonLine());
+            }
+            // The ownership fixture reports itself; every one of its counters is written at the
+            // host entry or at the plan point, never derived from what a commit landed.
+            if (EntityTickOwnership.live()) {
+                EVIDENCE.info(EntityTickOwnership.evidenceLine());
             }
         }
         if (!KernelSettings.dispatchParallel()) {
@@ -195,6 +201,7 @@ public final class EntityDomain implements KernelDomain {
         probe.reset();
         PrtsEntityCapability.reset();
         PrtsEntityRescope.reset();
+        EntityTickOwnership.reset();
         lastFrame = MergeSegment.Frame.empty();
         lastEvidenceTick = 0L;
     }
@@ -227,6 +234,9 @@ public final class EntityDomain implements KernelDomain {
         sink.add("self.entity_rejected_host_callback",
             PrtsEntityCapability.reasonCount(PrtsEntityCapability.HOST_CALLBACK));
         sink.add("self.entity_rejected_unknown", PrtsEntityCapability.reasonCount(PrtsEntityCapability.UNKNOWN));
+        // The ownership fields are observation only: the fixture contributes them even when it is
+        // off, where every one of them reads zero.
+        EntityTickOwnership.readings(sink);
     }
 
     @Override

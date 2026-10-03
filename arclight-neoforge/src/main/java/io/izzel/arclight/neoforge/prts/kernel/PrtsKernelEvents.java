@@ -30,6 +30,7 @@ public final class PrtsKernelEvents {
      * platform subscription once. */
     public static synchronized void register() {
         KernelWiring.install();
+        PrtsEntityOwnershipEvents.registerIfDeclared();
         if (!reloadHookInstalled) {
             PrtsConfigManager.addReloadListener(PrtsKernelEvents::syncSubscription);
             reloadHookInstalled = true;
