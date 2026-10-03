@@ -1,13 +1,11 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/*
- * The platform bindings of the ownership fixture: the plan point before the worlds tick, the host
- * entry of one entity tick, the close after the worlds ticked, and the stop that ends the pool.
- * The listener exists only when the process declared the fixture, and the cancel flag of the host
- * entry is the whole takeover: the platform skips the original tick of that row.
- */
+/* The platform bindings of the ownership fixture; the verdict of its host entry decides the cancel
+ * flag here, so the row counted as skipped is the row that is cancelled. */
 package io.izzel.arclight.neoforge.prts.kernel;
 
+import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership;
+import io.izzel.arclight.common.prts.support.PrtsHostTickCalls;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
@@ -32,22 +30,27 @@ public final class PrtsEntityOwnershipEvents {
         subscribed = true;
     }
 
-    /** The plan point: freeze the eligible rows, issue their tokens and dispatch them. */
     @SubscribeEvent
     public void onServerTickPre(ServerTickEvent.Pre event) {
         EntityTickOwnership.onServerTickPre(event.getServer());
     }
 
-    /** The host entry of one entity tick: cancelling the event skips the original tick of the row,
-     * and the decision of the row is counted right here, not derived from a later commit. */
+    /** Cancelling the event skips the original tick of the row; the verdict of the entry, counted
+     * right there, decides the flag. */
     @SubscribeEvent
     public void onEntityTickPre(EntityTickEvent.Pre event) {
-        if (EntityTickOwnership.onEntityTickPre(event.getEntity())) {
+        int verdict = EntityTickOwnership.onEntityTickPre(event.getEntity());
+        if (verdict == EntityTickOwnership.SKIP_HOST_TICK && !FaultInjection.ownershipSkipsIgnored()) {
             event.setCanceled(true);
         }
     }
 
-    /** The close of the tick: recycle every lease that never reached its host entry. */
+    /** The host path ran the tick of this row; the independent counter records it. */
+    @SubscribeEvent
+    public void onEntityTickPost(EntityTickEvent.Post event) {
+        PrtsHostTickCalls.notePath(event.getEntity());
+    }
+
     @SubscribeEvent
     public void onServerTickPost(ServerTickEvent.Post event) {
         EntityTickOwnership.onServerTickPost();

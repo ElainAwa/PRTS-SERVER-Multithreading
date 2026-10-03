@@ -25,6 +25,7 @@
     "PrtsSaplingStructureGrowEventMixin",
     "PrtsTreeGrowerSpeciesMixin",
     "PrtsCraftMetaItemBlockEntityDataMixin",
+    "observation.PrtsEntityTickCallMixin",
     "observation.PrtsEntityTickCostMixin",
     "observation.PrtsEntityMoveCostMixin",
     "observation.PrtsEntityRescopeMixin",

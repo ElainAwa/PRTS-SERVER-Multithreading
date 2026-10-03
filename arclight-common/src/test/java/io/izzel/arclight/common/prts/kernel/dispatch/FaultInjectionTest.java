@@ -37,6 +37,8 @@ class FaultInjectionTest {
             assertFalse(FaultInjection.ownershipFails(spec));
             assertEquals(0L, FaultInjection.ownershipDelayNanos(spec));
             assertFalse(FaultInjection.ownershipEpochBreak(spec));
+            assertFalse(FaultInjection.ownershipSkipsIgnored(spec));
+            assertFalse(FaultInjection.ownershipDoubleRuns(spec));
         }
         assertFalse(FaultInjection.enabled(), "the process carries no directive in a test run");
     }
@@ -58,7 +60,7 @@ class FaultInjectionTest {
     @Test
     void theOwnershipFaultsAreSpentExactlyOnTheDeclaredRows() {
         FaultInjection.Spec spec = FaultInjection.Spec.parse(
-            "ownFail=2,ownDelayMs=40,ownDelayRows=1,ownEpochBreak=1");
+            "ownFail=2,ownDelayMs=40,ownDelayRows=1,ownEpochBreak=1,ownSkipIgnored=1,ownDoubleRun=1");
         assertTrue(spec.enabled());
         assertTrue(FaultInjection.ownershipFails(spec));
         assertTrue(FaultInjection.ownershipFails(spec));
@@ -69,9 +71,17 @@ class FaultInjectionTest {
         assertTrue(FaultInjection.ownershipEpochBreak(spec));
         assertFalse(FaultInjection.ownershipEpochBreak(spec),
             "more revalidations were broken than were declared");
+        assertTrue(FaultInjection.ownershipSkipsIgnored(spec));
+        assertFalse(FaultInjection.ownershipSkipsIgnored(spec),
+            "more skips were left uncancelled than were declared");
+        assertTrue(FaultInjection.ownershipDoubleRuns(spec));
+        assertFalse(FaultInjection.ownershipDoubleRuns(spec),
+            "more rows ran twice than were declared");
         assertFalse(FaultInjection.ownershipFails(),
             "the process carries no ownership fault in a test run");
         assertFalse(FaultInjection.ownershipEpochBreak());
+        assertFalse(FaultInjection.ownershipSkipsIgnored());
+        assertFalse(FaultInjection.ownershipDoubleRuns());
     }
 
     @Test

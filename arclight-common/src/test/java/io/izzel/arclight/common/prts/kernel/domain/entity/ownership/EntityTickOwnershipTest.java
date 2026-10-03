@@ -51,7 +51,7 @@ class EntityTickOwnershipTest {
         }
         assertTrue(EntityTickOwnership.evidenceLine().endsWith("live=0"),
             "the evidence line claims an arm that is not declared");
-        assertFalse(EntityTickOwnership.onEntityTickPre(null),
+        assertEquals(EntityTickOwnership.RUN_HOST_TICK, EntityTickOwnership.onEntityTickPre(null),
             "the host entry did work while the arm is off");
     }
 
@@ -196,6 +196,52 @@ class EntityTickOwnershipTest {
             "a row that never kept its token counted as owned");
         assertEquals(0L, EntityTickOwnership.INVARIANT_VIOLATIONS.sum());
         assertTrue(EntityTickOwnership.closureOk() && EntityTickOwnership.partitionOk());
+    }
+
+    @Test
+    void theIndependentCounterIsComparedRowByRow() {
+        int[] ids = {31, 32, 33, 34};
+        byte[] skips = {1, 0, 0, 1};
+        Map<Integer, Integer> brokenPath = Map.of(32, 1, 33, 2, 34, 1);
+        Map<Integer, Integer> brokenBody = Map.of(32, 1, 33, 2, 34, 1);
+        assertEquals(2L, EntityTickOwnership.crossCheckProbe(ids, ids.length, skips,
+                id -> brokenPath.getOrDefault(id, 0), id -> brokenBody.getOrDefault(id, 0)),
+            "the skipped row that ran and the row that ran twice were not both found");
+        assertEquals(4L, EntityTickOwnership.PROBE_CHECKED.sum());
+        assertEquals(2L, EntityTickOwnership.PROBE_MATCHED.sum(),
+            "the rows the two records agree about were not counted");
+        assertEquals(1L, EntityTickOwnership.PROBE_SKIPPED_RAN.sum());
+        assertEquals(1L, EntityTickOwnership.PROBE_RAN_TWICE.sum());
+        assertEquals(0L, EntityTickOwnership.PROBE_NEVER_RAN.sum());
+        assertEquals(0L, EntityTickOwnership.crossCheckProbe(ids, ids.length, skips,
+                id -> id == 31 || id == 34 ? 0 : 1, id -> id == 31 || id == 34 ? 0 : 1),
+            "a record the counter agrees with was reported as a disagreement");
+        assertEquals(6L, EntityTickOwnership.PROBE_MATCHED.sum());
+        assertEquals(3L, EntityTickOwnership.PROBE_BODY_SEEN.sum());
+    }
+
+    @Test
+    void aRowTheCounterNeverSawIsADisagreement() {
+        assertEquals(1L, EntityTickOwnership.crossCheckProbe(new int[] {36}, 1,
+            new byte[] {0}, id -> 0, id -> 0));
+        assertEquals(1L, EntityTickOwnership.PROBE_NEVER_RAN.sum(),
+            "a row the entry did not skip and the counter never saw was accepted");
+        assertEquals(0L, EntityTickOwnership.PROBE_MATCHED.sum());
+        assertEquals(1L, EntityTickOwnership.PROBE_CHECKED.sum());
+    }
+
+    @Test
+    void aRowWhoseClassSkipsTheBaseBodyIsStillSeenOnTheHostPath() {
+        assertEquals(0L, EntityTickOwnership.crossCheckProbe(new int[] {37}, 1,
+            new byte[] {0}, id -> 1, id -> 0));
+        assertEquals(1L, EntityTickOwnership.PROBE_MATCHED.sum());
+        assertEquals(1L, EntityTickOwnership.PROBE_BODY_BYPASSED.sum(),
+            "a class that ticks without the base body was reported as a disagreement");
+        assertEquals(0L, EntityTickOwnership.PROBE_NEVER_RAN.sum());
+        assertEquals(1L, EntityTickOwnership.crossCheckProbe(new int[] {38}, 1,
+            new byte[] {0}, id -> 1, id -> 2));
+        assertEquals(1L, EntityTickOwnership.PROBE_RAN_TWICE.sum(),
+            "a body call beyond the host path was not reported");
     }
 
     private static OwnershipLease lease(int capacity) {

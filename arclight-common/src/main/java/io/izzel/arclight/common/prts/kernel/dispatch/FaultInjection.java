@@ -32,8 +32,12 @@ import java.util.function.Function;
  * revalidation of the first n rows at the host entry, {@code ownWiden=<n>} admits the first n rows
  * the whole-tick model refuses, and {@code ownBreak=<n>} answers the first n rows with the captured
  * state instead of running the model. The last two are the negative fixtures of the equivalence
- * harness: they make an answer wrong on purpose so the harness can be shown to reject it. All six
- * default to zero, so a process that declares nothing runs every row through the original path.
+ * harness: they make an answer wrong on purpose so the harness can be shown to reject it.
+ * {@code ownSkipIgnored=<n>} keeps the platform from cancelling the first n rows the host entry
+ * decided to skip, and {@code ownDoubleRun=<n>} runs the original tick of the first n rows the host
+ * entry decided to run a second time; both are the negative fixtures of the independent call
+ * counter, which has to report them. All of them default to zero, so a process that declares
+ * nothing runs every row through the original path exactly once.
  */
 public final class FaultInjection {
 
@@ -134,17 +138,22 @@ public final class FaultInjection {
         private final int ownEpochBreak;
         private final int ownWiden;
         private final int ownBreak;
+        private final int ownSkipIgnored;
+        private final int ownDoubleRun;
         private final AtomicLong delayTaken = new AtomicLong();
         private final AtomicLong ownFailTaken = new AtomicLong();
         private final AtomicLong ownDelayTaken = new AtomicLong();
         private final AtomicLong ownEpochTaken = new AtomicLong();
         private final AtomicLong ownWidenTaken = new AtomicLong();
         private final AtomicLong ownBreakTaken = new AtomicLong();
+        private final AtomicLong ownSkipIgnoredTaken = new AtomicLong();
+        private final AtomicLong ownDoubleRunTaken = new AtomicLong();
         private final Map<String, WorkPlan> holding = new ConcurrentHashMap<>();
         private final Set<String> holdSpent = ConcurrentHashMap.newKeySet();
 
         private Spec(long delayNanos, int delayBatches, Set<String> holdWorlds, int ownFail,
-            long ownDelayNanos, int ownDelayRows, int ownEpochBreak, int ownWiden, int ownBreak) {
+            long ownDelayNanos, int ownDelayRows, int ownEpochBreak, int ownWiden, int ownBreak,
+            int ownSkipIgnored, int ownDoubleRun) {
             this.delayNanos = delayNanos;
             this.delayBatches = delayBatches;
             this.holdWorlds = Set.copyOf(holdWorlds);
@@ -154,8 +163,11 @@ public final class FaultInjection {
             this.ownEpochBreak = ownEpochBreak;
             this.ownWiden = ownWiden;
             this.ownBreak = ownBreak;
+            this.ownSkipIgnored = ownSkipIgnored;
+            this.ownDoubleRun = ownDoubleRun;
             this.enabled = delayNanos > 0L || !holdWorlds.isEmpty() || ownFail > 0
-                || ownDelayNanos > 0L || ownEpochBreak > 0 || ownWiden > 0 || ownBreak > 0;
+                || ownDelayNanos > 0L || ownEpochBreak > 0 || ownWiden > 0 || ownBreak > 0
+                || ownSkipIgnored > 0 || ownDoubleRun > 0;
         }
 
         static Spec parse(String directive) {
@@ -168,6 +180,8 @@ public final class FaultInjection {
             int ownEpochBreak = 0;
             int ownWiden = 0;
             int ownBreak = 0;
+            int ownSkipIgnored = 0;
+            int ownDoubleRun = 0;
             if (directive != null) {
                 for (String token : directive.split(",")) {
                     String trimmed = token.trim();
@@ -199,11 +213,15 @@ public final class FaultInjection {
                         ownWiden = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
                     } else if ("ownBreak".equals(name)) {
                         ownBreak = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
+                    } else if ("ownSkipIgnored".equals(name)) {
+                        ownSkipIgnored = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
+                    } else if ("ownDoubleRun".equals(name)) {
+                        ownDoubleRun = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
                     }
                 }
             }
             return new Spec(delayMs * 1_000_000L, batches, worlds, ownFail, ownDelayMs * 1_000_000L,
-                ownDelayRows, ownEpochBreak, ownWiden, ownBreak);
+                ownDelayRows, ownEpochBreak, ownWiden, ownBreak, ownSkipIgnored, ownDoubleRun);
         }
 
         private static long clampNumber(String value, long low, long high, long fallback) {
@@ -252,6 +270,14 @@ public final class FaultInjection {
 
         int ownBreak() {
             return ownBreak;
+        }
+
+        int ownSkipIgnored() {
+            return ownSkipIgnored;
+        }
+
+        int ownDoubleRun() {
+            return ownDoubleRun;
         }
     }
 
@@ -303,5 +329,27 @@ public final class FaultInjection {
 
     static boolean ownershipBreaks(Spec spec) {
         return spec.ownBreak > 0 && spec.ownBreakTaken.getAndIncrement() < spec.ownBreak;
+    }
+
+    /** Whether the platform is kept from cancelling a row the host entry decided to skip; off
+     * unless declared. The decision stands, so the independent counter must see the row run. */
+    public static boolean ownershipSkipsIgnored() {
+        return ownershipSkipsIgnored(LIVE);
+    }
+
+    static boolean ownershipSkipsIgnored(Spec spec) {
+        return spec.ownSkipIgnored > 0
+            && spec.ownSkipIgnoredTaken.getAndIncrement() < spec.ownSkipIgnored;
+    }
+
+    /** Whether a row the host entry decided to run runs its original tick once more; off unless
+     * declared, and only the independent counter of the tick body can see it. */
+    public static boolean ownershipDoubleRuns() {
+        return ownershipDoubleRuns(LIVE);
+    }
+
+    static boolean ownershipDoubleRuns(Spec spec) {
+        return spec.ownDoubleRun > 0
+            && spec.ownDoubleRunTaken.getAndIncrement() < spec.ownDoubleRun;
     }
 }
