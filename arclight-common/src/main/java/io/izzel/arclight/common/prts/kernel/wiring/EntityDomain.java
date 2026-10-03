@@ -22,6 +22,7 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.EntityCandidateView;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
+import io.izzel.arclight.common.prts.support.PrtsEntityCapability;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.SelfRow;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -82,6 +83,10 @@ public final class EntityDomain implements KernelDomain {
                 module.intents().depth(), module.intents().orderViolationCount(), selfEntityMs());
             EVIDENCE.info(readings.evidenceLine(arena, window));
             EVIDENCE.info(writeBack.sampleLine());
+            // The census is observation only: it says which rows a takeover could claim and what
+            // those rows cost the host, and no decision of this domain reads it.
+            EVIDENCE.info(PrtsEntityCapability.censusLine());
+            EVIDENCE.info(PrtsEntityCapability.classLine());
         }
         if (!KernelSettings.dispatchParallel()) {
             if (pool != null || pending != null) {
@@ -180,6 +185,7 @@ public final class EntityDomain implements KernelDomain {
         ledger.reset();
         merge.reset();
         probe.reset();
+        PrtsEntityCapability.reset();
         lastFrame = MergeSegment.Frame.empty();
         lastEvidenceTick = 0L;
     }
@@ -193,6 +199,25 @@ public final class EntityDomain implements KernelDomain {
         sink.add("self.dispatch_redo_ms", readings.redoNanos() / 1_000_000.0);
         sink.add("self.dispatch_rows", readings.rowsTotal());
         sink.add("self.dispatch_commit_channel_ms", readings.commitChannelNanos() / 1_000_000.0);
+        sink.add("self.entity_tick_open", PrtsEntityCapability.tickOpens());
+        sink.add("self.entity_tick_close", PrtsEntityCapability.tickCloses());
+        sink.add("self.entity_tick_unpaired", PrtsEntityCapability.tickUnpaired());
+        sink.add("self.entity_tick_cancelled", PrtsEntityCapability.tickCancelled());
+        sink.add("self.entity_move_open", PrtsEntityCapability.moveOpens());
+        sink.add("self.entity_move_close", PrtsEntityCapability.moveCloses());
+        sink.add("self.entity_candidates", PrtsEntityCapability.candidates());
+        sink.add("self.entity_eligible", PrtsEntityCapability.eligible());
+        sink.add("self.entity_owner_conflict", PrtsEntityCapability.ownerConflicts());
+        sink.add("self.entity_cap_dropped", PrtsEntityCapability.capDropped());
+        sink.add("self.entity_no_ai_mobs", PrtsEntityCapability.noAiMobs());
+        sink.add("self.entity_rejected_lifecycle", PrtsEntityCapability.reasonCount(PrtsEntityCapability.LIFECYCLE));
+        sink.add("self.entity_rejected_ai", PrtsEntityCapability.reasonCount(PrtsEntityCapability.AI));
+        sink.add("self.entity_rejected_riding", PrtsEntityCapability.reasonCount(PrtsEntityCapability.RIDING));
+        sink.add("self.entity_rejected_cross_entity",
+            PrtsEntityCapability.reasonCount(PrtsEntityCapability.CROSS_ENTITY));
+        sink.add("self.entity_rejected_host_callback",
+            PrtsEntityCapability.reasonCount(PrtsEntityCapability.HOST_CALLBACK));
+        sink.add("self.entity_rejected_unknown", PrtsEntityCapability.reasonCount(PrtsEntityCapability.UNKNOWN));
     }
 
     @Override

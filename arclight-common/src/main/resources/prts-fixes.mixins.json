@@ -25,6 +25,8 @@
     "PrtsSaplingStructureGrowEventMixin",
     "PrtsTreeGrowerSpeciesMixin",
     "PrtsCraftMetaItemBlockEntityDataMixin",
+    "observation.PrtsEntityTickCostMixin",
+    "observation.PrtsEntityMoveCostMixin",
     "waitpoints.PrtsEntityWaitSiteMixin",
     "waitpoints.PrtsBlockCollisionsWaitSiteMixin",
     "waitpoints.PrtsNaturalSpawnerWaitSiteMixin",
