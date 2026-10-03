@@ -2,6 +2,7 @@
 package io.izzel.arclight.common.prts.kernel.domain.entity.ownership;
 
 import io.izzel.arclight.common.prts.kernel.DomainReadings;
+import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.TickState;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -60,7 +61,7 @@ class EntityTickOwnershipTest {
         lease.publish(direct(), 1);
         EntityTickOwnership.install(lease);
         assertEquals(OwnershipLease.SETTLED, lease.state(0));
-        assertTrue(EntityTickOwnership.decideRow(11, WORLD_EPOCH, 41, CLEAN, false),
+        assertTrue(EntityTickOwnership.decideRow(11, WORLD_EPOCH, 41, CLEAN, false, 0.0, 0.0, 0.0) >= 0,
             "a settled token did not skip its row");
         assertEquals(OwnershipLease.CONSUMED, lease.state(0), "the spent token stayed usable");
         EntityTickOwnership.closeInstalled();
@@ -81,7 +82,7 @@ class EntityTickOwnershipTest {
         lease.publish(never(), 1);
         EntityTickOwnership.install(lease);
         assertEquals(OwnershipLease.PENDING, lease.state(0));
-        assertFalse(EntityTickOwnership.decideRow(12, WORLD_EPOCH, 41, CLEAN, false),
+        assertTrue(EntityTickOwnership.decideRow(12, WORLD_EPOCH, 41, CLEAN, false, 0.0, 0.0, 0.0) < 0,
             "a row without an answer was skipped");
         assertEquals(1L, EntityTickOwnership.ELIGIBLE.sum(), "the fallback row is not the eligible one");
         assertEquals(1L, EntityTickOwnership.FALLBACK.sum(), "the withdrawal was not counted");
@@ -104,8 +105,8 @@ class EntityTickOwnershipTest {
         EntityTickOwnership.install(lease);
         assertEquals(OwnershipLease.FAILED, lease.state(0), "a refused chunk was not failed");
         assertEquals(OwnershipLease.FAILED, lease.state(1));
-        assertFalse(EntityTickOwnership.decideRow(13, WORLD_EPOCH, 41, CLEAN, false));
-        assertFalse(EntityTickOwnership.decideRow(14, WORLD_EPOCH, 41, CLEAN, false));
+        assertTrue(EntityTickOwnership.decideRow(13, WORLD_EPOCH, 41, CLEAN, false, 0.0, 0.0, 0.0) < 0);
+        assertTrue(EntityTickOwnership.decideRow(14, WORLD_EPOCH, 41, CLEAN, false, 0.0, 0.0, 0.0) < 0);
         assertEquals(2L, EntityTickOwnership.FALLBACK.sum());
         assertEquals(2L, EntityTickOwnership.ELIGIBLE.sum());
         assertEquals(0L, EntityTickOwnership.HOST_SKIPPED.sum());
@@ -138,8 +139,8 @@ class EntityTickOwnershipTest {
         issue(lease, 17, 40);
         lease.publish(direct(), 1);
         EntityTickOwnership.install(lease);
-        assertTrue(EntityTickOwnership.decideRow(17, WORLD_EPOCH, 41, CLEAN, false));
-        assertFalse(EntityTickOwnership.decideRow(17, WORLD_EPOCH, 41, CLEAN, false),
+        assertTrue(EntityTickOwnership.decideRow(17, WORLD_EPOCH, 41, CLEAN, false, 0.0, 0.0, 0.0) >= 0);
+        assertTrue(EntityTickOwnership.decideRow(17, WORLD_EPOCH, 41, CLEAN, false, 0.0, 0.0, 0.0) < 0,
             "a second host entry of one row skipped it again");
         assertEquals(1L, EntityTickOwnership.OWNER_CONFLICT.sum());
         assertEquals(0L, EntityTickOwnership.HOST_SKIPPED.sum(),
@@ -158,10 +159,10 @@ class EntityTickOwnershipTest {
         issue(lease, 18, 40);
         lease.publish(direct(), 1);
         EntityTickOwnership.install(lease);
-        assertFalse(EntityTickOwnership.decideRow(18, WORLD_EPOCH + 1L, 41, CLEAN, false),
+        assertTrue(EntityTickOwnership.decideRow(18, WORLD_EPOCH + 1L, 41, CLEAN, false, 0.0, 0.0, 0.0) < 0,
             "a token of another generation skipped its row");
         assertEquals(1L, EntityTickOwnership.LIFECYCLE_REJECTED.sum());
-        assertFalse(EntityTickOwnership.decideRow(19, WORLD_EPOCH, 41, CLEAN, false),
+        assertTrue(EntityTickOwnership.decideRow(19, WORLD_EPOCH, 41, CLEAN, false, 0.0, 0.0, 0.0) < 0,
             "a row nobody claimed was skipped");
         assertEquals(1L, EntityTickOwnership.HOST_EXECUTED.sum(),
             "the unclaimed row was not counted as one the host ran");
@@ -179,8 +180,8 @@ class EntityTickOwnershipTest {
         issue(lease, 24, 40);
         lease.publish(refuse(), 1);
         EntityTickOwnership.install(lease);
-        assertFalse(EntityTickOwnership.decideRow(21, WORLD_EPOCH, 41, CLEAN, false));
-        assertFalse(EntityTickOwnership.decideRow(22, WORLD_EPOCH, 41, CLEAN, true));
+        assertTrue(EntityTickOwnership.decideRow(21, WORLD_EPOCH, 41, CLEAN, false, 0.0, 0.0, 0.0) < 0);
+        assertTrue(EntityTickOwnership.decideRow(22, WORLD_EPOCH, 41, CLEAN, true, 0.0, 0.0, 0.0) < 0);
         EntityTickOwnership.closeInstalled();
         assertEquals(4L, EntityTickOwnership.ISSUED.sum());
         assertEquals(2L, EntityTickOwnership.NOT_ENTERED.sum());
@@ -201,8 +202,10 @@ class EntityTickOwnershipTest {
     }
 
     private static void issue(OwnershipLease lease, int entityId, int tickCount) {
-        assertTrue(lease.issue(entityId, WORLD_EPOCH, entityId, tickCount + 1, CLEAN, 1.0, 2.0, 3.0,
-            0.1, 0.2, 0.3) >= 0, "the row was not issued");
+        TickState state = new TickState();
+        state.appliedScale = 1.0F;
+        assertTrue(lease.issue(entityId, WORLD_EPOCH, entityId, tickCount + 1, CLEAN, state) >= 0,
+            "the row was not issued");
     }
 
     private static Executor direct() {

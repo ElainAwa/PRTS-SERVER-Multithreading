@@ -17,11 +17,14 @@ package io.izzel.arclight.common.prts.kernel.domain.entity.ownership;
 import io.izzel.arclight.common.prts.kernel.DomainReadings;
 import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
+import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.ArmorStandTick;
+import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.TickState;
 import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
 import it.unimi.dsi.fastutil.ints.Int2LongOpenHashMap;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.decoration.ArmorStand;
 import net.minecraft.world.level.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -76,6 +79,8 @@ public final class EntityTickOwnership {
     static final LongAdder INVARIANT_VIOLATIONS = new LongAdder();
     /** Rows a worker settled. */
     static final LongAdder SETTLED_ROWS = new LongAdder();
+    /** Answers the host entry committed onto their rows, so their original tick did not run. */
+    static final LongAdder APPLIED = new LongAdder();
     /** Nanoseconds the plan point spent freezing the rows of one tick. */
     static final LongAdder PLAN_NANOS = new LongAdder();
     /** Why the plan point refused a row, by reason. */
@@ -137,12 +142,16 @@ public final class EntityTickOwnership {
                 REASON_COUNTS[reason].increment();
                 continue;
             }
+            if (!(entity instanceof ArmorStand stand)) {
+                // The predicate admits no other class, so this is a row the plan point must not own.
+                continue;
+            }
+            TickState state = new TickState();
+            ArmorStandTick.capture(stand, state);
             int entityId = entity.getId();
             long worldEpoch = worldEpochOf(level);
             int index = lease.issue(entityId, worldEpoch, entityEpochOf(entityId, tick),
-                entity.tickCount + 1, OwnershipEligibility.fingerprintOf(entity), entity.getX(),
-                entity.getY(), entity.getZ(), entity.getDeltaMovement().x, entity.getDeltaMovement().y,
-                entity.getDeltaMovement().z);
+                entity.tickCount + 1, OwnershipEligibility.fingerprintOf(entity), state);
             if (index >= 0) {
                 ISSUED.increment();
             }
@@ -163,24 +172,42 @@ public final class EntityTickOwnership {
             return false;
         }
         noteTrace(serverLevel, entity.getId());
-        return decideRow(entity.getId(), worldEpochOf(serverLevel), entity.tickCount,
-            OwnershipEligibility.fingerprintOf(entity), FaultInjection.ownershipEpochBreak());
+        if (!(entity instanceof ArmorStand stand)) {
+            // The entry of a row no model covers is still an entry: it is counted here, at the host
+            // entry, so the partition of this fixture spans every row the host walked past.
+            CANDIDATES.increment();
+            HOST_EXECUTED.increment();
+            return false;
+        }
+        int index = decideRow(entity.getId(), worldEpochOf(serverLevel), entity.tickCount,
+            OwnershipEligibility.fingerprintOf(entity), FaultInjection.ownershipEpochBreak(),
+            entity.xo, entity.yo, entity.zo);
+        OwnershipLease lease = current;
+        if (index < 0 || lease == null) {
+            return false;
+        }
+        // The commit segment of the row: the host applies the settled answer on the tick thread and
+        // then skips the original tick. No worker ever touches the entity.
+        ArmorStandTick.apply(stand, lease.answer(index));
+        APPLIED.increment();
+        return true;
     }
 
-    /** The decision of one host entry, on the values the entry read; no world access, no wait. */
-    static boolean decideRow(int entityId, long worldEpoch, int tickCount, byte liveFingerprint,
-        boolean epochBreak) {
+    /** The decision of one host entry, on the values the entry read; no world access, no wait.
+     * A non-negative return is the index of the answer the caller must commit and then skip. */
+    static int decideRow(int entityId, long worldEpoch, int tickCount, byte liveFingerprint,
+        boolean epochBreak, double xo, double yo, double zo) {
         OwnershipLease lease = current;
         if (lease == null) {
             CANDIDATES.increment();
             HOST_EXECUTED.increment();
-            return false;
+            return -1;
         }
         int index = lease.indexOf(entityId);
         if (index < 0) {
             CANDIDATES.increment();
             HOST_EXECUTED.increment();
-            return false;
+            return -1;
         }
         if (lease.looked(index)) {
             // One row of one tick must have at most one owner. A second entry is a conflict: the
@@ -194,28 +221,29 @@ public final class EntityTickOwnership {
             } else {
                 lease.revoke(index);
             }
-            return false;
+            return -1;
         }
         CANDIDATES.increment();
         lease.markLooked(index);
         boolean valid = !epochBreak
             && lease.worldEpoch(index) == worldEpoch
             && lease.hostTickVersion(index) == tickCount
-            && lease.fingerprint(index) == liveFingerprint;
+            && lease.fingerprint(index) == liveFingerprint
+            && lease.positionHolds(index, xo, yo, zo);
         if (!valid) {
             LIFECYCLE_REJECTED.increment();
             withdraw(lease, index);
-            return false;
+            return -1;
         }
         if (lease.state(index) != OwnershipLease.SETTLED) {
             // No answer before the host needs the row: the token is withdrawn right here, in front
             // of the host, and the row runs its original tick exactly once.
             withdraw(lease, index);
-            return false;
+            return -1;
         }
         lease.consume(index);
         HOST_SKIPPED.increment();
-        return true;
+        return index;
     }
 
     /** Closes the tick: recycle every lease that never reached the host, then check the accounts. */
@@ -279,6 +307,26 @@ public final class EntityTickOwnership {
             + " live=" + (LIVE ? 1 : 0);
     }
 
+    /** One evidence line for the whole-tick model: what it answered, and why it refused a row. */
+    public static String replicaLine() {
+        StringBuilder builder = new StringBuilder("[PRTS] entity-replica:");
+        builder.append(" applied=").append(APPLIED.sum());
+        builder.append(" settled=").append(SETTLED_ROWS.sum());
+        builder.append(" compute_rows=").append(ArmorStandTick.computeRows());
+        builder.append(" compute_ns_per_row=").append(String.format(Locale.ROOT, "%.1f",
+            ArmorStandTick.computeRows() == 0L ? 0.0
+                : (double) ArmorStandTick.computeNanos() / (double) ArmorStandTick.computeRows()));
+        LongAdder[] refusals = ArmorStandTick.refusalCounts();
+        builder.append(" refused_physics=").append(refusals[ArmorStandTick.PHYSICS].sum());
+        builder.append(" refused_state=").append(refusals[ArmorStandTick.STATE].sum());
+        builder.append(" refused_equipment=").append(refusals[ArmorStandTick.EQUIPMENT].sum());
+        builder.append(" refused_effects=").append(refusals[ArmorStandTick.EFFECTS].sum());
+        builder.append(" refused_combat=").append(refusals[ArmorStandTick.COMBAT].sum());
+        builder.append(" refused_portal=").append(refusals[ArmorStandTick.PORTAL].sum());
+        builder.append(" refused_fluid=").append(refusals[ArmorStandTick.FLUID].sum());
+        return builder.toString();
+    }
+
     /** Contributes the observation fields of the fixture; every one of them reads zero when off. */
     public static void readings(DomainReadings sink) {
         long issued = ISSUED.sum();
@@ -321,6 +369,8 @@ public final class EntityTickOwnership {
         for (LongAdder counter : REASON_COUNTS) {
             counter.reset();
         }
+        APPLIED.reset();
+        ArmorStandTick.reset();
         current = null;
         previous = null;
         previousLate = 0L;

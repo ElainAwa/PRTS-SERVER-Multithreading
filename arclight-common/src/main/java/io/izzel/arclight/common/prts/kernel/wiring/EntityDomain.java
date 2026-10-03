@@ -100,6 +100,7 @@ public final class EntityDomain implements KernelDomain {
             // host entry or at the plan point, never derived from what a commit landed.
             if (EntityTickOwnership.live()) {
                 EVIDENCE.info(EntityTickOwnership.evidenceLine());
+                EVIDENCE.info(EntityTickOwnership.replicaLine());
             }
         }
         if (!KernelSettings.dispatchParallel()) {

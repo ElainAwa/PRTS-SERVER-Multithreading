@@ -28,9 +28,12 @@ import java.util.function.Function;
  *
  * <p>The same directive carries the faults of the ownership fixture: {@code ownFail=<n>} makes the
  * first n ownership rows fail in the worker, {@code ownDelayMs=<n>} with {@code ownDelayRows=<n>}
- * makes its first rows answer too late to be used, and {@code ownEpochBreak=<n>} fails the token
- * revalidation of the first n rows at the host entry. All four default to zero, so a process that
- * declares nothing runs every row through the original path.
+ * makes its first rows answer too late to be used, {@code ownEpochBreak=<n>} fails the token
+ * revalidation of the first n rows at the host entry, {@code ownWiden=<n>} admits the first n rows
+ * the whole-tick model refuses, and {@code ownBreak=<n>} answers the first n rows with the captured
+ * state instead of running the model. The last two are the negative fixtures of the equivalence
+ * harness: they make an answer wrong on purpose so the harness can be shown to reject it. All six
+ * default to zero, so a process that declares nothing runs every row through the original path.
  */
 public final class FaultInjection {
 
@@ -129,15 +132,19 @@ public final class FaultInjection {
         private final long ownDelayNanos;
         private final int ownDelayRows;
         private final int ownEpochBreak;
+        private final int ownWiden;
+        private final int ownBreak;
         private final AtomicLong delayTaken = new AtomicLong();
         private final AtomicLong ownFailTaken = new AtomicLong();
         private final AtomicLong ownDelayTaken = new AtomicLong();
         private final AtomicLong ownEpochTaken = new AtomicLong();
+        private final AtomicLong ownWidenTaken = new AtomicLong();
+        private final AtomicLong ownBreakTaken = new AtomicLong();
         private final Map<String, WorkPlan> holding = new ConcurrentHashMap<>();
         private final Set<String> holdSpent = ConcurrentHashMap.newKeySet();
 
         private Spec(long delayNanos, int delayBatches, Set<String> holdWorlds, int ownFail,
-            long ownDelayNanos, int ownDelayRows, int ownEpochBreak) {
+            long ownDelayNanos, int ownDelayRows, int ownEpochBreak, int ownWiden, int ownBreak) {
             this.delayNanos = delayNanos;
             this.delayBatches = delayBatches;
             this.holdWorlds = Set.copyOf(holdWorlds);
@@ -145,8 +152,10 @@ public final class FaultInjection {
             this.ownDelayNanos = ownDelayNanos;
             this.ownDelayRows = ownDelayRows;
             this.ownEpochBreak = ownEpochBreak;
+            this.ownWiden = ownWiden;
+            this.ownBreak = ownBreak;
             this.enabled = delayNanos > 0L || !holdWorlds.isEmpty() || ownFail > 0
-                || ownDelayNanos > 0L || ownEpochBreak > 0;
+                || ownDelayNanos > 0L || ownEpochBreak > 0 || ownWiden > 0 || ownBreak > 0;
         }
 
         static Spec parse(String directive) {
@@ -157,6 +166,8 @@ public final class FaultInjection {
             long ownDelayMs = 0L;
             int ownDelayRows = 1;
             int ownEpochBreak = 0;
+            int ownWiden = 0;
+            int ownBreak = 0;
             if (directive != null) {
                 for (String token : directive.split(",")) {
                     String trimmed = token.trim();
@@ -184,11 +195,15 @@ public final class FaultInjection {
                         ownDelayRows = (int) clampNumber(value, 1L, ROWS_MAX, 1L);
                     } else if ("ownEpochBreak".equals(name)) {
                         ownEpochBreak = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
+                    } else if ("ownWiden".equals(name)) {
+                        ownWiden = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
+                    } else if ("ownBreak".equals(name)) {
+                        ownBreak = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
                     }
                 }
             }
             return new Spec(delayMs * 1_000_000L, batches, worlds, ownFail, ownDelayMs * 1_000_000L,
-                ownDelayRows, ownEpochBreak);
+                ownDelayRows, ownEpochBreak, ownWiden, ownBreak);
         }
 
         private static long clampNumber(String value, long low, long high, long fallback) {
@@ -230,6 +245,14 @@ public final class FaultInjection {
         int ownEpochBreak() {
             return ownEpochBreak;
         }
+
+        int ownWiden() {
+            return ownWiden;
+        }
+
+        int ownBreak() {
+            return ownBreak;
+        }
     }
 
     /** Whether the ownership row this worker is about to run must fail; off unless declared. */
@@ -262,5 +285,23 @@ public final class FaultInjection {
 
     static boolean ownershipEpochBreak(Spec spec) {
         return spec.ownEpochBreak > 0 && spec.ownEpochTaken.getAndIncrement() < spec.ownEpochBreak;
+    }
+
+    /** Whether this row is admitted although the model refuses it; off unless declared. */
+    public static boolean ownershipWidens() {
+        return ownershipWidens(LIVE);
+    }
+
+    static boolean ownershipWidens(Spec spec) {
+        return spec.ownWiden > 0 && spec.ownWidenTaken.getAndIncrement() < spec.ownWiden;
+    }
+
+    /** Whether this row is answered without running the model; off unless declared. */
+    public static boolean ownershipBreaks() {
+        return ownershipBreaks(LIVE);
+    }
+
+    static boolean ownershipBreaks(Spec spec) {
+        return spec.ownBreak > 0 && spec.ownBreakTaken.getAndIncrement() < spec.ownBreak;
     }
 }

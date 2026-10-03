@@ -1,35 +1,37 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * The token table of one entity tick. The plan point freezes a row and issues a token for it, the
- * worker pool settles the tokens it can, and the host entry consumes or revokes the token of every
- * row it reaches. The table is written by the tick thread before it is published to the pool and
- * read by the tick thread again at the host entries; the only field a worker publishes is the
- * per-row state, which is atomic, so one row has exactly one owner and at most one outcome.
+ * worker pool answers the token with the whole-tick model of that row, and the host entry consumes
+ * or revokes the token of every row it reaches. The table is written by the tick thread before it
+ * is published to the pool and read by the tick thread again at the host entries; the only field a
+ * worker publishes is the per-row state, which is atomic, so one row has exactly one owner and at
+ * most one outcome.
  */
 package io.izzel.arclight.common.prts.kernel.domain.entity.ownership;
 
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
+import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.ArmorStandTick;
+import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.TickState;
 import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
 
 import java.util.concurrent.Executor;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
  * The leases of one tick. A row is addressed by its index, the host entry addresses it by entity
- * id, and a token is spent once: it is either consumed by the host entry that skipped the row, or
- * revoked, so a late worker result can never skip a row the host already ran.
+ * id, and a token is spent once: it is either consumed by the host entry that committed the answer
+ * of the row, or revoked, so a late worker result can never skip a row the host already ran.
  */
 final class OwnershipLease {
 
     /** Issued, no worker answer yet. */
     static final int PENDING = 0;
-    /** A worker answered and the result is published. */
+    /** A worker answered and the answer is published. */
     static final int SETTLED = 1;
     /** The worker answered with a failure. */
     static final int FAILED = 2;
-    /** The host entry skipped the row under this token. */
+    /** The host entry committed the answer of the row and skipped its original tick. */
     static final int CONSUMED = 3;
     /** The token was withdrawn: the row runs on the host. */
     static final int REVOKED = 4;
@@ -43,13 +45,8 @@ final class OwnershipLease {
     private final long[] entityEpochs;
     private final int[] hostTickVersions;
     private final byte[] fingerprints;
-    private final double[] px;
-    private final double[] py;
-    private final double[] pz;
-    private final double[] vx;
-    private final double[] vy;
-    private final double[] vz;
-    private final long[] results;
+    private final TickState[] captured;
+    private final TickState[] answers;
     private final boolean[] looked;
     private final AtomicIntegerArray states;
     private final Int2IntOpenHashMap indexById = new Int2IntOpenHashMap();
@@ -68,13 +65,8 @@ final class OwnershipLease {
         this.entityEpochs = new long[capacity];
         this.hostTickVersions = new int[capacity];
         this.fingerprints = new byte[capacity];
-        this.px = new double[capacity];
-        this.py = new double[capacity];
-        this.pz = new double[capacity];
-        this.vx = new double[capacity];
-        this.vy = new double[capacity];
-        this.vz = new double[capacity];
-        this.results = new long[capacity];
+        this.captured = new TickState[capacity];
+        this.answers = new TickState[capacity];
         this.looked = new boolean[capacity];
         this.states = new AtomicIntegerArray(capacity);
         this.indexById.defaultReturnValue(-1);
@@ -94,7 +86,7 @@ final class OwnershipLease {
 
     /** Freezes one row and issues its token; the caller read every value on the tick thread. */
     int issue(int entityId, long worldEpoch, long entityEpoch, int hostTickVersion, byte fingerprint,
-        double x, double y, double z, double dx, double dy, double dz) {
+        TickState state) {
         if (rows >= capacity || indexById.containsKey(entityId)) {
             return -1;
         }
@@ -105,12 +97,12 @@ final class OwnershipLease {
         entityEpochs[index] = entityEpoch;
         hostTickVersions[index] = hostTickVersion;
         fingerprints[index] = fingerprint;
-        px[index] = x;
-        py[index] = y;
-        pz[index] = z;
-        vx[index] = dx;
-        vy[index] = dy;
-        vz[index] = dz;
+        // The worker owns its own copy: the captured state stays the record of what the plan point
+        // saw, and a failed or late answer cannot corrupt a row the host may still run.
+        TickState answer = new TickState();
+        answer.copyFrom(state);
+        captured[index] = state;
+        answers[index] = answer;
         states.set(index, PENDING);
         indexById.put(entityId, index);
         return index;
@@ -148,6 +140,18 @@ final class OwnershipLease {
         return states.get(index);
     }
 
+    /** The answer a settled worker published for one row; its state is read only after SETTLED. */
+    TickState answer(int index) {
+        return answers[index];
+    }
+
+    /** Whether the row still stands where the plan point froze it: the host wrote that position
+     * into the previous-position fields right before this host entry. */
+    boolean positionHolds(int index, double xo, double yo, double zo) {
+        TickState state = captured[index];
+        return state != null && state.x == xo && state.y == yo && state.z == zo;
+    }
+
     boolean looked(int index) {
         return looked[index];
     }
@@ -156,12 +160,12 @@ final class OwnershipLease {
         looked[index] = true;
     }
 
-    /** Spends the token of a row the host entry skipped. */
+    /** Spends the token of a row the host entry committed and skipped. */
     void consume(int index) {
         states.set(index, CONSUMED);
     }
 
-    /** Withdraws the token of a row so the host runs it. The published result of that row is
+    /** Withdraws the token of a row so the host runs it. The published answer of that row is
      * never read again: the decision of one row of one tick happens at most once. */
     void revoke(int index) {
         states.set(index, REVOKED);
@@ -217,13 +221,12 @@ final class OwnershipLease {
         closed = true;
     }
 
-    private void settle(int index, long result) {
+    private void settle(int index) {
         if (closed) {
             lateDropped.increment();
             return;
         }
         if (states.compareAndSet(index, PENDING, SETTLED)) {
-            results[index] = result;
             settled.increment();
         } else {
             lateDropped.increment();
@@ -232,15 +235,6 @@ final class OwnershipLease {
 
     private void fail(int index) {
         states.compareAndSet(index, PENDING, FAILED);
-    }
-
-    /** The kinematic step of one frozen row: no world access, no entity access, no allocation. */
-    private long compute(int index) {
-        double x = px[index] + vx[index];
-        double y = py[index] + vy[index];
-        double z = pz[index] + vz[index];
-        return Double.doubleToRawLongBits(x) * 31L + Double.doubleToRawLongBits(y) * 131L
-            + Double.doubleToRawLongBits(z) * 137L + hostTickVersions[index];
     }
 
     /** One range of rows of this lease, run on a pool thread. */
@@ -272,7 +266,21 @@ final class OwnershipLease {
                         Thread.currentThread().interrupt();
                     }
                 }
-                settle(index, compute(index));
+                // The declared break answers with the captured state and never runs the model: it
+                // exists so a harness can be shown to reject the answer of an owned row.
+                boolean answered;
+                if (FaultInjection.ownershipBreaks()) {
+                    answered = true;
+                } else {
+                    long startedAt = System.nanoTime();
+                    answered = ArmorStandTick.compute(answers[index]);
+                    ArmorStandTick.noteCompute(System.nanoTime() - startedAt);
+                }
+                if (answered) {
+                    settle(index);
+                } else {
+                    fail(index);
+                }
             }
         }
     }

@@ -1,25 +1,23 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * The eligibility predicate of the ownership fixture: which rows a whole-tick skip may be offered
- * for at all. It reads host state only, and it answers with the first reason that refuses a row,
- * so a refusal is attributable. The fingerprint is the part of the verdict the host entry can
- * recheck without touching the world.
+ * for at all. The bar is a whole-tick model that reproduces every state transition of the row, so
+ * only the class that has one - a no-physics armour stand - passes; every other class is refused
+ * with the reason that names what a model of it would have to read. It reads host state only, and
+ * it answers with the first reason that refuses a row, so a refusal is attributable. The
+ * fingerprint is the part of the verdict the host entry can recheck without touching the world.
  */
 package io.izzel.arclight.common.prts.kernel.domain.entity.ownership;
 
+import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
+import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.ArmorStandTick;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySelector;
-import net.minecraft.world.entity.GlowSquid;
 import net.minecraft.world.entity.Leashable;
-import net.minecraft.world.entity.Marker;
 import net.minecraft.world.entity.Mob;
-import net.minecraft.world.entity.ambient.Bat;
-import net.minecraft.world.entity.animal.Squid;
 import net.minecraft.world.entity.decoration.ArmorStand;
-import net.minecraft.world.entity.item.FallingBlockEntity;
 import net.minecraft.world.entity.item.ItemEntity;
-import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.Projectile;
 
@@ -29,7 +27,7 @@ import net.minecraft.world.entity.projectile.Projectile;
  */
 final class OwnershipEligibility {
 
-    /** The whole tick of this row is offered to the ownership set. */
+    /** The whole tick of this row is reproduced by a stated model. */
     static final int WIDENED = 0;
     /** The class is not the host's: owning it would own foreign code. */
     static final int THIRD_PARTY = 1;
@@ -51,9 +49,11 @@ final class OwnershipEligibility {
     static final int FLUID = 9;
     /** The row is on fire. */
     static final int FIRE = 10;
+    /** The row has a model, and the row is in a state that model does not cover. */
+    static final int MODEL = 11;
 
     /** How many refusal reasons the table above declares. */
-    static final int REASONS = 11;
+    static final int REASONS = 12;
 
     /** The row is gone; the token must not be exercised. */
     static final byte F_REMOVED = 1;
@@ -65,6 +65,8 @@ final class OwnershipEligibility {
     static final byte F_FLUID = 1 << 3;
     /** The row started running its AI. */
     static final byte F_AI = 1 << 4;
+    /** The row left the state the model covers; it must run on the host. */
+    static final byte F_MODEL = 1 << 5;
 
     private OwnershipEligibility() {
     }
@@ -90,7 +92,7 @@ final class OwnershipEligibility {
         if (entity instanceof ItemEntity || entity instanceof Projectile) {
             return CALLBACK;
         }
-        if (!modeled(entity)) {
+        if (!(entity instanceof ArmorStand stand) || stand.getClass() != ArmorStand.class) {
             return UNMODELED;
         }
         if (entity.isOnFire()) {
@@ -103,7 +105,14 @@ final class OwnershipEligibility {
             .isEmpty()) {
             return NEIGHBOURS;
         }
-        return WIDENED;
+        int refusal = ArmorStandTick.refusal(stand);
+        if (refusal == ArmorStandTick.REPLICABLE) {
+            return WIDENED;
+        }
+        ArmorStandTick.noteRefusal(refusal);
+        // A declared widen directive admits a refused row on purpose: it is the negative fixture
+        // that shows the equivalence harness rejects an answer the model cannot stand behind.
+        return FaultInjection.ownershipWidens() ? WIDENED : MODEL;
     }
 
     /** The part of the verdict the host entry can recheck without a world query; zero for a row
@@ -125,17 +134,10 @@ final class OwnershipEligibility {
         if (entity instanceof Mob mob && !mob.isNoAi()) {
             bits |= F_AI;
         }
-        return bits;
-    }
-
-    /** Whether a whole tick of this row has a model the fixture is willing to own. */
-    private static boolean modeled(Entity entity) {
-        if (entity instanceof Villager || entity instanceof Squid || entity instanceof GlowSquid
-            || entity instanceof Bat || entity instanceof ArmorStand || entity instanceof Marker) {
-            return true;
+        if (!(entity instanceof ArmorStand stand) || !stand.noPhysics
+            || (!stand.isMarker() && !stand.isNoGravity())) {
+            bits |= F_MODEL;
         }
-        // A falling block that rests on the ground writes a block and can raise a callback; only
-        // the airborne row has a tick that reads the world without writing it.
-        return entity instanceof FallingBlockEntity && !entity.onGround();
+        return bits;
     }
 }
