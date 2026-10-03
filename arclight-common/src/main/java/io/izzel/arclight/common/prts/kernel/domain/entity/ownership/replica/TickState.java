@@ -107,6 +107,20 @@ public final class TickState {
     public float bbHeight;
     /** Whether the tick snapped the row's position, so the commit must repeat that call. */
     public boolean positionSnapped;
+    /** Whether a cloud row waits: a waiting cloud returns before it steps its radius. */
+    public boolean waiting;
+    /** The radius of a cloud row, which its tick steps and whose write refreshes its box. */
+    public float radius;
+    /** The radius step of a cloud row; zero means its tick does not write the radius. */
+    public float radiusPerTick;
+    /** The wait time of a cloud row: before it the tick returns after the wait flag. */
+    public int waitTime;
+    /** The life of a cloud row; past wait time plus life its tick discards the row. */
+    public int duration;
+    /** Whether the tick ran the radius branch, so the commit repeats the data write. */
+    public boolean radiusStepped;
+    /** Whether the tick changed the wait flag, so the commit repeats the data write. */
+    public boolean waitingChanged;
 
     /** Copies another state over this one; the worker answers on a copy of the captured row. */
     public void copyFrom(TickState other) {
@@ -183,6 +197,13 @@ public final class TickState {
         inBlockStateCleared = other.inBlockStateCleared;
         bbHeight = other.bbHeight;
         positionSnapped = other.positionSnapped;
+        waiting = other.waiting;
+        radius = other.radius;
+        radiusPerTick = other.radiusPerTick;
+        waitTime = other.waitTime;
+        duration = other.duration;
+        radiusStepped = other.radiusStepped;
+        waitingChanged = other.waitingChanged;
     }
 
     /** Clears every field, so a reused row cannot carry the answer of another row. */
@@ -260,5 +281,12 @@ public final class TickState {
         inBlockStateCleared = false;
         bbHeight = 0.0F;
         positionSnapped = false;
+        waiting = false;
+        radius = 0.0F;
+        radiusPerTick = 0.0F;
+        waitTime = 0;
+        duration = 0;
+        radiusStepped = false;
+        waitingChanged = false;
     }
 }

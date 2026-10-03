@@ -6,7 +6,9 @@
  */
 package io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica;
 
+import net.minecraft.world.entity.AreaEffectCloud;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.Marker;
 import net.minecraft.world.entity.ambient.Bat;
 import net.minecraft.world.entity.decoration.ArmorStand;
 import net.minecraft.world.entity.npc.Villager;
@@ -20,7 +22,8 @@ public final class TickModels {
         "replicable", "physics", "state", "equipment", "effects", "combat", "portal", "fluid"
     };
     private static final WholeTickModel ARMOR_STAND = new ArmorStandModel();
-    private static final List<WholeTickModel> ALL = List.of(ARMOR_STAND, VillagerTick.MODEL, BatTick.MODEL);
+    private static final List<WholeTickModel> ALL = List.of(ARMOR_STAND, VillagerTick.MODEL,
+        BatTick.MODEL, MarkerTick.MODEL, AreaEffectCloudTick.MODEL);
 
     private TickModels() {
     }
@@ -35,6 +38,12 @@ public final class TickModels {
         }
         if (entity.getClass() == Bat.class) {
             return BatTick.MODEL;
+        }
+        if (entity.getClass() == Marker.class) {
+            return MarkerTick.MODEL;
+        }
+        if (entity.getClass() == AreaEffectCloud.class) {
+            return AreaEffectCloudTick.MODEL;
         }
         return null;
     }
@@ -57,6 +66,12 @@ public final class TickModels {
         @Override
         public String name() {
             return "armor_stand";
+        }
+
+        @Override
+        public boolean retains(Entity entity) {
+            ArmorStand stand = (ArmorStand) entity;
+            return stand.noPhysics && (stand.isMarker() || stand.isNoGravity());
         }
 
         @Override

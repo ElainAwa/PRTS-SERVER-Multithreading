@@ -10,6 +10,7 @@
 package io.izzel.arclight.common.prts.support;
 
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.AreaEffectCloud;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySelector;
 import net.minecraft.world.entity.GlowSquid;
@@ -370,7 +371,8 @@ public final class PrtsEntityRescope {
     /** Whether a whole tick of this row has a model this census is willing to name. */
     private static boolean modeled(Entity entity) {
         if (entity instanceof Villager || entity instanceof Squid || entity instanceof GlowSquid
-            || entity instanceof Bat || entity instanceof ArmorStand || entity instanceof Marker) {
+            || entity instanceof Bat || entity instanceof ArmorStand || entity instanceof Marker
+            || entity instanceof AreaEffectCloud) {
             return true;
         }
         // A falling block that rests on the ground writes a block and can raise a callback; only the

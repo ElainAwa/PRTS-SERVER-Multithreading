@@ -29,6 +29,7 @@
     "observation.PrtsEntityTickCostMixin",
     "observation.PrtsEntityMoveCostMixin",
     "observation.PrtsEntityRescopeMixin",
+    "ownership.PrtsAreaEffectCloudStateMixin",
     "ownership.PrtsAttributeMapStateMixin",
     "ownership.PrtsBodyRotationControlStateMixin",
     "ownership.PrtsCombatTrackerStateMixin",

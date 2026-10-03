@@ -24,6 +24,12 @@ public interface WholeTickModel {
     /** The first condition that keeps this row out of the model, or {@link #REPLICABLE}. */
     int refusal(Entity entity);
 
+    /** Whether the row is still one this model covers, judged without a world query; the host
+     * entry rechecks it between the plan point and the tick, and a false sends the row to the host. */
+    default boolean retains(Entity entity) {
+        return true;
+    }
+
     /** Reads every field the model needs; the caller runs on the tick thread and owns the row. */
     void capture(Entity entity, TickState state);
 
