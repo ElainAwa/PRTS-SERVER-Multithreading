@@ -179,6 +179,9 @@ public final class WorkerPool {
 
     private void runItem(Item item) {
         Thread self = Thread.currentThread();
+        // A declared fault sleeps here, before the execution clock, so a fault leg never lands in
+        // the worker cost row.
+        FaultInjection.pauseWorker();
         long startedAt = System.nanoTime();
         TaskOutcome outcome;
         int attempts = 0;

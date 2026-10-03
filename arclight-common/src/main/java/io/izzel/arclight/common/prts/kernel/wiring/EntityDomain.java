@@ -13,6 +13,7 @@ import io.izzel.arclight.common.prts.kernel.dispatch.DispatchPass;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchPass.DispatchSettings;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchReadings;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchWriteBack;
+import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
 import io.izzel.arclight.common.prts.kernel.dispatch.MergeSegment;
 import io.izzel.arclight.common.prts.kernel.dispatch.TaskLedger;
 import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
@@ -90,6 +91,11 @@ public final class EntityDomain implements KernelDomain {
         }
         DispatchSettings.Policy policy = DispatchSettings.resolve();
         if (pending != null) {
+            // A declared fault keeps this pass pending and stops the next plan until its world is
+            // reloaded, so the generation refusal of the stale batch happens on the live path.
+            if (FaultInjection.holdsMerge(pending.plan(), module.guard().worldEpochs()::epochOf)) {
+                return;
+            }
             // The merge closes the window of the pass it reads; the epoch of the ledger only moves
             // here, so a pass that is closed without a merge must move it itself.
             long grace = policy.deadlineGraceMs();
