@@ -23,6 +23,7 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
 import io.izzel.arclight.common.prts.support.PrtsEntityCapability;
+import io.izzel.arclight.common.prts.support.PrtsEntityRescope;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.SelfRow;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -87,6 +88,13 @@ public final class EntityDomain implements KernelDomain {
             // those rows cost the host, and no decision of this domain reads it.
             EVIDENCE.info(PrtsEntityCapability.censusLine());
             EVIDENCE.info(PrtsEntityCapability.classLine());
+            // The re-scoping census is observation only too: it counts the rows the host entry
+            // really ticked and how long their whole tick ran, and no decision reads it.
+            if (PrtsEntityRescope.timed()) {
+                EVIDENCE.info(PrtsEntityRescope.censusLine());
+                EVIDENCE.info(PrtsEntityRescope.classLine());
+                EVIDENCE.info(PrtsEntityRescope.reasonLine());
+            }
         }
         if (!KernelSettings.dispatchParallel()) {
             if (pool != null || pending != null) {
@@ -186,6 +194,7 @@ public final class EntityDomain implements KernelDomain {
         merge.reset();
         probe.reset();
         PrtsEntityCapability.reset();
+        PrtsEntityRescope.reset();
         lastFrame = MergeSegment.Frame.empty();
         lastEvidenceTick = 0L;
     }

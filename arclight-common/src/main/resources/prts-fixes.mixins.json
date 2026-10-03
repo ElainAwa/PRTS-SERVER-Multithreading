@@ -27,6 +27,7 @@
     "PrtsCraftMetaItemBlockEntityDataMixin",
     "observation.PrtsEntityTickCostMixin",
     "observation.PrtsEntityMoveCostMixin",
+    "observation.PrtsEntityRescopeMixin",
     "waitpoints.PrtsEntityWaitSiteMixin",
     "waitpoints.PrtsBlockCollisionsWaitSiteMixin",
     "waitpoints.PrtsNaturalSpawnerWaitSiteMixin",
