@@ -18,7 +18,9 @@ import io.izzel.arclight.common.prts.kernel.DomainReadings;
 import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.ArmorStandTick;
+import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.TickModels;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.TickState;
+import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.WholeTickModel;
 import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
 import it.unimi.dsi.fastutil.ints.Int2LongOpenHashMap;
 import net.minecraft.server.MinecraftServer;
@@ -142,16 +144,17 @@ public final class EntityTickOwnership {
                 REASON_COUNTS[reason].increment();
                 continue;
             }
-            if (!(entity instanceof ArmorStand stand)) {
+            WholeTickModel model = TickModels.of(entity);
+            if (model == null) {
                 // The predicate admits no other class, so this is a row the plan point must not own.
                 continue;
             }
             TickState state = new TickState();
-            ArmorStandTick.capture(stand, state);
+            model.capture(entity, state);
             int entityId = entity.getId();
             long worldEpoch = worldEpochOf(level);
             int index = lease.issue(entityId, worldEpoch, entityEpochOf(entityId, tick),
-                entity.tickCount + 1, OwnershipEligibility.fingerprintOf(entity), state);
+                entity.tickCount + 1, OwnershipEligibility.fingerprintOf(entity), model, state);
             if (index >= 0) {
                 ISSUED.increment();
             }
@@ -172,7 +175,8 @@ public final class EntityTickOwnership {
             return false;
         }
         noteTrace(serverLevel, entity.getId());
-        if (!(entity instanceof ArmorStand stand)) {
+        WholeTickModel model = TickModels.of(entity);
+        if (model == null) {
             // The entry of a row no model covers is still an entry: it is counted here, at the host
             // entry, so the partition of this fixture spans every row the host walked past.
             CANDIDATES.increment();
@@ -186,9 +190,13 @@ public final class EntityTickOwnership {
         if (index < 0 || lease == null) {
             return false;
         }
-        // The commit segment of the row: the host applies the settled answer on the tick thread and
-        // then skips the original tick. No worker ever touches the entity.
-        ArmorStandTick.apply(stand, lease.answer(index));
+        // The commit segment of the row: the host applies the settled answer on the tick thread,
+        // takes the steps whose input is the row's own random stream or the level clock, and then
+        // skips the original tick. No worker ever touches the entity.
+        TickState answer = lease.answer(index);
+        model.apply(entity, answer);
+        model.commitHostSteps(entity, answer);
+        model.noteApplied();
         APPLIED.increment();
         return true;
     }
@@ -307,7 +315,7 @@ public final class EntityTickOwnership {
             + " live=" + (LIVE ? 1 : 0);
     }
 
-    /** One evidence line for the whole-tick model: what it answered, and why it refused a row. */
+    /** One evidence line for the whole-tick models: what each answered, and why it refused a row. */
     public static String replicaLine() {
         StringBuilder builder = new StringBuilder("[PRTS] entity-replica:");
         builder.append(" applied=").append(APPLIED.sum());
@@ -324,6 +332,20 @@ public final class EntityTickOwnership {
         builder.append(" refused_combat=").append(refusals[ArmorStandTick.COMBAT].sum());
         builder.append(" refused_portal=").append(refusals[ArmorStandTick.PORTAL].sum());
         builder.append(" refused_fluid=").append(refusals[ArmorStandTick.FLUID].sum());
+        for (WholeTickModel model : TickModels.all()) {
+            String prefix = " " + model.name() + "_";
+            builder.append(prefix).append("applied=").append(model.appliedCount());
+            builder.append(prefix).append("compute_rows=").append(model.computeRows());
+            builder.append(prefix).append("compute_ns_per_row=").append(String.format(Locale.ROOT,
+                "%.1f", model.computeRows() == 0L ? 0.0
+                    : (double) model.computeNanos() / (double) model.computeRows()));
+            LongAdder[] counts = model.refusalCounts();
+            String[] names = model.refusalNames();
+            for (int index = 1; index < counts.length && index < names.length; index++) {
+                builder.append(prefix).append("refused_").append(names[index]).append('=')
+                    .append(counts[index].sum());
+            }
+        }
         return builder.toString();
     }
 
@@ -370,7 +392,9 @@ public final class EntityTickOwnership {
             counter.reset();
         }
         APPLIED.reset();
-        ArmorStandTick.reset();
+        for (WholeTickModel model : TickModels.all()) {
+            model.reset();
+        }
         current = null;
         previous = null;
         previousLate = 0L;

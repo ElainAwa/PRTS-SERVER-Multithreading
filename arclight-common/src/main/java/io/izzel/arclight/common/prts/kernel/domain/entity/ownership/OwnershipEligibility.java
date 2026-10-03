@@ -10,7 +10,8 @@
 package io.izzel.arclight.common.prts.kernel.domain.entity.ownership;
 
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
-import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.ArmorStandTick;
+import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.WholeTickModel;
+import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.TickModels;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySelector;
@@ -92,7 +93,8 @@ final class OwnershipEligibility {
         if (entity instanceof ItemEntity || entity instanceof Projectile) {
             return CALLBACK;
         }
-        if (!(entity instanceof ArmorStand stand) || stand.getClass() != ArmorStand.class) {
+        WholeTickModel model = TickModels.of(entity);
+        if (model == null) {
             return UNMODELED;
         }
         if (entity.isOnFire()) {
@@ -105,11 +107,11 @@ final class OwnershipEligibility {
             .isEmpty()) {
             return NEIGHBOURS;
         }
-        int refusal = ArmorStandTick.refusal(stand);
-        if (refusal == ArmorStandTick.REPLICABLE) {
+        int refusal = model.refusal(entity);
+        if (refusal == WholeTickModel.REPLICABLE) {
             return WIDENED;
         }
-        ArmorStandTick.noteRefusal(refusal);
+        model.noteRefusal(refusal);
         // A declared widen directive admits a refused row on purpose: it is the negative fixture
         // that shows the equivalence harness rejects an answer the model cannot stand behind.
         return FaultInjection.ownershipWidens() ? WIDENED : MODEL;
@@ -134,8 +136,9 @@ final class OwnershipEligibility {
         if (entity instanceof Mob mob && !mob.isNoAi()) {
             bits |= F_AI;
         }
-        if (!(entity instanceof ArmorStand stand) || !stand.noPhysics
-            || (!stand.isMarker() && !stand.isNoGravity())) {
+        WholeTickModel model = TickModels.of(entity);
+        if (model == null || (entity instanceof ArmorStand stand
+            && (!stand.noPhysics || (!stand.isMarker() && !stand.isNoGravity())))) {
             bits |= F_MODEL;
         }
         return bits;

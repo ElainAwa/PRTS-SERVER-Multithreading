@@ -2,6 +2,7 @@
 package io.izzel.arclight.common.prts.kernel.domain.entity.ownership;
 
 import io.izzel.arclight.common.prts.kernel.DomainReadings;
+import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.TickModels;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.TickState;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -204,8 +205,8 @@ class EntityTickOwnershipTest {
     private static void issue(OwnershipLease lease, int entityId, int tickCount) {
         TickState state = new TickState();
         state.appliedScale = 1.0F;
-        assertTrue(lease.issue(entityId, WORLD_EPOCH, entityId, tickCount + 1, CLEAN, state) >= 0,
-            "the row was not issued");
+        assertTrue(lease.issue(entityId, WORLD_EPOCH, entityId, tickCount + 1, CLEAN,
+            TickModels.armorStand(), state) >= 0, "the row was not issued");
     }
 
     private static Executor direct() {

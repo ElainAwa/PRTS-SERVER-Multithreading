@@ -7,6 +7,8 @@
  */
 package io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica;
 
+import net.minecraft.core.BlockPos;
+
 /** The frozen state of one row of one tick. */
 public final class TickState {
 
@@ -79,6 +81,32 @@ public final class TickState {
     /** Whether the row is in a portal block, and its portal cooldown. */
     public boolean inPortal;
     public int portalCooldown;
+    /** The block position the base tick last saw; the tick rewrites it when the row moved. */
+    public BlockPos lastPos;
+    /** The walk animation bookkeeping the entity animation update decays. */
+    public float walkSpeedOld;
+    public float walkSpeed;
+    public float walkPosition;
+    /** The body rotation control of a mob: how long the head has been stable, and around which
+     * yaw it was stable. The tick of a mob row steps this control. */
+    public int bodyHeadStableTime;
+    public float bodyLastStableYHeadRot;
+    /** The age of an ageable row; its tick walks the age back to zero. */
+    public int age;
+    /** The unhappy counter of a villager row; its tick decrements it. */
+    public int unhappyCounter;
+    /** Whether a bat row rests: a resting bat zeroes its motion and snaps onto the block below. */
+    public boolean resting;
+    /** The head yaw limit of the row's body rotation control. */
+    public int headTurnLimit;
+    /** Whether the row carries a mob passenger, which the body rotation control checks. */
+    public boolean carryingMobPassenger;
+    /** Whether the base tick clears the block-state memo of the row. */
+    public boolean inBlockStateCleared;
+    /** The height of the row's bounding box, which the bat rest snap needs. */
+    public float bbHeight;
+    /** Whether the tick snapped the row's position, so the commit must repeat that call. */
+    public boolean positionSnapped;
 
     /** Copies another state over this one; the worker answers on a copy of the captured row. */
     public void copyFrom(TickState other) {
@@ -141,6 +169,20 @@ public final class TickState {
         lastPosMoved = other.lastPosMoved;
         inPortal = other.inPortal;
         portalCooldown = other.portalCooldown;
+        lastPos = other.lastPos;
+        walkSpeedOld = other.walkSpeedOld;
+        walkSpeed = other.walkSpeed;
+        walkPosition = other.walkPosition;
+        bodyHeadStableTime = other.bodyHeadStableTime;
+        bodyLastStableYHeadRot = other.bodyLastStableYHeadRot;
+        age = other.age;
+        unhappyCounter = other.unhappyCounter;
+        resting = other.resting;
+        headTurnLimit = other.headTurnLimit;
+        carryingMobPassenger = other.carryingMobPassenger;
+        inBlockStateCleared = other.inBlockStateCleared;
+        bbHeight = other.bbHeight;
+        positionSnapped = other.positionSnapped;
     }
 
     /** Clears every field, so a reused row cannot carry the answer of another row. */
@@ -204,5 +246,19 @@ public final class TickState {
         lastPosMoved = false;
         inPortal = false;
         portalCooldown = 0;
+        lastPos = null;
+        walkSpeedOld = 0.0F;
+        walkSpeed = 0.0F;
+        walkPosition = 0.0F;
+        bodyHeadStableTime = 0;
+        bodyLastStableYHeadRot = 0.0F;
+        age = 0;
+        unhappyCounter = 0;
+        resting = false;
+        headTurnLimit = 0;
+        carryingMobPassenger = false;
+        inBlockStateCleared = false;
+        bbHeight = 0.0F;
+        positionSnapped = false;
     }
 }

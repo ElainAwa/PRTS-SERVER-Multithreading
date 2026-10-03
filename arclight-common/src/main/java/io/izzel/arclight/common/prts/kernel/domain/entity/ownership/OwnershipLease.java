@@ -10,8 +10,8 @@
 package io.izzel.arclight.common.prts.kernel.domain.entity.ownership;
 
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
-import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.ArmorStandTick;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.TickState;
+import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.WholeTickModel;
 import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
 
 import java.util.concurrent.Executor;
@@ -47,6 +47,7 @@ final class OwnershipLease {
     private final byte[] fingerprints;
     private final TickState[] captured;
     private final TickState[] answers;
+    private final WholeTickModel[] models;
     private final boolean[] looked;
     private final AtomicIntegerArray states;
     private final Int2IntOpenHashMap indexById = new Int2IntOpenHashMap();
@@ -67,6 +68,7 @@ final class OwnershipLease {
         this.fingerprints = new byte[capacity];
         this.captured = new TickState[capacity];
         this.answers = new TickState[capacity];
+        this.models = new WholeTickModel[capacity];
         this.looked = new boolean[capacity];
         this.states = new AtomicIntegerArray(capacity);
         this.indexById.defaultReturnValue(-1);
@@ -86,7 +88,7 @@ final class OwnershipLease {
 
     /** Freezes one row and issues its token; the caller read every value on the tick thread. */
     int issue(int entityId, long worldEpoch, long entityEpoch, int hostTickVersion, byte fingerprint,
-        TickState state) {
+        WholeTickModel model, TickState state) {
         if (rows >= capacity || indexById.containsKey(entityId)) {
             return -1;
         }
@@ -103,6 +105,7 @@ final class OwnershipLease {
         answer.copyFrom(state);
         captured[index] = state;
         answers[index] = answer;
+        models[index] = model;
         states.set(index, PENDING);
         indexById.put(entityId, index);
         return index;
@@ -268,13 +271,14 @@ final class OwnershipLease {
                 }
                 // The declared break answers with the captured state and never runs the model: it
                 // exists so a harness can be shown to reject the answer of an owned row.
+                WholeTickModel model = models[index];
                 boolean answered;
-                if (FaultInjection.ownershipBreaks()) {
+                if (FaultInjection.ownershipBreaks() || model == null) {
                     answered = true;
                 } else {
                     long startedAt = System.nanoTime();
-                    answered = ArmorStandTick.compute(answers[index]);
-                    ArmorStandTick.noteCompute(System.nanoTime() - startedAt);
+                    answered = model.compute(answers[index]);
+                    model.noteCompute(System.nanoTime() - startedAt);
                 }
                 if (answered) {
                     settle(index);

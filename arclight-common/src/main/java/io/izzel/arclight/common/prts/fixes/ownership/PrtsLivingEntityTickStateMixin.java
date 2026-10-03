@@ -40,6 +40,9 @@ public interface PrtsLivingEntityTickStateMixin {
     @Accessor("animStepO")
     void prts$setAnimStepO(float value);
 
+    @Accessor("animStep")
+    void prts$setAnimStep(float value);
+
     @Accessor("attackAnim")
     float prts$attackAnim();
 
