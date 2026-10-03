@@ -7,13 +7,16 @@ import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
 import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkBody;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityCandidateView;
 import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;

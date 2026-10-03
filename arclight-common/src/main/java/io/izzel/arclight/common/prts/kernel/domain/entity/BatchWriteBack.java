@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-package io.izzel.arclight.common.prts.kernel.dispatch;
+package io.izzel.arclight.common.prts.kernel.domain.entity;
 
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.diff.StateHasher;
@@ -15,10 +15,10 @@ import java.util.List;
 public final class BatchWriteBack implements PrtsWorldWriteTaps.DeferredWrite {
 
     private final List<StateHasher.Slice> rows;
-    private final DispatchReadings readings;
+    private final Counters readings;
 
     /** Creates the payload of one batch. */
-    public BatchWriteBack(List<StateHasher.Slice> rows, DispatchReadings readings) {
+    public BatchWriteBack(List<StateHasher.Slice> rows, Counters readings) {
         this.rows = List.copyOf(rows);
         this.readings = readings;
     }
@@ -78,8 +78,21 @@ public final class BatchWriteBack implements PrtsWorldWriteTaps.DeferredWrite {
         return level != null;
     }
 
-    static boolean noRowsLanded(boolean worldPresent, boolean identicalOnly, int written,
-                                int identical, int kept) {
+    /** The counters a write-back feeds; the dispatch readings implement it, so the payload names
+     * the counters it writes and never the class that holds them. */
+    public interface Counters {
+
+        void noteWriteBack(int written, int gone, long nanos);
+
+        void noteWriteBackIdentity(int identical, int kept);
+
+        void noteWriteBackNoRows();
+    }
+
+    /** Tells a settlement that landed nothing from one that landed no row: the world being there is
+     * still what "applied" means, so only a present world with zero rows counts. */
+    public static boolean noRowsLanded(boolean worldPresent, boolean identicalOnly, int written,
+                                       int identical, int kept) {
         if (!worldPresent) {
             return false;
         }

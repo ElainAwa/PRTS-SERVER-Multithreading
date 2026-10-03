@@ -1,0 +1,23 @@
+# PRTS package-graph baseline — known structural debt, blocks NEW entries only.
+# entries: 16 cycle(s) · 0 layer(s)
+# layer rules: scripts/verify/layer-rules-prts.txt
+# format: one entry per line — 'cycle: a <-> b <-> c' or 'layer: from -> to'; '#' starts a comment
+# update: only when a debt is really repaid — regenerate, review the diff; the list should
+#         shrink, and a new cycle or violation must never be written into the baseline.
+
+cycle: io.izzel.arclight.common.bridge.core.entity <-> io.izzel.arclight.common.bridge.inject
+cycle: io.izzel.arclight.common.bridge.core.server.level <-> io.izzel.arclight.common.mod.util
+cycle: io.izzel.arclight.common.mixin.bukkit.plugin <-> io.izzel.arclight.common.mod.server
+cycle: io.izzel.arclight.common.mixin.core.world.level <-> io.izzel.arclight.common.mod.server.world
+cycle: io.izzel.arclight.common.mod.server <-> io.izzel.arclight.common.mod.util
+cycle: io.izzel.arclight.common.mod.util.remapper <-> io.izzel.arclight.common.prts.support
+cycle: io.izzel.arclight.neoforge.mixin.neoforge <-> io.izzel.arclight.neoforge.mod.plugin.messaging
+cycle: io.izzel.arclight.neoforge.mixin.neoforge.items <-> io.izzel.arclight.neoforge.mod.util
+cycle: io.izzel.arclight.common.bridge.bukkit <-> io.izzel.arclight.common.mod.plugin.messaging <-> io.izzel.arclight.common.mod.server
+cycle: io.izzel.arclight.common.bridge.core.server.level <-> io.izzel.arclight.common.bridge.core.world.level <-> io.izzel.arclight.common.mod.util
+cycle: io.izzel.arclight.common.mixin.bukkit.plugin <-> io.izzel.arclight.common.mod.util.remapper <-> io.izzel.arclight.common.mod.server
+cycle: io.izzel.arclight.common.bridge.bukkit <-> io.izzel.arclight.common.mod.plugin.messaging <-> io.izzel.arclight.common.mod.server <-> io.izzel.arclight.common.mixin.bukkit.plugin
+cycle: io.izzel.arclight.common.bridge.bukkit <-> io.izzel.arclight.common.mod.plugin.messaging <-> io.izzel.arclight.common.mod.server <-> io.izzel.arclight.common.mod.util
+cycle: io.izzel.arclight.common.mixin.bukkit.plugin <-> io.izzel.arclight.common.mod.util.remapper <-> io.izzel.arclight.common.prts.support <-> io.izzel.arclight.common.mod.server
+cycle: io.izzel.arclight.common.mixin.bukkit.plugin <-> io.izzel.arclight.common.mod.util.remapper.generated <-> io.izzel.arclight.common.prts.support <-> io.izzel.arclight.common.mod.server
+cycle: io.izzel.arclight.common.mixin.bukkit.plugin <-> io.izzel.arclight.common.mod.util.remapper.generated <-> io.izzel.arclight.common.prts.support <-> io.izzel.arclight.common.mod.util.remapper <-> io.izzel.arclight.common.mod.server

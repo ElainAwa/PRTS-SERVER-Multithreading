@@ -6,25 +6,10 @@ import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
 import io.izzel.arclight.common.prts.kernel.auth.WriteAuthority;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
-import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
-import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
-import io.izzel.arclight.common.prts.kernel.dispatch.DispatchPass;
-import io.izzel.arclight.common.prts.kernel.dispatch.DispatchReadings;
-import io.izzel.arclight.common.prts.kernel.dispatch.DispatchPass.DispatchSettings;
-import io.izzel.arclight.common.prts.kernel.dispatch.DispatchSnapshot;
-import io.izzel.arclight.common.prts.kernel.dispatch.DispatchWriteBack;
-import io.izzel.arclight.common.prts.kernel.dispatch.EntityCandidateView;
-import io.izzel.arclight.common.prts.kernel.dispatch.EntityIntegrator;
-import io.izzel.arclight.common.prts.kernel.dispatch.MergeSegment;
-import io.izzel.arclight.common.prts.kernel.dispatch.TaskLedger;
-import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan;
-import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
-import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.MeterWindow;
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
-import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.SelfRow;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers;
 import io.izzel.arclight.common.prts.kernel.shares.SharePlanner.ConservationCheck;
 import io.izzel.arclight.common.prts.kernel.shares.OverrunRecord;
@@ -41,6 +26,7 @@ import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -63,11 +49,6 @@ public final class KernelModule {
     private static final KernelModule INSTANCE = new KernelModule();
     private static final String RUNTIME_WORLD = "";
     private static final String SERVER_SITE = "host:server-thread";
-    private static final String DISPATCH_DOMAIN = "entity";
-    private static final String DISPATCH_THREAD_PREFIX = "prts-worker-";
-    private static final long DISPATCH_EVIDENCE_TICKS = 400L;
-    private static final long DISPATCH_SHUTDOWN_WAIT_MS = 250L;
-    private static final Logger DISPATCH_EVIDENCE = LogManager.getLogger("PRTS");
 
     private final OwnerRegistry owners = new OwnerRegistry();
     private final IntentQueue intents = new IntentQueue(KernelSettings::intentQueueCap,
@@ -87,19 +68,8 @@ public final class KernelModule {
     private final SharePlanner shares = new SharePlanner();
 
     private final ArenaLedger arena = new ArenaLedger();
-    private final DispatchReadings dispatchReadings = new DispatchReadings();
-    private final TaskLedger dispatchLedger = new TaskLedger(0L);
-    private final DiffProbe diffProbe = new DiffProbe();
-    private final MergeSegment mergeSegment = new MergeSegment();
-    private final DispatchWriteBack dispatchWriteBack = new DispatchWriteBack(intents, payloads::bind,
-        payloads::drop, guard.worldEpochs()::epochOf, dispatchReadings,
-        KernelSettings::dispatchTakeover);
+    private final List<KernelDomain> domains = new ArrayList<>();
     private long tickIndex;
-    private long dispatchTaskSeq;
-    private long lastDispatchEvidenceTick;
-    private WorkerPool dispatchPool;
-    private DispatchPass pendingDispatch;
-    private MergeSegment.Frame lastDispatchFrame = MergeSegment.Frame.empty();
     private boolean waitSiteTapInstalled;
     private long windowStartTick;
     private boolean started;
@@ -120,7 +90,7 @@ public final class KernelModule {
         if (!KernelSettings.enabled()) {
             guard.refresh(false, false, false, tickIndex);
             syncWaitSiteTap(false);
-            shutdownDispatch();
+            shutdownDomains();
             return;
         }
         long startedAt = System.nanoTime();
@@ -149,7 +119,7 @@ public final class KernelModule {
             publishWindowIfDue();
         }
         ledger.verifyClosure();
-        driveDispatch();
+        tickDomains();
         if (KernelSettings.selfTimers()) {
             SelfTimers.note(SelfClass.OBSERVE, RUNTIME_WORLD, "runtime",
                 System.nanoTime() - startedAt);
@@ -195,109 +165,8 @@ public final class KernelModule {
         PrtsWaitSites.install(wanted ? waitSites : null);
     }
 
-    private void driveDispatch() {
-        boolean parallel = KernelSettings.dispatchParallel();
-        // The line is exported before the merge of this tick and after the commit of this tick, so
-        // the orders the commit consumed account for every task the plan froze: a task is counted
-        // when its plan is built and its intent is consumed at the next commit boundary.
-        if (tickIndex - lastDispatchEvidenceTick >= DISPATCH_EVIDENCE_TICKS) {
-            lastDispatchEvidenceTick = tickIndex;
-            DispatchReadings.Window window = new DispatchReadings.Window(
-                dispatchPool == null ? 0 : dispatchPool.alive(), lastDispatchFrame.closureOk(),
-                commitSegment.cursor(), intents.depth(), intents.orderViolationCount(),
-                selfEntityMs());
-            DISPATCH_EVIDENCE.info(dispatchReadings.evidenceLine(arena, window));
-            DISPATCH_EVIDENCE.info(dispatchWriteBack.sampleLine());
-        }
-        if (parallel) {
-            DispatchSettings.Policy policy = DispatchSettings.resolve();
-            if (pendingDispatch != null) {
-                // The merge closes the window of the pass it reads; the epoch of the ledger only
-                // moves here, so a pass that is closed without a merge must move it itself.
-                long grace = policy.deadlineGraceMs();
-                long deadline = System.nanoTime() + grace * 1_000_000L;
-                lastDispatchFrame = mergeSegment.merge(pendingDispatch, deadline, arena,
-                    dispatchReadings, diffProbe, HashWhitelist.bitexact(), DISPATCH_DOMAIN,
-                    dispatchWriteBack);
-                pendingDispatch = null;
-                if (lastDispatchFrame == null) {
-                    lastDispatchFrame = MergeSegment.Frame.empty();
-                }
-            }
-            long snapshotStart = System.nanoTime();
-            // One epoch source for the freeze and the commit: the task carries the generation the
-            // write-right guard tracks, so the write-back can freeze it and the commit can compare
-            // the very same number.
-            List<EntityCandidateView> views =
-                DispatchSnapshot.capture(guard.worldEpochs()::epochOf);
-            DispatchWriteBack.noteSnapshot(dispatchReadings, RUNTIME_WORLD, "snapshot",
-                System.nanoTime() - snapshotStart);
-            WorkPlan plan = WorkPlan.freeze(tickIndex, dispatchLedger.epoch(), views,
-                policy.batchChunks(), dispatchTaskSeq + 1L);
-            dispatchTaskSeq += plan.taskCount();
-            dispatchReadings.noteTasks(plan.taskCount());
-            if (!plan.empty()) {
-                if (dispatchPool == null) {
-                    try {
-                        dispatchPool = WorkerPool.open(new WorkerPool.Spec(policy.workerCount(),
-                            DISPATCH_THREAD_PREFIX, Thread.NORM_PRIORITY, policy.queueCap(),
-                            policy.batchChunks()), policy.retryBudget(), dispatchReadings, arena);
-                    } catch (Throwable t) {
-                        dispatchReadings.notePoolOpenFailed();
-                        dispatchPool = null;
-                    }
-                }
-                if (dispatchPool != null) {
-                    pendingDispatch = DispatchPass.dispatch(plan, dispatchPool,
-                        EntityIntegrator.INSTANCE, arena, dispatchReadings, dispatchLedger);
-                } else {
-                    // No pool this tick: the plan still receives one terminal outcome per task, so
-                    // the accounting of the tick closes and the merge redos the batches on the tick
-                    // thread in the frozen order.
-                    pendingDispatch = DispatchPass.serialFallback(plan, dispatchReadings,
-                        dispatchLedger);
-                }
-            }
-        } else if (dispatchPool != null || pendingDispatch != null) {
-            shutdownDispatch();
-        }
-    }
-
     private static boolean commitWanted() {
         return KernelSettings.commitIntents() || KernelSettings.dispatchTakeover();
-    }
-
-    private double selfEntityMs() {
-        for (SelfRow row : window().rows()) {
-            if (row.selfClass() == SelfClass.ENTITY) {
-                return row.totalMs();
-            }
-        }
-        return 0.0;
-    }
-
-    private void shutdownDispatch() {
-        WorkerPool current = dispatchPool;
-        dispatchPool = null;
-        DispatchPass pending = pendingDispatch;
-        pendingDispatch = null;
-        if (pending != null) {
-            pending.abort(RejectCode.TICK_BUDGET_EXHAUSTED.text());
-        }
-        boolean confirmed = true;
-        if (current != null) {
-            WorkerPool.ShutdownReport report =
-                current.shutdown(true, true, DISPATCH_SHUTDOWN_WAIT_MS);
-            confirmed = report.terminated() && report.remainingInFlight() == 0;
-            dispatchReadings.noteShutdown(report.remainingInFlight(), report.terminated());
-        }
-        if (confirmed) {
-            arena.releaseAll();
-        } else {
-            // A worker that ignored the deadline may still hold a lease; the arena is quarantined so
-            // its slots can never be handed to the next pass.
-            arena.quarantineAll();
-        }
     }
 
     private void planBudget(List<String> worldIds) {
@@ -342,27 +211,37 @@ public final class KernelModule {
         return used;
     }
 
-    /** Returns the window to publish. */
-    public DispatchReadings dispatchReadings() {
-        return dispatchReadings;
-    }
-
-    TaskLedger dispatchLedger() {
-        return dispatchLedger;
-    }
-
-    MergeSegment.Frame lastDispatchFrame() {
-        return lastDispatchFrame;
-    }
-
-    ArenaLedger dispatchArena() {
+    /** The arena the domains share with the module. */
+    public ArenaLedger arena() {
         return arena;
     }
 
-    /** Hands the module the pass the next merge must close; used by the switch test, not the
-     * driver. */
-    void stagePendingDispatch(DispatchPass pass) {
-        this.pendingDispatch = pass;
+    /** The directory the intent payloads of the write path are bound in. */
+    public IntentPayloadDirectory payloads() {
+        return payloads;
+    }
+
+    /** Installs one domain; installing the same identity again replaces the previous instance. */
+    public void installDomain(KernelDomain domain) {
+        domains.removeIf(existing -> existing.id().equals(domain.id()));
+        domains.add(domain);
+    }
+
+    /** The domains this module drives, in installation order. */
+    public List<KernelDomain> domains() {
+        return List.copyOf(domains);
+    }
+
+    private void tickDomains() {
+        for (KernelDomain domain : domains) {
+            domain.tick(tickIndex);
+        }
+    }
+
+    private void shutdownDomains() {
+        for (KernelDomain domain : domains) {
+            domain.shutdown();
+        }
     }
 
     public MeterWindow window() {
@@ -428,14 +307,10 @@ public final class KernelModule {
 
     /** Clears the live counters. */
     public void resetReadings() {
-        shutdownDispatch();
-        dispatchReadings.reset();
-        dispatchLedger.reset();
-        mergeSegment.reset();
-        diffProbe.reset();
+        for (KernelDomain domain : domains) {
+            domain.reset();
+        }
         arena.reset();
-        lastDispatchFrame = MergeSegment.Frame.empty();
-        lastDispatchEvidenceTick = 0L;
         SelfTimers.resetAll();
         guard.resetReadings();
         waitSites.reset();

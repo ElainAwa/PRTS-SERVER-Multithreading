@@ -8,7 +8,8 @@ import io.izzel.arclight.common.prts.kernel.codes.DegradeLevel;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.codes.RejectTrigger;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
-import io.izzel.arclight.common.prts.kernel.dispatch.DispatchReadings;
+import io.izzel.arclight.common.prts.kernel.DomainReadings;
+import io.izzel.arclight.common.prts.kernel.KernelDomain;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.MeterWindow;
@@ -57,6 +58,7 @@ public final class KernelReadings {
         rejectCodes(lines, module);
         shareBudget(lines, module);
         selfTimers(lines, module);
+        domainReadings(lines, module);
         waitPoints(lines, module);
         control(lines, module);
         return lines;
@@ -363,16 +365,26 @@ public final class KernelReadings {
             add(lines, "self." + key + "_p99_ms", format(row.p99Ms()));
         }
         add(lines, "self.asserted_classes", SelfClass.assertedCount());
-        dispatchCost(lines, module);
     }
 
-    private static void dispatchCost(List<String> lines, KernelModule module) {
-        DispatchReadings readings = module.dispatchReadings();
-        add(lines, "self.dispatch_snapshot_ms", format(readings.snapshotNanos() / 1_000_000.0));
-        add(lines, "self.dispatch_verify_ms", format(readings.verifyNanos() / 1_000_000.0));
-        add(lines, "self.dispatch_verify_rows", readings.verifyRows());
-        add(lines, "self.dispatch_compute_ms", format(readings.computeNanos() / 1_000_000.0));
-        add(lines, "self.dispatch_redo_ms", format(readings.redoNanos() / 1_000_000.0));
+    /** The fields the domains contribute come through the kernel's own formatting, so a domain names
+     * its fields and the readout keeps one shape. */
+    private static void domainReadings(List<String> lines, KernelModule module) {
+        DomainReadings sink = new DomainReadings() {
+
+            @Override
+            public void add(String name, double value) {
+                KernelReadings.add(lines, name, format(value));
+            }
+
+            @Override
+            public void add(String name, long value) {
+                KernelReadings.add(lines, name, value);
+            }
+        };
+        for (KernelDomain domain : module.domains()) {
+            domain.readings(sink);
+        }
     }
 
     private static void waitPoints(List<String> lines, KernelModule module) {

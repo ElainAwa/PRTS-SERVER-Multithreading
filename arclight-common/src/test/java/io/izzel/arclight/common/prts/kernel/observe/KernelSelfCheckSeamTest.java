@@ -1,12 +1,13 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.observe;
 
+import io.izzel.arclight.common.prts.kernel.wiring.KernelWiring;
 import io.izzel.arclight.common.prts.support.PrtsWaitSites;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
-
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -20,6 +21,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * to see that the observation still arrives.</p>
  */
 class KernelSelfCheckSeamTest {
+
+    @BeforeEach
+    void installTheDomains() {
+        KernelWiring.install();
+    }
 
     @Test
     void theCheckHandsTheWaitSeamBackAndTheRealObservationContinues() {

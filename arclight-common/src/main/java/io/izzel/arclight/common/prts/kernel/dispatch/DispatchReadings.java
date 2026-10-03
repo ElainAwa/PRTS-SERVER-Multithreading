@@ -2,6 +2,7 @@
 package io.izzel.arclight.common.prts.kernel.dispatch;
 
 import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
+import io.izzel.arclight.common.prts.kernel.domain.entity.BatchWriteBack;
 
 import java.util.Map;
 import java.util.TreeMap;
@@ -12,7 +13,7 @@ import java.util.concurrent.atomic.LongAdder;
 
 /** Every value is readable at zero, which is what makes the switch-off leg a reading instead of an
  * absence: the same line is rendered with the pool never created and every count at zero. */
-public final class DispatchReadings {
+public final class DispatchReadings implements BatchWriteBack.Counters {
 
     private final LongAdder tasksTotal = new LongAdder();
     private final LongAdder dispatched = new LongAdder();

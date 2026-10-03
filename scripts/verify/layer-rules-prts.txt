@@ -1,0 +1,34 @@
+# PRTS package-layer rules: one glob=rank per line, the lower rank is the more stable side.
+# The first matching line wins, and a package matches a line when the package itself or one of its
+# ancestors does. A violation is a direct dependency from a lower rank to a higher one.
+#
+# The kernel is the bottom of this tree. The pipeline and the domains sit above the kernel, the
+# assembly of the domains above those, and the platform entry above the assembly: the kernel must
+# never name a domain, a domain may name the kernel, and only the assembly may name both.
+*.prts.kernel.codes=10
+*.prts.kernel.config=11
+*.prts.kernel.meter=12
+*.prts.kernel.intent=13
+*.prts.kernel.auth=14
+*.prts.kernel.shares=15
+*.prts.kernel.waitpoints=16
+*.prts.kernel.arena=17
+*.prts.kernel.diff=17
+*.prts.kernel.sites=17
+# The kernel itself: the module, the readout and the seams around them.
+*.prts.kernel.observe=18
+# The entity domain and the pipeline that works on it. Both sit above the kernel, so the pipeline
+# may name the domain and the domain may name the kernel, while neither may name the assembly.
+*.prts.kernel.domain=25
+*.prts.kernel.dispatch=25
+# The assembly builds the domains and hands the kernel a handle; the platform entry calls it.
+*.prts.kernel.wiring=30
+*.neoforge.prts.kernel=35
+*.prts.kernel=17
+# Host and platform packages.
+*.prts.config=5
+*.prts.support=6
+*.prts.fixes=6
+*.prts.modsupport=6
+*.prts.performance=6
+*.prts.optional=6

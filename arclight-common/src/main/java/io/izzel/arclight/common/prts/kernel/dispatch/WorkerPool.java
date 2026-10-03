@@ -5,6 +5,9 @@ import io.izzel.arclight.common.prts.kernel.arena.ArenaSlot;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
+import io.izzel.arclight.common.prts.kernel.domain.entity.CancelToken;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkBody;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan.WorkBatch;
 
 import java.util.List;
 import java.util.Map;
@@ -20,7 +23,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
-import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan.WorkBatch;
 
 /** The pool is never shared with the host or with a mod: it has a fixed size, its threads are
  * named so a result can be attributed to the thread that produced it, their priority never exceeds

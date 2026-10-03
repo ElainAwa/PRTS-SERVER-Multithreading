@@ -11,6 +11,11 @@ import io.izzel.arclight.common.prts.kernel.intent.WriteIntent;
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers;
 import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
+import io.izzel.arclight.common.prts.kernel.domain.entity.BatchWriteBack;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
+import io.izzel.arclight.common.prts.kernel.domain.entity.LiveEntityAccess;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan.WorkBatch;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan.WorkTask;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 
@@ -21,8 +26,6 @@ import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan.WorkBatch;
-import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan.WorkTask;
 
 /** There are two settlements and the tier decides which one runs. */
 public final class DispatchWriteBack {

@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.observe;
 
+import io.izzel.arclight.common.prts.kernel.wiring.KernelWiring;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -13,6 +14,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * publish the dispatch readings this layer is judged by.
  */
 class KernelSelfCheckTest {
+
+    @BeforeEach
+    void installTheDomains() {
+        KernelWiring.install();
+    }
 
     @Test
     void theMatrixEndsWithNoFailure() {

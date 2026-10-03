@@ -4,15 +4,20 @@ package io.izzel.arclight.common.prts.kernel.dispatch;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaSlot;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
+import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool.WorkerHandle;
+import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
+import io.izzel.arclight.common.prts.kernel.domain.entity.CancelToken;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityCandidateView;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkBody;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan.WorkBatch;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan.WorkTask;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool.WorkerHandle;
-import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
-import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan.WorkBatch;
-import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan.WorkTask;
 
 /** One tick's dispatch: every frozen task offered to the pool, with its token, its slot and its
  * handle. */

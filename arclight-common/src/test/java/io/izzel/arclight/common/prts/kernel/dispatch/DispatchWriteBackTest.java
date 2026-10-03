@@ -11,6 +11,12 @@ import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import io.izzel.arclight.common.prts.kernel.intent.WriteIntent;
 import io.izzel.arclight.common.prts.kernel.sites.WorldEpochs;
 import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityCandidateView;
+import io.izzel.arclight.common.prts.kernel.domain.entity.BatchWriteBack;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan.WorkBatch;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan.WorkTask;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -18,9 +24,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
-
-import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan.WorkBatch;
-import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan.WorkTask;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;

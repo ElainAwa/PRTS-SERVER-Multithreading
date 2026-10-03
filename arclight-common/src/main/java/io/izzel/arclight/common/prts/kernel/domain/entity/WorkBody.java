@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-package io.izzel.arclight.common.prts.kernel.dispatch;
+package io.izzel.arclight.common.prts.kernel.domain.entity;
 
 import io.izzel.arclight.common.prts.kernel.arena.ArenaScratch;
-import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan.WorkBatch;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan.WorkBatch;
 
 /** The computation a worker runs for one batch; the body sees only the frozen batch, its scratch and the token. */
 @FunctionalInterface

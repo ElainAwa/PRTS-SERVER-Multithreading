@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-package io.izzel.arclight.common.prts.kernel.dispatch;
+package io.izzel.arclight.common.prts.kernel.domain.entity;
 
 /** The view is a struct of arrays: the parallel arm and the serial arm read the same instance, so
  * a comparison can never be explained by two different reads of the world. */

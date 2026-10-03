@@ -9,6 +9,10 @@ import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
 import io.izzel.arclight.common.prts.kernel.diff.StateHasher;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityCandidateView;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan.WorkBatch;
 import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
@@ -16,8 +20,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-
-import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan.WorkBatch;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;

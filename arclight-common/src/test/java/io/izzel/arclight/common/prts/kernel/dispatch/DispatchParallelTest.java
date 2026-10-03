@@ -6,8 +6,13 @@ import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
 import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
-import io.izzel.arclight.common.prts.kernel.dispatch.WorkBody.NonRetryableFault;
-import io.izzel.arclight.common.prts.kernel.dispatch.WorkBody.RetryableFault;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkBody.NonRetryableFault;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkBody.RetryableFault;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityCandidateView;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
+import io.izzel.arclight.common.prts.kernel.dispatch.DispatchPass.DispatchSettings;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan.WorkTask;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -16,9 +21,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-
-import io.izzel.arclight.common.prts.kernel.dispatch.DispatchPass.DispatchSettings;
-import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan.WorkTask;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;

@@ -5,12 +5,14 @@ import io.izzel.arclight.common.prts.kernel.arena.ArenaSlot;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
 import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityCandidateView;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;

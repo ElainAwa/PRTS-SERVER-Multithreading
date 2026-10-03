@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-package io.izzel.arclight.common.prts.kernel.dispatch;
+package io.izzel.arclight.common.prts.kernel.domain.entity;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;

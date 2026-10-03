@@ -8,10 +8,12 @@ import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
 import io.izzel.arclight.common.prts.kernel.diff.DomainHash;
 import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
 import io.izzel.arclight.common.prts.kernel.diff.StateHasher;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityCandidateView;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan.WorkTask;
 
 import java.util.ArrayList;
 import java.util.List;
-import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan.WorkTask;
 
 /** The walk is the frozen order of the plan. */
 public final class MergeSegment {

@@ -4,6 +4,7 @@ package io.izzel.arclight.neoforge.prts.kernel;
 import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.config.PrtsConfigManager;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
+import io.izzel.arclight.common.prts.kernel.wiring.KernelWiring;
 import net.minecraft.server.level.ServerLevel;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.common.NeoForge;
@@ -25,8 +26,10 @@ public final class PrtsKernelEvents {
     private PrtsKernelEvents() {
     }
 
-    /** Installs the configuration reload hook and synchronizes the platform subscription once. */
+    /** Binds the kernel domains, installs the configuration reload hook and synchronizes the
+     * platform subscription once. */
     public static synchronized void register() {
+        KernelWiring.install();
         if (!reloadHookInstalled) {
             PrtsConfigManager.addReloadListener(PrtsKernelEvents::syncSubscription);
             reloadHookInstalled = true;

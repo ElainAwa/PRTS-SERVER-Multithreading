@@ -6,12 +6,14 @@ import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchPass;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchReadings;
-import io.izzel.arclight.common.prts.kernel.dispatch.EntityCandidateView;
-import io.izzel.arclight.common.prts.kernel.dispatch.EntityIntegrator;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityCandidateView;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
 import io.izzel.arclight.common.prts.kernel.dispatch.MergeSegment;
 import io.izzel.arclight.common.prts.kernel.dispatch.TaskLedger;
-import io.izzel.arclight.common.prts.kernel.dispatch.WorkPlan;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
 import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
+import io.izzel.arclight.common.prts.kernel.wiring.EntityDomain;
+import io.izzel.arclight.common.prts.kernel.wiring.KernelWiring;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,7 +25,6 @@ import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Stream;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -64,15 +65,17 @@ class KernelDispatchShutdownTest {
         assertTrue(KernelSettings.dispatchParallel(), "the test drives the switched-on position");
         KernelModule module = KernelModule.instance();
         module.resetReadings();
-        DispatchReadings readings = module.dispatchReadings();
-        TaskLedger ledger = module.dispatchLedger();
-        ArenaLedger arena = module.dispatchArena();
+        // The test drives the plane the platform entry installs, not a stand-in of its own.
+        EntityDomain domain = KernelWiring.install();
+        DispatchReadings readings = domain.readings();
+        TaskLedger ledger = domain.ledger();
+        ArenaLedger arena = module.arena();
         WorkerPool pool = WorkerPool.open(new WorkerPool.Spec(1, "prts-switch-",
             Thread.NORM_PRIORITY, 8, 4), 1, readings, arena);
         try {
             WorkPlan first = WorkPlan.freeze(module.tickIndex() + 1, ledger.epoch(),
                 List.of(view(8)), 4, 1L);
-            module.stagePendingDispatch(DispatchPass.dispatch(first, pool,
+            domain.stage(DispatchPass.dispatch(first, pool,
                 EntityIntegrator.INSTANCE, arena, readings, ledger));
             assertTrue(ledger.pendingCount() > 0L, "the staged pass registered no pending batch");
             long epochBefore = ledger.epoch();
@@ -89,11 +92,11 @@ class KernelDispatchShutdownTest {
             writeConfig(true);
             WorkPlan second = WorkPlan.freeze(module.tickIndex() + 1, ledger.epoch(),
                 List.of(view(8)), 4, 100L);
-            module.stagePendingDispatch(DispatchPass.dispatch(second, pool,
+            domain.stage(DispatchPass.dispatch(second, pool,
                 EntityIntegrator.INSTANCE, arena, readings, ledger));
             module.serverTick(List.of(WORLD));
 
-            MergeSegment.Frame frame = module.lastDispatchFrame();
+            MergeSegment.Frame frame = domain.lastFrame();
             assertTrue(frame.closureOk(), "the closure of the reopened window is broken");
             assertEquals(second.taskCount(), frame.committed());
             assertEquals(0L, ledger.pendingCount());
