@@ -33,6 +33,7 @@ public final class MergeSegment {
     private long foreignRuns;
     private long hashInconsistent;
     private List<StateHasher.Slice> lastCommitted = List.of();
+    private DomainHash lastParallel;
     private boolean mergeSkipped;
 
     /** Names a tick that closed without a merge: the frame the segment still holds belongs to an
@@ -169,6 +170,14 @@ public final class MergeSegment {
             release(entry, arena, outcome.status() == TaskOutcome.Status.EXECUTED);
             frameNanos += System.nanoTime() - settleStartedAt;
         }
+        // The row-level negative fixture: one row of the parallel arm's digest input is deviated
+        // and nothing the settlement landed changes, so the two arms differ by exactly one row.
+        int breakRow = FaultInjection.segmentBreakRow();
+        if (breakRow > 0 && breakRow <= parallelSlices.size()) {
+            int index = breakRow - 1;
+            parallelSlices.set(index, deviated(parallelSlices.get(index)));
+            readings.noteSegmentBreak();
+        }
         long hashStartedAt = System.nanoTime();
         DomainHash parallel = StateHasher.hash(domainId, pass.plan().tickIndex(), parallelSlices,
             whitelist);
@@ -186,12 +195,21 @@ public final class MergeSegment {
             readings.noteForkUnattributed();
         }
         lastCommitted = landedSlices;
+        lastParallel = parallel;
         TaskLedger.ClosureReport closure = pass.ledger().closure(pass.dispatched(), executed,
             retried, fellback, cancelled, failed);
         pass.ledger().closeWindow();
         pass.ledger().advanceEpoch();
         return new Frame(pass.plan().tickIndex(), commitSeq, committed, redone, cancelled, failed,
             closure.ok(), parallel.value(), serial.value(), equal);
+    }
+
+    /** One row with its flag bit flipped; only the parallel list is replaced, never the frame the
+     * settlement landed. */
+    private static StateHasher.Slice deviated(StateHasher.Slice row) {
+        return new StateHasher.Slice(row.worldId(), row.regionId(), row.batchId(), row.entitySeq(),
+            row.x(), row.y(), row.z(), row.yaw(), row.pitch(), row.velX(), row.velY(), row.velZ(),
+            row.flags() ^ 1L, row.slotGeneration(), row.segmentRef());
     }
 
     private static void release(DispatchPass.Entry entry, ArenaLedger arena,
@@ -226,6 +244,11 @@ public final class MergeSegment {
         }
     }
 
+    /** The parallel arm of the last merge; null before the first one. */
+    public DomainHash lastParallel() {
+        return lastParallel;
+    }
+
     public long foreignRuns() {
         return foreignRuns;
     }
@@ -240,6 +263,7 @@ public final class MergeSegment {
         foreignRuns = 0L;
         hashInconsistent = 0L;
         lastCommitted = List.of();
+        lastParallel = null;
         mergeSkipped = false;
     }
 }

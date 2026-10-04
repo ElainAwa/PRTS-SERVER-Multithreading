@@ -9,7 +9,12 @@ import java.util.Set;
 import java.util.TreeMap;
 
 /** Compares the two arms tick by tick and locates the first fork. The comparison is read-only and
- * never repairs anything. */
+ * never repairs anything.
+ *
+ * <p>The descent starts on the row sidecar: the offsets at which the two frames disagree name the
+ * row, and the sidecar answers the entity id of that offset, so a fork is placed on one row without
+ * walking a map. A frame that kept no sidecar still descends through the group maps, where it can
+ * name the entity but not the offset. */
 public final class DiffProbe {
 
     private long tickPairs;
@@ -20,10 +25,12 @@ public final class DiffProbe {
     private String firstForkRegion = "";
     private long firstForkBatch = -1L;
     private long firstForkEntitySeq = -1L;
+    private long firstForkHostOrdinal = -1L;
     private String firstForkField = "";
     private final Set<String> forkedFields = new LinkedHashSet<>();
     private final Set<String> attributedWorlds = new LinkedHashSet<>();
     private long attributedSites;
+    private long locatedRows;
 
     /** Compares one pair of hashes. */
     public void compare(DomainHash parallel, DomainHash serial) {
@@ -49,14 +56,22 @@ public final class DiffProbe {
             firstForkRegion = fork.region;
             firstForkBatch = fork.batch;
             firstForkEntitySeq = fork.entitySeq;
+            firstForkHostOrdinal = fork.hostOrdinal;
             firstForkField = fork.field;
         }
         forkedFields.add(fork.field);
         attributedWorlds.add(fork.world);
         attributedSites++;
+        if (fork.hostOrdinal >= 0L) {
+            locatedRows++;
+        }
     }
 
     private Fork locate(DomainHash parallel, DomainHash serial) {
+        Fork byRow = locateRow(parallel, serial);
+        if (byRow != null) {
+            return byRow;
+        }
         // Level one and two: the world set is fixed for both arms, so a world that only one arm has
         // is already a located fork.
         String world = firstDivergentKey(parallel.worldDigests(), serial.worldDigests());
@@ -87,7 +102,37 @@ public final class DiffProbe {
         if (field == null) {
             return null;
         }
-        return new Fork(world, region, batch, entity, field);
+        return new Fork(world, region, batch, entity, -1L, field);
+    }
+
+    /** Descends on the per-row sidecars: the first offset whose digest differs is the row, and the
+     * sidecar answers its identity. Two frames of different shapes are left to the group maps. */
+    private Fork locateRow(DomainHash parallel, DomainHash serial) {
+        DomainHash.RowDigests left = parallel.rows();
+        DomainHash.RowDigests right = serial.rows();
+        if (!left.located() || !right.located() || !left.layoutId().equals(right.layoutId())
+            || left.size() != right.size()) {
+            return null;
+        }
+        int rows = left.size();
+        long[] leftDigests = left.rowDigests();
+        long[] rightDigests = right.rowDigests();
+        for (int ordinal = 0; ordinal < rows; ordinal++) {
+            if (leftDigests[ordinal] == rightDigests[ordinal]) {
+                continue;
+            }
+            StateHasher.Slice slice = left.slice(ordinal);
+            if (slice == null) {
+                return null;
+            }
+            String field = firstDivergentKey(parallel.fieldDigests(), serial.fieldDigests());
+            if (field == null) {
+                return null;
+            }
+            return new Fork(slice.worldId(), slice.regionId(), slice.batchId(), slice.entitySeq(),
+                ordinal, field);
+        }
+        return null;
     }
 
     private static Map<String, Long> withPrefix(Map<String, Long> digests, String prefix) {
@@ -145,7 +190,8 @@ public final class DiffProbe {
         return new DiffReport(tickPairs, equal, rate,
             tickPairs == 0 ? "" : "fnv1a64-bitexact-v1", firstForkTick, firstForkWorld,
             firstForkRegion, firstForkBatch, firstForkEntitySeq, firstForkField, unattributed,
-            forkedFields.size(), attributedSites, attributedWorlds.size());
+            forkedFields.size(), attributedSites, attributedWorlds.size(), firstForkHostOrdinal,
+            locatedRows);
     }
 
     public long tickPairs() {
@@ -170,25 +216,36 @@ public final class DiffProbe {
         firstForkRegion = "";
         firstForkBatch = -1L;
         firstForkEntitySeq = -1L;
+        firstForkHostOrdinal = -1L;
         firstForkField = "";
         forkedFields.clear();
         attributedWorlds.clear();
         attributedSites = 0L;
+        locatedRows = 0L;
     }
 
-    private record Fork(String world, String region, long batch, long entitySeq, String field) {
+    private record Fork(String world, String region, long batch, long entitySeq, long hostOrdinal,
+                        String field) {
     }
 
     /** What a comparison of the two arms saw. The report keeps the pair count and the equal count -
-     * the rate is their quotient - and the first fork down to one entity and one field. */
+     * the rate is their quotient - and the first fork down to one entity and one field, plus the
+     * offset of that row in the frame when the sidecar could name it. */
     public record DiffReport(long tickPairs, long equal, double rate, String algorithmId,
                              long firstForkTick, String firstForkWorld, String firstForkRegion,
                              long firstForkBatch, long firstForkEntitySeq, String firstForkField,
                              long unattributed, long fieldCount, long attributedSites,
-                             long attributedWorlds) {
+                             long attributedWorlds, long firstForkHostOrdinal, long locatedRows) {
 
         public static DiffReport empty() {
-            return new DiffReport(0L, 0L, 0.0, "", -1L, "", "", -1L, -1L, "", 0L, 0L, 0L, 0L);
+            return new DiffReport(0L, 0L, 0.0, "", -1L, "", "", -1L, -1L, "", 0L, 0L, 0L, 0L, -1L,
+                0L);
+        }
+
+        /** The entity id of the first fork; the same identity {@link #firstForkEntitySeq()} names,
+         * under the name the row-level reading uses. */
+        public long firstForkEntityId() {
+            return firstForkEntitySeq;
         }
 
         /** Renders the first fork as one line. */
@@ -198,6 +255,7 @@ public final class DiffProbe {
             }
             return "first_fork tick=" + firstForkTick + " world=" + firstForkWorld + " region="
                 + firstForkRegion + " batch=" + firstForkBatch + " entity_seq=" + firstForkEntitySeq
+                + " entity_id=" + firstForkEntityId() + " host_ordinal=" + firstForkHostOrdinal
                 + " field=" + firstForkField + " unattributed=" + unattributed + " fields="
                 + fieldCount;
         }

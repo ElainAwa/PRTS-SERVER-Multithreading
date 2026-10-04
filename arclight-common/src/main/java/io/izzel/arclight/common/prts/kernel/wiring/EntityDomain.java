@@ -8,6 +8,7 @@ import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
+import io.izzel.arclight.common.prts.kernel.diff.DomainHash;
 import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchPass;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchPass.DispatchSettings;
@@ -56,6 +57,7 @@ public final class EntityDomain implements KernelDomain {
 
     private long taskSeq;
     private long lastEvidenceTick;
+    private long lastForkTick = -1L;
     private WorkerPool pool;
     private DispatchPass pending;
     private MergeSegment.Frame lastFrame = MergeSegment.Frame.empty();
@@ -103,6 +105,25 @@ public final class EntityDomain implements KernelDomain {
                 EVIDENCE.info(EntityTickOwnership.replicaLine());
                 EVIDENCE.info(EntityTickOwnership.segmentLine());
             }
+            // The digest face of the frame: the header, the row count and the value, plus the row
+            // the descent placed the last fork on. Observation only - no decision reads it.
+            DomainHash frame = merge.lastParallel();
+            if (frame != null) {
+                EVIDENCE.info("[PRTS] segment-digest: header=" + Long.toHexString(
+                    frame.segmentHeaderDigest()) + " rows=" + frame.rows().size() + " value="
+                    + Long.toHexString(frame.value()) + " algorithm=" + frame.algorithmId()
+                    + " row_index=" + frame.rows().layoutId());
+            }
+            DiffProbe.DiffReport fork = probe.report();
+            if (fork.firstForkTick() >= 0) {
+                EVIDENCE.info(segBreakLine(fork));
+            }
+        }
+        // A fork is announced on the tick it is placed, not only at the evidence cadence, so a short
+        // leg still records the row the descent named.
+        if (probe.tickPairs() > probe.equal() && probe.report().firstForkTick() != lastForkTick) {
+            lastForkTick = probe.report().firstForkTick();
+            EVIDENCE.info(segBreakLine(probe.report()));
         }
         if (!KernelSettings.dispatchParallel()) {
             if (pool != null || pending != null) {
@@ -206,6 +227,7 @@ public final class EntityDomain implements KernelDomain {
         EntityTickOwnership.reset();
         lastFrame = MergeSegment.Frame.empty();
         lastEvidenceTick = 0L;
+        lastForkTick = -1L;
     }
 
     @Override
@@ -244,6 +266,16 @@ public final class EntityDomain implements KernelDomain {
     @Override
     public List<String> selfCheck(List<String> failures, long tick) {
         return EntityDomainSelfCheck.run(failures, tick);
+    }
+
+    /** The row the descent named, as one line: the entity id and the offset of the row in the
+     * frame, which is what a segment break has to answer with. */
+    private static String segBreakLine(DiffProbe.DiffReport fork) {
+        return "[PRTS] seg-break: entity_id=" + fork.firstForkEntityId() + " host_ordinal="
+            + fork.firstForkHostOrdinal() + " tick=" + fork.firstForkTick() + " world="
+            + fork.firstForkWorld() + " region=" + fork.firstForkRegion() + " batch="
+            + fork.firstForkBatch() + " field=" + fork.firstForkField() + " located_rows="
+            + fork.locatedRows() + " unattributed=" + fork.unattributed();
     }
 
     private double selfEntityMs() {

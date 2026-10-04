@@ -44,8 +44,11 @@ class FaultInjectionTest {
             assertFalse(FaultInjection.ownershipSegmentBreak(spec));
             assertFalse(FaultInjection.ownershipOrdinalBreak(spec));
             assertFalse(FaultInjection.ownershipObserveClaims(spec));
+            assertEquals(0, FaultInjection.segmentBreakRow(spec));
         }
         assertFalse(FaultInjection.enabled(), "the process carries no directive in a test run");
+        assertEquals(0, FaultInjection.segmentBreakRow(),
+            "a row was deviated in the frame digest without a directive");
     }
 
     @Test
@@ -120,6 +123,19 @@ class FaultInjectionTest {
         assertTrue(FaultInjection.ownershipObserveClaims(spec));
         assertFalse(FaultInjection.ownershipObserveClaims(spec),
             "more rows were booked in both sets than were declared");
+    }
+
+    @Test
+    void theSegmentBreakIsSpentExactlyOnTheDeclaredFramesAndRow() {
+        FaultInjection.Spec spec = FaultInjection.Spec.parse("segBreak=2,segBreakRow=5");
+        assertTrue(spec.enabled());
+        assertEquals(5, FaultInjection.segmentBreakRow(spec));
+        assertEquals(5, FaultInjection.segmentBreakRow(spec));
+        assertEquals(0, FaultInjection.segmentBreakRow(spec),
+            "more frames were deviated than were declared");
+        FaultInjection.Spec first = FaultInjection.Spec.parse("segBreak=1");
+        assertEquals(1, FaultInjection.segmentBreakRow(first),
+            "the deviated row does not default to the first");
     }
 
     @Test

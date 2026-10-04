@@ -68,6 +68,7 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
     private final LongAdder hashEqual = new LongAdder();
     private final LongAdder forkUnattributed = new LongAdder();
     private final LongAdder hashInconsistent = new LongAdder();
+    private final LongAdder segmentBreakRows = new LongAdder();
     private volatile int lastPlanTasks;
     private final AtomicInteger queueDepth = new AtomicInteger();
     private final AtomicInteger queuePeak = new AtomicInteger();
@@ -349,6 +350,11 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
         forkUnattributed.increment();
     }
 
+    /** Counts one row the segment-break fixture deviated in the parallel arm's digest input. */
+    public void noteSegmentBreak() {
+        segmentBreakRows.increment();
+    }
+
     /** Counts a committed frame whose hash no longer matched when it was re-taken. */
     public void noteHashInconsistent() {
         hashInconsistent.increment();
@@ -579,6 +585,10 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
         return forkUnattributed.sum();
     }
 
+    public long segmentBreakRows() {
+        return segmentBreakRows.sum();
+    }
+
     public int queueDepth() {
         return queueDepth.get();
     }
@@ -684,6 +694,7 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
         builder.append(" hash_pairs=").append(hashPairs());
         builder.append(" hash_equal=").append(hashEqual());
         builder.append(" fork_unattributed=").append(forkUnattributed());
+        builder.append(" seg_break_rows=").append(segmentBreakRows());
         builder.append(" hash_inconsistent=").append(hashInconsistent());
         builder.append(" arena_claims=").append(arena.claims());
         builder.append(" arena_releases=").append(arena.releases());
@@ -756,6 +767,7 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
         hashEqual.reset();
         forkUnattributed.reset();
         hashInconsistent.reset();
+        segmentBreakRows.reset();
         lastPlanTasks = 0;
         queueDepth.set(0);
         queuePeak.set(0);

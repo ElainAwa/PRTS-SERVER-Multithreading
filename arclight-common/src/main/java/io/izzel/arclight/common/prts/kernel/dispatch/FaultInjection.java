@@ -45,6 +45,11 @@ import java.util.function.Function;
  * first two ordinals, so the entry meets rows out of the frozen order, and
  * {@code ownObserveClaim=<n>} books a claimed row as observed as well, which the frame check of the
  * two row sets has to report.
+ *
+ * <p>The frame digest has one fault of its own, off by default: {@code segBreak=<n>} deviates one
+ * row of the parallel arm's digest input in each of the first n merges, and {@code segBreakRow=<n>}
+ * picks that row (one-based, default the first). Only the frame the digest folds sees the deviated
+ * value, so the descent has to name that row by entity id and row offset.
  */
 public final class FaultInjection {
 
@@ -152,6 +157,8 @@ public final class FaultInjection {
         private final int ownSegmentBreak;
         private final int ownOrdinalBreak;
         private final int ownObserveClaim;
+        private final int segBreak;
+        private final int segBreakRow;
         private final AtomicLong delayTaken = new AtomicLong();
         private final AtomicLong ownFailTaken = new AtomicLong();
         private final AtomicLong ownDelayTaken = new AtomicLong();
@@ -165,13 +172,15 @@ public final class FaultInjection {
         private final AtomicLong ownSegmentBreakTaken = new AtomicLong();
         private final AtomicLong ownOrdinalBreakTaken = new AtomicLong();
         private final AtomicLong ownObserveClaimTaken = new AtomicLong();
+        private final AtomicLong segBreakTaken = new AtomicLong();
         private final Map<String, WorkPlan> holding = new ConcurrentHashMap<>();
         private final Set<String> holdSpent = ConcurrentHashMap.newKeySet();
 
         private Spec(long delayNanos, int delayBatches, Set<String> holdWorlds, int ownFail,
             long ownDelayNanos, int ownDelayRows, int ownEpochBreak, int ownWiden, int ownBreak,
             int ownSkipIgnored, int ownDoubleRun, int ownThrow, int ownEntityBreak,
-            int ownSegmentBreak, int ownOrdinalBreak, int ownObserveClaim) {
+            int ownSegmentBreak, int ownOrdinalBreak, int ownObserveClaim, int segBreak,
+            int segBreakRow) {
             this.delayNanos = delayNanos;
             this.delayBatches = delayBatches;
             this.holdWorlds = Set.copyOf(holdWorlds);
@@ -188,10 +197,13 @@ public final class FaultInjection {
             this.ownSegmentBreak = ownSegmentBreak;
             this.ownOrdinalBreak = ownOrdinalBreak;
             this.ownObserveClaim = ownObserveClaim;
+            this.segBreak = segBreak;
+            this.segBreakRow = segBreakRow;
             this.enabled = delayNanos > 0L || !holdWorlds.isEmpty() || ownFail > 0
                 || ownDelayNanos > 0L || ownEpochBreak > 0 || ownWiden > 0 || ownBreak > 0
                 || ownSkipIgnored > 0 || ownDoubleRun > 0 || ownThrow > 0 || ownEntityBreak > 0
-                || ownSegmentBreak > 0 || ownOrdinalBreak > 0 || ownObserveClaim > 0;
+                || ownSegmentBreak > 0 || ownOrdinalBreak > 0 || ownObserveClaim > 0
+                || segBreak > 0;
         }
 
         static Spec parse(String directive) {
@@ -211,6 +223,8 @@ public final class FaultInjection {
             int ownSegmentBreak = 0;
             int ownOrdinalBreak = 0;
             int ownObserveClaim = 0;
+            int segBreak = 0;
+            int segBreakRow = 1;
             if (directive != null) {
                 for (String token : directive.split(",")) {
                     String trimmed = token.trim();
@@ -256,12 +270,17 @@ public final class FaultInjection {
                         ownOrdinalBreak = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
                     } else if ("ownObserveClaim".equals(name)) {
                         ownObserveClaim = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
+                    } else if ("segBreak".equals(name)) {
+                        segBreak = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
+                    } else if ("segBreakRow".equals(name)) {
+                        segBreakRow = (int) clampNumber(value, 1L, ROWS_MAX, 1L);
                     }
                 }
             }
             return new Spec(delayMs * 1_000_000L, batches, worlds, ownFail, ownDelayMs * 1_000_000L,
                 ownDelayRows, ownEpochBreak, ownWiden, ownBreak, ownSkipIgnored, ownDoubleRun,
-                ownThrow, ownEntityBreak, ownSegmentBreak, ownOrdinalBreak, ownObserveClaim);
+                ownThrow, ownEntityBreak, ownSegmentBreak, ownOrdinalBreak, ownObserveClaim,
+                segBreak, segBreakRow);
         }
 
         private static long clampNumber(String value, long low, long high, long fallback) {
@@ -338,6 +357,14 @@ public final class FaultInjection {
 
         int ownObserveClaim() {
             return ownObserveClaim;
+        }
+
+        int segBreak() {
+            return segBreak;
+        }
+
+        int segBreakRow() {
+            return segBreakRow;
         }
     }
 
@@ -452,6 +479,19 @@ public final class FaultInjection {
      * the two row sets has to report the row it was injected for. */
     public static boolean ownershipObserveClaims() {
         return ownershipObserveClaims(LIVE);
+    }
+
+    /** The row of this frame's parallel digest input that must carry a deviated value, one-based;
+     * zero while nothing is declared or after the declared number of merges has been spent. */
+    public static int segmentBreakRow() {
+        return segmentBreakRow(LIVE);
+    }
+
+    static int segmentBreakRow(Spec spec) {
+        if (spec.segBreak <= 0 || spec.segBreakTaken.getAndIncrement() >= spec.segBreak) {
+            return 0;
+        }
+        return spec.segBreakRow;
     }
 
     static boolean ownershipObserveClaims(Spec spec) {

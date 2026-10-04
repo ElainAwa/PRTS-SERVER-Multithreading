@@ -70,6 +70,69 @@ class SegmentDigestLocatorTest {
             "a committed frame keeps one entry per row");
     }
 
+    @Test
+    void theRowIndexNamesTheRowWithoutAMap() {
+        List<StateHasher.Slice> committed = rows(1, ROWS);
+        List<StateHasher.Slice> changed = new ArrayList<>(committed);
+        changed.set(INJECTED, withVelocity(committed.get(INJECTED), 0.5));
+        DomainHash before = StateHasher.hash(DOMAIN, TICK, committed, HashWhitelist.bitexact());
+        DomainHash after = StateHasher.hash(DOMAIN, TICK, changed, HashWhitelist.bitexact());
+        DiffProbe probe = new DiffProbe();
+        probe.compare(after, before);
+        DiffProbe.DiffReport report = probe.report();
+        assertEquals(0L, report.unattributed());
+        assertEquals(1L, report.locatedRows());
+        assertEquals(committed.get(INJECTED).entitySeq(), report.firstForkEntityId());
+        assertEquals(INJECTED, report.firstForkHostOrdinal(),
+            "the offset of the row in the frame is what the descent answers with");
+        assertEquals("velocity", report.firstForkField());
+        assertTrue(report.forkLine().contains("host_ordinal=" + INJECTED));
+        assertTrue(report.forkLine().contains("entity_id=" + committed.get(INJECTED).entitySeq()));
+    }
+
+    @Test
+    void theHeaderDoesNotMoveWhenARowValueMoves() {
+        List<StateHasher.Slice> committed = rows(1, ROWS);
+        List<StateHasher.Slice> changed = new ArrayList<>(committed);
+        changed.set(INJECTED, withVelocity(committed.get(INJECTED), 0.5));
+        DomainHash before = StateHasher.hash(DOMAIN, TICK, committed, HashWhitelist.bitexact());
+        DomainHash after = StateHasher.hash(DOMAIN, TICK, changed, HashWhitelist.bitexact());
+        assertNotEquals(before.value(), after.value());
+        assertEquals(before.segmentHeaderDigest(), after.segmentHeaderDigest(),
+            "the header names the frame, not the row values, so it cannot stand in for the descent");
+        assertEquals(StateHasher.ROW_INDEX_ID, before.rows().layoutId());
+        assertEquals(ROWS, before.rows().size());
+        for (int index = 0; index < ROWS; index++) {
+            assertEquals(committed.get(index).entitySeq(), before.rows().entitySeq(index));
+        }
+    }
+
+    @Test
+    void theRowIndexOfASecondSegmentIsItsOffsetInTheFrame() {
+        List<StateHasher.Slice> firstSegment = rows(1, ROWS);
+        List<StateHasher.Slice> secondSegment = rows(2, ROWS);
+        List<StateHasher.Slice> committed = new ArrayList<>(firstSegment);
+        committed.addAll(secondSegment);
+        List<StateHasher.Slice> changed = new ArrayList<>(committed);
+        changed.set(ROWS + INJECTED, withVelocity(committed.get(ROWS + INJECTED), 0.5));
+        DomainHash before = StateHasher.hash(DOMAIN, TICK, committed, HashWhitelist.bitexact());
+        DomainHash after = StateHasher.hash(DOMAIN, TICK, changed, HashWhitelist.bitexact());
+        DiffProbe probe = new DiffProbe();
+        probe.compare(after, before);
+        DiffProbe.DiffReport report = probe.report();
+        // The frame folds its rows by world, region and entity sequence, so a row of a later
+        // segment is named by its offset in that order - not by the offset it had in the plan.
+        List<StateHasher.Slice> frame = new ArrayList<>(changed);
+        frame.sort(java.util.Comparator.comparing(StateHasher.Slice::worldId)
+            .thenComparing(StateHasher.Slice::regionId)
+            .thenComparingLong(StateHasher.Slice::entitySeq));
+        int ordinal = frame.indexOf(changed.get(ROWS + INJECTED));
+        assertEquals(0L, report.unattributed());
+        assertEquals(committed.get(ROWS + INJECTED).entitySeq(), report.firstForkEntityId());
+        assertEquals(ordinal, report.firstForkHostOrdinal());
+        assertEquals(2L, report.firstForkBatch(), "the row carries the batch it belongs to");
+    }
+
     private static String sliceKey(StateHasher.Slice slice) {
         return slice.worldId() + "|" + slice.regionId() + "|" + slice.batchId() + "|"
             + slice.entitySeq();

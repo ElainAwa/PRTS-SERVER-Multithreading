@@ -171,8 +171,15 @@ public final class SegmentDigestBench {
                         (left, right) -> StateHasher.mixLong(left, right));
                 }
             }
+            // The old shape copied the per-entity map on the way out; the copy is kept here so the
+            // mirror still pays for it even though the record no longer carries that map.
+            Map<String, Long> entityView = Map.copyOf(entityDigests);
+            if (entityView.isEmpty() && !entityDigests.isEmpty()) {
+                throw new IllegalStateException("the entity view went missing");
+            }
             return new DomainHash(DOMAIN, TICK, StateHasher.ALGORITHM_ID, digest, true,
-                null, worldDigests, regionDigests, batchDigests, entityDigests, fieldDigests);
+                null, worldDigests, regionDigests, batchDigests, fieldDigests,
+                DomainHash.RowDigests.none());
         }
     }
 
@@ -206,12 +213,26 @@ public final class SegmentDigestBench {
         System.out.printf("# locate rows_per_segment=%d injected_ordinal=%d injected_entity=%d"
                 + " repeats=%d%n", rowsPerSegment, injected, row.entitySeq(), repeats);
         System.out.println("# shape\tdiffers\tlocated\tordinal\tother_rows\tns_locate");
-        report("rows", committedTotal != changedTotal, mapLocate(before, after, committed), repeats,
-            () -> mapLocate(before, after, committed));
+        // The map view of both frames, built once: it is what the descent used to walk, and the
+        // revised record rebuilds it on demand, so measuring it per repetition would measure the
+        // rebuild instead of the descent.
+        Map<String, Long> beforeView = before.entityDigests();
+        Map<String, Long> afterView = after.entityDigests();
+        report("rows", committedTotal != changedTotal, mapLocate(beforeView, afterView, committed),
+            repeats, () -> mapLocate(beforeView, afterView, committed));
         report("header", totalBefore != totalAfter, new Located(-1L, -1L, 0L), repeats,
             () -> new Located(-1L, -1L, 0L));
         report("located", totalBefore != totalAfter, arrayLocate(digestsBefore, digestsAfter, seqs),
             repeats, () -> arrayLocate(digestsBefore, digestsAfter, seqs));
+        // The production shape: the frame's own per-row sidecar and its own descent.
+        DiffProbe probe = new DiffProbe();
+        probe.compare(after, before);
+        report("prod", committedTotal != changedTotal, sidecarLocate(before, after), repeats,
+            () -> sidecarLocate(before, after));
+        DiffProbe.DiffReport fork = probe.report();
+        System.out.printf("# prod_fork entity_id=%d host_ordinal=%d field=%s unattributed=%d%n",
+            fork.firstForkEntityId(), fork.firstForkHostOrdinal(), fork.firstForkField(),
+            fork.unattributed());
     }
 
     private static void report(String shape, boolean differs, Located located, int repeats,
@@ -225,13 +246,31 @@ public final class SegmentDigestBench {
             located.ordinal(), located.others(), (double) nanos / repeats);
     }
 
-    /** The production descent: the map keys that differ name the row. */
-    private static Located mapLocate(DomainHash before, DomainHash after,
+    /** The production descent of the revised frame: the sidecar arrays name the row directly. */
+    private static Located sidecarLocate(DomainHash before, DomainHash after) {
+        long[] left = before.rows().rowDigests();
+        long[] right = after.rows().rowDigests();
+        for (int index = 0; index < left.length && index < right.length; index++) {
+            if (left[index] != right[index]) {
+                long others = 0L;
+                for (int rest = index + 1; rest < left.length; rest++) {
+                    if (left[rest] != right[rest]) {
+                        others++;
+                    }
+                }
+                return new Located(before.rows().entitySeq(index), index, others);
+            }
+        }
+        return new Located(-1L, -1L, 0L);
+    }
+
+    /** The old descent: the map keys that differ name the row. */
+    private static Located mapLocate(Map<String, Long> before, Map<String, Long> after,
                                      List<StateHasher.Slice> committed) {
         long found = -1L;
         long others = 0L;
-        for (Map.Entry<String, Long> entry : before.entityDigests().entrySet()) {
-            Long other = after.entityDigests().get(entry.getKey());
+        for (Map.Entry<String, Long> entry : before.entrySet()) {
+            Long other = after.get(entry.getKey());
             if (other == null || other.longValue() != entry.getValue().longValue()) {
                 if (found < 0L) {
                     String key = entry.getKey();

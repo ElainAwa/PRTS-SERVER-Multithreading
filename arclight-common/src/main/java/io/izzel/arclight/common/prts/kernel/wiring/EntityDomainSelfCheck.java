@@ -3,6 +3,7 @@ package io.izzel.arclight.common.prts.kernel.wiring;
 
 import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
+import io.izzel.arclight.common.prts.kernel.diff.DomainHash;
 import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
 import io.izzel.arclight.common.prts.kernel.diff.StateHasher;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchPass;
@@ -235,6 +236,7 @@ final class EntityDomainSelfCheck {
             == StateHasher.hash(DOMAIN_ID, tick, same, HashWhitelist.bitexact()).value();
         boolean different = StateHasher.hash(DOMAIN_ID, tick, one, HashWhitelist.bitexact()).value()
             != StateHasher.hash(DOMAIN_ID, tick, other, HashWhitelist.bitexact()).value();
+        lines.addAll(rowLocateMatrix(failures, tick));
         boolean empty = !StateHasher.hash(DOMAIN_ID, tick, List.of(), HashWhitelist.bitexact())
             .comparable();
         lines.add("selftest.dispatch_hash_exact=" + (equal && different ? 1 : 0));
@@ -244,6 +246,52 @@ final class EntityDomainSelfCheck {
         }
         if (!empty) {
             failures.add("an empty range produced a hash instead of an error");
+        }
+        return lines;
+    }
+
+    /** The negative fixture of the row-level descent: one row of a frame is deviated, the header
+     * of the frame must stay equal because it names no row value, the value must differ, and the
+     * descent must name that row by entity id and offset. */
+    private static List<String> rowLocateMatrix(List<String> failures, long tick) {
+        List<String> lines = new ArrayList<>();
+        List<StateHasher.Slice> rows = new ArrayList<>();
+        for (int index = 0; index < 8; index++) {
+            rows.add(new StateHasher.Slice("world", "r0.0", 1L, 100000L + index, index, 64.0, 0.0,
+                0.0, 0.0, 0.1, 0.0, 0.0, 0L, 0L, 0L));
+        }
+        List<StateHasher.Slice> changed = new ArrayList<>(rows);
+        StateHasher.Slice row = changed.get(3);
+        changed.set(3, new StateHasher.Slice(row.worldId(), row.regionId(), row.batchId(),
+            row.entitySeq(), row.x(), row.y(), row.z(), row.yaw(), row.pitch(), row.velX(),
+            row.velY(), row.velZ(), row.flags() ^ 1L, row.slotGeneration(), row.segmentRef()));
+        DomainHash before = StateHasher.hash(DOMAIN_ID, tick, rows, HashWhitelist.bitexact());
+        DomainHash after = StateHasher.hash(DOMAIN_ID, tick, changed, HashWhitelist.bitexact());
+        DiffProbe probe = new DiffProbe();
+        probe.compare(after, before);
+        DiffProbe.DiffReport fork = probe.report();
+        boolean moved = before.value() != after.value();
+        boolean headerHeld = before.segmentHeaderDigest() == after.segmentHeaderDigest();
+        boolean located = fork.firstForkHostOrdinal() == 3L
+            && fork.firstForkEntityId() == 100003L && fork.unattributed() == 0L;
+        boolean sidecar = before.rows().size() == 8 && before.rows().entitySeq(3) == 100003L;
+        lines.add("selftest.dispatch_row_value_moved=" + (moved ? 1 : 0));
+        lines.add("selftest.dispatch_row_header_held=" + (headerHeld ? 1 : 0));
+        lines.add("selftest.dispatch_row_located=" + (located ? 1 : 0));
+        lines.add("selftest.dispatch_row_entity_id=" + fork.firstForkEntityId());
+        lines.add("selftest.dispatch_row_host_ordinal=" + fork.firstForkHostOrdinal());
+        lines.add("selftest.dispatch_row_sidecar=" + (sidecar ? 1 : 0));
+        if (!moved) {
+            failures.add("a deviated row did not move the frame value");
+        }
+        if (!headerHeld) {
+            failures.add("the frame header followed a row value it must not name");
+        }
+        if (!located) {
+            failures.add("the row-level descent did not name the deviated row");
+        }
+        if (!sidecar) {
+            failures.add("the frame carried no per-row sidecar");
         }
         return lines;
     }
