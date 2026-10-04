@@ -39,6 +39,7 @@ class FaultInjectionTest {
             assertFalse(FaultInjection.ownershipEpochBreak(spec));
             assertFalse(FaultInjection.ownershipSkipsIgnored(spec));
             assertFalse(FaultInjection.ownershipDoubleRuns(spec));
+            assertFalse(FaultInjection.ownershipThrows(spec));
         }
         assertFalse(FaultInjection.enabled(), "the process carries no directive in a test run");
     }
@@ -60,7 +61,8 @@ class FaultInjectionTest {
     @Test
     void theOwnershipFaultsAreSpentExactlyOnTheDeclaredRows() {
         FaultInjection.Spec spec = FaultInjection.Spec.parse(
-            "ownFail=2,ownDelayMs=40,ownDelayRows=1,ownEpochBreak=1,ownSkipIgnored=1,ownDoubleRun=1");
+            "ownFail=2,ownDelayMs=40,ownDelayRows=1,ownEpochBreak=1,ownSkipIgnored=1,ownDoubleRun=1,"
+                + "ownThrow=1");
         assertTrue(spec.enabled());
         assertTrue(FaultInjection.ownershipFails(spec));
         assertTrue(FaultInjection.ownershipFails(spec));
@@ -77,11 +79,15 @@ class FaultInjectionTest {
         assertTrue(FaultInjection.ownershipDoubleRuns(spec));
         assertFalse(FaultInjection.ownershipDoubleRuns(spec),
             "more rows ran twice than were declared");
+        assertTrue(FaultInjection.ownershipThrows(spec));
+        assertFalse(FaultInjection.ownershipThrows(spec),
+            "the worker threw on more rows than were declared");
         assertFalse(FaultInjection.ownershipFails(),
             "the process carries no ownership fault in a test run");
         assertFalse(FaultInjection.ownershipEpochBreak());
         assertFalse(FaultInjection.ownershipSkipsIgnored());
         assertFalse(FaultInjection.ownershipDoubleRuns());
+        assertFalse(FaultInjection.ownershipThrows());
     }
 
     @Test

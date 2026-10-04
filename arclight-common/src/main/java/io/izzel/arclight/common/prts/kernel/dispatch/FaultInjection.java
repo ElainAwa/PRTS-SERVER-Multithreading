@@ -26,18 +26,17 @@ import java.util.function.Function;
  * {@code holdWorld=<id>|<id>} names the worlds one pending plan is held for. A token that cannot be
  * parsed is ignored, so a malformed directive disables the injection instead of failing a tick.
  *
- * <p>The same directive carries the faults of the ownership fixture: {@code ownFail=<n>} makes the
- * first n ownership rows fail in the worker, {@code ownDelayMs=<n>} with {@code ownDelayRows=<n>}
- * makes its first rows answer too late to be used, {@code ownEpochBreak=<n>} fails the token
+ * <p>The same directive carries the faults of the ownership fixture, all zero by default, so a
+ * process that declares nothing runs every row through the original path exactly once:
+ * {@code ownFail=<n>} makes the first n rows fail in the worker, {@code ownDelayMs=<n>} with
+ * {@code ownDelayRows=<n>} makes its first rows answer too late to be used, {@code ownThrow=<n>}
+ * makes its worker throw instead of answering, {@code ownEpochBreak=<n>} fails the token
  * revalidation of the first n rows at the host entry, {@code ownWiden=<n>} admits the first n rows
  * the whole-tick model refuses, and {@code ownBreak=<n>} answers the first n rows with the captured
- * state instead of running the model. The last two are the negative fixtures of the equivalence
- * harness: they make an answer wrong on purpose so the harness can be shown to reject it.
- * {@code ownSkipIgnored=<n>} keeps the platform from cancelling the first n rows the host entry
- * decided to skip, and {@code ownDoubleRun=<n>} runs the original tick of the first n rows the host
- * entry decided to run a second time; both are the negative fixtures of the independent call
- * counter, which has to report them. All of them default to zero, so a process that declares
- * nothing runs every row through the original path exactly once.
+ * state instead of running the model. {@code ownSkipIgnored=<n>} keeps the platform from cancelling
+ * the first n rows the host entry decided to skip, and {@code ownDoubleRun=<n>} runs the original
+ * tick of the first n rows it decided to run a second time; the last four are the negative fixtures
+ * of the equivalence harness and of the independent call counter, which have to report them.
  */
 public final class FaultInjection {
 
@@ -140,6 +139,7 @@ public final class FaultInjection {
         private final int ownBreak;
         private final int ownSkipIgnored;
         private final int ownDoubleRun;
+        private final int ownThrow;
         private final AtomicLong delayTaken = new AtomicLong();
         private final AtomicLong ownFailTaken = new AtomicLong();
         private final AtomicLong ownDelayTaken = new AtomicLong();
@@ -148,12 +148,13 @@ public final class FaultInjection {
         private final AtomicLong ownBreakTaken = new AtomicLong();
         private final AtomicLong ownSkipIgnoredTaken = new AtomicLong();
         private final AtomicLong ownDoubleRunTaken = new AtomicLong();
+        private final AtomicLong ownThrowTaken = new AtomicLong();
         private final Map<String, WorkPlan> holding = new ConcurrentHashMap<>();
         private final Set<String> holdSpent = ConcurrentHashMap.newKeySet();
 
         private Spec(long delayNanos, int delayBatches, Set<String> holdWorlds, int ownFail,
             long ownDelayNanos, int ownDelayRows, int ownEpochBreak, int ownWiden, int ownBreak,
-            int ownSkipIgnored, int ownDoubleRun) {
+            int ownSkipIgnored, int ownDoubleRun, int ownThrow) {
             this.delayNanos = delayNanos;
             this.delayBatches = delayBatches;
             this.holdWorlds = Set.copyOf(holdWorlds);
@@ -165,9 +166,10 @@ public final class FaultInjection {
             this.ownBreak = ownBreak;
             this.ownSkipIgnored = ownSkipIgnored;
             this.ownDoubleRun = ownDoubleRun;
+            this.ownThrow = ownThrow;
             this.enabled = delayNanos > 0L || !holdWorlds.isEmpty() || ownFail > 0
                 || ownDelayNanos > 0L || ownEpochBreak > 0 || ownWiden > 0 || ownBreak > 0
-                || ownSkipIgnored > 0 || ownDoubleRun > 0;
+                || ownSkipIgnored > 0 || ownDoubleRun > 0 || ownThrow > 0;
         }
 
         static Spec parse(String directive) {
@@ -182,6 +184,7 @@ public final class FaultInjection {
             int ownBreak = 0;
             int ownSkipIgnored = 0;
             int ownDoubleRun = 0;
+            int ownThrow = 0;
             if (directive != null) {
                 for (String token : directive.split(",")) {
                     String trimmed = token.trim();
@@ -217,11 +220,14 @@ public final class FaultInjection {
                         ownSkipIgnored = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
                     } else if ("ownDoubleRun".equals(name)) {
                         ownDoubleRun = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
+                    } else if ("ownThrow".equals(name)) {
+                        ownThrow = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
                     }
                 }
             }
             return new Spec(delayMs * 1_000_000L, batches, worlds, ownFail, ownDelayMs * 1_000_000L,
-                ownDelayRows, ownEpochBreak, ownWiden, ownBreak, ownSkipIgnored, ownDoubleRun);
+                ownDelayRows, ownEpochBreak, ownWiden, ownBreak, ownSkipIgnored, ownDoubleRun,
+                ownThrow);
         }
 
         private static long clampNumber(String value, long low, long high, long fallback) {
@@ -278,6 +284,10 @@ public final class FaultInjection {
 
         int ownDoubleRun() {
             return ownDoubleRun;
+        }
+
+        int ownThrow() {
+            return ownThrow;
         }
     }
 
@@ -351,5 +361,15 @@ public final class FaultInjection {
     static boolean ownershipDoubleRuns(Spec spec) {
         return spec.ownDoubleRun > 0
             && spec.ownDoubleRunTaken.getAndIncrement() < spec.ownDoubleRun;
+    }
+
+    /** Whether the worker of a row throws instead of answering; off unless declared. The row is
+     * left without an answer, which the host entry reads as a row it must run itself. */
+    public static boolean ownershipThrows() {
+        return ownershipThrows(LIVE);
+    }
+
+    static boolean ownershipThrows(Spec spec) {
+        return spec.ownThrow > 0 && spec.ownThrowTaken.getAndIncrement() < spec.ownThrow;
     }
 }
