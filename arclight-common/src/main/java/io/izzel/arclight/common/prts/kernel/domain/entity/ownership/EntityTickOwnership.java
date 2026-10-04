@@ -202,6 +202,8 @@ public final class EntityTickOwnership {
     static final LongAdder ORDER_VIOLATIONS = new LongAdder();
 
     private static volatile OwnershipLease current;
+    // True while an armed plan point has opened a window whose frames are not closed yet.
+    private static boolean windowOpen;
     private static volatile boolean disarmed;
     private static volatile String disarmReason = "";
     private static OwnershipLease previous;
@@ -349,6 +351,7 @@ public final class EntityTickOwnership {
         if (!armed()) {
             return;
         }
+        windowOpen = true;
         swapTrace();
         current = null;
         // A segment frame belongs to one tick; the next plan point drops the frames it replaced.
@@ -619,6 +622,11 @@ public final class EntityTickOwnership {
     }
 
     private static void closeLease() {
+        if (!windowOpen) {
+            // No window is open, so a latched fixture books nothing here: no lease, no frame, no row.
+            return;
+        }
+        windowOpen = false;
         OwnershipLease lease = current;
         current = null;
         if (lease != null) {
@@ -641,6 +649,7 @@ public final class EntityTickOwnership {
         }
         previous = lease;
         closeSegmentFrames(lease);
+        SEGMENTS.reset();
         checkInvariants();
         closeTickRecord();
     }
@@ -1143,6 +1152,7 @@ public final class EntityTickOwnership {
         tickProbeMatched = 0L;
         tickProbeViolations = 0L;
         PrtsHostTickCalls.reset();
+        windowOpen = false;
         current = null;
         previous = null;
         previousLate = 0L;
@@ -1544,6 +1554,7 @@ public final class EntityTickOwnership {
                 SEGMENTS.adopt(segment);
             }
         }
+        windowOpen = true;
         current = lease;
     }
 

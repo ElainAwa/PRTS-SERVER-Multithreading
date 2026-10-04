@@ -427,6 +427,9 @@ class EntityTickOwnershipTest {
     @Test
     void aBrokenAccountDisarmsTheFixtureAndTheNextRowRunsOnTheHost() {
         assertFalse(EntityTickOwnership.latched(), "the latch started closed");
+        // Only an open window is closed, so the tick whose accounts are broken has to open one: the
+        // plan point of an armed tick does, and the test installs its lease the same way.
+        EntityTickOwnership.install(lease(1));
         // One skip the claim ledger does not know about: the accounts no longer close.
         EntityTickOwnership.HOST_SKIPPED.increment();
         EntityTickOwnership.closeInstalled();
@@ -466,6 +469,36 @@ class EntityTickOwnershipTest {
         assertEquals(1L, EntityTickOwnership.SET_CONFLICTS.sum());
         assertTrue(EntityTickOwnership.latched(), "a frame in both row sets did not disarm");
         assertEquals(1L, EntityTickOwnership.DISARMS.sum());
+    }
+
+    @Test
+    void aCloseThatRunsAgainBooksNoFrameOfTheClosedWindow() {
+        SegmentWork segment = segment();
+        OwnershipLease lease = lease(1);
+        issue(lease, segment, 53, 40, true);
+        // One row in both sets: the close of this window trips the latch the way a failing takeover
+        // does, and every tick after it runs its rows on the host path.
+        segment.conflictForFault(53, 53L, 0);
+        lease.publish(never(), 1);
+        EntityTickOwnership.install(lease, segment);
+        EntityTickOwnership.closeInstalled();
+        long frames = EntityTickOwnership.SEGMENT_FRAMES.sum();
+        long closed = EntityTickOwnership.framesClosed();
+        long owned = EntityTickOwnership.OWNED_ROWS.sum();
+        assertTrue(EntityTickOwnership.latched(), "the broken frame did not trip the latch");
+        assertEquals(1L, frames, "the window did not close its frame exactly once");
+        assertEquals(1L, EntityTickOwnership.DISARMS.sum());
+        // The ticks after the latch open no window, so their closes must count nothing: neither a
+        // frame, nor its rows, nor another disarm for the frame that is already closed.
+        EntityTickOwnership.closeInstalled();
+        EntityTickOwnership.closeInstalled();
+        assertEquals(frames, EntityTickOwnership.SEGMENT_FRAMES.sum(),
+            "a repeated close counted the frame of the closed window again");
+        assertEquals(owned, EntityTickOwnership.OWNED_ROWS.sum(),
+            "a repeated close counted the rows of the closed window again");
+        assertEquals(closed, EntityTickOwnership.framesClosed(),
+            "a repeated close booked the frame of the closed window again");
+        assertEquals(1L, EntityTickOwnership.DISARMS.sum(), "a repeated close disarmed the fixture again");
     }
 
     @Test
