@@ -16,6 +16,7 @@ import io.izzel.arclight.common.prts.kernel.dispatch.DispatchReadings;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchWriteBack;
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
 import io.izzel.arclight.common.prts.kernel.dispatch.MergeSegment;
+import io.izzel.arclight.common.prts.kernel.dispatch.SegmentFrames;
 import io.izzel.arclight.common.prts.kernel.dispatch.TaskLedger;
 import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
 import io.izzel.arclight.common.prts.kernel.domain.entity.DispatchSnapshot;
@@ -41,6 +42,11 @@ public final class EntityDomain implements KernelDomain {
     /** The name the readout knows this domain by; it is also the domain id of the state hash. */
     public static final String ID = "entity";
 
+    /** The migrated frame face: the domain books the segment frames the host entry closed and
+     * publishes the two row sets apart. Off by default, an evidence path and not a release switch -
+     * no configuration file, reload or command reaches it, and no decision of this domain reads what
+     * it books. */
+    private static final boolean FRAME_MIGRATION = Boolean.getBoolean("arclight.prts.frameMigration");
     private static final String THREAD_PREFIX = "prts-worker-";
     private static final String RUNTIME_WORLD = "";
     private static final long EVIDENCE_TICKS = 400L;
@@ -54,7 +60,9 @@ public final class EntityDomain implements KernelDomain {
     private final DiffProbe probe = new DiffProbe();
     private final MergeSegment merge = new MergeSegment();
     private final DispatchWriteBack writeBack;
+    private final SegmentFrames.Ledger frames = new SegmentFrames.Ledger();
 
+    private long frameCursor;
     private long taskSeq;
     private long lastEvidenceTick;
     private long lastForkTick = -1L;
@@ -77,6 +85,11 @@ public final class EntityDomain implements KernelDomain {
 
     @Override
     public void tick(long tick) {
+        // The migrated face books what the host entry closed since the last adoption; it is read
+        // here and nowhere else, so nothing this domain decides can depend on it.
+        if (FRAME_MIGRATION) {
+            adoptSegmentFrames();
+        }
         // The evidence line is exported before the merge of this tick and after the commit of this
         // tick, so the orders the commit consumed account for every task the plan froze: a task is
         // counted when its plan is built and its intent is consumed at the next commit boundary.
@@ -117,6 +130,11 @@ public final class EntityDomain implements KernelDomain {
             DiffProbe.DiffReport fork = probe.report();
             if (fork.firstForkTick() >= 0) {
                 EVIDENCE.info(segBreakLine(fork));
+            }
+            // The migrated frame face: the segment frames of the ticks since the last adoption, the
+            // two row sets apart and the verdict of their checks. Observation only.
+            if (FRAME_MIGRATION) {
+                EVIDENCE.info(frames.evidenceLine());
             }
         }
         // A fork is announced on the tick it is placed, not only at the evidence cadence, so a short
@@ -225,6 +243,8 @@ public final class EntityDomain implements KernelDomain {
         PrtsEntityCapability.reset();
         PrtsEntityRescope.reset();
         EntityTickOwnership.reset();
+        frames.reset();
+        frameCursor = 0L;
         lastFrame = MergeSegment.Frame.empty();
         lastEvidenceTick = 0L;
         lastForkTick = -1L;
@@ -261,6 +281,20 @@ public final class EntityDomain implements KernelDomain {
         // The ownership fields are observation only: the fixture contributes them even when it is
         // off, where every one of them reads zero.
         EntityTickOwnership.readings(sink);
+        if (FRAME_MIGRATION) {
+            sink.add("entity.segment_count", frames.frames());
+            sink.add("entity.segment_rows", frames.rows());
+            sink.add("self.frame_owned_rows", frames.ownedRows());
+            sink.add("self.frame_observed_rows", frames.observedRows());
+            sink.add("self.frame_observed_entries", frames.observedEntries());
+            sink.add("self.frame_committed", frames.committed());
+            sink.add("self.frame_fallback", frames.fellBack());
+            sink.add("self.frame_not_entered", frames.notEntered());
+            sink.add("self.frame_set_conflicts", frames.setConflicts());
+            sink.add("self.frame_unbooked_commits", frames.unbookedCommits());
+            sink.add("self.frame_broken_frames", frames.brokenFrames());
+            sink.add("self.frame_broken_ledgers", frames.brokenLedgers());
+        }
     }
 
     @Override
@@ -285,6 +319,18 @@ public final class EntityDomain implements KernelDomain {
             }
         }
         return 0.0;
+    }
+
+    /** Books every segment frame the host entry closed since the last adoption. The ring keeps the
+     * most recent frames, so a reader that fell further behind resumes at the oldest frame still
+     * held instead of reading a slot a later frame was written to. */
+    private void adoptSegmentFrames() {
+        long closed = EntityTickOwnership.framesClosed();
+        long oldest = Math.max(frameCursor, closed - EntityTickOwnership.framesKept());
+        for (long at = oldest; at < closed; at++) {
+            frames.note(EntityTickOwnership.frameAt(at));
+        }
+        frameCursor = closed;
     }
 
     /** The live counters of this domain. */

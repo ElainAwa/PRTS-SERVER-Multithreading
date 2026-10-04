@@ -31,6 +31,7 @@ package io.izzel.arclight.common.prts.kernel.domain.entity.ownership;
 import io.izzel.arclight.common.prts.kernel.DomainReadings;
 import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
+import io.izzel.arclight.common.prts.kernel.dispatch.SegmentFrames;
 import io.izzel.arclight.common.prts.support.PrtsHostTickCalls;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.ArmorStandTick;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.TickModels;
@@ -211,7 +212,7 @@ public final class EntityTickOwnership {
     // by the world it is in and reads every value it compares from that frozen frame.
     private static final SegmentWork.Table SEGMENTS = new SegmentWork.Table();
     private static final int SEGMENT_RING = 4_096;
-    private static SegmentWork.Frame[] segmentRing = new SegmentWork.Frame[SEGMENT_RING];
+    private static SegmentFrames.Frame[] segmentRing = new SegmentFrames.Frame[SEGMENT_RING];
     private static int segmentFrameRows;
 
     private static volatile ThreadPoolExecutor pool;
@@ -621,7 +622,7 @@ public final class EntityTickOwnership {
                 BROKEN_SEGMENT_LEDGERS.increment();
                 tickBrokenLedgers++;
             }
-            segmentRing[segmentFrameRows % SEGMENT_RING] = frame;
+            segmentRing[segmentFrameRows % SEGMENT_RING] = asFrame(frame);
             segmentFrameRows++;
         }
     }
@@ -1014,7 +1015,7 @@ public final class EntityTickOwnership {
                 + " entity_rejected world_rejected segment_rejected ledger_ok\n");
             int from = Math.max(0, segmentFrameRows - SEGMENT_RING);
             for (int at = from; at < segmentFrameRows; at++) {
-                SegmentWork.Frame frame = segmentRing[at % SEGMENT_RING];
+                SegmentFrames.Frame frame = segmentRing[at % SEGMENT_RING];
                 writer.write(Long.toString(frame.tickIndex()));
                 writer.write(' ' + frame.worldId());
                 writer.write(' ' + Long.toString(frame.segmentEpoch()));
@@ -1056,6 +1057,30 @@ public final class EntityTickOwnership {
             + " broken_frames=" + BROKEN_FRAMES.sum()
             + " broken_segment_ledgers=" + BROKEN_SEGMENT_LEDGERS.sum()
             + " sets_apart=" + (SET_CONFLICTS.sum() == 0L ? "ok" : "broken");
+    }
+
+    /** How many segment frames this process closed so far; zero while no fixture is live. */
+    public static long framesClosed() {
+        return segmentFrameRows;
+    }
+
+    /** How many of the most recent frames the ring keeps. */
+    public static int framesKept() {
+        return SEGMENT_RING;
+    }
+
+    /** One closed segment frame by its index, counting from the first frame of the process. */
+    public static SegmentFrames.Frame frameAt(long index) {
+        return segmentRing[(int) (index % SEGMENT_RING)];
+    }
+
+    /** One closed frame as the frame shape a reader outside this package books. */
+    private static SegmentFrames.Frame asFrame(SegmentWork.Frame frame) {
+        return new SegmentFrames.Frame(frame.tickIndex(), frame.worldId(), frame.segmentEpoch(),
+            frame.ownedRows(), frame.observedRows(), frame.committed(), frame.fellBack(),
+            frame.notEntered(), frame.observedEntries(), frame.setConflicts(),
+            frame.unbookedCommits(), frame.ordinalBroken(), frame.entityRejected(),
+            frame.worldRejected(), frame.segmentRejected(), frame.ledgerOk());
     }
 
     /** Stops the pool; declared so a server that stops does not leave worker threads behind. */
