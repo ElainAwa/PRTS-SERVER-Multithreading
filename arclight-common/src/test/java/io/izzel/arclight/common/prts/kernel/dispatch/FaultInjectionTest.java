@@ -40,6 +40,10 @@ class FaultInjectionTest {
             assertFalse(FaultInjection.ownershipSkipsIgnored(spec));
             assertFalse(FaultInjection.ownershipDoubleRuns(spec));
             assertFalse(FaultInjection.ownershipThrows(spec));
+            assertFalse(FaultInjection.ownershipEntityBreak(spec));
+            assertFalse(FaultInjection.ownershipSegmentBreak(spec));
+            assertFalse(FaultInjection.ownershipOrdinalBreak(spec));
+            assertFalse(FaultInjection.ownershipObserveClaims(spec));
         }
         assertFalse(FaultInjection.enabled(), "the process carries no directive in a test run");
     }
@@ -82,12 +86,40 @@ class FaultInjectionTest {
         assertTrue(FaultInjection.ownershipThrows(spec));
         assertFalse(FaultInjection.ownershipThrows(spec),
             "the worker threw on more rows than were declared");
+        assertFalse(FaultInjection.ownershipEntityBreak(),
+            "the entity generation of a row was broken without a directive");
+        assertFalse(FaultInjection.ownershipSegmentBreak(),
+            "the segment generation of a row was broken without a directive");
+        assertFalse(FaultInjection.ownershipOrdinalBreak(),
+            "the host order was broken without a directive");
+        assertFalse(FaultInjection.ownershipObserveClaims(),
+            "a row was booked in both sets without a directive");
         assertFalse(FaultInjection.ownershipFails(),
             "the process carries no ownership fault in a test run");
         assertFalse(FaultInjection.ownershipEpochBreak());
         assertFalse(FaultInjection.ownershipSkipsIgnored());
         assertFalse(FaultInjection.ownershipDoubleRuns());
         assertFalse(FaultInjection.ownershipThrows());
+    }
+
+    @Test
+    void theSegmentFaultsAreSpentExactlyOnTheDeclaredRows() {
+        FaultInjection.Spec spec = FaultInjection.Spec.parse(
+            "ownEntityBreak=1,ownSegmentBreak=1,ownOrdinalBreak=2,ownObserveClaim=1");
+        assertTrue(spec.enabled());
+        assertTrue(FaultInjection.ownershipEntityBreak(spec));
+        assertFalse(FaultInjection.ownershipEntityBreak(spec),
+            "more entity generations were broken than were declared");
+        assertTrue(FaultInjection.ownershipSegmentBreak(spec));
+        assertFalse(FaultInjection.ownershipSegmentBreak(spec),
+            "more segment generations were broken than were declared");
+        assertTrue(FaultInjection.ownershipOrdinalBreak(spec));
+        assertTrue(FaultInjection.ownershipOrdinalBreak(spec));
+        assertFalse(FaultInjection.ownershipOrdinalBreak(spec),
+            "more host orders were broken than were declared");
+        assertTrue(FaultInjection.ownershipObserveClaims(spec));
+        assertFalse(FaultInjection.ownershipObserveClaims(spec),
+            "more rows were booked in both sets than were declared");
     }
 
     @Test

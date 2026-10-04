@@ -17,11 +17,15 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** The ownership fixture lifecycle: one frozen capability per claimed row, one outcome per claim, a
- * claim that cannot be used handed back in front of the host, and no lease that outlives its tick. */
+ * claim that cannot be used handed back in front of the host, and no lease that outlives its tick.
+ * The three generations of a claim - of the row, of its world and of its segment - are checked
+ * before a row is skipped, and a row that fails one of them runs on the host. */
 class EntityTickOwnershipTest {
 
     private static final long TICK = 500L;
     private static final long WORLD_EPOCH = 7L;
+    private static final long SEGMENT_EPOCH = 3L;
+    private static final String WORLD = "minecraft:overworld";
     private static final byte CLEAN = 0;
 
     @BeforeEach
@@ -57,12 +61,13 @@ class EntityTickOwnershipTest {
 
     @Test
     void aSettledTokenSkipsTheRowOnceAndIsSpent() {
+        SegmentWork segment = segment();
         OwnershipLease lease = lease(1);
-        issue(lease, 11, 40, true);
+        issue(lease, segment, 11, 40, true);
         lease.publish(direct(), 1);
-        EntityTickOwnership.install(lease);
+        EntityTickOwnership.install(lease, segment);
         assertEquals(OwnershipLease.SETTLED, lease.state(0));
-        assertTrue(EntityTickOwnership.decideRow(11, WORLD_EPOCH, 41, CLEAN, false, 0.0, 0.0, 0.0) >= 0,
+        assertTrue(decide(segment, live(11, 41, CLEAN, 0.0)) >= 0,
             "a settled token did not skip its row");
         assertEquals(OwnershipLease.CONSUMED, lease.state(0), "the spent token stayed usable");
         EntityTickOwnership.closeInstalled();
@@ -78,12 +83,13 @@ class EntityTickOwnershipTest {
 
     @Test
     void anUnsettledTokenIsHandedBackBeforeTheHostContinues() {
+        SegmentWork segment = segment();
         OwnershipLease lease = lease(1);
-        issue(lease, 12, 40, true);
+        issue(lease, segment, 12, 40, true);
         lease.publish(never(), 1);
-        EntityTickOwnership.install(lease);
+        EntityTickOwnership.install(lease, segment);
         assertEquals(OwnershipLease.PENDING, lease.state(0));
-        assertTrue(EntityTickOwnership.decideRow(12, WORLD_EPOCH, 41, CLEAN, false, 0.0, 0.0, 0.0) < 0,
+        assertTrue(decide(segment, live(12, 41, CLEAN, 0.0)) < 0,
             "a row without an answer was skipped");
         assertEquals(1L, EntityTickOwnership.ELIGIBLE.sum(), "the fallback row is not the eligible one");
         assertEquals(1L, EntityTickOwnership.FALLBACK.sum(), "the withdrawal was not counted");
@@ -101,15 +107,16 @@ class EntityTickOwnershipTest {
 
     @Test
     void aFailedWorkerHandsTheRowBackAndAnswersAreNeverAppliedLate() {
+        SegmentWork segment = segment();
         OwnershipLease lease = lease(2);
-        issue(lease, 13, 40, true);
-        issue(lease, 14, 40, true);
+        issue(lease, segment, 13, 40, true);
+        issue(lease, segment, 14, 40, true);
         lease.publish(refuse(), 1);
-        EntityTickOwnership.install(lease);
+        EntityTickOwnership.install(lease, segment);
         assertEquals(OwnershipLease.FAILED, lease.state(0), "a refused chunk was not failed");
         assertEquals(OwnershipLease.FAILED, lease.state(1));
-        assertTrue(EntityTickOwnership.decideRow(13, WORLD_EPOCH, 41, CLEAN, false, 0.0, 0.0, 0.0) < 0);
-        assertTrue(EntityTickOwnership.decideRow(14, WORLD_EPOCH, 41, CLEAN, false, 0.0, 0.0, 0.0) < 0);
+        assertTrue(decide(segment, live(13, 41, CLEAN, 0.0)) < 0);
+        assertTrue(decide(segment, live(14, 41, CLEAN, 0.0)) < 0);
         assertEquals(2L, EntityTickOwnership.FALLBACK.sum());
         assertEquals(2L, EntityTickOwnership.ELIGIBLE.sum());
         assertEquals(2L, EntityTickOwnership.CLAIM_EXECUTED.sum());
@@ -123,11 +130,12 @@ class EntityTickOwnershipTest {
 
     @Test
     void aTokenThatNeverReachesTheHostEntryIsRecycledAtTheClose() {
+        SegmentWork segment = segment();
         OwnershipLease lease = lease(2);
-        issue(lease, 15, 40, true);
-        issue(lease, 16, 40, true);
+        issue(lease, segment, 15, 40, true);
+        issue(lease, segment, 16, 40, true);
         lease.publish(never(), 1);
-        EntityTickOwnership.install(lease);
+        EntityTickOwnership.install(lease, segment);
         EntityTickOwnership.closeInstalled();
         assertEquals(2L, EntityTickOwnership.NOT_ENTERED.sum());
         assertEquals(2L, EntityTickOwnership.WITHDRAWN.sum());
@@ -140,12 +148,13 @@ class EntityTickOwnershipTest {
 
     @Test
     void aSecondEntryOfOneRowIsAConflictAndTheRowRuns() {
+        SegmentWork segment = segment();
         OwnershipLease lease = lease(1);
-        issue(lease, 17, 40, true);
+        issue(lease, segment, 17, 40, true);
         lease.publish(direct(), 1);
-        EntityTickOwnership.install(lease);
-        assertTrue(EntityTickOwnership.decideRow(17, WORLD_EPOCH, 41, CLEAN, false, 0.0, 0.0, 0.0) >= 0);
-        assertTrue(EntityTickOwnership.decideRow(17, WORLD_EPOCH, 41, CLEAN, false, 0.0, 0.0, 0.0) < 0,
+        EntityTickOwnership.install(lease, segment);
+        assertTrue(decide(segment, live(17, 41, CLEAN, 0.0)) >= 0);
+        assertTrue(decide(segment, live(17, 41, CLEAN, 0.0)) < 0,
             "a second host entry of one row skipped it again");
         assertEquals(1L, EntityTickOwnership.OWNER_CONFLICT.sum());
         assertEquals(0L, EntityTickOwnership.HOST_SKIPPED.sum(),
@@ -163,21 +172,20 @@ class EntityTickOwnershipTest {
 
     @Test
     void aTokenThatNoLongerMatchesItsRowIsWithdrawn() {
+        SegmentWork segment = segment();
         OwnershipLease lease = lease(2);
-        issue(lease, 18, 40, true);
-        issue(lease, 19, 40, true);
+        issue(lease, segment, 18, 40, true, WORLD_EPOCH + 1L, SEGMENT_EPOCH);
+        issue(lease, segment, 19, 40, true);
         lease.publish(direct(), 1);
-        EntityTickOwnership.install(lease);
-        assertTrue(EntityTickOwnership.decideRow(18, WORLD_EPOCH + 1L, 41, CLEAN, false, 0.0, 0.0, 0.0) < 0,
+        EntityTickOwnership.install(lease, segment);
+        assertTrue(decide(segment, live(18, 41, CLEAN, 0.0)) < 0,
             "a claim of another generation skipped its row");
         assertEquals(1L, EntityTickOwnership.LIFECYCLE_REJECTED.sum());
         assertEquals(1L, EntityTickOwnership.CLAIM_REVOKED.sum());
         assertEquals(0L, EntityTickOwnership.CLAIM_EXECUTED.sum());
-        assertEquals(0L, EntityTickOwnership.CLAIM_EXECUTED.sum(),
-            "a claim no row withdrew was booked as executed");
-        assertTrue(EntityTickOwnership.decideRow(19, WORLD_EPOCH, 41, CLEAN, false, 0.0, 0.0, 0.0) >= 0,
+        assertTrue(decide(segment, live(19, 41, CLEAN, 0.0)) >= 0,
             "a claim that still matched its row was not used to skip it");
-        assertTrue(EntityTickOwnership.decideRow(20, WORLD_EPOCH, 41, CLEAN, false, 0.0, 0.0, 0.0) < 0,
+        assertTrue(decide(segment, live(20, 41, CLEAN, 0.0)) < 0,
             "a row nobody claimed was skipped");
         assertEquals(1L, EntityTickOwnership.NEVER_CLAIMED.sum(),
             "the row nobody claimed was not counted as one the fixture never held");
@@ -191,11 +199,12 @@ class EntityTickOwnershipTest {
 
     @Test
     void aRowThePlanPointCouldNotVouchForIsHandedBack() {
+        SegmentWork segment = segment();
         OwnershipLease lease = lease(1);
-        issue(lease, 25, 40, false);
+        issue(lease, segment, 25, 40, false);
         lease.publish(direct(), 1);
-        EntityTickOwnership.install(lease);
-        assertTrue(EntityTickOwnership.decideRow(25, WORLD_EPOCH, 41, CLEAN, false, 0.0, 0.0, 0.0) < 0,
+        EntityTickOwnership.install(lease, segment);
+        assertTrue(decide(segment, live(25, 41, CLEAN, 0.0)) < 0,
             "a row the frozen capability did not vouch for was skipped");
         assertEquals(1L, EntityTickOwnership.CLAIM_REVOKED.sum());
         assertEquals(1L, EntityTickOwnership.HOST_EXECUTED.sum());
@@ -205,11 +214,12 @@ class EntityTickOwnershipTest {
 
     @Test
     void aCapabilityThatMovedBeforeTheEntryIsWithdrawn() {
+        SegmentWork segment = segment();
         OwnershipLease lease = lease(1);
-        issue(lease, 26, 40, true);
+        issue(lease, segment, 26, 40, true);
         lease.publish(direct(), 1);
-        EntityTickOwnership.install(lease);
-        assertTrue(EntityTickOwnership.decideRow(26, WORLD_EPOCH, 41, CLEAN, false, 1.5, 0.0, 0.0) < 0,
+        EntityTickOwnership.install(lease, segment);
+        assertTrue(decide(segment, live(26, 41, CLEAN, 1.5)) < 0,
             "a row that moved after the plan point kept its claim");
         assertEquals(1L, EntityTickOwnership.CLAIM_REVOKED.sum());
         EntityTickOwnership.closeInstalled();
@@ -218,16 +228,17 @@ class EntityTickOwnershipTest {
 
     @Test
     void theAccountsCloseOnAMixtureOfAllFourOutcomes() {
+        SegmentWork segment = segment();
         OwnershipLease lease = lease(5);
-        issue(lease, 21, 40, true);
-        issue(lease, 22, 40, true);
-        issue(lease, 23, 40, true);
-        issue(lease, 24, 40, true);
-        issue(lease, 27, 40, true);
+        issue(lease, segment, 21, 40, true);
+        issue(lease, segment, 22, 40, true, WORLD_EPOCH + 1L, SEGMENT_EPOCH);
+        issue(lease, segment, 23, 40, true);
+        issue(lease, segment, 24, 40, true);
+        issue(lease, segment, 27, 40, true);
         lease.publish(refuse(), 1);
-        EntityTickOwnership.install(lease);
-        assertTrue(EntityTickOwnership.decideRow(21, WORLD_EPOCH, 41, CLEAN, false, 0.0, 0.0, 0.0) < 0);
-        assertTrue(EntityTickOwnership.decideRow(22, WORLD_EPOCH, 41, CLEAN, true, 0.0, 0.0, 0.0) < 0);
+        EntityTickOwnership.install(lease, segment);
+        assertTrue(decide(segment, live(21, 41, CLEAN, 0.0)) < 0);
+        assertTrue(decide(segment, live(22, 41, CLEAN, 0.0)) < 0);
         EntityTickOwnership.closeInstalled();
         assertEquals(5L, EntityTickOwnership.CLAIMED.sum());
         assertEquals(3L, EntityTickOwnership.NOT_ENTERED.sum());
@@ -243,6 +254,116 @@ class EntityTickOwnershipTest {
         assertEquals(0L, EntityTickOwnership.ISSUED.sum() - EntityTickOwnership.WITHDRAWN.sum(),
             "a row that never kept its token counted as owned");
         assertAccountsClose();
+    }
+
+    @Test
+    void aRowOfAnotherGenerationOfTheRowItselfIsHandedBack() {
+        SegmentWork segment = segment();
+        OwnershipLease lease = lease(1);
+        issue(lease, segment, 28, 40, true);
+        lease.publish(direct(), 1);
+        EntityTickOwnership.install(lease, segment);
+        // The kernel generation recorded for the id is not the one the row was frozen under.
+        EntityTickOwnership.noteEntityEpoch(28, 999L);
+        assertTrue(decide(segment, live(28, 41, CLEAN, 0.0)) < 0,
+            "a row whose entity generation changed kept its claim");
+        assertEquals(1L, EntityTickOwnership.CLAIM_REVOKED.sum());
+        assertEquals(1L, EntityTickOwnership.HOST_EXECUTED.sum());
+        EntityTickOwnership.closeInstalled();
+        assertEquals(1L, EntityTickOwnership.LAYER_ENTITY_REJECTED.sum(),
+            "the entity generation was not the layer that rejected the row");
+        assertAccountsClose();
+    }
+
+    @Test
+    void aRowOfAnotherWorldGenerationIsHandedBack() {
+        SegmentWork segment = segment();
+        OwnershipLease lease = lease(1);
+        issue(lease, segment, 29, 40, true, WORLD_EPOCH + 1L, SEGMENT_EPOCH);
+        lease.publish(direct(), 1);
+        EntityTickOwnership.install(lease, segment);
+        assertTrue(decide(segment, live(29, 41, CLEAN, 0.0)) < 0,
+            "a row frozen under another world generation kept its claim");
+        assertEquals(1L, EntityTickOwnership.HOST_EXECUTED.sum());
+        EntityTickOwnership.closeInstalled();
+        assertEquals(1L, EntityTickOwnership.LAYER_WORLD_REJECTED.sum(),
+            "the world generation was not the layer that rejected the row");
+        assertAccountsClose();
+    }
+
+    @Test
+    void aRowOfAnotherSegmentGenerationIsHandedBack() {
+        SegmentWork segment = segment();
+        OwnershipLease lease = lease(1);
+        issue(lease, segment, 30, 40, true, WORLD_EPOCH, SEGMENT_EPOCH + 1L);
+        lease.publish(direct(), 1);
+        EntityTickOwnership.install(lease, segment);
+        assertTrue(decide(segment, live(30, 41, CLEAN, 0.0)) < 0,
+            "a row frozen under another segment generation kept its claim");
+        assertEquals(1L, EntityTickOwnership.HOST_EXECUTED.sum());
+        EntityTickOwnership.closeInstalled();
+        assertEquals(1L, EntityTickOwnership.LAYER_SEGMENT_REJECTED.sum(),
+            "the segment generation was not the layer that rejected the row");
+        assertAccountsClose();
+    }
+
+    @Test
+    void aRowTheHostPassedOutOfOrderIsHandedBack() {
+        SegmentWork segment = segment();
+        OwnershipLease lease = lease(2);
+        issue(lease, segment, 41, 40, true);
+        issue(lease, segment, 42, 40, true);
+        lease.publish(direct(), 1);
+        EntityTickOwnership.install(lease, segment);
+        assertTrue(decide(segment, live(42, 41, CLEAN, 0.0)) >= 0,
+            "the first row of the frozen order was not skipped");
+        assertTrue(decide(segment, live(41, 41, CLEAN, 0.0)) < 0,
+            "a row the host had already passed in the frozen order was skipped");
+        assertEquals(1L, EntityTickOwnership.HOST_SKIPPED.sum());
+        EntityTickOwnership.closeInstalled();
+        assertEquals(1L, EntityTickOwnership.ORDINAL_VIOLATIONS.sum(),
+            "the host order violation was not counted");
+        assertAccountsClose();
+    }
+
+    @Test
+    void anObservedRowRunsOnTheHostAndIsNeverAnOwnershipRow() {
+        SegmentWork segment = segment();
+        OwnershipLease lease = lease(1);
+        issue(lease, segment, 43, 40, true);
+        segment.observe(44, 44L);
+        lease.publish(never(), 1);
+        EntityTickOwnership.install(lease, segment);
+        assertTrue(decide(segment, live(44, 41, CLEAN, 0.0)) < 0,
+            "a row nobody claimed was skipped");
+        assertEquals(1L, EntityTickOwnership.NEVER_CLAIMED.sum(),
+            "the observed row was not booked as one the fixture never held");
+        assertEquals(0L, EntityTickOwnership.HOST_SKIPPED.sum());
+        EntityTickOwnership.closeInstalled();
+        assertEquals(1L, EntityTickOwnership.OBSERVED_ROWS.sum());
+        assertEquals(1L, EntityTickOwnership.OBSERVED_ENTRIES.sum(),
+            "the observed row that ran was not counted on the observation face");
+        assertEquals(0L, EntityTickOwnership.UNBOOKED_COMMITS.sum());
+        assertEquals(0L, EntityTickOwnership.SET_CONFLICTS.sum());
+        assertAccountsClose();
+    }
+
+    @Test
+    void aRowBookedInBothSetsIsReportedByTheFrame() {
+        SegmentWork segment = segment();
+        OwnershipLease lease = lease(1);
+        issue(lease, segment, 45, 40, true);
+        segment.conflictForFault(45, 45L, 0);
+        lease.publish(never(), 1);
+        EntityTickOwnership.install(lease, segment);
+        EntityTickOwnership.closeInstalled();
+        assertEquals(1L, EntityTickOwnership.SET_CONFLICTS.sum(),
+            "the row booked as owned and observed was not reported");
+        assertEquals(1L, EntityTickOwnership.BROKEN_FRAMES.sum());
+        assertEquals(45, segment.conflictingEntity());
+        assertEquals(0, segment.conflictingOrdinal());
+        assertEquals(1L, EntityTickOwnership.OWNED_ROWS.sum());
+        assertEquals(1L, EntityTickOwnership.OBSERVED_ROWS.sum());
     }
 
     @Test
@@ -291,6 +412,15 @@ class EntityTickOwnershipTest {
             "a body call beyond the host path was not reported");
     }
 
+    @Test
+    void oneValueIsWrittenPerTimelineColumn() {
+        assertEquals(EntityTickOwnership.TIMELINE_COLUMNS.length,
+            EntityTickOwnership.timelineRow(0).length,
+            "the timeline row and its header do not have the same number of columns");
+        assertTrue(EntityTickOwnership.TIMELINE_COLUMNS.length >= 20,
+            "a column of the earlier batches disappeared");
+    }
+
     /** Every equation the fixture checks on a frame has to hold once the tick closed. */
     private static void assertAccountsClose() {
         assertEquals(0L, EntityTickOwnership.INVARIANT_VIOLATIONS.sum(), "the accounts do not close");
@@ -301,17 +431,50 @@ class EntityTickOwnershipTest {
         assertTrue(EntityTickOwnership.hostPathOk(), "the host path of the tick is not accounted for");
     }
 
+    private static SegmentWork segment() {
+        return EntityTickOwnership.beginSegment(TICK, WORLD, WORLD_EPOCH, SEGMENT_EPOCH);
+    }
+
     private static OwnershipLease lease(int capacity) {
         return EntityTickOwnership.beginLease(TICK, capacity);
     }
 
-    private static void issue(OwnershipLease lease, int entityId, int tickCount, boolean eligible) {
+    private static void issue(OwnershipLease lease, SegmentWork segment, int entityId, int tickCount,
+        boolean eligible) {
+        issue(lease, segment, entityId, tickCount, eligible, WORLD_EPOCH, SEGMENT_EPOCH);
+    }
+
+    /** Issues one row into the lease and books it in the segment, exactly as the plan point does. */
+    private static void issue(OwnershipLease lease, SegmentWork segment, int entityId, int tickCount,
+        boolean eligible, long worldEpoch, long segmentEpoch) {
         TickState state = new TickState();
         state.appliedScale = 1.0F;
+        int ordinal = segment.claim(entityId, entityId, uuidHigh(entityId), uuidLow(entityId));
+        segment.readSet().freezeNeighbourVerdict(ordinal, true);
         OwnershipLease.EntityCapability capability = new OwnershipLease.EntityCapability(entityId,
-            entityId, WORLD_EPOCH, tickCount + 1, true, eligible, CLEAN, 0.0, 0.0, 0.0);
-        assertTrue(lease.issue(capability, TickModels.armorStand(), state) >= 0,
-            "the row was not issued");
+            entityId, worldEpoch, tickCount + 1, true, eligible, CLEAN, 0.0, 0.0, 0.0,
+            segmentEpoch, ordinal);
+        int index = lease.issue(capability, TickModels.armorStand(), state);
+        assertTrue(index >= 0, "the row was not issued");
+        segment.book(ordinal, lease.token(index));
+    }
+
+    private static int decide(SegmentWork segment, EntityTickOwnership.LiveRow live) {
+        return EntityTickOwnership.decideRow(live, segment);
+    }
+
+    private static EntityTickOwnership.LiveRow live(int entityId, int tickVersion, byte fingerprint,
+        double xo) {
+        return new EntityTickOwnership.LiveRow(entityId, uuidHigh(entityId), uuidLow(entityId),
+            tickVersion, fingerprint, xo, 0.0, 0.0);
+    }
+
+    private static long uuidHigh(int entityId) {
+        return 0x1000_0000L + entityId;
+    }
+
+    private static long uuidLow(int entityId) {
+        return 0x2000_0000L + entityId;
     }
 
     private static Executor direct() {

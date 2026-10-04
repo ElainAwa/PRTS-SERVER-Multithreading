@@ -101,6 +101,7 @@ public final class EntityDomain implements KernelDomain {
             if (EntityTickOwnership.live()) {
                 EVIDENCE.info(EntityTickOwnership.evidenceLine());
                 EVIDENCE.info(EntityTickOwnership.replicaLine());
+                EVIDENCE.info(EntityTickOwnership.segmentLine());
             }
         }
         if (!KernelSettings.dispatchParallel()) {

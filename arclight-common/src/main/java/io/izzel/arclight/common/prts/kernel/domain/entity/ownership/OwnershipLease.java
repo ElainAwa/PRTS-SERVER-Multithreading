@@ -38,11 +38,11 @@ final class OwnershipLease {
      * The capability of one row, frozen at the plan point: every value the host entry needs in order
      * to decide, and no live world state. The entry reads this record and the row's own fields; it
      * never asks the world again, so a world or a row that changed between the two points fails the
-     * comparison instead of being read as its own successor.
+     * comparison, and the segment generation and host ordinal name the frame it was frozen in.
      */
     record EntityCapability(int entityId, long entityEpoch, long worldEpoch, int hostTickVersion,
         boolean pureKinematics, boolean eligibleForTakeover, byte fingerprint, double x, double y,
-        double z) {
+        double z, long segmentEpoch, int hostOrdinal) {
 
         /** Whether the row still stands where the plan point froze it: the host wrote its previous
          * position into the same fields right before this host entry. */

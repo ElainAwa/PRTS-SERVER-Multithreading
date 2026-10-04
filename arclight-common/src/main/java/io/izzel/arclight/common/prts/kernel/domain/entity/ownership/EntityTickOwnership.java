@@ -20,6 +20,11 @@
  * <p>The plan point freezes one capability per claimed row and the entry reads that record instead
  * of asking the world again; every claimed row ends in exactly one of four outcomes, and the four
  * are checked against the claim count on every tick.
+ *
+ * <p>The rows of one world of one tick are a segment: its ownership set, the rows it only observes,
+ * and the world inputs and three generations they were frozen under. The two row sets are booked
+ * apart and checked against each other on every frame; an observed row has no token and no answer,
+ * so it can neither be committed nor counted as an ownership row.
  */
 package io.izzel.arclight.common.prts.kernel.domain.entity.ownership;
 
@@ -127,6 +132,31 @@ public final class EntityTickOwnership {
     /** Why the plan point refused a row, by reason. */
     static final LongAdder[] REASON_COUNTS = adders(OwnershipEligibility.REASONS);
 
+    /** Segment frames closed; one per world the plan point claimed or watched a row in. */
+    static final LongAdder SEGMENT_FRAMES = new LongAdder();
+    /** Rows booked in an ownership set. */
+    static final LongAdder OWNED_ROWS = new LongAdder();
+    /** Rows booked as observed: read-only, never committed and never counted as owned. */
+    static final LongAdder OBSERVED_ROWS = new LongAdder();
+    /** Observed rows that reached the host entry and ran their original tick there. */
+    static final LongAdder OBSERVED_ENTRIES = new LongAdder();
+    /** Frames in which one row was booked in both sets; must stay zero. */
+    static final LongAdder SET_CONFLICTS = new LongAdder();
+    /** Commits of rows this segment did not book as ownership rows; must stay zero. */
+    static final LongAdder UNBOOKED_COMMITS = new LongAdder();
+    /** Commits that landed before a row the host had already passed in the frozen order. */
+    static final LongAdder ORDINAL_VIOLATIONS = new LongAdder();
+    /** Claims rejected because the row is no longer the entity the plan point froze. */
+    static final LongAdder LAYER_ENTITY_REJECTED = new LongAdder();
+    /** Claims rejected because the world inputs or the world generation no longer match. */
+    static final LongAdder LAYER_WORLD_REJECTED = new LongAdder();
+    /** Claims rejected because the segment frame they were frozen in is not the live one. */
+    static final LongAdder LAYER_SEGMENT_REJECTED = new LongAdder();
+    /** Frames whose ownership set and observed rows did not stay apart; must stay zero. */
+    static final LongAdder BROKEN_FRAMES = new LongAdder();
+    /** Frames whose ownership rows did not all end in exactly one outcome; must stay zero. */
+    static final LongAdder BROKEN_SEGMENT_LEDGERS = new LongAdder();
+
     /** Rows the independent counter saw run although the entry counted them as skipped. */
     static final LongAdder PROBE_SKIPPED_RAN = new LongAdder();
     /** Rows the independent counter saw run more than once in one tick. */
@@ -177,11 +207,12 @@ public final class EntityTickOwnership {
 
     private static final Int2LongOpenHashMap ENTITY_EPOCH = new Int2LongOpenHashMap();
     private static final Int2IntOpenHashMap ENTITY_EPOCH_TICK = new Int2IntOpenHashMap();
-    // The generations of the worlds touched by one plan point, frozen for the host entries of that
-    // tick: the entry compares against these numbers instead of asking a world again.
-    private static ServerLevel[] epochLevels = new ServerLevel[4];
-    private static long[] epochValues = new long[4];
-    private static int epochLevelRows;
+    // The segments of the tick being planned, one per world: the entry finds the segment of the row
+    // by the world it is in and reads every value it compares from that frozen frame.
+    private static final SegmentWork.Table SEGMENTS = new SegmentWork.Table();
+    private static final int SEGMENT_RING = 4_096;
+    private static SegmentWork.Frame[] segmentRing = new SegmentWork.Frame[SEGMENT_RING];
+    private static int segmentFrameRows;
 
     private static volatile ThreadPoolExecutor pool;
 
@@ -204,6 +235,17 @@ public final class EntityTickOwnership {
     private static long tickProbeMatched;
     private static long tickProbeViolations;
     private static long tickEntryNanos;
+    private static long tickSegments;
+    private static long tickOwned;
+    private static long tickObserved;
+    private static long tickSetConflicts;
+    private static long tickUnbookedCommits;
+    private static long tickOrdinalBroken;
+    private static long tickEntityRejected;
+    private static long tickWorldRejected;
+    private static long tickSegmentRejected;
+    private static long tickBrokenFrames;
+    private static long tickBrokenLedgers;
     private static long planSequence;
     private static long firstEntrySequence;
     private static long lastEntrySequence;
@@ -229,7 +271,25 @@ public final class EntityTickOwnership {
     private static final long[] TL_CLAIM_REVOKED = new long[TIMELINE_TICKS];
     private static final long[] TL_NEVER_CLAIMED = new long[TIMELINE_TICKS];
     private static final long[] TL_LEDGER_OK = new long[TIMELINE_TICKS];
+    private static final long[] TL_SEGMENTS = new long[TIMELINE_TICKS];
+    private static final long[] TL_OWNED = new long[TIMELINE_TICKS];
+    private static final long[] TL_OBSERVED = new long[TIMELINE_TICKS];
+    private static final long[] TL_SET_CONFLICTS = new long[TIMELINE_TICKS];
+    private static final long[] TL_UNBOOKED_COMMITS = new long[TIMELINE_TICKS];
+    private static final long[] TL_ORDINAL_BROKEN = new long[TIMELINE_TICKS];
+    private static final long[] TL_ENTITY_REJECTED = new long[TIMELINE_TICKS];
+    private static final long[] TL_WORLD_REJECTED = new long[TIMELINE_TICKS];
+    private static final long[] TL_SEGMENT_REJECTED = new long[TIMELINE_TICKS];
+    private static final long[] TL_BROKEN_FRAMES = new long[TIMELINE_TICKS];
     private static int timelineRows;
+
+    /** The timeline columns in the order the row of one tick writes them. */
+    static final String[] TIMELINE_COLUMNS = {"tick", "plan_seq", "first_seq", "last_seq",
+        "close_seq", "issued", "claimed", "entries", "skipped", "executed", "eligible",
+        "not_entered", "claim_executed", "claim_revoked", "never_claimed", "ledger_ok",
+        "probe_checked", "probe_matched", "probe_broken", "entry_nanos", "segments", "owned",
+        "observed", "set_conflicts", "unbooked_commits", "ordinal_broken", "entity_rejected",
+        "world_rejected", "segment_rejected", "broken_frames"};
 
     private EntityTickOwnership() {
     }
@@ -246,14 +306,13 @@ public final class EntityTickOwnership {
         }
         swapTrace();
         current = null;
-        // The generations of the worlds are read here and nowhere else in the tick: the table is
-        // dropped so a world replaced between two ticks cannot keep the old number.
-        epochLevelRows = 0;
+        // A segment frame belongs to one tick; the next plan point drops the frames it replaced.
+        SEGMENTS.reset();
         long tick = server.getTickCount();
         beginTickRecord(tick);
         long startedAt = System.nanoTime();
         OwnershipLease lease = new OwnershipLease(tick, MAX_ROWS, nextToken);
-        for (int row = 0; row < traceReadRows && lease.rows() < MAX_ROWS; row++) {
+        for (int row = 0; row < traceReadRows; row++) {
             ServerLevel level = traceLevelsRead[row];
             if (level == null) {
                 continue;
@@ -262,31 +321,46 @@ public final class EntityTickOwnership {
             if (entity == null) {
                 continue;
             }
+            SegmentWork segment = SEGMENTS.of(level, worldIdOf(level), worldEpochOf(level), tick);
+            int entityId = entity.getId();
+            long entityEpoch = entityEpochOf(entityId, tick);
             int reason = OwnershipEligibility.reasonOf(level, entity);
             if (reason != OwnershipEligibility.WIDENED) {
                 REASON_COUNTS[reason].increment();
+                // A refused row is watched, not owned: booked as observed, it carries no token.
+                observe(segment, entityId, entityEpoch, reason);
                 continue;
             }
             WholeTickModel model = TickModels.of(entity);
-            if (model == null) {
-                // The predicate admits no other class, so this is a row the plan point must not own.
+            if (model == null || lease.rows() >= MAX_ROWS || lease.indexOf(entityId) >= 0) {
+                observe(segment, entityId, entityEpoch, OwnershipEligibility.MODEL);
                 continue;
             }
             TickState state = new TickState();
             model.capture(entity, state);
-            int entityId = entity.getId();
             // The capability of the row is frozen here, from values read once on the tick thread:
             // the whole-tick model is the proof that this row's tick is pure kinematics, and the
             // row-level recheck says whether this row is one that model still covers. Every value
             // the host entry compares later is in this record, so the entry reads no world state.
             boolean covered = model.retains(entity);
+            int ordinal = segment.claim(entityId, entityEpoch,
+                entity.getUUID().getMostSignificantBits(),
+                entity.getUUID().getLeastSignificantBits());
+            // The neighbour query the predicate ran came back empty; the verdict is frozen here.
+            segment.readSet().freezeNeighbourVerdict(ordinal, true);
             OwnershipLease.EntityCapability capability = new OwnershipLease.EntityCapability(entityId,
-                entityEpochOf(entityId, tick), freezeWorldEpoch(level), entity.tickCount + 1,
-                true, covered, OwnershipEligibility.fingerprintOf(entity), state.x, state.y, state.z);
+                entityEpoch, segment.readSet().worldEpoch(), entity.tickCount + 1,
+                true, covered, OwnershipEligibility.fingerprintOf(entity), state.x, state.y, state.z,
+                segment.segmentEpoch(), ordinal);
             int index = lease.issue(capability, model, state);
             if (index >= 0) {
                 ISSUED.increment();
                 CLAIMED.increment();
+                segment.book(ordinal, lease.token(index));
+                if (FaultInjection.ownershipObserveClaims()) {
+                    // The declared fault: the frame has to report one row in both sets.
+                    segment.conflictForFault(entityId, entityEpoch, ordinal);
+                }
             }
         }
         nextToken = lease.lastToken();
@@ -328,12 +402,20 @@ public final class EntityTickOwnership {
         return verdict;
     }
 
+    /** The live values of one row, read once at the host entry and compared with its frozen
+     * capability; the three generations are read from the segment the row is in. */
+    record LiveRow(int entityId, long uuidHigh, long uuidLow, int tickVersion, byte fingerprint,
+        double xo, double yo, double zo) {
+    }
+
     /** The host entry of a row on a server level: the frozen capability of the row is read once and
      * compared with the row's own fields; a skip commits the settled answer on the tick thread. */
     private static int lookup(Entity entity, ServerLevel level) {
-        int index = decideRow(entity.getId(), frozenWorldEpoch(level), entity.tickCount,
-            OwnershipEligibility.fingerprintOf(entity), FaultInjection.ownershipEpochBreak(),
-            entity.xo, entity.yo, entity.zo);
+        SegmentWork segment = SEGMENTS.live(level);
+        LiveRow live = new LiveRow(entity.getId(), entity.getUUID().getMostSignificantBits(),
+            entity.getUUID().getLeastSignificantBits(), entity.tickCount,
+            OwnershipEligibility.fingerprintOf(entity), entity.xo, entity.yo, entity.zo);
+        int index = decideRow(live, segment);
         OwnershipLease lease = current;
         if (index >= 0 && lease != null) {
             // The commit segment of the row: the host applies the settled answer on the tick thread,
@@ -345,6 +427,8 @@ public final class EntityTickOwnership {
             model.commitHostSteps(entity, answer);
             model.noteApplied();
             APPLIED.increment();
+            // The commit is booked against the ownership row it belongs to, or counted instead.
+            segment.noteCommit(lease.capability(index).hostOrdinal());
             return SKIP_HOST_TICK;
         }
         if (lastWithdrawn && FaultInjection.ownershipDoubleRuns()) {
@@ -356,19 +440,19 @@ public final class EntityTickOwnership {
     }
 
     /** The decision of one host entry: the frozen capability of the row, compared with the values
-     * the entry read from the row itself. No world access, no wait; a non-negative return is the
-     * index of the answer the caller must commit and then skip. */
-    static int decideRow(int entityId, long liveWorldEpoch, int liveTickVersion, byte liveFingerprint,
-        boolean epochBreak, double xo, double yo, double zo) {
+     * the entry read from the row itself and with the three generations of its segment. No world
+     * access, no wait; a non-negative return is the index of the answer the caller must commit and
+     * then skip. */
+    static int decideRow(LiveRow live, SegmentWork segment) {
         lastWithdrawn = false;
         OwnershipLease lease = current;
         if (lease == null) {
-            absent();
+            absent(segment, live.entityId());
             return -1;
         }
-        int index = lease.indexOf(entityId);
+        int index = lease.indexOf(live.entityId());
         if (index < 0) {
-            absent();
+            absent(segment, live.entityId());
             return -1;
         }
         OwnershipLease.EntityCapability capability = lease.capability(index);
@@ -389,18 +473,44 @@ public final class EntityTickOwnership {
         }
         CANDIDATES.increment();
         lease.markLooked(index);
+        if (segment == null) {
+            // No row of the world this row is in now was frozen, so this claim is not its claim.
+            LAYER_SEGMENT_REJECTED.increment();
+            return reject(lease, index);
+        }
+        int ordinal = capability.hostOrdinal();
+        // Entity layer: the kernel generation of the row and the identity it was frozen with.
+        if (capability.entityEpoch() != ENTITY_EPOCH.get(live.entityId())
+            || segment.entityIdOf(ordinal) != live.entityId()
+            || segment.uuidHighOf(ordinal) != live.uuidHigh()
+            || segment.uuidLowOf(ordinal) != live.uuidLow()
+            || FaultInjection.ownershipEntityBreak()) {
+            segment.noteEntityRejected();
+            return reject(lease, index);
+        }
+        // World layer: the world generation and the frozen verdict of its neighbour query.
+        if (FaultInjection.ownershipEpochBreak()
+            || capability.worldEpoch() != segment.readSet().worldEpoch()
+            || !segment.neighbourClearOf(ordinal)) {
+            segment.noteWorldRejected();
+            return reject(lease, index);
+        }
+        // Segment layer: the frame the row was frozen in is the frame the host is running now.
+        if (capability.segmentEpoch() != segment.segmentEpoch()
+            || FaultInjection.ownershipSegmentBreak()) {
+            segment.noteSegmentRejected();
+            return reject(lease, index);
+        }
+        if (!segment.acceptOrdinal(ordinal)) {
+            return reject(lease, index);
+        }
         boolean matches = capability.pureKinematics()
             && capability.eligibleForTakeover()
-            && !epochBreak
-            && capability.worldEpoch() == liveWorldEpoch
-            && capability.hostTickVersion() == liveTickVersion
-            && capability.fingerprint() == liveFingerprint
-            && capability.holdsPosition(xo, yo, zo);
+            && capability.hostTickVersion() == live.tickVersion()
+            && capability.fingerprint() == live.fingerprint()
+            && capability.holdsPosition(live.xo(), live.yo(), live.zo());
         if (!matches) {
-            LIFECYCLE_REJECTED.increment();
-            DECIDED_STALE.increment();
-            withdraw(lease, index, true);
-            return -1;
+            return reject(lease, index);
         }
         if (lease.state(index) != OwnershipLease.SETTLED) {
             // No answer before the host needs the row: the token is withdrawn right here, in front
@@ -416,12 +526,23 @@ public final class EntityTickOwnership {
         return index;
     }
 
+    /** Hands a claim whose row, world or segment generation no longer matches back to the host. */
+    private static int reject(OwnershipLease lease, int index) {
+        LIFECYCLE_REJECTED.increment();
+        DECIDED_STALE.increment();
+        withdraw(lease, index, true);
+        return -1;
+    }
+
     /** The entry of a row the fixture holds no claim for: the host runs its original tick. */
-    private static void absent() {
+    private static void absent(SegmentWork segment, int entityId) {
         CANDIDATES.increment();
         HOST_EXECUTED.increment();
         NEVER_CLAIMED.increment();
         DECIDED_ABSENT.increment();
+        if (segment != null) {
+            segment.noteObservedEntry(entityId);
+        }
     }
 
     /** Closes the tick: recycle every lease that never reached the host, then check the accounts. */
@@ -454,8 +575,55 @@ public final class EntityTickOwnership {
             previousLate = now;
         }
         previous = lease;
+        closeSegmentFrames(lease);
         checkInvariants();
         closeTickRecord();
+    }
+
+    /**
+     * Closes every segment frame of this tick: the ownership set and the observed rows of each world
+     * are checked against each other, every ownership row is checked to end in exactly one outcome,
+     * and the per-row generations each entry compared are summed into the tick record. A frame that
+     * fails either check is logged with the row that broke it and counted; nothing here can change
+     * what the tick did.
+     */
+    private static void closeSegmentFrames(OwnershipLease lease) {
+        for (int at = 0; at < SEGMENTS.rows(); at++) {
+            SegmentWork segment = SEGMENTS.at(at);
+            SegmentWork.Frame frame = segment.closeFrame(lease);
+            SEGMENT_FRAMES.increment();
+            OWNED_ROWS.add(frame.ownedRows());
+            OBSERVED_ROWS.add(frame.observedRows());
+            OBSERVED_ENTRIES.add(frame.observedEntries());
+            SET_CONFLICTS.add(frame.setConflicts());
+            UNBOOKED_COMMITS.add(frame.unbookedCommits());
+            ORDINAL_VIOLATIONS.add(frame.ordinalBroken());
+            LAYER_ENTITY_REJECTED.add(frame.entityRejected());
+            LAYER_WORLD_REJECTED.add(frame.worldRejected());
+            LAYER_SEGMENT_REJECTED.add(frame.segmentRejected());
+            tickSegments++;
+            tickOwned += frame.ownedRows();
+            tickObserved += frame.observedRows();
+            tickSetConflicts += frame.setConflicts();
+            tickUnbookedCommits += frame.unbookedCommits();
+            tickOrdinalBroken += frame.ordinalBroken();
+            tickEntityRejected += frame.entityRejected();
+            tickWorldRejected += frame.worldRejected();
+            tickSegmentRejected += frame.segmentRejected();
+            if (frame.setConflicts() > 0) {
+                BROKEN_FRAMES.increment();
+                tickBrokenFrames++;
+                LOGGER.warn("[PRTS] entity-segment: a row is in both the ownership set and the"
+                        + " observed rows: entity={} ordinal={} world={}",
+                    segment.conflictingEntity(), segment.conflictingOrdinal(), frame.worldId());
+            }
+            if (!frame.ledgerOk()) {
+                BROKEN_SEGMENT_LEDGERS.increment();
+                tickBrokenLedgers++;
+            }
+            segmentRing[segmentFrameRows % SEGMENT_RING] = frame;
+            segmentFrameRows++;
+        }
     }
 
     /** Opens the record of one tick: the phase order, the row tally and the plan-time snapshot. */
@@ -471,6 +639,17 @@ public final class EntityTickOwnership {
         atPlanClaimExecuted = CLAIM_EXECUTED.sum();
         atPlanClaimRevoked = CLAIM_REVOKED.sum();
         atPlanNeverClaimed = NEVER_CLAIMED.sum();
+        tickSegments = 0L;
+        tickOwned = 0L;
+        tickObserved = 0L;
+        tickSetConflicts = 0L;
+        tickUnbookedCommits = 0L;
+        tickOrdinalBroken = 0L;
+        tickEntityRejected = 0L;
+        tickWorldRejected = 0L;
+        tickSegmentRejected = 0L;
+        tickBrokenFrames = 0L;
+        tickBrokenLedgers = 0L;
         if (!PROBED) {
             return;
         }
@@ -548,6 +727,16 @@ public final class EntityTickOwnership {
         TL_CLAIM_REVOKED[slot] = CLAIM_REVOKED.sum() - atPlanClaimRevoked;
         TL_NEVER_CLAIMED[slot] = NEVER_CLAIMED.sum() - atPlanNeverClaimed;
         TL_LEDGER_OK[slot] = claimLedgerOk() ? 1L : 0L;
+        TL_SEGMENTS[slot] = tickSegments;
+        TL_OWNED[slot] = tickOwned;
+        TL_OBSERVED[slot] = tickObserved;
+        TL_SET_CONFLICTS[slot] = tickSetConflicts;
+        TL_UNBOOKED_COMMITS[slot] = tickUnbookedCommits;
+        TL_ORDINAL_BROKEN[slot] = tickOrdinalBroken;
+        TL_ENTITY_REJECTED[slot] = tickEntityRejected;
+        TL_WORLD_REJECTED[slot] = tickWorldRejected;
+        TL_SEGMENT_REJECTED[slot] = tickSegmentRejected;
+        TL_BROKEN_FRAMES[slot] = tickBrokenFrames;
         timelineRows++;
         PrtsHostTickCalls.endTick();
     }
@@ -757,6 +946,18 @@ public final class EntityTickOwnership {
         DECIDED_ABSENT.reset();
         DECIDED_CONFLICT.reset();
         ORDER_VIOLATIONS.reset();
+        SEGMENT_FRAMES.reset();
+        OWNED_ROWS.reset();
+        OBSERVED_ROWS.reset();
+        OBSERVED_ENTRIES.reset();
+        SET_CONFLICTS.reset();
+        UNBOOKED_COMMITS.reset();
+        ORDINAL_VIOLATIONS.reset();
+        LAYER_ENTITY_REJECTED.reset();
+        LAYER_WORLD_REJECTED.reset();
+        LAYER_SEGMENT_REJECTED.reset();
+        BROKEN_FRAMES.reset();
+        BROKEN_SEGMENT_LEDGERS.reset();
         for (WholeTickModel model : TickModels.all()) {
             model.reset();
         }
@@ -779,12 +980,88 @@ public final class EntityTickOwnership {
         traceWriteRows = 0;
         ENTITY_EPOCH.clear();
         ENTITY_EPOCH_TICK.clear();
-        epochLevelRows = 0;
+        SEGMENTS.reset();
+        segmentFrameRows = 0;
+        tickSegments = 0L;
+        tickOwned = 0L;
+        tickObserved = 0L;
+        tickSetConflicts = 0L;
+        tickUnbookedCommits = 0L;
+        tickOrdinalBroken = 0L;
+        tickEntityRejected = 0L;
+        tickWorldRejected = 0L;
+        tickSegmentRejected = 0L;
+        tickBrokenFrames = 0L;
+        tickBrokenLedgers = 0L;
+    }
+
+    /**
+     * Writes the segment frames of the observed ticks when the harness declared a trace path: one
+     * line per world slice with its row sets, its three generations and the verdict of the frame
+     * checks. Nothing is written while no path was declared.
+     */
+    static void dumpSegments() {
+        if (TRACE_PATH == null || TRACE_PATH.isEmpty() || segmentFrameRows == 0) {
+            return;
+        }
+        Path path = Path.of(TRACE_PATH + ".segments.tsv");
+        try (Writer writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
+            writer.write("# entity-segment frames: " + segmentFrameRows + " frame(s), "
+                + Math.min(segmentFrameRows, SEGMENT_RING) + " kept, set_conflicts="
+                + SET_CONFLICTS.sum() + " broken_ledgers=" + BROKEN_SEGMENT_LEDGERS.sum() + "\n");
+            writer.write("# columns: tick world segment_epoch owned observed committed fellback"
+                + " not_entered observed_entries set_conflicts unbooked_commits ordinal_broken"
+                + " entity_rejected world_rejected segment_rejected ledger_ok\n");
+            int from = Math.max(0, segmentFrameRows - SEGMENT_RING);
+            for (int at = from; at < segmentFrameRows; at++) {
+                SegmentWork.Frame frame = segmentRing[at % SEGMENT_RING];
+                writer.write(Long.toString(frame.tickIndex()));
+                writer.write(' ' + frame.worldId());
+                writer.write(' ' + Long.toString(frame.segmentEpoch()));
+                writer.write(' ' + Integer.toString(frame.ownedRows()));
+                writer.write(' ' + Integer.toString(frame.observedRows()));
+                writer.write(' ' + Integer.toString(frame.committed()));
+                writer.write(' ' + Integer.toString(frame.fellBack()));
+                writer.write(' ' + Integer.toString(frame.notEntered()));
+                writer.write(' ' + Integer.toString(frame.observedEntries()));
+                writer.write(' ' + Integer.toString(frame.setConflicts()));
+                writer.write(' ' + Integer.toString(frame.unbookedCommits()));
+                writer.write(' ' + Integer.toString(frame.ordinalBroken()));
+                writer.write(' ' + Integer.toString(frame.entityRejected()));
+                writer.write(' ' + Integer.toString(frame.worldRejected()));
+                writer.write(' ' + Integer.toString(frame.segmentRejected()));
+                writer.write(' ' + (frame.ledgerOk() ? "1" : "0"));
+                writer.write('\n');
+            }
+        } catch (IOException failed) {
+            LOGGER.warn("[PRTS] entity-segment: cannot write the frames to {}: {}",
+                path, failed.toString());
+        }
+    }
+
+    /** One evidence line for the segment face: the row sets, the frame checks and the three
+     * generations the entries compared. Every count is written per frame, none is derived from what
+     * a commit landed. */
+    public static String segmentLine() {
+        return "[PRTS] entity-segment: frames=" + SEGMENT_FRAMES.sum()
+            + " owned_rows=" + OWNED_ROWS.sum()
+            + " observed_rows=" + OBSERVED_ROWS.sum()
+            + " observed_entries=" + OBSERVED_ENTRIES.sum()
+            + " set_conflicts=" + SET_CONFLICTS.sum()
+            + " unbooked_commits=" + UNBOOKED_COMMITS.sum()
+            + " ordinal_violations=" + ORDINAL_VIOLATIONS.sum()
+            + " layer_entity_rejected=" + LAYER_ENTITY_REJECTED.sum()
+            + " layer_world_rejected=" + LAYER_WORLD_REJECTED.sum()
+            + " layer_segment_rejected=" + LAYER_SEGMENT_REJECTED.sum()
+            + " broken_frames=" + BROKEN_FRAMES.sum()
+            + " broken_segment_ledgers=" + BROKEN_SEGMENT_LEDGERS.sum()
+            + " sets_apart=" + (SET_CONFLICTS.sum() == 0L ? "ok" : "broken");
     }
 
     /** Stops the pool; declared so a server that stops does not leave worker threads behind. */
     public static void shutdown() {
         dumpTimeline();
+        dumpSegments();
         reset();
         synchronized (EntityTickOwnership.class) {
             ThreadPoolExecutor open = pool;
@@ -809,38 +1086,34 @@ public final class EntityTickOwnership {
             writer.write("# entity-ownership timeline: " + timelineRows + " tick(s), "
                 + Math.min(timelineRows, TIMELINE_TICKS) + " kept, order_violations="
                 + ORDER_VIOLATIONS.sum() + " " + PrtsHostTickCalls.evidence() + "\n");
-            writer.write("# columns: tick plan_seq first_seq last_seq close_seq issued claimed"
-                + " entries skipped executed eligible not_entered claim_executed claim_revoked"
-                + " never_claimed ledger_ok probe_checked probe_matched probe_broken entry_nanos\n");
+            writer.write("# columns: " + String.join(" ", TIMELINE_COLUMNS) + "\n");
             int from = Math.max(0, timelineRows - TIMELINE_TICKS);
             for (int at = from; at < timelineRows; at++) {
-                int slot = at % TIMELINE_TICKS;
-                writer.write(Long.toString(TL_TICK[slot]));
-                writer.write(' ' + Long.toString(TL_PLAN_SEQ[slot]));
-                writer.write(' ' + Long.toString(TL_FIRST_SEQ[slot]));
-                writer.write(' ' + Long.toString(TL_LAST_SEQ[slot]));
-                writer.write(' ' + Long.toString(TL_CLOSE_SEQ[slot]));
-                writer.write(' ' + Long.toString(TL_ISSUED[slot]));
-                writer.write(' ' + Long.toString(TL_CLAIMED[slot]));
-                writer.write(' ' + Long.toString(TL_ENTRIES[slot]));
-                writer.write(' ' + Long.toString(TL_SKIPPED[slot]));
-                writer.write(' ' + Long.toString(TL_EXECUTED[slot]));
-                writer.write(' ' + Long.toString(TL_ELIGIBLE[slot]));
-                writer.write(' ' + Long.toString(TL_NOT_ENTERED[slot]));
-                writer.write(' ' + Long.toString(TL_CLAIM_EXECUTED[slot]));
-                writer.write(' ' + Long.toString(TL_CLAIM_REVOKED[slot]));
-                writer.write(' ' + Long.toString(TL_NEVER_CLAIMED[slot]));
-                writer.write(' ' + Long.toString(TL_LEDGER_OK[slot]));
-                writer.write(' ' + Long.toString(TL_PROBE_CHECKED[slot]));
-                writer.write(' ' + Long.toString(TL_PROBE_MATCHED[slot]));
-                writer.write(' ' + Long.toString(TL_PROBE_BROKEN[slot]));
-                writer.write(' ' + Long.toString(TL_ENTRY_NANOS[slot]));
+                long[] values = timelineRow(at % TIMELINE_TICKS);
+                for (int column = 0; column < values.length; column++) {
+                    if (column > 0) {
+                        writer.write(' ');
+                    }
+                    writer.write(Long.toString(values[column]));
+                }
                 writer.write('\n');
             }
         } catch (IOException failed) {
             LOGGER.warn("[PRTS] entity-ownership: cannot write the timeline to {}: {}",
                 TRACE_PATH, failed.toString());
         }
+    }
+
+    /** The values of one timeline row, in the order {@link #TIMELINE_COLUMNS} names them. */
+    static long[] timelineRow(int slot) {
+        return new long[]{TL_TICK[slot], TL_PLAN_SEQ[slot], TL_FIRST_SEQ[slot], TL_LAST_SEQ[slot],
+            TL_CLOSE_SEQ[slot], TL_ISSUED[slot], TL_CLAIMED[slot], TL_ENTRIES[slot], TL_SKIPPED[slot],
+            TL_EXECUTED[slot], TL_ELIGIBLE[slot], TL_NOT_ENTERED[slot], TL_CLAIM_EXECUTED[slot],
+            TL_CLAIM_REVOKED[slot], TL_NEVER_CLAIMED[slot], TL_LEDGER_OK[slot], TL_PROBE_CHECKED[slot],
+            TL_PROBE_MATCHED[slot], TL_PROBE_BROKEN[slot], TL_ENTRY_NANOS[slot], TL_SEGMENTS[slot],
+            TL_OWNED[slot], TL_OBSERVED[slot], TL_SET_CONFLICTS[slot], TL_UNBOOKED_COMMITS[slot],
+            TL_ORDINAL_BROKEN[slot], TL_ENTITY_REJECTED[slot], TL_WORLD_REJECTED[slot],
+            TL_SEGMENT_REJECTED[slot], TL_BROKEN_FRAMES[slot]};
     }
 
     /** Every claimed row ends in exactly one outcome: skipped, handed back for lack of an answer,
@@ -931,36 +1204,23 @@ public final class EntityTickOwnership {
         return epoch;
     }
 
-    /** The generation of one world, read once per plan point and frozen for the host entries; the
-     * write guard tracks the same numbers. */
-    private static long freezeWorldEpoch(ServerLevel level) {
-        for (int at = 0; at < epochLevelRows; at++) {
-            if (epochLevels[at] == level) {
-                return epochValues[at];
-            }
+    /** Books a row as observed, with the world verdict the predicate reached for it, if any. */
+    private static void observe(SegmentWork segment, int entityId, long entityEpoch, int reason) {
+        int ordinal = segment.observe(entityId, entityEpoch);
+        if (reason == OwnershipEligibility.MODEL || reason == OwnershipEligibility.NEIGHBOURS) {
+            segment.readSet().freezeNeighbourVerdict(ordinal,
+                reason == OwnershipEligibility.MODEL);
         }
-        long epoch = KernelModule.instance().guard().worldEpochs()
-            .epochOf(level.dimension().location().toString());
-        if (epochLevelRows == epochLevels.length) {
-            int grown = epochLevelRows * 2;
-            epochLevels = java.util.Arrays.copyOf(epochLevels, grown);
-            epochValues = java.util.Arrays.copyOf(epochValues, grown);
-        }
-        epochLevels[epochLevelRows] = level;
-        epochValues[epochLevelRows] = epoch;
-        epochLevelRows++;
-        return epoch;
     }
 
-    /** The frozen generation of one world, or a value no generation can take when the plan point did
-     * not freeze that world: such a row fails the comparison at the host entry. */
-    private static long frozenWorldEpoch(ServerLevel level) {
-        for (int at = 0; at < epochLevelRows; at++) {
-            if (epochLevels[at] == level) {
-                return epochValues[at];
-            }
-        }
-        return Long.MIN_VALUE;
+    /** The identity of one world, read once per segment and frozen with its other inputs. */
+    private static String worldIdOf(ServerLevel level) {
+        return level.dimension().location().toString();
+    }
+
+    /** The generation of one world, read once per segment; the write guard tracks the same number. */
+    private static long worldEpochOf(ServerLevel level) {
+        return KernelModule.instance().guard().worldEpochs().epochOf(worldIdOf(level));
     }
 
     private static void swapTrace() {
@@ -1033,10 +1293,29 @@ public final class EntityTickOwnership {
         return new OwnershipLease(tick, capacity, nextToken);
     }
 
-    static void install(OwnershipLease lease) {
+    static SegmentWork beginSegment(long tick, String worldId, long worldEpoch, long segmentEpoch) {
+        return new SegmentWork(tick, worldId, worldEpoch, null, segmentEpoch);
+    }
+
+    static void install(OwnershipLease lease, SegmentWork... segments) {
         ISSUED.add(lease.rows());
         CLAIMED.add(lease.rows());
+        for (int index = 0; index < lease.rows(); index++) {
+            OwnershipLease.EntityCapability capability = lease.capability(index);
+            noteEntityEpoch(capability.entityId(), capability.entityEpoch());
+        }
+        SEGMENTS.reset();
+        for (SegmentWork segment : segments) {
+            if (segment != null) {
+                SEGMENTS.adopt(segment);
+            }
+        }
         current = lease;
+    }
+
+    /** Records the kernel generation of one row; the plan point writes it, the entry reads it. */
+    static void noteEntityEpoch(int entityId, long epoch) {
+        ENTITY_EPOCH.put(entityId, epoch);
     }
 
     static OwnershipLease installed() {

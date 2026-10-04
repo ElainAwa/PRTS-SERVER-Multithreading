@@ -37,6 +37,14 @@ import java.util.function.Function;
  * the first n rows the host entry decided to skip, and {@code ownDoubleRun=<n>} runs the original
  * tick of the first n rows it decided to run a second time; the last four are the negative fixtures
  * of the equivalence harness and of the independent call counter, which have to report them.
+ *
+ * <p>The generation checks of the segment face carry their own faults, all zero by default:
+ * {@code ownEntityBreak=<n>} fails the entity generation of the first n entries,
+ * {@code ownSegmentBreak=<n>} fails the segment generation of the first n entries,
+ * {@code ownOrdinalBreak=<n>} starts the first n frames as if the host had already passed their
+ * first two ordinals, so the entry meets rows out of the frozen order, and
+ * {@code ownObserveClaim=<n>} books a claimed row as observed as well, which the frame check of the
+ * two row sets has to report.
  */
 public final class FaultInjection {
 
@@ -140,6 +148,10 @@ public final class FaultInjection {
         private final int ownSkipIgnored;
         private final int ownDoubleRun;
         private final int ownThrow;
+        private final int ownEntityBreak;
+        private final int ownSegmentBreak;
+        private final int ownOrdinalBreak;
+        private final int ownObserveClaim;
         private final AtomicLong delayTaken = new AtomicLong();
         private final AtomicLong ownFailTaken = new AtomicLong();
         private final AtomicLong ownDelayTaken = new AtomicLong();
@@ -149,12 +161,17 @@ public final class FaultInjection {
         private final AtomicLong ownSkipIgnoredTaken = new AtomicLong();
         private final AtomicLong ownDoubleRunTaken = new AtomicLong();
         private final AtomicLong ownThrowTaken = new AtomicLong();
+        private final AtomicLong ownEntityBreakTaken = new AtomicLong();
+        private final AtomicLong ownSegmentBreakTaken = new AtomicLong();
+        private final AtomicLong ownOrdinalBreakTaken = new AtomicLong();
+        private final AtomicLong ownObserveClaimTaken = new AtomicLong();
         private final Map<String, WorkPlan> holding = new ConcurrentHashMap<>();
         private final Set<String> holdSpent = ConcurrentHashMap.newKeySet();
 
         private Spec(long delayNanos, int delayBatches, Set<String> holdWorlds, int ownFail,
             long ownDelayNanos, int ownDelayRows, int ownEpochBreak, int ownWiden, int ownBreak,
-            int ownSkipIgnored, int ownDoubleRun, int ownThrow) {
+            int ownSkipIgnored, int ownDoubleRun, int ownThrow, int ownEntityBreak,
+            int ownSegmentBreak, int ownOrdinalBreak, int ownObserveClaim) {
             this.delayNanos = delayNanos;
             this.delayBatches = delayBatches;
             this.holdWorlds = Set.copyOf(holdWorlds);
@@ -167,9 +184,14 @@ public final class FaultInjection {
             this.ownSkipIgnored = ownSkipIgnored;
             this.ownDoubleRun = ownDoubleRun;
             this.ownThrow = ownThrow;
+            this.ownEntityBreak = ownEntityBreak;
+            this.ownSegmentBreak = ownSegmentBreak;
+            this.ownOrdinalBreak = ownOrdinalBreak;
+            this.ownObserveClaim = ownObserveClaim;
             this.enabled = delayNanos > 0L || !holdWorlds.isEmpty() || ownFail > 0
                 || ownDelayNanos > 0L || ownEpochBreak > 0 || ownWiden > 0 || ownBreak > 0
-                || ownSkipIgnored > 0 || ownDoubleRun > 0 || ownThrow > 0;
+                || ownSkipIgnored > 0 || ownDoubleRun > 0 || ownThrow > 0 || ownEntityBreak > 0
+                || ownSegmentBreak > 0 || ownOrdinalBreak > 0 || ownObserveClaim > 0;
         }
 
         static Spec parse(String directive) {
@@ -185,6 +207,10 @@ public final class FaultInjection {
             int ownSkipIgnored = 0;
             int ownDoubleRun = 0;
             int ownThrow = 0;
+            int ownEntityBreak = 0;
+            int ownSegmentBreak = 0;
+            int ownOrdinalBreak = 0;
+            int ownObserveClaim = 0;
             if (directive != null) {
                 for (String token : directive.split(",")) {
                     String trimmed = token.trim();
@@ -222,12 +248,20 @@ public final class FaultInjection {
                         ownDoubleRun = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
                     } else if ("ownThrow".equals(name)) {
                         ownThrow = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
+                    } else if ("ownEntityBreak".equals(name)) {
+                        ownEntityBreak = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
+                    } else if ("ownSegmentBreak".equals(name)) {
+                        ownSegmentBreak = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
+                    } else if ("ownOrdinalBreak".equals(name)) {
+                        ownOrdinalBreak = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
+                    } else if ("ownObserveClaim".equals(name)) {
+                        ownObserveClaim = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
                     }
                 }
             }
             return new Spec(delayMs * 1_000_000L, batches, worlds, ownFail, ownDelayMs * 1_000_000L,
                 ownDelayRows, ownEpochBreak, ownWiden, ownBreak, ownSkipIgnored, ownDoubleRun,
-                ownThrow);
+                ownThrow, ownEntityBreak, ownSegmentBreak, ownOrdinalBreak, ownObserveClaim);
         }
 
         private static long clampNumber(String value, long low, long high, long fallback) {
@@ -288,6 +322,22 @@ public final class FaultInjection {
 
         int ownThrow() {
             return ownThrow;
+        }
+
+        int ownEntityBreak() {
+            return ownEntityBreak;
+        }
+
+        int ownSegmentBreak() {
+            return ownSegmentBreak;
+        }
+
+        int ownOrdinalBreak() {
+            return ownOrdinalBreak;
+        }
+
+        int ownObserveClaim() {
+            return ownObserveClaim;
         }
     }
 
@@ -367,6 +417,46 @@ public final class FaultInjection {
      * left without an answer, which the host entry reads as a row it must run itself. */
     public static boolean ownershipThrows() {
         return ownershipThrows(LIVE);
+    }
+
+    /** Whether the entity generation of this entry is forced to fail; off unless declared. */
+    public static boolean ownershipEntityBreak() {
+        return ownershipEntityBreak(LIVE);
+    }
+
+    static boolean ownershipEntityBreak(Spec spec) {
+        return spec.ownEntityBreak > 0 && spec.ownEntityBreakTaken.getAndIncrement() < spec.ownEntityBreak;
+    }
+
+    /** Whether the segment generation of this entry is forced to fail; off unless declared. */
+    public static boolean ownershipSegmentBreak() {
+        return ownershipSegmentBreak(LIVE);
+    }
+
+    static boolean ownershipSegmentBreak(Spec spec) {
+        return spec.ownSegmentBreak > 0
+            && spec.ownSegmentBreakTaken.getAndIncrement() < spec.ownSegmentBreak;
+    }
+
+    /** Whether the host ordinals of the first two claimed rows are swapped; off unless declared. */
+    public static boolean ownershipOrdinalBreak() {
+        return ownershipOrdinalBreak(LIVE);
+    }
+
+    static boolean ownershipOrdinalBreak(Spec spec) {
+        return spec.ownOrdinalBreak > 0
+            && spec.ownOrdinalBreakTaken.getAndIncrement() < spec.ownOrdinalBreak;
+    }
+
+    /** Whether a claimed row is booked as observed as well; off unless declared. The frame check of
+     * the two row sets has to report the row it was injected for. */
+    public static boolean ownershipObserveClaims() {
+        return ownershipObserveClaims(LIVE);
+    }
+
+    static boolean ownershipObserveClaims(Spec spec) {
+        return spec.ownObserveClaim > 0
+            && spec.ownObserveClaimTaken.getAndIncrement() < spec.ownObserveClaim;
     }
 
     static boolean ownershipThrows(Spec spec) {
