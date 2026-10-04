@@ -31,6 +31,9 @@ class EntityTickOwnershipTest {
     @BeforeEach
     void clearCounters() {
         EntityTickOwnership.reset();
+        // The latch is deliberately not cleared by the readout reset: a failed process stays
+        // disarmed. A test that drives a failure re-arms explicitly for the next case.
+        EntityTickOwnership.rearmForTests();
     }
 
     @Test
@@ -49,7 +52,7 @@ class EntityTickOwnershipTest {
                 fields.put(name, (double) value);
             }
         });
-        assertEquals(16, fields.size(), "the field set changed");
+        assertEquals(46, fields.size(), "the field set changed");
         for (Map.Entry<String, Double> field : fields.entrySet()) {
             assertEquals(0.0, field.getValue(), field.getKey() + " is not zero while the arm is off");
         }
@@ -419,6 +422,95 @@ class EntityTickOwnershipTest {
             "the timeline row and its header do not have the same number of columns");
         assertTrue(EntityTickOwnership.TIMELINE_COLUMNS.length >= 20,
             "a column of the earlier batches disappeared");
+    }
+
+    @Test
+    void aBrokenAccountDisarmsTheFixtureAndTheNextRowRunsOnTheHost() {
+        assertFalse(EntityTickOwnership.latched(), "the latch started closed");
+        // One skip the claim ledger does not know about: the accounts no longer close.
+        EntityTickOwnership.HOST_SKIPPED.increment();
+        EntityTickOwnership.closeInstalled();
+        assertTrue(EntityTickOwnership.latched(), "a broken account did not disarm the fixture");
+        assertEquals(1L, EntityTickOwnership.DISARMS.sum(), "the disarm was not counted once");
+        assertTrue(EntityTickOwnership.evidenceLine().contains("disarms=1"),
+            "the evidence line does not report the disarm");
+        // The readout reset must not re-arm what a failure closed.
+        EntityTickOwnership.reset();
+        assertTrue(EntityTickOwnership.latched(), "the readout reset released the latch");
+        assertFalse(EntityTickOwnership.evidenceLine().contains("armed=1"),
+            "the evidence line claims an armed fixture after a failure");
+    }
+
+    @Test
+    void aSecondEntryOfOneRowDisarmsTheFixture() {
+        SegmentWork segment = segment();
+        OwnershipLease lease = lease(1);
+        issue(lease, segment, 51, 40, true);
+        lease.publish(direct(), 1);
+        EntityTickOwnership.install(lease, segment);
+        assertTrue(decide(segment, live(51, 41, CLEAN, 0.0)) >= 0);
+        assertTrue(decide(segment, live(51, 41, CLEAN, 0.0)) < 0);
+        assertTrue(EntityTickOwnership.latched(), "a second entry of one row did not disarm");
+        assertEquals(1L, EntityTickOwnership.DISARMS.sum());
+    }
+
+    @Test
+    void aFrameThatDoesNotCloseDisarmsTheFixture() {
+        SegmentWork segment = segment();
+        OwnershipLease lease = lease(1);
+        issue(lease, segment, 52, 40, true);
+        segment.conflictForFault(52, 52L, 0);
+        lease.publish(never(), 1);
+        EntityTickOwnership.install(lease, segment);
+        EntityTickOwnership.closeInstalled();
+        assertEquals(1L, EntityTickOwnership.SET_CONFLICTS.sum());
+        assertTrue(EntityTickOwnership.latched(), "a frame in both row sets did not disarm");
+        assertEquals(1L, EntityTickOwnership.DISARMS.sum());
+    }
+
+    @Test
+    void theTakeoverLineCarriesTheFiveQuantitiesOfTheBatch() {
+        String line = EntityTickOwnership.takeoverLine("cafebabe", "prts-state-fnv1a64-bitexact-v1");
+        for (String quantity : new String[] {"host_skip=", "host_execute=", "fallback=",
+            "commit=", "hash=cafebabe"}) {
+            assertTrue(line.contains(quantity), "the takeover line does not carry " + quantity);
+        }
+        assertTrue(line.contains("algorithm=prts-state-fnv1a64-bitexact-v1"),
+            "the hash is published without the algorithm that produced it");
+    }
+
+    @Test
+    void theNetReadingChargesTheFixedCostToTheEntryRow() {
+        assertEquals(0.0, EntityTickOwnership.netPerUnit(), "a run that took nothing over has no net");
+        assertEquals(0.0, EntityTickOwnership.netPerEntryRow());
+        EntityTickOwnership.PLAN_NANOS.add(300L);
+        EntityTickOwnership.ENTRY_NANOS.add(700L);
+        EntityTickOwnership.COMMIT_NANOS.add(500L);
+        EntityTickOwnership.HOST_SKIPPED.add(5L);
+        assertEquals(300.0, EntityTickOwnership.kCarriedNanos(), 1.0e-9,
+            "the per-carried-row cost is not the host-thread cost over the skipped rows");
+    }
+
+    @Test
+    void theWhitelistCountsEveryClassAndNeverClaimsARowOutsideIt() {
+        TickModels.all();
+        for (int slot = 0; slot < TakeoverWhitelist.SLOTS; slot++) {
+            TakeoverWhitelist.noteSeen(slot, null);
+            TakeoverWhitelist.noteClaimed(slot);
+            TakeoverWhitelist.noteEntry(slot, true);
+            assertEquals(1L, TakeoverWhitelist.claimed(slot));
+            assertEquals(1L, TakeoverWhitelist.skipped(slot));
+        }
+        TakeoverWhitelist.noteSeen(TickModels.OUTSIDE, String.class);
+        TakeoverWhitelist.noteClaimed(TickModels.OUTSIDE);
+        assertTrue(TakeoverWhitelist.evidenceLine().contains("outside_claimed=1"),
+            "a claim outside the whitelist was not reported");
+        TakeoverWhitelist.reset();
+        assertTrue(TakeoverWhitelist.evidenceLine().contains("outside_claimed=0"),
+            "the outside claim counter is not empty after a reset");
+        for (int slot = 0; slot < TakeoverWhitelist.SLOTS; slot++) {
+            assertEquals(0L, TakeoverWhitelist.claimed(slot));
+        }
     }
 
     /** Every equation the fixture checks on a frame has to hold once the tick closed. */

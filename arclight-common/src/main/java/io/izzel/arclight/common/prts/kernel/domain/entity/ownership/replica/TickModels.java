@@ -18,6 +18,16 @@ import java.util.concurrent.atomic.LongAdder;
 
 public final class TickModels {
 
+    /** The slot of a row whose class no model covers; such a row is never claimed. */
+    public static final int OUTSIDE = -1;
+    /** How many classes have a whole-tick model; the slots are the order of {@link #all()}. */
+    public static final int SLOTS = 5;
+    public static final int ARMOR_STAND_SLOT = 0;
+    public static final int VILLAGER_SLOT = 1;
+    public static final int BAT_SLOT = 2;
+    public static final int MARKER_SLOT = 3;
+    public static final int AREA_EFFECT_CLOUD_SLOT = 4;
+
     private static final String[] ARMOR_STAND_REFUSALS = {
         "replicable", "physics", "state", "equipment", "effects", "combat", "portal", "fluid"
     };
@@ -28,24 +38,49 @@ public final class TickModels {
     private TickModels() {
     }
 
+    /** The slot of this row's class on the whitelist, or {@link #OUTSIDE} for every other class.
+     * The slot names both the model that answers for the row and the bucket the evidence reports. */
+    public static int slotOf(Entity entity) {
+        Class<?> type = entity.getClass();
+        if (type == ArmorStand.class) {
+            return ARMOR_STAND_SLOT;
+        }
+        if (type == Villager.class) {
+            return VILLAGER_SLOT;
+        }
+        if (type == Bat.class) {
+            return BAT_SLOT;
+        }
+        if (type == Marker.class) {
+            return MARKER_SLOT;
+        }
+        if (type == AreaEffectCloud.class) {
+            return AREA_EFFECT_CLOUD_SLOT;
+        }
+        return OUTSIDE;
+    }
+
     /** The model of this row's class, or null when no model covers the class. */
     public static WholeTickModel of(Entity entity) {
-        if (entity.getClass() == ArmorStand.class) {
-            return ARMOR_STAND;
-        }
-        if (entity.getClass() == Villager.class) {
-            return VillagerTick.MODEL;
-        }
-        if (entity.getClass() == Bat.class) {
-            return BatTick.MODEL;
-        }
-        if (entity.getClass() == Marker.class) {
-            return MarkerTick.MODEL;
-        }
-        if (entity.getClass() == AreaEffectCloud.class) {
-            return AreaEffectCloudTick.MODEL;
-        }
-        return null;
+        int slot = slotOf(entity);
+        return slot == OUTSIDE ? null : ALL.get(slot);
+    }
+
+    /** The name of one slot, for the evidence line of the census. */
+    public static String nameOf(int slot) {
+        return slot >= 0 && slot < ALL.size() ? ALL.get(slot).name() : "outside";
+    }
+
+    /** The class the model of one slot answers for; the class census prices a class with it. */
+    public static Class<?> classOf(int slot) {
+        return switch (slot) {
+            case ARMOR_STAND_SLOT -> ArmorStand.class;
+            case VILLAGER_SLOT -> Villager.class;
+            case BAT_SLOT -> Bat.class;
+            case MARKER_SLOT -> Marker.class;
+            case AREA_EFFECT_CLOUD_SLOT -> AreaEffectCloud.class;
+            default -> null;
+        };
     }
 
     /** Every model, for the evidence line and the readout reset. */

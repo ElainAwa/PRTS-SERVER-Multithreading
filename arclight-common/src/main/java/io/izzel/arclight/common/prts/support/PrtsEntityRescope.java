@@ -68,6 +68,10 @@ public final class PrtsEntityRescope {
     private static final int DEPTH = 8;
     /** The tag the load generator puts on every entity it summons, so declared rows count apart. */
     private static final String LOAD_TAG = "cal_load";
+    // The classes a controlled takeover may claim; a lookup here never creates a class slot, so a
+    // reader off the tick thread cannot race the census.
+    private static final Class<?>[] WHITELIST = {ArmorStand.class, Villager.class, Bat.class,
+        Marker.class, AreaEffectCloud.class};
 
     private static final long F_PLAYER = 1L;
     private static final long F_THIRD_PARTY = 1L << 1;
@@ -276,6 +280,23 @@ public final class PrtsEntityRescope {
                 .append(SLOT_PASSENGERS[slot].sum());
         }
         return builder.toString();
+    }
+
+    /** The host whole-tick nanoseconds per row this process measured on the rows of one whitelisted
+     * class that the takeover did not widen, or zero when the class was measured not at all or only
+     * through widened rows. It is the same-run estimate of what skipping such a row removes; the
+     * reading is observation only, no decision reads it, and the controlled pairing takes the cost
+     * from the arm that runs every row on the host. */
+    public static double hostNanosPerRowNotWidened(Class<?> type) {
+        for (int slot = 0; slot < WHITELIST.length; slot++) {
+            if (WHITELIST[slot] != type) {
+                continue;
+            }
+            long rows = SLOT_INNER_COUNT[slot].sum() - SLOT_WIDENED_COUNT[slot].sum();
+            long nanos = SLOT_INNER_NANOS[slot].sum() - SLOT_WIDENED_NANOS[slot].sum();
+            return rows <= 0L || nanos <= 0L ? 0.0 : (double) nanos / (double) rows;
+        }
+        return 0.0;
     }
 
     /** One line with the verdict of every class, so an exclusion is attributable per class. */

@@ -21,6 +21,7 @@ import io.izzel.arclight.common.prts.kernel.dispatch.TaskLedger;
 import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
 import io.izzel.arclight.common.prts.kernel.domain.entity.DispatchSnapshot;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership;
+import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.TakeoverWhitelist;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityCandidateView;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
@@ -117,6 +118,8 @@ public final class EntityDomain implements KernelDomain {
                 EVIDENCE.info(EntityTickOwnership.evidenceLine());
                 EVIDENCE.info(EntityTickOwnership.replicaLine());
                 EVIDENCE.info(EntityTickOwnership.segmentLine());
+                EVIDENCE.info(EntityTickOwnership.worldLine());
+                EVIDENCE.info(TakeoverWhitelist.evidenceLine());
             }
             // The digest face of the frame: the header, the row count and the value, plus the row
             // the descent placed the last fork on. Observation only - no decision reads it.
@@ -126,6 +129,12 @@ public final class EntityDomain implements KernelDomain {
                     frame.segmentHeaderDigest()) + " rows=" + frame.rows().size() + " value="
                     + Long.toHexString(frame.value()) + " algorithm=" + frame.algorithmId()
                     + " row_index=" + frame.rows().layoutId());
+            }
+            // The five quantities of the takeover and the frame hash, on one line of one batch.
+            if (EntityTickOwnership.live()) {
+                EVIDENCE.info(EntityTickOwnership.takeoverLine(
+                    frame == null ? "none" : Long.toHexString(frame.value()),
+                    frame == null ? "none" : frame.algorithmId()));
             }
             DiffProbe.DiffReport fork = probe.report();
             if (fork.firstForkTick() >= 0) {

@@ -37,6 +37,7 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.Armo
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.TickModels;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.TickState;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.WholeTickModel;
+import io.izzel.arclight.common.prts.support.PrtsEntityRescope;
 import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
 import it.unimi.dsi.fastutil.ints.Int2LongOpenHashMap;
 import net.minecraft.server.MinecraftServer;
@@ -100,6 +101,13 @@ public final class EntityTickOwnership {
     static final LongAdder CLAIM_REVOKED = new LongAdder();
     /** Entries of rows the fixture never claimed; their original tick was never in question. */
     static final LongAdder NEVER_CLAIMED = new LongAdder();
+    /** Rows of a world the lifecycle guard does not track; such a row is never claimed. */
+    static final LongAdder WORLD_NOT_LIVE = new LongAdder();
+    /** Host-thread nanoseconds the entries spent committing a settled answer onto its row. */
+    static final LongAdder COMMIT_NANOS = new LongAdder();
+    static final LongAdder COMMITTED_ROWS = new LongAdder();
+    /** The times the fixture disarmed itself after a failure; must stay zero in a passing run. */
+    static final LongAdder DISARMS = new LongAdder();
     /** Rows whose original tick the host did not run. */
     static final LongAdder HOST_SKIPPED = new LongAdder();
     /** Rows a host entry left to the host: every row it reached except the skipped ones. */
@@ -194,6 +202,8 @@ public final class EntityTickOwnership {
     static final LongAdder ORDER_VIOLATIONS = new LongAdder();
 
     private static volatile OwnershipLease current;
+    private static volatile boolean disarmed;
+    private static volatile String disarmReason = "";
     private static OwnershipLease previous;
     private static long previousLate;
     private static long nextToken = 1L;
@@ -214,6 +224,10 @@ public final class EntityTickOwnership {
     private static final int SEGMENT_RING = 4_096;
     private static SegmentFrames.Frame[] segmentRing = new SegmentFrames.Frame[SEGMENT_RING];
     private static int segmentFrameRows;
+    // The frames one world closed, so a run that ticks two worlds can account for both: frames,
+    // owned rows, commits, fallbacks, rows that never entered and frames whose ledger broke.
+    private static final java.util.LinkedHashMap<String, long[]> WORLD_TOTALS =
+        new java.util.LinkedHashMap<>();
 
     private static volatile ThreadPoolExecutor pool;
 
@@ -300,9 +314,39 @@ public final class EntityTickOwnership {
         return LIVE;
     }
 
+    /** Whether the fixture is still taking rows over. A declared fixture that failed an account,
+     * a frame check or the independent counter disarms itself, and from the next tick on every row
+     * runs its original tick on the host path; the latch is never released inside the process. */
+    public static boolean armed() {
+        return LIVE && !disarmed;
+    }
+
+    public static long disarms() {
+        return DISARMS.sum();
+    }
+
+    /** Whether the latch tripped; a test and the evidence line read it while the arm is off. */
+    static boolean latched() {
+        return disarmed;
+    }
+
+    /** Disarms the fixture after a failure. Idempotent, and it never releases the latch. */
+    private static void disarm(String reason) {
+        if (disarmed) {
+            return;
+        }
+        disarmed = true;
+        disarmReason = reason;
+        DISARMS.increment();
+        if (LIVE) {
+            LOGGER.warn("[PRTS] entity-ownership: disarmed ({}); the fixture claims no further row"
+                + " and every row runs its original tick on the host path", reason);
+        }
+    }
+
     /** The plan point of one tick: freeze the eligible rows, issue their tokens, dispatch them. */
     public static void onServerTickPre(MinecraftServer server) {
-        if (!LIVE) {
+        if (!armed()) {
             return;
         }
         swapTrace();
@@ -322,10 +366,23 @@ public final class EntityTickOwnership {
             if (entity == null) {
                 continue;
             }
-            SegmentWork segment = SEGMENTS.of(level, worldIdOf(level), worldEpochOf(level), tick);
             int entityId = entity.getId();
             long entityEpoch = entityEpochOf(entityId, tick);
+            int slot = TickModels.slotOf(entity);
+            TakeoverWhitelist.noteSeen(slot, entity.getClass());
+            long worldEpoch = worldEpochOf(level);
+            SegmentWork segment = SEGMENTS.of(level, worldIdOf(level), worldEpoch, tick);
+            if (worldEpoch <= 0L) {
+                // The lifecycle guard does not track this world, so the row is not a row this
+                // takeover may answer for: it is watched, never claimed.
+                WORLD_NOT_LIVE.increment();
+                observe(segment, entityId, entityEpoch, OwnershipEligibility.LIFECYCLE);
+                continue;
+            }
             int reason = OwnershipEligibility.reasonOf(level, entity);
+            if (reason == OwnershipEligibility.RIDING) {
+                TakeoverWhitelist.notePassenger(slot);
+            }
             if (reason != OwnershipEligibility.WIDENED) {
                 REASON_COUNTS[reason].increment();
                 // A refused row is watched, not owned: booked as observed, it carries no token.
@@ -357,6 +414,7 @@ public final class EntityTickOwnership {
             if (index >= 0) {
                 ISSUED.increment();
                 CLAIMED.increment();
+                TakeoverWhitelist.noteClaimed(slot);
                 segment.book(ordinal, lease.token(index));
                 if (FaultInjection.ownershipObserveClaims()) {
                     // The declared fault: the frame has to report one row in both sets.
@@ -377,7 +435,7 @@ public final class EntityTickOwnership {
      * a row it cannot take runs its original tick on the host path, exactly once.
      */
     public static int onEntityTickPre(Entity entity) {
-        if (!LIVE) {
+        if (!armed()) {
             return RUN_HOST_TICK;
         }
         long startedAt = PROBED ? System.nanoTime() : 0L;
@@ -417,6 +475,9 @@ public final class EntityTickOwnership {
             entity.getUUID().getLeastSignificantBits(), entity.tickCount,
             OwnershipEligibility.fingerprintOf(entity), entity.xo, entity.yo, entity.zo);
         int index = decideRow(live, segment);
+        // The outcome of this row, by class: a row of a class outside the list can only land on the
+        // executed side, which is what the census of the whitelist has to show.
+        TakeoverWhitelist.noteEntry(TickModels.slotOf(entity), index >= 0);
         OwnershipLease lease = current;
         if (index >= 0 && lease != null) {
             // The commit segment of the row: the host applies the settled answer on the tick thread,
@@ -424,8 +485,10 @@ public final class EntityTickOwnership {
             // then skips the original tick. No worker ever touches the entity.
             WholeTickModel model = lease.model(index);
             TickState answer = lease.answer(index);
+            long commitStartedAt = System.nanoTime();
             model.apply(entity, answer);
             model.commitHostSteps(entity, answer);
+            COMMIT_NANOS.add(System.nanoTime() - commitStartedAt);
             model.noteApplied();
             APPLIED.increment();
             // The commit is booked against the ownership row it belongs to, or counted instead.
@@ -464,6 +527,7 @@ public final class EntityTickOwnership {
             // the conflict undoes is booked where the withdrawal happens.
             OWNER_CONFLICT.increment();
             DECIDED_CONFLICT.increment();
+            disarm("owner-conflict");
             if (lease.state(index) == OwnershipLease.CONSUMED) {
                 HOST_SKIPPED.decrement();
                 withdraw(lease, index, true);
@@ -599,6 +663,8 @@ public final class EntityTickOwnership {
             SET_CONFLICTS.add(frame.setConflicts());
             UNBOOKED_COMMITS.add(frame.unbookedCommits());
             ORDINAL_VIOLATIONS.add(frame.ordinalBroken());
+            COMMITTED_ROWS.add(frame.committed());
+            noteWorldTotals(frame);
             LAYER_ENTITY_REJECTED.add(frame.entityRejected());
             LAYER_WORLD_REJECTED.add(frame.worldRejected());
             LAYER_SEGMENT_REJECTED.add(frame.segmentRejected());
@@ -621,6 +687,12 @@ public final class EntityTickOwnership {
             if (!frame.ledgerOk()) {
                 BROKEN_SEGMENT_LEDGERS.increment();
                 tickBrokenLedgers++;
+            }
+            if (frame.setConflicts() > 0 || frame.unbookedCommits() > 0 || frame.ordinalBroken() > 0
+                || !frame.ledgerOk()) {
+                // A frame whose accounts do not close is a failure of the takeover, not a reading:
+                // the fixture stops claiming from the next tick on.
+                disarm("frame");
             }
             segmentRing[segmentFrameRows % SEGMENT_RING] = asFrame(frame);
             segmentFrameRows++;
@@ -706,6 +778,11 @@ public final class EntityTickOwnership {
             && (lastEntrySequence == 0L || closeSequence > lastEntrySequence);
         if (!ordered) {
             ORDER_VIOLATIONS.increment();
+        }
+        if (violations > 0L) {
+            // The independent counter saw a row the entry did not: a skipped row that ran, a row
+            // that ran twice, or a row that never ran. The fixture stops claiming at once.
+            disarm("probe");
         }
         int slot = (int) (timelineRows % TIMELINE_TICKS);
         TL_TICK[slot] = currentTickIndex;
@@ -810,6 +887,15 @@ public final class EntityTickOwnership {
             + " host_executed=" + executed
             + " never_claimed=" + NEVER_CLAIMED.sum()
             + " fallback=" + FALLBACK.sum()
+            + " committed=" + COMMITTED_ROWS.sum()
+            + " applied=" + APPLIED.sum()
+            + " world_not_live=" + WORLD_NOT_LIVE.sum()
+            + " plan_nanos=" + PLAN_NANOS.sum()
+            + " commit_nanos=" + COMMIT_NANOS.sum()
+            + " k_carried_ns=" + format(kCarriedNanos())
+            + " c_move_ns=" + format(cMoveNanos())
+            + " net_per_unit=" + format(netPerUnit())
+            + " net_per_entry_row=" + format(netPerEntryRow())
             + " not_entered=" + notEntered
             + " revoked=" + withdrawn
             + " claim_executed=" + CLAIM_EXECUTED.sum()
@@ -844,6 +930,9 @@ public final class EntityTickOwnership {
             + " claim_ledger=" + (claimLedgerOk() ? "ok" : "broken")
             + " closure=" + (closureOk() ? "ok" : "broken")
             + " invariants=" + (INVARIANT_VIOLATIONS.sum() == 0L ? "ok" : "broken")
+            + " armed=" + (armed() ? 1 : 0)
+            + " disarms=" + DISARMS.sum()
+            + " disarm_reason=" + (disarmReason.isEmpty() ? "none" : disarmReason)
             + " live=" + (LIVE ? 1 : 0);
     }
 
@@ -901,6 +990,82 @@ public final class EntityTickOwnership {
         sink.add("entity.late_dropped", LATE_DROPPED.sum());
         sink.add("entity.settled", SETTLED_ROWS.sum());
         sink.add("entity.invariant_violations", INVARIANT_VIOLATIONS.sum());
+        sink.add("entity.commit", COMMITTED_ROWS.sum());
+        sink.add("entity.applied", APPLIED.sum());
+        sink.add("entity.world_not_live", WORLD_NOT_LIVE.sum());
+        sink.add("entity.plan_nanos", PLAN_NANOS.sum());
+        sink.add("entity.entry_nanos", ENTRY_NANOS.sum());
+        sink.add("entity.commit_nanos", COMMIT_NANOS.sum());
+        sink.add("entity.k_carried_ns", kCarriedNanos());
+        sink.add("entity.c_move_ns", cMoveNanos());
+        sink.add("entity.net_per_unit", netPerUnit());
+        sink.add("entity.net_per_entry_row", netPerEntryRow());
+        sink.add("entity.disarmed", disarmed ? 1L : 0L);
+        sink.add("entity.disarms", DISARMS.sum());
+        TakeoverWhitelist.readings(sink);
+    }
+
+    /** One line with the five quantities of the controlled takeover and the digest of the state the
+     * takeover answered with, so a reader gets the two host decisions, the fallback, the commits and
+     * the hash from one place of one run. */
+    public static String takeoverLine(String hash, String algorithm) {
+        return "[PRTS] entity-takeover: host_skip=" + HOST_SKIPPED.sum()
+            + " host_execute=" + HOST_EXECUTED.sum()
+            + " fallback=" + FALLBACK.sum()
+            + " commit=" + COMMITTED_ROWS.sum()
+            + " applied=" + APPLIED.sum()
+            + " hash=" + hash
+            + " algorithm=" + algorithm
+            + " frames=" + SEGMENT_FRAMES.sum()
+            + " worlds=" + WORLD_TOTALS.size()
+            + " armed=" + (armed() ? 1 : 0);
+    }
+
+    /** The host-thread cost the fixture added per row it took over. */
+    static double kCarriedNanos() {
+        long carried = HOST_SKIPPED.sum();
+        if (carried == 0L) {
+            return 0.0;
+        }
+        return (double) (PLAN_NANOS.sum() + ENTRY_NANOS.sum() + COMMIT_NANOS.sum())
+            / (double) carried;
+    }
+
+    /** The host whole-tick nanoseconds per row this run measured on the whitelisted classes it did
+     * not take over; zero while the host-cost observation is off. The batch criterion is the paired
+     * run, where the cost comes from the arm that runs every row on the host. */
+    static double cMoveNanos() {
+        double weighted = 0.0;
+        long rows = 0L;
+        for (int slot = 0; slot < TakeoverWhitelist.SLOTS; slot++) {
+            long taken = TakeoverWhitelist.skipped(slot);
+            if (taken == 0L) {
+                continue;
+            }
+            double perRow = PrtsEntityRescope.hostNanosPerRowNotWidened(TickModels.classOf(slot));
+            if (perRow <= 0.0) {
+                continue;
+            }
+            weighted += perRow * (double) taken;
+            rows += taken;
+        }
+        return rows == 0L ? 0.0 : weighted / (double) rows;
+    }
+
+    /** What one carried row is worth: the host cost it removes minus the host cost it adds. */
+    static double netPerUnit() {
+        return cMoveNanos() - kCarriedNanos();
+    }
+
+    /** The same net per row a host entry saw, with the fixed cost of the tick charged to that
+     * denominator: {@code coverage * c_move - added / entries}. */
+    static double netPerEntryRow() {
+        long candidates = CANDIDATES.sum();
+        if (candidates == 0L) {
+            return 0.0;
+        }
+        long added = PLAN_NANOS.sum() + ENTRY_NANOS.sum() + COMMIT_NANOS.sum();
+        return coverage() * cMoveNanos() - (double) added / (double) candidates;
     }
 
     /** Clears every counter and forgets the trace; the readout reset and the tests use it. */
@@ -917,6 +1082,10 @@ public final class EntityTickOwnership {
         CLAIM_EXECUTED.reset();
         CLAIM_REVOKED.reset();
         NEVER_CLAIMED.reset();
+        WORLD_NOT_LIVE.reset();
+        COMMIT_NANOS.reset();
+        COMMITTED_ROWS.reset();
+        DISARMS.reset();
         ENTRY_FAULTS.reset();
         WORKER_FAULTS.reset();
         OWNER_CONFLICT.reset();
@@ -994,6 +1163,14 @@ public final class EntityTickOwnership {
         tickSegmentRejected = 0L;
         tickBrokenFrames = 0L;
         tickBrokenLedgers = 0L;
+        WORLD_TOTALS.clear();
+        TakeoverWhitelist.reset();
+    }
+
+    /** Re-arms the latch; only the unit tests use it, a failed process stays disarmed. */
+    static void rearmForTests() {
+        disarmed = false;
+        disarmReason = "";
     }
 
     /**
@@ -1044,7 +1221,8 @@ public final class EntityTickOwnership {
      * generations the entries compared. Every count is written per frame, none is derived from what
      * a commit landed. */
     public static String segmentLine() {
-        return "[PRTS] entity-segment: frames=" + SEGMENT_FRAMES.sum()
+        return "[PRTS] entity-segment: worlds=" + WORLD_TOTALS.size()
+            + " frames=" + SEGMENT_FRAMES.sum()
             + " owned_rows=" + OWNED_ROWS.sum()
             + " observed_rows=" + OBSERVED_ROWS.sum()
             + " observed_entries=" + OBSERVED_ENTRIES.sum()
@@ -1072,6 +1250,36 @@ public final class EntityTickOwnership {
     /** One closed segment frame by its index, counting from the first frame of the process. */
     public static SegmentFrames.Frame frameAt(long index) {
         return segmentRing[(int) (index % SEGMENT_RING)];
+    }
+
+    /** Books one closed frame into the totals of its world. */
+    private static void noteWorldTotals(SegmentWork.Frame frame) {
+        long[] totals = WORLD_TOTALS.computeIfAbsent(frame.worldId(), key -> new long[6]);
+        totals[0]++;
+        totals[1] += frame.ownedRows();
+        totals[2] += frame.committed();
+        totals[3] += frame.fellBack();
+        totals[4] += frame.notEntered();
+        if (!frame.ledgerOk()) {
+            totals[5]++;
+        }
+    }
+
+    /** One line per world: the frames it closed and what their ownership rows ended in. A run that
+     * ticks two worlds in one tick closes one frame per world per tick, and both are listed here. */
+    public static String worldLine() {
+        StringBuilder builder = new StringBuilder("[PRTS] entity-segment-world:");
+        if (WORLD_TOTALS.isEmpty()) {
+            builder.append(" none");
+        }
+        for (java.util.Map.Entry<String, long[]> entry : WORLD_TOTALS.entrySet()) {
+            long[] totals = entry.getValue();
+            builder.append(' ').append(entry.getKey()).append('=')
+                .append(totals[0]).append(',').append(totals[1]).append(',')
+                .append(totals[2]).append(',').append(totals[3]).append(',')
+                .append(totals[4]).append(',').append(totals[5]);
+        }
+        return builder.toString();
     }
 
     /** One closed frame as the frame shape a reader outside this package books. */
@@ -1212,6 +1420,7 @@ public final class EntityTickOwnership {
         }
         if (!holds) {
             INVARIANT_VIOLATIONS.increment();
+            disarm("accounts");
         }
     }
 
