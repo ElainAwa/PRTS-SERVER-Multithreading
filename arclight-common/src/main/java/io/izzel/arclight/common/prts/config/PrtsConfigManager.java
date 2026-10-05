@@ -206,7 +206,24 @@ public final class PrtsConfigManager {
                 + "# itself produced, and it lands nothing, so every position, orientation and velocity\n"
                 + "# stays with the host. On, the leg hands the batch to the intent channel and the\n"
                 + "# commit segment lands it - the tier the controlled three-probe comparison registered\n"
-                + "# as a semantic deviation (registration M4-OPEN), reachable only by this opt-in."));
+                + "# as a semantic deviation (registration M4-OPEN), reachable only by this opt-in.\n"
+                + "# 'tick-plan: false' leaves the planning period switched off: no plan is frozen and\n"
+                + "# nothing consumes an order. On, the tick freezes one plan - the job graph, its\n"
+                + "# topological order, the commit order derived from it, the share table and the mode\n"
+                + "# of every world and domain pair - and publishes it for the next tick.\n"
+                + "# 'job-graph: false' leaves the job layer switched off, so a domain dispatches in the\n"
+                + "# order it always did. On, the declared jobs are frozen into a graph, the scheduler\n"
+                + "# hands them out along that order and along their affinity, the declared bound of\n"
+                + "# jobs in flight is enforced instead of growing a queue, and the cost of the layer is\n"
+                + "# metered into the same per-class timers the share table is planned from.\n"
+                + "# 'commit-log: false' leaves every commit producer on its own path. On, the producers\n"
+                + "# report what they committed to one log, which accepts a report only while the order\n"
+                + "# of each world and domain pair keeps rising, keeps it in a ring per pair and folds\n"
+                + "# what it read so a replayed run can be compared with the run that happened. The log\n"
+                + "# records and judges; it does not intercept a write.\n"
+                + "# 'job-queue-cap' is the upper bound of the declarations one tick may hand to the\n"
+                + "# planning period, 'commit-ring-cap' the capacity of one world and domain ring and\n"
+                + "# 'plan-history-cap' how many recent plans an order may be resolved against."));
     }
 
     private static Map<String, Boolean> modSupportFeatures() {
@@ -249,6 +266,9 @@ public final class PrtsConfigManager {
         features.put("dispatch-parallel", false);
         features.put("dispatch-identical-only", false);
         features.put("dispatch-takeover", false);
+        features.put("tick-plan", false);
+        features.put("job-graph", false);
+        features.put("commit-log", false);
         return features;
     }
 
@@ -270,6 +290,9 @@ public final class PrtsConfigManager {
         numbers.put("worker-batch-chunks", new IntSetting(4, 1, 64));
         numbers.put("worker-deadline-grace-ms", new IntSetting(0, 0, 1000));
         numbers.put("worker-retry-budget", new IntSetting(1, 0, 2));
+        numbers.put("job-queue-cap", new IntSetting(256, 1, 4096));
+        numbers.put("commit-ring-cap", new IntSetting(512, 1, 65536));
+        numbers.put("plan-history-cap", new IntSetting(8, 1, 64));
         return numbers;
     }
 

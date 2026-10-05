@@ -7,7 +7,13 @@ import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
 import io.izzel.arclight.common.prts.kernel.codes.DegradeLevel;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.codes.RejectTrigger;
+import io.izzel.arclight.common.prts.kernel.commit.CommitLog;
+import io.izzel.arclight.common.prts.kernel.commit.CommitRing;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
+import io.izzel.arclight.common.prts.kernel.jobs.JobScheduler;
+import io.izzel.arclight.common.prts.kernel.jobs.ShareMeterPoint;
+import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
+import io.izzel.arclight.common.prts.kernel.plan.TickPlanStore;
 import io.izzel.arclight.common.prts.kernel.degrade.DegradeLadder;
 import io.izzel.arclight.common.prts.kernel.DomainReadings;
 import io.izzel.arclight.common.prts.kernel.KernelDomain;
@@ -69,6 +75,7 @@ public final class KernelReadings {
         selfTimers(lines, module);
         domainReadings(lines, module);
         waitPoints(lines, module);
+        contractLayers(lines, module);
         control(lines, module);
         return lines;
     }
@@ -376,6 +383,170 @@ public final class KernelReadings {
             add(lines, "budget.meter." + shareClass.key() + ".sources",
                 row == null ? "-" : selfKeys(row.sources()));
         }
+    }
+
+    /** The three contract layers of one tick: the frozen plan and its orders, the job layer that
+     * follows them and the commit log that judges what was reached. Every field here is an
+     * observation request; no gate, verdict or release reads one of them. */
+    private static void contractLayers(List<String> lines, KernelModule module) {
+        add(lines, "plan.observation_only", 1);
+        add(lines, "plan.enabled", KernelSettings.tickPlan() ? 1 : 0);
+        add(lines, "plan.job_graph_enabled", KernelSettings.jobGraph() ? 1 : 0);
+        add(lines, "plan.commit_log_enabled", KernelSettings.commitLog() ? 1 : 0);
+        TickPlanStore store = module.plans();
+        TickPlan plan = store.latest();
+        TickPlanStore.Control control = store.control();
+        add(lines, "plan.plans_built", store.plansBuilt());
+        add(lines, "plan.failures", store.failures());
+        add(lines, "plan.failure_rate", format(store.failureRate()));
+        add(lines, "plan.last_failure", store.lastFailure() == null ? "none"
+            : store.lastFailure().text());
+        add(lines, "plan.rebuilds", store.rebuilds());
+        add(lines, "plan.bootstrap_skips", store.bootstrapSkips());
+        add(lines, "plan.unknown_sites", store.unknownSites());
+        add(lines, "plan.history", store.historySize() + "/" + store.historyCap());
+        add(lines, "plan.unresolved_lookups", store.unresolvedLookups());
+        add(lines, "plan.control_observed", control.observed() ? 1 : 0);
+        add(lines, "plan.control_tick", control.tickIndex());
+        add(lines, "plan.control_sequence", control.planSequence());
+        add(lines, "plan.control_world_generation", control.worldSetGeneration());
+        add(lines, "plan.control_min_margin_ms", format(control.minMarginMs()));
+        add(lines, "plan.control_overrun_hits", control.overrunHits());
+        add(lines, "plan.control_wait_bound_hits", control.waitBoundHits());
+        add(lines, "plan.control_reserve_remaining_ms", format(control.reserveRemainingMs()));
+        add(lines, "plan.control_degrade_state", control.degradeState());
+        if (plan == null) {
+            add(lines, "plan.tick", 0L);
+            add(lines, "plan.sequence", 0L);
+            add(lines, "plan.world_generation", 0L);
+            add(lines, "plan.worlds", 0);
+            add(lines, "plan.nodes", 0);
+            add(lines, "plan.edges", 0);
+            add(lines, "plan.affinity_groups", 0);
+            add(lines, "plan.split_intents", 0);
+            add(lines, "plan.unknown_sites_in_plan", 0);
+            add(lines, "plan.topological_order", "-");
+            add(lines, "plan.commit_order", "-");
+            add(lines, "plan.commit_steps", 0);
+            add(lines, "plan.modes", "-");
+            add(lines, "plan.content_hash", 0L);
+            add(lines, "plan.share_rows", 0);
+        } else {
+            add(lines, "plan.tick", plan.tickIndex());
+            add(lines, "plan.sequence", plan.planSequence());
+            add(lines, "plan.world_generation", plan.worldSetGeneration());
+            add(lines, "plan.worlds", plan.worlds().size());
+            add(lines, "plan.nodes", plan.graph().nodeCount());
+            add(lines, "plan.edges", plan.graph().edgeCount());
+            add(lines, "plan.affinity_groups", plan.graph().affinity().size());
+            add(lines, "plan.split_intents", plan.splitIntents());
+            add(lines, "plan.unknown_sites_in_plan", plan.unknownSites());
+            add(lines, "plan.topological_order", joinIds(plan.topologicalOrder()));
+            add(lines, "plan.commit_order", commitOrderText(plan));
+            add(lines, "plan.commit_steps", plan.commitOrder().size());
+            add(lines, "plan.modes", modesText(plan));
+            add(lines, "plan.content_hash", Long.toHexString(plan.contentHash()));
+            add(lines, "plan.share_rows", plan.shareTable() == null ? 0
+                : plan.shareTable().rows().size());
+        }
+        JobScheduler scheduler = module.scheduler();
+        add(lines, "jobs.observation_only", 1);
+        add(lines, "jobs.intake_depth", module.jobIntake().depth());
+        add(lines, "jobs.intake_cap", module.jobIntake().capacity());
+        add(lines, "jobs.intake_submitted", module.jobIntake().submitted());
+        add(lines, "jobs.intake_refused", module.jobIntake().refused());
+        add(lines, "jobs.intake_taken", module.jobIntake().taken());
+        add(lines, "jobs.intake_batches", module.jobIntake().takenBatches());
+        add(lines, "jobs.dispatched", scheduler.dispatched());
+        add(lines, "jobs.settled", scheduler.settledTotal());
+        add(lines, "jobs.ready_depth", scheduler.depth());
+        add(lines, "jobs.queued_peak", scheduler.queuedPeak());
+        add(lines, "jobs.lanes", scheduler.lanes());
+        add(lines, "jobs.backpressure_hits", scheduler.backpressureHits());
+        add(lines, "jobs.cancelled", scheduler.cancelledTotal());
+        add(lines, "jobs.timed_out", scheduler.timedOutTotal());
+        ShareMeterPoint meter = module.jobMeter();
+        add(lines, "jobs.meter_notes", meter.notes());
+        add(lines, "jobs.meter_nanos", meter.nanos());
+        add(lines, "jobs.meter_classes", meter.classes());
+        add(lines, "jobs.meter_refused", meter.refusedNotes());
+        CommitLog commits = module.commits();
+        CommitLog.Replay replay = module.commitReplay();
+        add(lines, "commit.observation_only", 1);
+        add(lines, "commit.planes", commits.ringCount());
+        add(lines, "commit.ring_capacity", commits.ringCapacity());
+        add(lines, "commit.ring_depth", commits.ringDepth());
+        add(lines, "commit.watermarks", commits.watermarks());
+        add(lines, "commit.entries", commits.sequence());
+        add(lines, "commit.accepted", commits.accepted());
+        add(lines, "commit.merged", commits.merged());
+        add(lines, "commit.intent", commits.intents());
+        add(lines, "commit.dropped", commits.dropped());
+        add(lines, "commit.retried", commits.retried());
+        add(lines, "commit.refused_full", commits.refusedFull());
+        add(lines, "commit.unplanned", commits.unplanned());
+        add(lines, "commit.order_violations", commits.orderViolations());
+        add(lines, "commit.first_divergence_position", commits.firstDivergencePosition());
+        add(lines, "commit.plan_order_matches", commits.orderViolations() == 0L ? 1 : 0);
+        add(lines, "commit.ticks", commits.ticks());
+        add(lines, "commit.replay_logged_steps", replay == null ? 0 : replay.loggedSteps());
+        add(lines, "commit.replay_log_digest", replay == null ? 0L
+            : Long.toHexString(replay.logDigest()));
+        add(lines, "commit.replay_order_matches", replay == null ? -1
+            : (replay.orderMatches() ? 1 : 0));
+        for (CommitRing ring : commits.rings()) {
+            String prefix = "commit.ring." + safe(ring.worldId()) + "." + safe(ring.domainId()) + ".";
+            add(lines, prefix + "depth", ring.depth());
+            add(lines, prefix + "capacity", ring.capacity());
+            add(lines, prefix + "pushed", ring.pushed());
+            add(lines, prefix + "popped", ring.popped());
+            add(lines, prefix + "refused_full", ring.refusedFull());
+        }
+    }
+
+    private static String joinIds(List<Long> ids) {
+        if (ids.isEmpty()) {
+            return "-";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (Long id : ids) {
+            if (builder.length() > 0) {
+                builder.append(",");
+            }
+            builder.append(id);
+        }
+        return builder.toString();
+    }
+
+    private static String commitOrderText(TickPlan plan) {
+        if (plan.commitOrder().isEmpty()) {
+            return "-";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (TickPlan.CommitStep step : plan.commitOrder()) {
+            if (builder.length() > 0) {
+                builder.append(",");
+            }
+            builder.append(step.position()).append(":").append(safe(step.worldId())).append("/")
+                .append(safe(step.domainId())).append(step.intent() ? "#intent" : "");
+        }
+        return builder.toString();
+    }
+
+    private static String modesText(TickPlan plan) {
+        if (plan.domainModes().isEmpty()) {
+            return "-";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (TickPlan.DomainMode mode : plan.domainModes()) {
+            if (builder.length() > 0) {
+                builder.append(",");
+            }
+            builder.append(safe(mode.worldId())).append("/").append(safe(mode.domainId()))
+                .append("=").append(mode.mode().name().toLowerCase(Locale.ROOT))
+                .append(":").append(mode.reason().name().toLowerCase(Locale.ROOT));
+        }
+        return builder.toString();
     }
 
     /** The two states of the budget and the four conditions the control plane judges them by. */

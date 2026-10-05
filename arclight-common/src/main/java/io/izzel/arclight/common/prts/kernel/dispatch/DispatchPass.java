@@ -50,12 +50,20 @@ public final class DispatchPass {
     public static DispatchPass dispatch(WorkPlan plan, WorkerPool pool, WorkBody body,
                                         ArenaLedger arena, DispatchReadings readings,
                                         TaskLedger ledger) {
+        return dispatch(plan, pool, body, arena, readings, ledger, plan.tasks());
+    }
+
+    /** Dispatches a frozen plan in an order the caller froze - the order of the tick's job graph,
+     * which is a function of the declarations and not of the iteration of a list. */
+    public static DispatchPass dispatch(WorkPlan plan, WorkerPool pool, WorkBody body,
+                                        ArenaLedger arena, DispatchReadings readings,
+                                        TaskLedger ledger, List<WorkTask> orderedTasks) {
         Map<String, EntityCandidateView> byWorld = new LinkedHashMap<>();
         for (EntityCandidateView view : plan.views()) {
             byWorld.putIfAbsent(view.worldId(), view);
         }
         List<Entry> entries = new ArrayList<>(plan.taskCount());
-        for (WorkTask task : plan.tasks()) {
+        for (WorkTask task : orderedTasks) {
             EntityCandidateView view = byWorld.get(task.worldId());
             WorkBatch batch = new WorkBatch(task.batchId(), task, plan.planEpoch(), view);
             ledger.register(task.batchId());
@@ -91,12 +99,19 @@ public final class DispatchPass {
      * never started; no slot is claimed. */
     public static DispatchPass serialFallback(WorkPlan plan, DispatchReadings readings,
                                               TaskLedger ledger) {
+        return serialFallback(plan, readings, ledger, plan.tasks());
+    }
+
+    /** Falls back along an order the caller froze, so the serial arm and the graph arm of one tick
+     * walk the same sequence. */
+    public static DispatchPass serialFallback(WorkPlan plan, DispatchReadings readings,
+                                              TaskLedger ledger, List<WorkTask> orderedTasks) {
         Map<String, EntityCandidateView> byWorld = new LinkedHashMap<>();
         for (EntityCandidateView view : plan.views()) {
             byWorld.putIfAbsent(view.worldId(), view);
         }
         List<Entry> entries = new ArrayList<>(plan.taskCount());
-        for (WorkTask task : plan.tasks()) {
+        for (WorkTask task : orderedTasks) {
             EntityCandidateView view = byWorld.get(task.worldId());
             WorkBatch batch = new WorkBatch(task.batchId(), task, plan.planEpoch(), view);
             ledger.register(task.batchId());

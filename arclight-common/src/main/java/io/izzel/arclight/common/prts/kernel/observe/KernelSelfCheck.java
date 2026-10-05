@@ -15,7 +15,18 @@ import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
 import io.izzel.arclight.common.prts.kernel.codes.DegradeLevel;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.codes.RejectTrigger;
+import io.izzel.arclight.common.prts.kernel.commit.CommitLog;
+import io.izzel.arclight.common.prts.kernel.commit.CommitRing;
 import io.izzel.arclight.common.prts.kernel.degrade.DegradeLadder;
+import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
+import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
+import io.izzel.arclight.common.prts.kernel.jobs.JobGraphBuilder;
+import io.izzel.arclight.common.prts.kernel.jobs.JobIntake;
+import io.izzel.arclight.common.prts.kernel.jobs.JobScheduler;
+import io.izzel.arclight.common.prts.kernel.jobs.ShareMeterPoint;
+import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
+import io.izzel.arclight.common.prts.kernel.plan.TickPlanPlanner;
+import io.izzel.arclight.common.prts.kernel.plan.TickPlanStore;
 import io.izzel.arclight.common.prts.kernel.intent.CommitOrder;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentPayload;
@@ -237,6 +248,7 @@ public final class KernelSelfCheck {
         lines.addAll(waitSiteMatrix(failures, tick));
         lines.addAll(waitContractMatrix(failures, tick));
         lines.addAll(budgetGovernanceMatrix(failures, tick));
+        lines.addAll(contractLayerMatrix(failures, tick));
         lines.addAll(domainSelfChecks(failures, tick));
 
         lines.add("selftest.failures=" + failures.size());
@@ -809,6 +821,345 @@ public final class KernelSelfCheck {
             failures.add("a tick that carried an overrun did not end the clean run");
         }
         return lines;
+    }
+
+    /** The three contract layers, driven on their own objects: the graph freeze and its refusals, the
+     * scheduler with its affinity, its backpressure, its cancellation and its gate, the planning
+     * period with its refusals, its modes and its order, and the commit log with its order invariant,
+     * its bounded rings and its replay comparison. */
+    private static List<String> contractLayerMatrix(List<String> failures, long tick) {
+        List<String> lines = new ArrayList<>();
+        String world = "world-a";
+        JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef(world, "entity", 0);
+        List<JobDeclaration> declarations = new ArrayList<>();
+        declarations.add(declaration("a/0", world, "entity", "r0", 0, ShareClass.ENTITY,
+            JobDeclaration.SiteClass.PARALLEL, List.of(), 1));
+        declarations.add(declaration("a/1", world, "entity", "r1", 1, ShareClass.ENTITY,
+            JobDeclaration.SiteClass.PARALLEL, List.of("a/0"), 1));
+        declarations.add(declaration("a/2", world, "entity", "r2", 2, ShareClass.ENTITY,
+            JobDeclaration.SiteClass.UNKNOWN, List.of("a/1"), 1));
+        declarations.add(declaration("a/3", world, "entity", "r3", 3, ShareClass.ENTITY,
+            JobDeclaration.SiteClass.PARALLEL, List.of("a/2", "a/0"), 1));
+        JobGraphBuilder.Freeze first = JobGraphBuilder.freeze(declarations, tick, 1L, 1L, 64);
+        List<JobDeclaration> shuffled = new ArrayList<>();
+        for (int index = declarations.size() - 1; index >= 0; index--) {
+            shuffled.add(declarations.get(index));
+        }
+        JobGraphBuilder.Freeze second = JobGraphBuilder.freeze(shuffled, tick, 1L, 1L, 64);
+        String firstOrder = first.ok() ? joinIds(first.graph().order()) : "refused";
+        String secondOrder = second.ok() ? joinIds(second.graph().order()) : "refused";
+        lines.add("selftest.jobgraph_nodes=" + (first.ok() ? first.graph().nodeCount() : 0)
+            + " edges=" + (first.ok() ? first.graph().edgeCount() : 0)
+            + " roots=" + (first.ok() ? first.graph().ready().size() : 0)
+            + " lanes=" + (first.ok() ? first.graph().affinity().size() : 0));
+        lines.add("selftest.jobgraph_order_equal=" + (firstOrder.equals(secondOrder) ? 1 : 0)
+            + " order=" + firstOrder);
+        if (!first.ok() || !second.ok() || !firstOrder.equals(secondOrder)) {
+            failures.add("two freezes of the same declarations did not produce the same order");
+        }
+        if (first.ok() && first.graph().order().size() != declarations.size()) {
+            failures.add("the frozen graph does not order every declaration");
+        }
+        lines.add("selftest.jobgraph_split_intents=" + (first.ok() ? first.graph().splitIntents() : -1));
+
+        List<JobDeclaration> cyclic = new ArrayList<>(declarations);
+        cyclic.add(declaration("a/4", world, "entity", "r4", 4, ShareClass.ENTITY,
+            JobDeclaration.SiteClass.PARALLEL, List.of("a/5"), 1));
+        cyclic.add(declaration("a/5", world, "entity", "r5", 5, ShareClass.ENTITY,
+            JobDeclaration.SiteClass.PARALLEL, List.of("a/4"), 1));
+        JobGraphBuilder.Freeze cycle = JobGraphBuilder.freeze(cyclic, tick, 1L, 1L, 64);
+        JobGraphBuilder.Freeze duplicate = JobGraphBuilder.freeze(
+            List.of(declaration("a/0", world, "entity", "r0", 0, ShareClass.ENTITY,
+                JobDeclaration.SiteClass.PARALLEL, List.of(), 1),
+                declaration("a/0", world, "entity", "r9", 0, ShareClass.ENTITY,
+                    JobDeclaration.SiteClass.PARALLEL, List.of(), 1)), tick, 1L, 1L, 64);
+        JobDeclaration crossWorld = new JobDeclaration("x/0", 1L, world, "entity", 0, List.of(), 0,
+            "r0", "region", List.of(ref), List.of(new JobDeclaration.DomainRef("world-b", "entity", 0)),
+            ShareClass.ENTITY, JobDeclaration.SiteClass.PARALLEL, 0, 4);
+        JobGraphBuilder.Freeze cross = JobGraphBuilder.freeze(List.of(crossWorld), tick, 1L, 1L, 64);
+        JobDeclaration unbounded = new JobDeclaration("u/0", 1L, world, "entity", 0, List.of(), 0,
+            "r0", "region", List.of(ref), List.of(ref), ShareClass.ENTITY,
+            JobDeclaration.SiteClass.PARALLEL, 0, 0);
+        JobGraphBuilder.Freeze bound = JobGraphBuilder.freeze(List.of(unbounded), tick, 1L, 1L, 64);
+        JobGraphBuilder.Freeze capped = JobGraphBuilder.freeze(declarations, tick, 1L, 1L, 2);
+        JobGraphBuilder.Freeze unknownPredecessor = JobGraphBuilder.freeze(
+            List.of(declaration("a/9", world, "entity", "r9", 0, ShareClass.ENTITY,
+                JobDeclaration.SiteClass.PARALLEL, List.of("nobody"), 1)), tick, 1L, 1L, 64);
+        lines.add("selftest.jobgraph_refusals=" + codeOf(cycle) + "/" + codeOf(duplicate) + "/"
+            + codeOf(cross) + "/" + codeOf(bound) + "/" + codeOf(capped) + "/"
+            + codeOf(unknownPredecessor));
+        if (cycle.code() != RejectCode.DAG_CYCLE
+            || duplicate.code() != RejectCode.WRITE_DENIED_NOT_OWNER
+            || cross.code() != RejectCode.CROSS_WORLD_WRITE_DENIED
+            || bound.code() != RejectCode.QUEUE_CAP_EXCEEDED
+            || capped.code() != RejectCode.QUEUE_CAP_EXCEEDED
+            || unknownPredecessor.code() != RejectCode.WRITE_DENIED_NOT_OWNER) {
+            failures.add("a declaration the contract refuses was frozen anyway");
+        }
+
+        JobGraph graph = first.graph();
+        JobScheduler scheduler = new JobScheduler();
+        scheduler.begin(graph);
+        List<Long> handedOut = new ArrayList<>();
+        int emptyRounds = 0;
+        while (true) {
+            JobScheduler.Step step = scheduler.next();
+            if (step == null) {
+                emptyRounds++;
+                if (emptyRounds > 4 || handedOut.size() >= graph.nodeCount()) {
+                    break;
+                }
+                continue;
+            }
+            emptyRounds = 0;
+            handedOut.add(step.nodeId());
+            scheduler.settle(step.nodeId());
+        }
+        lines.add("selftest.scheduler_order=" + joinIds(handedOut) + " lanes=" + scheduler.lanes()
+            + " dispatched=" + scheduler.dispatched() + " settled=" + scheduler.settledTotal());
+        if (!joinIds(handedOut).equals(firstOrder) || !scheduler.closed()) {
+            failures.add("the scheduler did not hand out the frozen order of the graph");
+        }
+        List<JobDeclaration> twoRoots = new ArrayList<>();
+        twoRoots.add(declaration("b/0", world, "entity", "r0", 0, ShareClass.ENTITY,
+            JobDeclaration.SiteClass.PARALLEL, List.of(), 1));
+        twoRoots.add(declaration("b/1", world, "entity", "r1", 0, ShareClass.ENTITY,
+            JobDeclaration.SiteClass.PARALLEL, List.of(), 1));
+        twoRoots.add(declaration("b/2", world, "entity", "r2", 0, ShareClass.ENTITY,
+            JobDeclaration.SiteClass.PARALLEL, List.of("b/0"), 1));
+        JobGraph wide = JobGraphBuilder.freeze(twoRoots, tick, 1L, 1L, 64).graph();
+        JobScheduler cappedScheduler = new JobScheduler();
+        cappedScheduler.begin(wide, 1);
+        boolean admitted = cappedScheduler.next() != null;
+        boolean refusedAgain = cappedScheduler.next() == null
+            && cappedScheduler.backpressureHits() > 0L;
+        if (!admitted || !refusedAgain) {
+            failures.add("the declared bound of jobs in flight did not refuse a second job");
+        }
+        lines.add("selftest.scheduler_backpressure=" + cappedScheduler.backpressureHits()
+            + " peak=" + cappedScheduler.queuedPeak() + " cap=" + cappedScheduler.inFlightCap());
+
+        JobScheduler cancelling = new JobScheduler();
+        cancelling.begin(graph);
+        JobScheduler.CancelReport report = cancelling.cancel(nodeIdOf(graph, "a/0"));
+        lines.add("selftest.scheduler_cancel=" + report.cancelled().size() + " kept="
+            + report.kept().size() + " scopes=" + report.scopes().size());
+        if (report.cancelled().size() != graph.nodeCount() || report.code() != null) {
+            failures.add("a cancellation inside one scope did not reach every job of the scope");
+        }
+        JobScheduler gated = new JobScheduler();
+        gated.begin(graph);
+        JobScheduler.Gate gate = gated.arm(1_000L);
+        boolean beforeDeadline = JobScheduler.expired(gate, 999L);
+        boolean atDeadline = JobScheduler.expired(gate, 1_000L);
+        lines.add("selftest.scheduler_gate=" + (beforeDeadline ? 1 : 0) + "/" + (atDeadline ? 1 : 0)
+            + " timeout_cancels=" + gated.noteTimedOut(nodeIdOf(graph, "a/0")).cancelled().size());
+        if (beforeDeadline || !atDeadline) {
+            failures.add("the hard timeout gate answered a reading the executor did not hand it");
+        }
+
+        JobIntake intake = new JobIntake(() -> 2);
+        boolean firstAdmission = intake.submit(declarations.get(0)).accepted();
+        intake.submit(declarations.get(1));
+        JobIntake.Admission refusal = intake.submit(declarations.get(2));
+        List<JobDeclaration> takenBatch = intake.take();
+        lines.add("selftest.jobintake=" + (firstAdmission ? 1 : 0) + "/"
+            + (refusal.accepted() ? 1 : 0) + "/" + refusal.code() + " depth=" + intake.depth()
+            + " taken=" + takenBatch.size());
+        if (!firstAdmission || refusal.accepted() || refusal.code() != RejectCode.QUEUE_CAP_EXCEEDED
+            || takenBatch.size() != 2 || intake.depth() != 0) {
+            failures.add("the bounded intake did not refuse past its declared capacity");
+        }
+
+        SharePlanner planner = new SharePlanner();
+        ShareTable table = planner.plan(List.of(world), tick, Map.of());
+        TickPlanPlanner.Input input = new TickPlanPlanner.Input(tick, 1L, 1L, List.of(world),
+            List.of("entity"), TickPlanStore.Control.of(tick - 1L, 0L, 1L, 1.0, 0L, 0L, 4.0, "normal"),
+            declarations, table, 64);
+        TickPlanPlanner.Result planned = TickPlanPlanner.plan(input);
+        TickPlanPlanner.Result again = TickPlanPlanner.plan(input);
+        lines.add("selftest.plan_nodes=" + (planned.ok() ? planned.plan().graph().nodeCount() : -1)
+            + " steps=" + (planned.ok() ? planned.plan().commitOrder().size() : -1)
+            + " modes=" + (planned.ok() ? planned.plan().domainModes().size() : -1)
+            + " unknown_sites=" + (planned.ok() ? planned.plan().unknownSites() : -1));
+        lines.add("selftest.plan_hash_equal=" + (planned.ok() && again.ok()
+            && planned.plan().contentHash() == again.plan().contentHash() ? 1 : 0)
+            + " hash=" + (planned.ok() ? Long.toHexString(planned.plan().contentHash()) : "none"));
+        if (!planned.ok() || !again.ok()
+            || planned.plan().contentHash() != again.plan().contentHash()) {
+            failures.add("two plans of the same input did not fold to the same content hash");
+        }
+        if (planned.ok()) {
+            TickPlan plan = planned.plan();
+            boolean ascending = true;
+            int previous = -1;
+            for (TickPlan.CommitStep step : plan.commitOrder()) {
+                if (step.position() <= previous) {
+                    ascending = false;
+                }
+                previous = step.position();
+            }
+            TickPlan.DomainMode mode = plan.modeOf(world, "entity");
+            lines.add("selftest.plan_commit_order=" + ascending + " first="
+                + plan.commitOrder().get(0).position() + " last="
+                + plan.commitOrder().get(plan.commitOrder().size() - 1).position()
+                + " mode=" + mode.mode() + "/" + mode.reason());
+            if (!ascending || mode.mode() != TickPlan.Mode.CONSERVATIVE
+                || mode.reason() != TickPlan.Reason.UNKNOWN_SITE) {
+                failures.add("the plan did not freeze a rising commit order or the conservative mode");
+            }
+        }
+        TickPlanPlanner.Result noControl = TickPlanPlanner.plan(new TickPlanPlanner.Input(tick, 1L, 1L,
+            List.of(world), List.of("entity"), TickPlanStore.Control.missing(), declarations, table, 64));
+        TickPlanPlanner.Result rollback = TickPlanPlanner.plan(new TickPlanPlanner.Input(tick, 1L, 0L,
+            List.of(world), List.of("entity"),
+            TickPlanStore.Control.of(tick - 1L, 0L, 1L, 1.0, 0L, 0L, 4.0, "normal"), declarations, table, 64));
+        TickPlanPlanner.Result regression = TickPlanPlanner.plan(new TickPlanPlanner.Input(tick, 0L, 1L,
+            List.of(world), List.of("entity"),
+            TickPlanStore.Control.of(tick - 1L, 0L, 1L, 1.0, 0L, 0L, 4.0, "normal"), declarations, table, 64));
+        lines.add("selftest.plan_refusals=" + codeOf(noControl) + "/" + codeOf(rollback) + "/"
+            + codeOf(regression));
+        if (noControl.code() != RejectCode.COUNTER_MISSING
+            || rollback.code() != RejectCode.WORLD_LIFECYCLE_DENIED
+            || regression.code() != RejectCode.COMMIT_ORDER_VIOLATION) {
+            failures.add("the planning period built a plan from an input it must refuse");
+        }
+
+        TickPlanStore store = new TickPlanStore(2);
+        store.noteControl(input.control());
+        if (planned.ok()) {
+            store.publish(planned.plan());
+            store.noteControl(TickPlanStore.Control.of(tick, 1L, 1L, 1.0, 0L, 0L, 4.0, "normal"));
+        }
+        TickPlanStore.StepRef resolved = store.resolve(world, "entity", "a/2");
+        TickPlanStore.StepRef missing = store.resolve(world, "entity", "nobody");
+        lines.add("selftest.plan_store=" + (resolved == null ? "none"
+            : resolved.planSequence() + ":" + resolved.position()) + " unresolved="
+            + store.unresolvedLookups() + " control=" + store.control().planSequence()
+            + " rate=" + fmt(store.failureRate()));
+        if (resolved == null || missing != null || store.plansBuilt() != 1L) {
+            failures.add("the plan store did not resolve a planned key or resolved an unknown one");
+        }
+
+        CommitLog log = new CommitLog(() -> 4, (lineWorld, domain, key) -> {
+            TickPlanStore.StepRef step = store.resolve(lineWorld, domain, key);
+            return step == null ? null
+                : new CommitLog.Resolved(step.planSequence(), step.position(), step.intent());
+        });
+        log.beginTick(tick);
+        CommitLog.Verdict accepted = log.reach(new CommitLog.Batch(world, "entity", "a/0",
+            CommitLog.Batch.Kind.APPLY, 1L, 11L, 2));
+        CommitLog.Verdict later = log.reach(new CommitLog.Batch(world, "entity", "a/2",
+            CommitLog.Batch.Kind.APPLY, 1L, 12L, 2));
+        CommitLog.Verdict misordered = log.reach(new CommitLog.Batch(world, "entity", "a/1",
+            CommitLog.Batch.Kind.APPLY, 1L, 13L, 2));
+        CommitLog.Verdict unplanned = log.reach(new CommitLog.Batch(world, "entity", "nobody",
+            CommitLog.Batch.Kind.APPLY, 1L, 14L, 1));
+        CommitLog.Verdict intent = log.reach(new CommitLog.Batch(world, "intent", world + "/intent",
+            CommitLog.Batch.Kind.INTENT, 7L, 7L, 1));
+        CommitLog.Replay replay = log.closeTick();
+        lines.add("selftest.commit_verdicts=" + accepted.disposition() + "/"
+            + later.disposition() + "/"
+            + (misordered.code() == null ? "none" : misordered.code().text()) + "/"
+            + (unplanned.code() == null ? "none" : unplanned.code().text()) + "/"
+            + intent.disposition() + " divergence=" + log.firstDivergencePosition());
+        lines.add("selftest.commit_counters=" + log.accepted() + "/" + log.intents() + "/"
+            + log.dropped() + " violations=" + log.orderViolations() + " unplanned="
+            + log.unplanned() + " rings=" + log.ringCount() + " steps=" + replay.loggedSteps()
+            + " matches=" + (replay.orderMatches() ? 1 : 0));
+        // The run carries one injected violation, so the tick must report that its order did not
+        // match the plan: a certificate that stayed clean after an out-of-order commit would be
+        // exactly the false green the invariant exists to prevent.
+        if (!accepted.logged() || !later.logged()
+            || misordered.code() != RejectCode.COMMIT_ORDER_VIOLATION
+            || unplanned.code() != RejectCode.COMMIT_ORDER_VIOLATION || log.orderViolations() != 1L
+            || log.unplanned() != 1L || replay.orderMatches()) {
+            failures.add("the commit log did not judge an out-of-order or unplanned commit");
+        }
+
+        CommitLog bounded = new CommitLog(() -> 1, (lineWorld, domain, key) ->
+            new CommitLog.Resolved(1L, 0, false));
+        bounded.beginTick(tick);
+        bounded.reach(new CommitLog.Batch(world, "entity", "a/0", CommitLog.Batch.Kind.APPLY, 1L, 1L, 1));
+        CommitLog.Verdict full = bounded.reach(new CommitLog.Batch(world, "entity", "a/0",
+            CommitLog.Batch.Kind.APPLY, 1L, 2L, 1));
+        lines.add("selftest.commit_ring_full=" + full.code() + " capacity="
+            + bounded.ringCapacity() + " depth=" + bounded.ringDepth());
+        if (full.code() != RejectCode.QUEUE_CAP_EXCEEDED || bounded.refusedFull() != 1L) {
+            failures.add("a full commit ring did not refuse instead of growing");
+        }
+
+        CommitLog replayed = new CommitLog(() -> 8, (lineWorld, domain, key) -> {
+            TickPlanStore.StepRef step = store.resolve(lineWorld, domain, key);
+            return step == null ? null
+                : new CommitLog.Resolved(step.planSequence(), step.position(), step.intent());
+        });
+        replayed.beginTick(tick);
+        replayed.reach(new CommitLog.Batch(world, "entity", "a/0", CommitLog.Batch.Kind.APPLY, 1L, 11L, 2));
+        replayed.reach(new CommitLog.Batch(world, "entity", "a/2", CommitLog.Batch.Kind.APPLY, 1L, 12L, 2));
+        CommitLog.Replay sameRun = replayed.closeTick();
+        CommitLog perturbed = new CommitLog(() -> 8, (lineWorld, domain, key) -> {
+            TickPlanStore.StepRef step = store.resolve(lineWorld, domain, key);
+            return step == null ? null
+                : new CommitLog.Resolved(step.planSequence(), step.position(), step.intent());
+        });
+        perturbed.beginTick(tick);
+        perturbed.reach(new CommitLog.Batch(world, "entity", "a/0", CommitLog.Batch.Kind.APPLY, 1L, 11L, 2));
+        perturbed.reach(new CommitLog.Batch(world, "entity", "a/2", CommitLog.Batch.Kind.APPLY, 1L, 999L, 2));
+        CommitLog.Replay otherRun = perturbed.closeTick();
+        lines.add("selftest.commit_replay_compare=" + CommitLog.compareRuns(sameRun, replayed.last())
+            + "/" + CommitLog.compareRuns(sameRun, otherRun));
+        if (CommitLog.compareRuns(sameRun, replayed.last()) != 0
+            || CommitLog.compareRuns(sameRun, otherRun) == 0) {
+            failures.add("the replay comparison did not tell a repeated run from a changed one");
+        }
+
+        ShareMeterPoint point = new ShareMeterPoint();
+        point.note(SelfClass.ENTITY, world, "job-graph", 2_000_000L);
+        long[] totals = new long[SelfClass.values().length];
+        totals[SelfClass.ENTITY.ordinal()] = 2_000_000L;
+        ShareMeter.TickReading reading = ShareMeterPoint.read(tick, true, Map.of(world, totals));
+        lines.add("selftest.jobmeter_notes=" + point.notes() + " classes=" + point.classes()
+            + " entity_ms=" + fmt(reading.row(ShareClass.ENTITY).usedMs()) + " share_class="
+            + ShareMeterPoint.shareClassOf(SelfClass.ENTITY).key());
+        if (point.notes() != 1L || point.classes() != 1
+            || Math.abs(reading.row(ShareClass.ENTITY).usedMs() - 2.0) > 1.0e-9) {
+            failures.add("the metering point of the job layer did not reach the share reading");
+        }
+        return lines;
+    }
+
+    private static JobDeclaration declaration(String key, String world, String domain, String region,
+                                              int priority, ShareClass shareClass,
+                                              JobDeclaration.SiteClass siteClass,
+                                              List<String> predecessors, int bound) {
+        JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef(world, domain, 0);
+        return new JobDeclaration(key, key.hashCode(), world, domain, 0, predecessors, priority,
+            region, "region", List.of(ref), List.of(ref), shareClass, siteClass, 0, bound);
+    }
+
+    private static long nodeIdOf(JobGraph graph, String key) {
+        JobGraph.Node node = graph.nodeByKey(key);
+        return node == null ? -1L : node.nodeId();
+    }
+
+    private static String codeOf(JobGraphBuilder.Freeze freeze) {
+        return freeze.code() == null ? "ok" : freeze.code().text();
+    }
+
+    private static String codeOf(TickPlanPlanner.Result result) {
+        return result.code() == null ? "ok" : result.code().text();
+    }
+
+    private static String joinIds(List<Long> ids) {
+        StringBuilder builder = new StringBuilder();
+        for (Long id : ids) {
+            if (builder.length() > 0) {
+                builder.append(",");
+            }
+            builder.append(id);
+        }
+        return builder.toString();
     }
 
     private static ShareTable squeeze(ShareTable table, double budgetMs) {

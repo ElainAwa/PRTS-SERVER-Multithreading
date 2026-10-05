@@ -3,6 +3,7 @@ package io.izzel.arclight.common.prts.kernel.intent;
 
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -33,10 +34,16 @@ public final class CommitSegment {
         }
     }
 
+    /** One intent this walk applied: the world it landed in and the order the channel froze it
+     * with. The intent layer publishes them; the layer above decides what to do with them. */
+    public record AppliedStep(String worldId, long frozenOrder) {
+    }
+
     private final IntentQueue queue;
     private final BooleanSupplier enabled;
     private final IntSupplier budget;
     private final Map<String, Long> cursors = new LinkedHashMap<>();
+    private volatile List<AppliedStep> appliedSteps = List.of();
     private volatile Thread ownerThread;
     private volatile long cursor;
     private volatile long passes;
@@ -77,6 +84,12 @@ public final class CommitSegment {
         return ownerThread != null;
     }
 
+    /** The intents the last walk applied, in the order it applied them. A walk that applied nothing
+     * publishes the empty list, so a reader never has to tell "none" from "not reported". */
+    public List<AppliedStep> appliedSteps() {
+        return appliedSteps;
+    }
+
     /** Walks the segment once, at the end of a tick. */
     public Pass run(long tickIndex) {
         if (!enabled.getAsBoolean()) {
@@ -94,6 +107,7 @@ public final class CommitSegment {
         lastTruncated = false;
         int applied = 0;
         int touched = 0;
+        List<AppliedStep> appliedThisWalk = null;
         int releasedHere = 0;
         RejectCode refusal = null;
         RejectCode releasedCode = null;
@@ -108,6 +122,7 @@ public final class CommitSegment {
                     break;
                 }
                 touched++;
+                long frozenOrder = queue.headOrder(world);
                 CommitOrder order = queue.commit(world, position, tickIndex);
                 if (order.released()) {
                     // The channel consumed the position with its code, so the walk moves on.
@@ -129,11 +144,16 @@ public final class CommitSegment {
                 cursor++;
                 cursors.put(world, position);
                 applied++;
+                if (appliedThisWalk == null) {
+                    appliedThisWalk = new ArrayList<>();
+                }
+                appliedThisWalk.add(new AppliedStep(world, frozenOrder));
             }
             if (stopped) {
                 break;
             }
         }
+        appliedSteps = appliedThisWalk == null ? List.of() : List.copyOf(appliedThisWalk);
         steps += applied;
         walkNanos += System.nanoTime() - startedAt;
         lastSteps = applied;

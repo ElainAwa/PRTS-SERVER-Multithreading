@@ -26,6 +26,7 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.EntityCandidateView;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
+import io.izzel.arclight.common.prts.kernel.wiring.JobGraphAdapter;
 import io.izzel.arclight.common.prts.support.PrtsEntityCapability;
 import io.izzel.arclight.common.prts.support.PrtsEntityRescope;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.SelfRow;
@@ -56,6 +57,7 @@ public final class EntityDomain implements KernelDomain {
 
     private final KernelModule module;
     private final ArenaLedger arena;
+    private final JobGraphAdapter jobAdapter;
     private final DispatchReadings readings = new DispatchReadings();
     private final TaskLedger ledger = new TaskLedger(0L);
     private final DiffProbe probe = new DiffProbe();
@@ -74,6 +76,7 @@ public final class EntityDomain implements KernelDomain {
     public EntityDomain(KernelModule module) {
         this.module = module;
         this.arena = module.arena();
+        this.jobAdapter = new JobGraphAdapter(module);
         this.writeBack = new DispatchWriteBack(module.intents(), module.payloads()::bind,
             module.payloads()::drop, module.guard().worldEpochs()::epochOf, readings,
             KernelSettings::dispatchTakeover);
@@ -195,6 +198,15 @@ public final class EntityDomain implements KernelDomain {
             taskSeq + 1L);
         taskSeq += plan.taskCount();
         readings.noteTasks(plan.taskCount());
+        List<WorkPlan.WorkTask> orderedTasks = plan.tasks();
+        if (KernelSettings.jobGraph()) {
+            // The job layer is only reached while its switch is on: it declares this tick's tasks for
+            // the next plan and orders this dispatch by the graph of the newest plan.
+            long jobStartedAt = System.nanoTime();
+            jobAdapter.declare(plan);
+            orderedTasks = jobAdapter.order(plan);
+            jobAdapter.meter(RUNTIME_WORLD, System.nanoTime() - jobStartedAt);
+        }
         if (!plan.empty()) {
             if (pool == null) {
                 try {
@@ -208,12 +220,12 @@ public final class EntityDomain implements KernelDomain {
             }
             if (pool != null) {
                 pending = DispatchPass.dispatch(plan, pool, EntityIntegrator.INSTANCE, arena, readings,
-                    ledger);
+                    ledger, orderedTasks);
             } else {
                 // No pool this tick: the plan still receives one terminal outcome per task, so the
                 // accounting of the tick closes and the merge redos the batches on the tick thread in
                 // the frozen order.
-                pending = DispatchPass.serialFallback(plan, readings, ledger);
+                pending = DispatchPass.serialFallback(plan, readings, ledger, orderedTasks);
             }
         }
     }
@@ -253,6 +265,7 @@ public final class EntityDomain implements KernelDomain {
         PrtsEntityRescope.reset();
         EntityTickOwnership.reset();
         frames.reset();
+        jobAdapter.reset();
         frameCursor = 0L;
         lastFrame = MergeSegment.Frame.empty();
         lastEvidenceTick = 0L;
@@ -268,6 +281,9 @@ public final class EntityDomain implements KernelDomain {
         sink.add("self.dispatch_redo_ms", readings.redoNanos() / 1_000_000.0);
         sink.add("self.dispatch_rows", readings.rowsTotal());
         sink.add("self.dispatch_commit_channel_ms", readings.commitChannelNanos() / 1_000_000.0);
+        sink.add("jobs.declared", jobAdapter.declared());
+        sink.add("jobs.ordered_planned", jobAdapter.orderedPlanned());
+        sink.add("jobs.ordered_unplanned", jobAdapter.orderedUnplanned());
         sink.add("self.entity_tick_open", PrtsEntityCapability.tickOpens());
         sink.add("self.entity_tick_close", PrtsEntityCapability.tickCloses());
         sink.add("self.entity_tick_unpaired", PrtsEntityCapability.tickUnpaired());

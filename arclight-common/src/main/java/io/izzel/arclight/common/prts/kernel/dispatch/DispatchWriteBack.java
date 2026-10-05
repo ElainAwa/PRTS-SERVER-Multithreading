@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.dispatch;
 
+import io.izzel.arclight.common.prts.kernel.commit.CommitLog;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaScratch;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.diff.DomainHash;
@@ -74,12 +75,18 @@ public final class DispatchWriteBack {
     private static final String DOMAIN_ID = "entity-kinematics";
     private static final String WAIT_POINT = "xdomain";
 
+    /** The domain the commit log knows the batches of this leg by. */
+    private static final String COMMIT_DOMAIN = "entity";
+    private static final long FOLD_BASIS = 0xcbf29ce484222325L;
+    private static final long FOLD_PRIME = 0x100000001b3L;
+
     private final IntentQueue intents;
     private final BiFunction<String, PrtsWorldWriteTaps.DeferredWrite, String> bind;
     private final Consumer<String> drop;
     private final Function<String, Long> worldEpoch;
     private final DispatchReadings readings;
     private final BooleanSupplier takeover;
+    private volatile CommitLog.Sink commitSink;
     private volatile String sample = "readback=none";
 
     /** The store is reached through two handles rather than through its type: the channel is the
@@ -98,6 +105,12 @@ public final class DispatchWriteBack {
         this.takeover = takeover;
     }
 
+    /** Binds the one entry a landed commit is reported to. A null sink leaves this leg on the path
+     * it always walked; the report is a record, not an interception. */
+    public void bindCommitSink(CommitLog.Sink sink) {
+        this.commitSink = sink;
+    }
+
     /** Settles one batch at the commit point: the tier decides whether the values become a write
      * the commit segment lands or a read back that lands nothing. */
     public Settlement settle(WorkBatch batch, List<StateHasher.Slice> rows) {
@@ -105,10 +118,51 @@ public final class DispatchWriteBack {
             long channelStartedAt = System.nanoTime();
             Settlement settlement = enqueue(batch, rows);
             readings.noteCommitChannel(System.nanoTime() - channelStartedAt);
+            CommitLog.Sink sink = commitSink;
+            if (settlement.landed() && sink != null) {
+                // Only a batch that was handed to the channel is a commit: a compute-only settlement
+                // lands nothing, so reporting it would log a write that never happened.
+                WorkTask task = batch.task();
+                sink.reach(new CommitLog.Batch(task.worldId(), COMMIT_DOMAIN, nodeKey(task),
+                    CommitLog.Batch.Kind.APPLY, task.worldEpoch(), foldWriteSet(rows), rows.size()));
+            }
             return settlement;
         }
         sampleReadBack(batch, rows);
         return Settlement.COMPUTE_ONLY;
+    }
+
+    /** The key the commit log resolves the order of one batch by. It is the same key the job
+     * declaration of the task carries, so the plan that ordered the job is the plan that judges the
+     * commit. */
+    public static String nodeKey(WorkTask task) {
+        return COMMIT_DOMAIN + "/" + task.worldId() + "/" + task.regionId();
+    }
+
+    /** The fold of the values one batch carries. It is a local fold over the row values, so a
+     * replayed run that wrote the same values under the same order folds to the same number. */
+    public static long foldWriteSet(List<StateHasher.Slice> rows) {
+        long hash = FOLD_BASIS;
+        if (rows == null) {
+            return hash;
+        }
+        for (StateHasher.Slice row : rows) {
+            hash = fold(hash, row.entitySeq());
+            hash = fold(hash, Double.doubleToLongBits(row.x()));
+            hash = fold(hash, Double.doubleToLongBits(row.y()));
+            hash = fold(hash, Double.doubleToLongBits(row.z()));
+            hash = fold(hash, Double.doubleToLongBits(row.yaw()));
+            hash = fold(hash, Double.doubleToLongBits(row.pitch()));
+            hash = fold(hash, Double.doubleToLongBits(row.velX()));
+            hash = fold(hash, Double.doubleToLongBits(row.velY()));
+            hash = fold(hash, Double.doubleToLongBits(row.velZ()));
+        }
+        return hash;
+    }
+
+    private static long fold(long hash, long value) {
+        long mixed = hash ^ value;
+        return mixed * FOLD_PRIME;
     }
 
     public boolean takeover() {

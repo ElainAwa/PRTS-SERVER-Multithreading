@@ -10,6 +10,7 @@ import io.izzel.arclight.common.prts.kernel.degrade.DegradeLadder;
 import io.izzel.arclight.common.prts.kernel.shares.BudgetStateMachine;
 import io.izzel.arclight.common.prts.kernel.shares.SharePlanner.ConservationCheck;
 import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
+import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
 import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
 import io.izzel.arclight.common.prts.kernel.waitpoints.CoverageReport;
 import io.izzel.arclight.common.prts.kernel.waitpoints.ForcedConvergence;
@@ -166,6 +167,28 @@ public final class KernelStatusLines {
             + " convergence_reached=" + module.waitPoints().convergence().reached()
             + " convergence_effective=" + module.waitPoints().convergence().effective()
             + " rollback_ready=" + (rollback.ready() ? 1 : 0)
+            + " observation_only=1");
+        TickPlan plan = module.plans().latest();
+        lines.add("[PRTS] kernel: plan built=" + module.plans().plansBuilt()
+            + " failures=" + module.plans().failures()
+            + " rate=" + KernelReadings.format(module.plans().failureRate())
+            + " rebuilds=" + module.plans().rebuilds()
+            + " unknown_sites=" + module.plans().unknownSites()
+            + " nodes=" + (plan == null ? 0 : plan.graph().nodeCount())
+            + " steps=" + (plan == null ? 0 : plan.commitOrder().size())
+            + " sequence=" + (plan == null ? 0L : plan.planSequence())
+            + " observation_only=1");
+        lines.add("[PRTS] kernel: jobs dispatched=" + module.scheduler().dispatched()
+            + " settled=" + module.scheduler().settledTotal()
+            + " backpressure=" + module.scheduler().backpressureHits()
+            + " cancelled=" + module.scheduler().cancelledTotal()
+            + " timed_out=" + module.scheduler().timedOutTotal()
+            + " intake=" + module.jobIntake().depth() + "/" + module.jobIntake().capacity()
+            + " commit entries=" + module.commits().sequence()
+            + " accepted=" + module.commits().accepted()
+            + " dropped=" + module.commits().dropped()
+            + " order_violations=" + module.commits().orderViolations()
+            + " rings=" + module.commits().ringCount()
             + " observation_only=1");
         lines.add("[PRTS] kernel: observation requests, not an approved counter table;"
             + " run '/prts kernel' for the full export");

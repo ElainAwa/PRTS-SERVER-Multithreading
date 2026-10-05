@@ -66,6 +66,24 @@ public final class KernelSettings {
     /** Number of retries one attempt carries before a refusal is final. */
     public static final String RETRY_BUDGET = "retry-budget";
 
+    /** Freezes one plan per tick; off, no plan is built and no plan order exists. */
+    public static final String TICK_PLAN = "tick-plan";
+
+    /** Drives the frozen job graph, its gates and the metering point of the job layer; off. */
+    public static final String JOB_GRAPH = "job-graph";
+
+    /** Converges every commit producer on the commit log; off, each producer keeps its own path. */
+    public static final String COMMIT_LOG = "commit-log";
+
+    /** Upper bound of the declarations one tick may hand to the planning period. */
+    public static final String JOB_QUEUE_CAP = "job-queue-cap";
+
+    /** Capacity of one (world, domain) commit ring. */
+    public static final String COMMIT_RING_CAP = "commit-ring-cap";
+
+    /** How many recent plans the commit log may resolve the order of a commit against. */
+    public static final String PLAN_HISTORY_CAP = "plan-history-cap";
+
     /** Turns the parallel dispatch of the first domain on; off, so nothing is dispatched. */
     public static final String DISPATCH_PARALLEL = "dispatch-parallel";
 
@@ -103,6 +121,12 @@ public final class KernelSettings {
     public static final int WORKER_DEADLINE_GRACE_MS_MAX = 1000;
 
     public static final int WORKER_RETRY_BUDGET_MAX = 2;
+
+    public static final int JOB_QUEUE_CAP_MAX = 4096;
+
+    public static final int COMMIT_RING_CAP_MAX = 65536;
+
+    public static final int PLAN_HISTORY_CAP_MAX = 64;
 
     private KernelSettings() {
     }
@@ -251,6 +275,30 @@ public final class KernelSettings {
 
     public static int workerRetryBudget() {
         return clamp(number(WORKER_RETRY_BUDGET), 0, WORKER_RETRY_BUDGET_MAX);
+    }
+
+    public static boolean tickPlan() {
+        return feature(TICK_PLAN);
+    }
+
+    public static boolean jobGraph() {
+        return feature(JOB_GRAPH);
+    }
+
+    public static boolean commitLog() {
+        return feature(COMMIT_LOG);
+    }
+
+    public static int jobQueueCap() {
+        return clamp(number(JOB_QUEUE_CAP), 1, JOB_QUEUE_CAP_MAX);
+    }
+
+    public static int commitRingCap() {
+        return clamp(number(COMMIT_RING_CAP), 1, COMMIT_RING_CAP_MAX);
+    }
+
+    public static int planHistoryCap() {
+        return clamp(number(PLAN_HISTORY_CAP), 1, PLAN_HISTORY_CAP_MAX);
     }
 
     private static boolean feature(String name) {

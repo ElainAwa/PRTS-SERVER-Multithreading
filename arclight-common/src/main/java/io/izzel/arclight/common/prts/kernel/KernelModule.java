@@ -6,10 +6,18 @@ import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
 import io.izzel.arclight.common.prts.kernel.auth.WriteAuthority;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
 import io.izzel.arclight.common.prts.kernel.codes.DegradeLevel;
+import io.izzel.arclight.common.prts.kernel.commit.CommitLog;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.degrade.DegradeLadder;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
+import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
+import io.izzel.arclight.common.prts.kernel.jobs.JobIntake;
+import io.izzel.arclight.common.prts.kernel.jobs.JobScheduler;
+import io.izzel.arclight.common.prts.kernel.jobs.ShareMeterPoint;
+import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
+import io.izzel.arclight.common.prts.kernel.plan.TickPlanPlanner;
+import io.izzel.arclight.common.prts.kernel.plan.TickPlanStore;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.MeterWindow;
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers;
@@ -57,6 +65,10 @@ public final class KernelModule {
     private static final String RUNTIME_WORLD = "";
     private static final String SERVER_SITE = "host:server-thread";
 
+    /** The domain one applied intent is logged under: the intent channel, which is not a world domain
+     * and is ordered by its own frozen sequence. */
+    private static final String INTENT_DOMAIN = "intent";
+
     private final OwnerRegistry owners = new OwnerRegistry();
     private final IntentQueue intents = new IntentQueue(KernelSettings::intentQueueCap,
         KernelSettings::retryBudget);
@@ -79,6 +91,12 @@ public final class KernelModule {
 
     private final ArenaLedger arena = new ArenaLedger();
     private final List<KernelDomain> domains = new ArrayList<>();
+    private final JobIntake jobIntake = new JobIntake(KernelSettings::jobQueueCap);
+    private final JobScheduler scheduler = new JobScheduler();
+    private final ShareMeterPoint jobMeter = new ShareMeterPoint();
+    private final TickPlanStore plans = new TickPlanStore(KernelSettings.planHistoryCap());
+    private final CommitLog commits = new CommitLog(KernelSettings::commitRingCap,
+        this::resolveCommitOrder);
     private long tickIndex;
     private boolean waitSiteTapInstalled;
     private long windowStartTick;
@@ -88,6 +106,11 @@ public final class KernelModule {
     private ShareMeter.TickReading lastMetering;
     private BudgetStateMachine.Decision lastDecision;
     private ControlFrame control = ControlFrame.empty();
+    private TickPlanStore.Control previousControl = TickPlanStore.Control.missing();
+    private CommitLog.Replay lastCommitReplay;
+    private long planSequence;
+    private long worldGeneration;
+    private List<String> plannedWorlds = List.of();
 
     private KernelModule() {
         intents.bindPayload(guard);
@@ -132,18 +155,36 @@ public final class KernelModule {
             KernelSettings.enforceUnregisteredWrites(),
             KernelSettings.routeUnregisteredWrites(), tickIndex);
         syncWaitSiteTap(KernelSettings.waitRegistry());
+        if (KernelSettings.commitLog()) {
+            // The log of this tick collects what the commit walk and the domain work reach. The
+            // order it judges against comes from the plans of the recent ticks, so a write that was
+            // ordered one tick earlier still resolves.
+            commits.beginTick(tickIndex);
+        }
         commitSegment.run(tickIndex);
+        if (KernelSettings.commitLog()) {
+            for (CommitSegment.AppliedStep step : commitSegment.appliedSteps()) {
+                commits.reach(new CommitLog.Batch(step.worldId(), INTENT_DOMAIN, step.worldId()
+                    + "/intent", CommitLog.Batch.Kind.INTENT, step.frozenOrder(), step.frozenOrder(), 1));
+            }
+        }
         owners.reclaimExpired(tickIndex);
         if (KernelSettings.shareTable()) {
             planBudget(worldIds);
         } else {
             SelfTimers.discardTickTotals();
         }
+        if (KernelSettings.tickPlan()) {
+            freezePlan(worldIds);
+        }
         if (KernelSettings.selfTimers()) {
             publishWindowIfDue();
         }
         ledger.verifyClosure();
         tickDomains();
+        if (KernelSettings.commitLog()) {
+            lastCommitReplay = commits.closeTick();
+        }
         waitPoints.noteTick();
         if (KernelSettings.selfTimers()) {
             SelfTimers.note(SelfClass.OBSERVE, RUNTIME_WORLD, "runtime",
@@ -222,6 +263,57 @@ public final class KernelModule {
         control = new ControlFrame(tickIndex, minMargin, overruns, waitPoints.waitOverrunCount(),
             reserveUsedMs(), table.reserve().remainingMs(), degradeStateKey(),
             lastDecision.enteredTick());
+    }
+
+    /** Freezes the plan of one tick. The declarations the domains handed in since the last plan are
+     * taken here, the job graph is built from them, and the plan is published with the control frame
+     * the next planning period consumes. A tick whose control frame is missing is a bootstrap tick:
+     * it is counted and no plan is built from values nobody measured. */
+    private void freezePlan(List<String> worldIds) {
+        List<String> worlds = worldIds == null ? List.of() : worldIds;
+        List<String> sorted = new ArrayList<>(worlds);
+        sorted.sort(String::compareTo);
+        if (!sorted.equals(plannedWorlds)) {
+            plannedWorlds = List.copyOf(sorted);
+            worldGeneration++;
+        }
+        if (!previousControl.observed()) {
+            plans.noteBootstrapSkip();
+            plans.noteControl(controlFrameOf(worldGeneration));
+            previousControl = plans.control();
+            return;
+        }
+        planSequence++;
+        List<String> domainIds = new ArrayList<>();
+        for (KernelDomain domain : domains) {
+            domainIds.add(domain.id());
+        }
+        TickPlanPlanner.Result result = TickPlanPlanner.plan(new TickPlanPlanner.Input(tickIndex,
+            planSequence, worldGeneration, worlds, domainIds, previousControl, jobIntake.take(),
+            shares.lastTable(), KernelSettings.jobQueueCap()));
+        if (result.ok()) {
+            plans.publish(result.plan());
+        } else {
+            plans.noteFailure(result.code());
+        }
+        plans.noteControl(controlFrameOf(worldGeneration));
+        previousControl = plans.control();
+    }
+
+    /** The five control values of this tick, as the next planning period reads them. */
+    private TickPlanStore.Control controlFrameOf(long generation) {
+        return TickPlanStore.Control.of(tickIndex, planSequence, generation, control.minMarginMs(),
+            control.overrunHits(), control.waitBoundHits(), control.reserveRemainingMs(),
+            control.degradeState());
+    }
+
+    /** Resolves the order of one commit against the plans of the recent ticks. */
+    private CommitLog.Resolved resolveCommitOrder(String worldId, String domainId, String nodeKey) {
+        TickPlanStore.StepRef ref = plans.resolve(worldId, domainId, nodeKey);
+        if (ref == null) {
+            return null;
+        }
+        return new CommitLog.Resolved(ref.planSequence(), ref.position(), ref.intent());
     }
 
     /** The state the control plane publishes: the phase, and the rung the ladder stands on when it
@@ -354,6 +446,42 @@ public final class KernelModule {
         return waitSites;
     }
 
+    /** The bounded intake a domain hands its declarations to. */
+    public JobIntake jobIntake() {
+        return jobIntake;
+    }
+
+    /** The scheduler of the frozen job graph of one tick. */
+    public JobScheduler scheduler() {
+        return scheduler;
+    }
+
+    /** The metering point of the job layer: it books into the same timers the share table is
+     * planned from, so the job layer has no conversion of its own. */
+    public ShareMeterPoint jobMeter() {
+        return jobMeter;
+    }
+
+    /** The plans of the recent ticks and the control frame the next one consumes. */
+    public TickPlanStore plans() {
+        return plans;
+    }
+
+    /** The single write entry of this tick. */
+    public CommitLog commits() {
+        return commits;
+    }
+
+    /** The replay of the newest closed tick; null before the first closed one. */
+    public CommitLog.Replay commitReplay() {
+        return lastCommitReplay;
+    }
+
+    /** The generation of the world set the newest plan belongs to. */
+    public long worldGeneration() {
+        return worldGeneration;
+    }
+
     public SharePlanner shares() {
         return shares;
     }
@@ -405,5 +533,15 @@ public final class KernelModule {
         budgetStates.reset();
         ladder.reset();
         control = ControlFrame.empty();
+        previousControl = TickPlanStore.Control.missing();
+        lastCommitReplay = null;
+        planSequence = 0L;
+        worldGeneration = 0L;
+        plannedWorlds = List.of();
+        jobIntake.reset();
+        scheduler.reset();
+        jobMeter.reset();
+        plans.reset();
+        commits.reset();
     }
 }

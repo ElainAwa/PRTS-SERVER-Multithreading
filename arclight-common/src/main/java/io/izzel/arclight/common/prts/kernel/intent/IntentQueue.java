@@ -130,6 +130,16 @@ public final class IntentQueue {
         return nextIntentId.getAndIncrement();
     }
 
+    /** The order the head of one world's shard was frozen with, or -1 when the shard is empty. It is
+     * read by the commit log so a logged intent carries the order the channel gave it. */
+    public synchronized long headOrder(String worldKey) {
+        Shard shard = shard(worldKey, false);
+        if (shard == null || shard.waiting.isEmpty()) {
+            return -1L;
+        }
+        return shard.waiting.peekFirst().frozenOrder();
+    }
+
     public synchronized int depth() {
         int total = 0;
         for (Shard shard : shards.values()) {
