@@ -53,6 +53,7 @@ import io.izzel.arclight.common.prts.kernel.observe.ChunkDemandObserver;
 import io.izzel.arclight.common.prts.kernel.observe.ChunkFlowObserver;
 import io.izzel.arclight.common.prts.kernel.observe.LoadThreadObserver;
 import io.izzel.arclight.common.prts.kernel.observe.PipelineRowObserver;
+import io.izzel.arclight.common.prts.kernel.observe.RegionIdentityObserver;
 import io.izzel.arclight.common.prts.kernel.observe.SaveIdentityObserver;
 import io.izzel.arclight.common.prts.kernel.observe.StallAttributionObserver;
 import io.izzel.arclight.common.prts.kernel.meter.SelfCostTap;
@@ -141,6 +142,7 @@ public final class KernelModule {
     private final LoadThreadObserver loadThread = new LoadThreadObserver();
     private final ChunkFlowObserver chunkFlow = new ChunkFlowObserver();
     private final SaveIdentityObserver saveIdentity = new SaveIdentityObserver();
+    private final RegionIdentityObserver regionIdentity = new RegionIdentityObserver();
     private final StallAttributionObserver attribution = new StallAttributionObserver();
     private final ChunkDemandObserver chunkDemand = new ChunkDemandObserver();
     private final SelfCostTap selfCosts = new SelfCostTap();
@@ -335,9 +337,11 @@ public final class KernelModule {
         syncLoadProbe(false);
     }
 
-    /** Remembers the server the tick source is, so the save identity can be named at a read. */
+    /** Remembers the server the tick source is, so the save identity and the partition can be named
+     * at a read. */
     public void noteTickSource(net.minecraft.server.MinecraftServer server) {
         saveIdentity.source(server);
+        regionIdentity.source(server);
     }
 
     private void syncLoadProbe(boolean wanted) {
@@ -812,6 +816,10 @@ public final class KernelModule {
         return saveIdentity;
     }
 
+    public RegionIdentityObserver regionIdentity() {
+        return regionIdentity;
+    }
+
     /** The per-instance attribution of the block entity and entity tick faces. */
     public StallAttributionObserver attribution() {
         return attribution;
@@ -931,6 +939,7 @@ public final class KernelModule {
         loadThread.reset();
         chunkFlow.reset();
         saveIdentity.reset();
+        regionIdentity.reset();
         attribution.reset();
         chunkDemand.reset();
         planNanosLast = 0L;

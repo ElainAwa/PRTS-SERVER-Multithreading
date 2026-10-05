@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Predicate;
 import java.util.function.ToLongFunction;
 
@@ -34,6 +35,13 @@ import java.util.function.ToLongFunction;
  * <p>The counters are written by the server thread and read by the command thread. The maps are
  * concurrent and the accumulated fields are volatile, so a read sees a value that was written, not a
  * torn one; a total and a top list are read a moment apart, which is stated here and not corrected.
+ *
+ * <p>The same rows are also classified against a batch predicate, because a block entity row is a
+ * candidate for a batch only when the row is inside a legal batch boundary: the rows of one type of
+ * one world inside one tick, at least two of them, all of them placed in a loaded chunk and none of
+ * them a physical step or a structure assembly. The classification is counted per row where the type
+ * and the position are already resolved, which is what makes a per row predicate affordable; it
+ * counts and never delays, cancels or reorders a tick.
  */
 public final class StallAttributionObserver
     implements PrtsBlockEntityCosts.CostTap, PrtsEntityCosts.CostTap,
@@ -48,6 +56,17 @@ public final class StallAttributionObserver
     public static final int EPISODE_RING = 4;
     public static final int EPISODE_TOP = 8;
     public static final int TYPE_TOP = 24;
+    /** The rows one type of one world must have inside one tick to be a batch. Declared value: the
+     *  batch size a merge is worth is not measured, and two is the smallest size that is not a call
+     *  per object. */
+    public static final int ROW_BATCH_FLOOR = 2;
+    /**
+     * The block entity types whose tick carries a physical step or a structure assembly or
+     * disassembly, which may not leave the owner thread and so never counts towards a batch. The list
+     * is a registry and not a measurement: it is open, it starts with the moving block entity, and a
+     * row of a type that is missing from it stays in the batch total as an upper bound.
+     */
+    public static final List<String> STRUCTURE_THIRD_TYPES = List.of("minecraft:piston");
     private static final int INSTANCE_CAP = 32_768;
     private static final int COLONY_CACHE_CAP = 65_536;
     private static final Logger LOGGER = LogManager.getLogger("PRTS-observe");
@@ -135,6 +154,7 @@ public final class StallAttributionObserver
     private static final class TypeCell extends Cell {
 
         final Map<Object, Instance> instances = new java.util.WeakHashMap<>();
+        final Map<String, BatchCell> batches = new ConcurrentHashMap<>();
         volatile long instanceCount;
         volatile long maxInstanceNanos;
         volatile String worst = "-";
@@ -143,10 +163,22 @@ public final class StallAttributionObserver
             super(key, KIND_TYPE, blockEntity);
         }
 
+        /** The batch bucket of one world, created on the first row of that world and type. */
+        BatchCell batch(String worldId) {
+            return batches.computeIfAbsent(worldId, key -> new BatchCell());
+        }
+
         @Override
         Row row() {
             return new Row(key, ticks, wallNanos, cpuNanos, instanceCount, maxInstanceNanos, worst);
         }
+    }
+
+    /** The rows one type of one world ticked inside the tick that is running now. */
+    private static final class BatchCell {
+
+        int rows;
+        boolean touched;
     }
 
     private static final class Instance {
@@ -155,13 +187,20 @@ public final class StallAttributionObserver
         final Cell mod;
         final Cell colony;
         final String label;
+        final BatchCell batch;
+        final boolean structureThird;
+        final boolean regionless;
         long nanos;
 
-        Instance(TypeCell type, Cell mod, Cell colony, String label) {
+        Instance(TypeCell type, Cell mod, Cell colony, String label, BatchCell batch,
+                 boolean structureThird, boolean regionless) {
             this.type = type;
             this.mod = mod;
             this.colony = colony;
             this.label = label;
+            this.batch = batch;
+            this.structureThird = structureThird;
+            this.regionless = regionless;
         }
     }
 
@@ -191,6 +230,9 @@ public final class StallAttributionObserver
             note(instance.type, wall, cpu);
             note(instance.mod, wall, cpu);
             note(instance.colony, wall, cpu);
+            if (blockEntity) {
+                noteRow(instance);
+            }
             if (instance.nanos > instance.type.maxInstanceNanos) {
                 instance.type.maxInstanceNanos = instance.nanos;
                 instance.type.worst = instance.label;
@@ -235,7 +277,12 @@ public final class StallAttributionObserver
                 instances.clear();
                 instancesCapped = true;
             }
-            Instance instance = new Instance(type, mod, colony, label);
+            boolean structureThird = blockEntity && STRUCTURE_THIRD_TYPES.contains(typeKey);
+            boolean regionless = position == null;
+            BatchCell batch = blockEntity && !structureThird && !regionless ? type.batch(worldId)
+                : null;
+            Instance instance = new Instance(type, mod, colony, label, batch, structureThird,
+                regionless);
             instances.put(identity, instance);
             type.instanceCount++;
             return instance;
@@ -284,6 +331,17 @@ public final class StallAttributionObserver
     private final ConcurrentLinkedDeque<Episode> episodes = new ConcurrentLinkedDeque<>();
     private volatile boolean installed;
     private volatile boolean instancesCapped;
+    private final LongAdder widenedRows = new LongAdder();
+    private final LongAdder singletonRows = new LongAdder();
+    private final LongAdder structureThirdRows = new LongAdder();
+    private final LongAdder regionlessRows = new LongAdder();
+    private final LongAdder bucketCount = new LongAdder();
+    private final LongAdder batchBucketCount = new LongAdder();
+    private final LongAdder foldedTicks = new LongAdder();
+    private final List<BatchCell> tickBatches = new ArrayList<>();
+    private volatile long pendingRows;
+    private int pendingStructureThird;
+    private int pendingRegionless;
     private long liveTickWall;
     private long liveTickPeak;
     private long lastLiveDumpNanos;
@@ -379,6 +437,7 @@ public final class StallAttributionObserver
         } else if (episodeOpen) {
             closeEpisode(gcCollections, gcMillis);
         }
+        foldRows();
         for (Cell cell : tickCells) {
             cell.clearTick();
         }
@@ -387,6 +446,105 @@ public final class StallAttributionObserver
         liveTickPeak = 0L;
         previousGcCollections = gcCollections;
         previousGcMillis = gcMillis;
+    }
+
+    /** Counts one row into its batch bucket, or into the class that keeps it out of a batch. */
+    private void noteRow(Instance instance) {
+        pendingRows++;
+        BatchCell cell = instance.batch;
+        if (cell != null) {
+            if (!cell.touched) {
+                cell.touched = true;
+                tickBatches.add(cell);
+            }
+            cell.rows++;
+            return;
+        }
+        if (instance.structureThird) {
+            pendingStructureThird++;
+        } else {
+            pendingRegionless++;
+        }
+    }
+
+    /**
+     * Closes the row buckets of the tick that just ended: a bucket that reached the floor carries
+     * every row in it, a smaller one carries none, and the rows that were never candidates were
+     * counted where they were seen. A bucket is one type of one world inside one tick, which is the
+     * batch boundary; a bucket may still span two regions, so the widened total stays an upper bound.
+     */
+    private void foldRows() {
+        for (BatchCell cell : tickBatches) {
+            int rows = cell.rows;
+            cell.rows = 0;
+            cell.touched = false;
+            bucketCount.increment();
+            if (rows >= ROW_BATCH_FLOOR) {
+                widenedRows.add(rows);
+                batchBucketCount.increment();
+            } else {
+                singletonRows.add(rows);
+            }
+        }
+        tickBatches.clear();
+        if (pendingStructureThird > 0) {
+            structureThirdRows.add(pendingStructureThird);
+            pendingStructureThird = 0;
+        }
+        if (pendingRegionless > 0) {
+            regionlessRows.add(pendingRegionless);
+            pendingRegionless = 0;
+        }
+        pendingRows = 0L;
+        foldedTicks.increment();
+    }
+
+    /** The block entity rows a batch could have carried: the rows of a bucket at or over the floor. */
+    public long rowWidened() {
+        return widenedRows.sum();
+    }
+
+    /** The block entity rows that were alone in their bucket, so a batch boundary does not cover them. */
+    public long rowSingleton() {
+        return singletonRows.sum();
+    }
+
+    /** The block entity rows whose type carries a physical step or a structure assembly. */
+    public long rowStructureThird() {
+        return structureThirdRows.sum();
+    }
+
+    /** The block entity rows that published no position, so no region could be named for them. */
+    public long rowRegionless() {
+        return regionlessRows.sum();
+    }
+
+    /** The rows of every class that are still in the tick that is running now: they are in none of
+     *  the four classes yet, so the row count of the face is these plus the folded ones. */
+    public long rowPending() {
+        return pendingRows;
+    }
+
+    /** Every block entity row the classification folded; the four classes above add up to it, and
+     *  these plus the pending rows are every row the face counted. */
+    public long rowHost() {
+        return widenedRows.sum() + singletonRows.sum() + structureThirdRows.sum()
+            + regionlessRows.sum();
+    }
+
+    /** The buckets of the closed ticks, whether or not they reached the floor. */
+    public long rowBuckets() {
+        return bucketCount.sum();
+    }
+
+    /** The buckets that reached the floor and so were carried as one batch. */
+    public long rowBatchBuckets() {
+        return batchBucketCount.sum();
+    }
+
+    /** The tick boundaries the classification was folded at. */
+    public long rowTicks() {
+        return foldedTicks.sum();
     }
 
     /** @return the episode that is still open, as far as it has been attributed; null when none is */
@@ -607,6 +765,17 @@ public final class StallAttributionObserver
         previousGcCollections = 0L;
         previousGcMillis = 0L;
         instancesCapped = false;
+        widenedRows.reset();
+        singletonRows.reset();
+        structureThirdRows.reset();
+        regionlessRows.reset();
+        bucketCount.reset();
+        batchBucketCount.reset();
+        foldedTicks.reset();
+        tickBatches.clear();
+        pendingRows = 0L;
+        pendingStructureThird = 0;
+        pendingRegionless = 0;
         resetFace(blockEntities);
         resetFace(entities);
     }

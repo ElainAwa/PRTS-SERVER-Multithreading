@@ -62,6 +62,20 @@ class StallAttributionObserverTest {
         }
     }
 
+    /** A ticker that publishes no position, like a ticker whose block is already gone. */
+    public static final class PositionlessTicker {
+
+        private final String type;
+
+        PositionlessTicker(String type) {
+            this.type = type;
+        }
+
+        public String getType() {
+            return type;
+        }
+    }
+
     public static final class Citizen {
 
         private final Position position = new Position(4, 5, 6);
@@ -154,6 +168,65 @@ class StallAttributionObserverTest {
         assertEquals("create:mechanical_press", episode.topTypes().get(0).key());
         assertEquals(40L * MILLIS, episode.topTypes().get(0).wallNanos());
         assertEquals("create", episode.topMods().get(0).key());
+    }
+
+    @Test
+    void theRowsOfOneTickAreClassifiedAgainstTheBatchBoundaryAndTheClassesAddUp() {
+        observer = new StallAttributionObserver();
+        observer.attach();
+        Ticker first = new Ticker("create:crushing_wheel", 10, 64, 20);
+        Ticker second = new Ticker("create:crushing_wheel", 11, 64, 20);
+        Ticker alone = new Ticker("minecraft:furnace", 12, 64, 20);
+        Ticker moving = new Ticker("minecraft:piston", 13, 64, 20);
+        PositionlessTicker gone = new PositionlessTicker("minecraft:chest");
+        PrtsBlockEntityCosts.blockEntityTick(first, null, "minecraft:overworld", MILLIS, -1L);
+        PrtsBlockEntityCosts.blockEntityTick(second, null, "minecraft:overworld", MILLIS, -1L);
+        PrtsBlockEntityCosts.blockEntityTick(alone, null, "minecraft:overworld", MILLIS, -1L);
+        PrtsBlockEntityCosts.blockEntityTick(moving, null, "minecraft:overworld", MILLIS, -1L);
+        PrtsBlockEntityCosts.blockEntityTick(gone, null, "minecraft:overworld", MILLIS, -1L);
+
+        assertEquals(0L, observer.rowWidened(), "nothing is classified before the tick is closed");
+        assertEquals(0L, observer.rowStructureThird(), "every class is folded at the boundary");
+        assertEquals(0L, observer.rowRegionless(), "every class is folded at the boundary");
+        assertEquals(5L, observer.rowPending(), "the five rows wait in the tick that is running");
+        observer.tickBoundary(boundary(4L, 5L * MILLIS, false));
+
+        assertEquals(2L, observer.rowWidened(), "the two rows of one type of one world are a batch");
+        assertEquals(1L, observer.rowSingleton(), "the furnace is alone in its bucket");
+        assertEquals(1L, observer.rowStructureThird(), "the moving block entity never batches");
+        assertEquals(1L, observer.rowRegionless(), "a row without a position has no region");
+        assertEquals(5L, observer.rowHost(), "the four classes add up to every row the face saw");
+        assertEquals(5L, observer.totalTicks(true));
+        assertEquals(2L, observer.rowBuckets());
+        assertEquals(1L, observer.rowBatchBuckets());
+        assertEquals(1L, observer.rowTicks());
+        assertEquals(0L, observer.rowPending());
+
+        PrtsBlockEntityCosts.blockEntityTick(alone, null, "minecraft:overworld", MILLIS, -1L);
+        observer.tickBoundary(boundary(5L, 5L * MILLIS, false));
+        assertEquals(2L, observer.rowWidened());
+        assertEquals(2L, observer.rowSingleton(), "the next tick opens its buckets again");
+        assertEquals(6L, observer.rowHost());
+        assertEquals(6L, observer.totalTicks(true), "the classes and the face count the same rows");
+        assertEquals(3L, observer.rowBuckets());
+        assertEquals(1L, observer.rowBatchBuckets());
+        assertEquals(2L, observer.rowTicks());
+    }
+
+    @Test
+    void theSameTypeInTwoWorldsFormsOneBucketPerWorld() {
+        observer = new StallAttributionObserver();
+        observer.attach();
+        Ticker overworld = new Ticker("create:crushing_wheel", 10, 64, 20);
+        Ticker nether = new Ticker("create:crushing_wheel", 10, 64, 20);
+        PrtsBlockEntityCosts.blockEntityTick(overworld, null, "minecraft:overworld", MILLIS, -1L);
+        PrtsBlockEntityCosts.blockEntityTick(nether, null, "minecraft:the_nether", MILLIS, -1L);
+        observer.tickBoundary(boundary(5L, 5L * MILLIS, false));
+
+        assertEquals(0L, observer.rowWidened(), "a batch never mixes two worlds");
+        assertEquals(2L, observer.rowSingleton());
+        assertEquals(2L, observer.rowBuckets());
+        assertEquals(2L, observer.rowHost());
     }
 
     @Test

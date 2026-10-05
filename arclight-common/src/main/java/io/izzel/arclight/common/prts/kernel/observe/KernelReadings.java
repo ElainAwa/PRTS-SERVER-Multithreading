@@ -96,6 +96,7 @@ public final class KernelReadings {
         loadObservation(lines, module);
         stallAttribution(lines, module);
         chunkDemand(lines, module);
+        regions(lines, module);
         control(lines, module);
         return lines;
     }
@@ -1105,6 +1106,35 @@ public final class KernelReadings {
         add(lines, "pipeline.row.widened_total", worldgen + light + writes);
     }
 
+    /** The regions the loaded chunks of every world fall into: the identity a stability window and
+     *  a rollback gate are counted against, and the counters of the three actions this tree does not
+     *  take. Every field is an observation request; no gate, verdict or release reads one. */
+    private static void regions(List<String> lines, KernelModule module) {
+        RegionIdentityObserver regions = module.regionIdentity();
+        RegionIdentityObserver.Reading reading = regions.read(module.tickIndex());
+        add(lines, "region.observation_only", 1);
+        add(lines, "region.count", reading.count());
+        add(lines, "region.identity_hash", reading.identityHash());
+        add(lines, "region.stability_window_ticks", regions.stabilityWindowTicks());
+        add(lines, "region.skip", regions.skip());
+        add(lines, "region.rollback_gate_ticks", regions.rollbackGateTicks());
+        add(lines, "region.barrier_wait_count", regions.barrierWaitCount());
+        add(lines, "region.barrier_wait_source", RegionIdentityObserver.BARRIER_WAIT_SOURCE);
+        add(lines, "region.source_installed", regions.installed() ? 1 : 0);
+        add(lines, "region.partition_available", reading.available());
+        add(lines, "region.worlds", reading.worlds());
+        add(lines, "region.chunks", reading.chunks());
+        add(lines, "region.partition_reads", reading.partitionReads());
+        add(lines, "region.jitter_events", reading.jitterEvents());
+        add(lines, "region.last_change_tick", reading.lastChangeTick());
+        add(lines, "region.divisions_applied", regions.divisionsApplied());
+        for (RegionIdentityObserver.WorldRow world : reading.perWorld()) {
+            String prefix = "region.world." + safe(world.worldId()) + ".";
+            add(lines, prefix + "components", world.components());
+            add(lines, prefix + "chunks", world.chunks());
+        }
+    }
+
     private static void control(List<String> lines, KernelModule module) {
         KernelModule.ControlFrame frame = module.control();
         add(lines, "control.tick", frame.tickIndex());
@@ -1380,6 +1410,27 @@ public final class KernelReadings {
             add(lines, prefix + "ms", ms(row.wallNanos()));
             add(lines, prefix + "ticks", row.ticks());
         }
+        rowFace(lines, attribution);
+    }
+
+    /** The block entity rows classified against the batch predicate: how many of the rows one tick
+     *  saw are inside a legal batch boundary, and which class keeps the others out. The four classes
+     *  and the pending rows add up to the rows the face counted, so the widened share of the block
+     *  entity rows is a reading a batch could carry and not a claim that any row was carried. */
+    private static void rowFace(List<String> lines, StallAttributionObserver attribution) {
+        add(lines, "be.row.observation_only", 1);
+        add(lines, "be.row.batch_floor", StallAttributionObserver.ROW_BATCH_FLOOR);
+        add(lines, "be.row.widened_total", attribution.rowWidened());
+        add(lines, "be.row.singleton_total", attribution.rowSingleton());
+        add(lines, "be.row.structure_third_total", attribution.rowStructureThird());
+        add(lines, "be.row.no_region_total", attribution.rowRegionless());
+        add(lines, "be.row.host_total", attribution.rowHost());
+        add(lines, "be.row.buckets", attribution.rowBuckets());
+        add(lines, "be.row.batch_buckets", attribution.rowBatchBuckets());
+        add(lines, "be.row.ticks", attribution.rowTicks());
+        add(lines, "be.row.pending", attribution.rowPending());
+        add(lines, "be.row.structure_third_types",
+            join(StallAttributionObserver.STRUCTURE_THIRD_TYPES));
     }
 
     private static void entityFace(List<String> lines, StallAttributionObserver attribution) {
