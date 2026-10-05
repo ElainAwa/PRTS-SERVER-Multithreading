@@ -46,6 +46,11 @@ import java.util.function.Function;
  * {@code ownObserveClaim=<n>} books a claimed row as observed as well, which the frame check of the
  * two row sets has to report.
  *
+ * <p>The two ladders and the wait walk have their own tokens, all zero by default and all read on
+ * the live path: {@code ladderWalk=<n>} walks the resource ladder one rung per tick,
+ * {@code ladderReturn=<n>} returns it one rung per tick, and {@code waitWalk=<n>} observes n waits
+ * over the bound, taking the call-site classes in turn.
+ *
  * <p>The frame digest has one fault of its own, off by default: {@code segBreak=<n>} deviates one
  * row of the parallel arm's digest input in each of the first n merges, and {@code segBreakRow=<n>}
  * picks that row (one-based, default the first). Only the frame the digest folds sees the deviated
@@ -58,6 +63,7 @@ public final class FaultInjection {
     private static final long DELAY_MAX_MS = 5_000L;
     private static final int BATCHES_MAX = 4_096;
     private static final int ROWS_MAX = 1_000_000;
+    private static final int LADDER_MAX = 8;
 
     private FaultInjection() {
     }
@@ -159,6 +165,9 @@ public final class FaultInjection {
         private final int ownObserveClaim;
         private final int segBreak;
         private final int segBreakRow;
+        private final int ladderWalk;
+        private final int ladderReturn;
+        private final int waitWalk;
         private final AtomicLong delayTaken = new AtomicLong();
         private final AtomicLong ownFailTaken = new AtomicLong();
         private final AtomicLong ownDelayTaken = new AtomicLong();
@@ -173,6 +182,9 @@ public final class FaultInjection {
         private final AtomicLong ownOrdinalBreakTaken = new AtomicLong();
         private final AtomicLong ownObserveClaimTaken = new AtomicLong();
         private final AtomicLong segBreakTaken = new AtomicLong();
+        private final AtomicLong ladderWalkTaken = new AtomicLong();
+        private final AtomicLong ladderReturnTaken = new AtomicLong();
+        private final AtomicLong waitWalkTaken = new AtomicLong();
         private final Map<String, WorkPlan> holding = new ConcurrentHashMap<>();
         private final Set<String> holdSpent = ConcurrentHashMap.newKeySet();
 
@@ -180,7 +192,7 @@ public final class FaultInjection {
             long ownDelayNanos, int ownDelayRows, int ownEpochBreak, int ownWiden, int ownBreak,
             int ownSkipIgnored, int ownDoubleRun, int ownThrow, int ownEntityBreak,
             int ownSegmentBreak, int ownOrdinalBreak, int ownObserveClaim, int segBreak,
-            int segBreakRow) {
+            int segBreakRow, int ladderWalk, int ladderReturn, int waitWalk) {
             this.delayNanos = delayNanos;
             this.delayBatches = delayBatches;
             this.holdWorlds = Set.copyOf(holdWorlds);
@@ -199,11 +211,14 @@ public final class FaultInjection {
             this.ownObserveClaim = ownObserveClaim;
             this.segBreak = segBreak;
             this.segBreakRow = segBreakRow;
+            this.ladderWalk = ladderWalk;
+            this.ladderReturn = ladderReturn;
+            this.waitWalk = waitWalk;
             this.enabled = delayNanos > 0L || !holdWorlds.isEmpty() || ownFail > 0
                 || ownDelayNanos > 0L || ownEpochBreak > 0 || ownWiden > 0 || ownBreak > 0
                 || ownSkipIgnored > 0 || ownDoubleRun > 0 || ownThrow > 0 || ownEntityBreak > 0
                 || ownSegmentBreak > 0 || ownOrdinalBreak > 0 || ownObserveClaim > 0
-                || segBreak > 0;
+                || segBreak > 0 || ladderWalk > 0 || ladderReturn > 0 || waitWalk > 0;
         }
 
         static Spec parse(String directive) {
@@ -225,6 +240,9 @@ public final class FaultInjection {
             int ownObserveClaim = 0;
             int segBreak = 0;
             int segBreakRow = 1;
+            int ladderWalk = 0;
+            int ladderReturn = 0;
+            int waitWalk = 0;
             if (directive != null) {
                 for (String token : directive.split(",")) {
                     String trimmed = token.trim();
@@ -274,13 +292,19 @@ public final class FaultInjection {
                         segBreak = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
                     } else if ("segBreakRow".equals(name)) {
                         segBreakRow = (int) clampNumber(value, 1L, ROWS_MAX, 1L);
+                    } else if ("ladderWalk".equals(name)) {
+                        ladderWalk = (int) clampNumber(value, 0L, LADDER_MAX, 0L);
+                    } else if ("ladderReturn".equals(name)) {
+                        ladderReturn = (int) clampNumber(value, 0L, LADDER_MAX, 0L);
+                    } else if ("waitWalk".equals(name)) {
+                        waitWalk = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
                     }
                 }
             }
             return new Spec(delayMs * 1_000_000L, batches, worlds, ownFail, ownDelayMs * 1_000_000L,
                 ownDelayRows, ownEpochBreak, ownWiden, ownBreak, ownSkipIgnored, ownDoubleRun,
                 ownThrow, ownEntityBreak, ownSegmentBreak, ownOrdinalBreak, ownObserveClaim,
-                segBreak, segBreakRow);
+                segBreak, segBreakRow, ladderWalk, ladderReturn, waitWalk);
         }
 
         private static long clampNumber(String value, long low, long high, long fallback) {
@@ -365,6 +389,18 @@ public final class FaultInjection {
 
         int segBreakRow() {
             return segBreakRow;
+        }
+
+        int ladderWalk() {
+            return ladderWalk;
+        }
+
+        int ladderReturn() {
+            return ladderReturn;
+        }
+
+        int waitWalk() {
+            return waitWalk;
         }
     }
 
@@ -497,6 +533,49 @@ public final class FaultInjection {
     static boolean ownershipObserveClaims(Spec spec) {
         return spec.ownObserveClaim > 0
             && spec.ownObserveClaimTaken.getAndIncrement() < spec.ownObserveClaim;
+    }
+
+    /** How many rungs of the resource ladder this tick has to walk to, counted from one; zero while
+     * nothing is declared or after the declared number of ticks. One rung is added per tick, so the
+     * ladder is walked in order and a skipped rung is never the injection's doing. */
+    public static int ladderWalkStep() {
+        return ladderWalkStep(LIVE);
+    }
+
+    static int ladderWalkStep(Spec spec) {
+        return step(spec.ladderWalk, spec.ladderWalkTaken);
+    }
+
+    /** How many rungs of the resource ladder this tick has to return, counted from one; zero while
+     * nothing is declared or after the declared number of ticks. */
+    public static int ladderReturnStep() {
+        return ladderReturnStep(LIVE);
+    }
+
+    static int ladderReturnStep(Spec spec) {
+        return step(spec.ladderReturn, spec.ladderReturnTaken);
+    }
+
+    /** How many waits over the bound this tick has to observe, and which call-site class to take
+     * them at: the classes alternate, so a declaration of two walks one call site of each class. */
+    public static int waitWalkStep() {
+        return waitWalkStep(LIVE);
+    }
+
+    static int waitWalkStep(Spec spec) {
+        if (spec.waitWalk <= 0) {
+            return 0;
+        }
+        long taken = spec.waitWalkTaken.getAndIncrement();
+        return taken >= spec.waitWalk ? 0 : (int) taken + 1;
+    }
+
+    private static int step(int declared, AtomicLong taken) {
+        if (declared <= 0) {
+            return 0;
+        }
+        long spent = taken.getAndIncrement();
+        return spent >= declared ? 0 : (int) spent + 1;
     }
 
     static boolean ownershipThrows(Spec spec) {

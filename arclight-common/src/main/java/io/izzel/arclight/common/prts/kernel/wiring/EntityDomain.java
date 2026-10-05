@@ -176,7 +176,8 @@ public final class EntityDomain implements KernelDomain {
             // here, so a pass that is closed without a merge must move it itself.
             long grace = policy.deadlineGraceMs();
             long deadline = System.nanoTime() + grace * 1_000_000L;
-            lastFrame = merge.merge(pending, deadline, arena, readings, probe, HashWhitelist.bitexact(),
+            lastFrame = merge.merge(pending, deadline, arena, readings, probe, module.arms(),
+                HashWhitelist.bitexact(),
                 ID, writeBack);
             pending = null;
             if (lastFrame == null) {

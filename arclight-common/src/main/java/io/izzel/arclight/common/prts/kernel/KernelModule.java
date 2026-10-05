@@ -2,6 +2,7 @@
 package io.izzel.arclight.common.prts.kernel;
 
 import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
+import io.izzel.arclight.common.prts.kernel.arena.ArenaPassthrough;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
 import io.izzel.arclight.common.prts.kernel.auth.WriteAuthority;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
@@ -40,7 +41,13 @@ import io.izzel.arclight.common.prts.kernel.sites.WritePath;
 import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
 import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard;
 import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
+import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
+import io.izzel.arclight.common.prts.kernel.waitpoints.SiteInventory.WaitClass;
+import io.izzel.arclight.common.prts.kernel.waitpoints.WaitLadder;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry;
+import io.izzel.arclight.common.prts.kernel.waitpoints.WaitProgress;
+import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSite;
+import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
 import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteObserver;
 import io.izzel.arclight.common.prts.support.PrtsWaitSites;
 import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
@@ -67,6 +74,34 @@ public final class KernelModule {
 
         public static ControlFrame empty() {
             return new ControlFrame(0L, 0.0, 0L, 0L, 0.0, 0.0, "none", 0L);
+        }
+    }
+
+    /** The one seam a planning-period component may take a wall clock through, and the counter that
+     * answers how often it did. Nothing in this build calls it: the planning period is a function of
+     * the tick index, the plan sequence and the control frame the tick before published, and the
+     * compiled classes of the planning period are scanned for any clock reference at build time.
+     *
+     * <p>The seam exists so the published count is a measurement and not a constant: a component that
+     * obtained a clock through it would move the count, and the count is published next to the plan it
+     * was taken for. */
+    public static final class PlanClockSeam {
+
+        private final java.util.concurrent.atomic.AtomicLong reads =
+            new java.util.concurrent.atomic.AtomicLong();
+
+        /** Hands out one wall-clock stamp and counts the read. */
+        public long stampNanos() {
+            reads.incrementAndGet();
+            return System.nanoTime();
+        }
+
+        public long reads() {
+            return reads.get();
+        }
+
+        public void reset() {
+            reads.set(0L);
         }
     }
 
@@ -97,8 +132,12 @@ public final class KernelModule {
     private final SharePlanner shares = new SharePlanner();
     private final BudgetStateMachine budgetStates = new BudgetStateMachine();
     private final DegradeLadder ladder = new DegradeLadder(KernelSettings::degradeActions);
+    private final WaitLadder waitLadder = new WaitLadder(KernelSettings::waitActions);
 
     private final ArenaLedger arena = new ArenaLedger();
+    private final ArenaPassthrough passthrough = new ArenaPassthrough();
+    private final DiffProbe arms = new DiffProbe();
+    private final PlanClockSeam planClock = new PlanClockSeam();
     private final List<KernelDomain> domains = new ArrayList<>();
     private final JobIntake jobIntake = new JobIntake(KernelSettings::jobQueueCap);
     private final JobScheduler scheduler = new JobScheduler();
@@ -111,6 +150,7 @@ public final class KernelModule {
     private final CommitLog commits = new CommitLog(KernelSettings::commitRingCap,
         this::resolveCommitOrder);
     private long tickIndex;
+    private int waitCrossStreak;
     private boolean waitSiteTapInstalled;
     private long windowStartTick;
     private boolean started;
@@ -139,6 +179,21 @@ public final class KernelModule {
         ladder.bindSecondCondition(DegradeLevel.B1, "budget.margin.ai", this::aiMarginWithin);
         ladder.bindSecondCondition(DegradeLevel.B5, "budget.conservation_ok",
             () -> lastConservation.ok());
+        // The first rung of the wait ladder returns on the progress signal of the wait points: the
+        // reading is the same one the readout publishes, so a gate can never pass on a value nobody
+        // published. The other two rungs stay unbound and say so.
+        waitLadder.bindSecondCondition(WaitLadder.Level.A1, "wp.signal.moved",
+            this::anyProgressMoved);
+    }
+
+    /** Whether any wait point's progress signal moved in the newest reading. */
+    private boolean anyProgressMoved() {
+        for (WaitProgress.Reading reading : waitPoints.progress().readings()) {
+            if (reading.bound() && reading.delta() > 0L) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static KernelModule instance() {
@@ -204,7 +259,10 @@ public final class KernelModule {
         if (KernelSettings.commitLog()) {
             lastCommitReplay = commits.closeTick();
         }
+        long overrunsBefore = waitPoints.waitOverrunCount();
+        injectWaits();
         waitPoints.noteTick();
+        noteWaitLadder(waitPoints.waitOverrunCount() > overrunsBefore);
         if (KernelSettings.selfTimers()) {
             SelfTimers.note(SelfClass.OBSERVE, RUNTIME_WORLD, "runtime",
                 System.nanoTime() - startedAt);
@@ -282,6 +340,70 @@ public final class KernelModule {
         control = new ControlFrame(tickIndex, minMargin, overruns, waitPoints.waitOverrunCount(),
             reserveUsedMs(), table.reserve().remainingMs(), degradeStateKey(),
             lastDecision.enteredTick());
+        injectLadderWalk();
+    }
+
+    /** The controlled leg of the resource ladder: walks or returns the rungs an injection declared,
+     * one rung per tick, so the order is walked and never skipped. Off unless a directive names it;
+     * a rung reports its action only while the switch that would allow one is on. */
+    private void injectLadderWalk() {
+        DegradeLevel[] levels = DegradeLevel.values();
+        int walk = FaultInjection.ladderWalkStep();
+        if (walk > 0) {
+            DegradeLevel target = levels[Math.min(walk, levels.length - 1)];
+            ladder.noteEntered(target, tickIndex);
+            ladder.noteEffective(target);
+        }
+        int back = FaultInjection.ladderReturnStep();
+        if (back > 0) {
+            ladder.noteReturned(levels[Math.min(back, levels.length - 1)]);
+        }
+    }
+
+    /** The controlled leg of the wait walk: observes the waits an injection declared, taking the
+     * call-site classes in turn so one declaration covers each class. Off unless a directive names
+     * it, and the observation enters through the same call the twenty real call sites use, so the
+     * counters it moves are the counters the live path moves. */
+    private void injectWaits() {
+        int step = FaultInjection.waitWalkStep();
+        if (step <= 0) {
+            return;
+        }
+        List<WaitClass> classes = WaitClass.classified();
+        WaitClass wanted = classes.get((step - 1) % classes.size());
+        WaitSite chosen = null;
+        for (WaitSite site : waitPoints.sites().sites()) {
+            if (WaitClass.ofPhase(site.tickPhase()) == wanted) {
+                chosen = site;
+                break;
+            }
+        }
+        if (chosen == null) {
+            return;
+        }
+        String world = plannedWorlds.isEmpty() ? RUNTIME_WORLD : plannedWorlds.get(0);
+        waitPoints.observeWait(chosen.wpId(), new WaitPointRegistry.WaitSpan(chosen.wpId(),
+            chosen.classRef() + "." + chosen.methodRef(), chosen.siteId(), world, tickIndex,
+            KernelSettings.waitBoundMs() + 1L, "injected"));
+        waitPoints.noteInjectionWalkthrough(chosen.wpId(), wanted);
+    }
+
+    /** One tick of the wait ladder. A tick that carried a wait over the bound enters the first rung;
+     * a run of such ticks walks it one rung further, in order, because the ladder may not skip. The
+     * ladder only counts: no rung changes the bound, the parallel degree or the order of the tick in
+     * this build, and a rung reports its action only while the switch that would allow one is on. */
+    private void noteWaitLadder(boolean crossed) {
+        if (crossed) {
+            waitCrossStreak++;
+            WaitLadder.Level target = waitCrossStreak >= 3 ? WaitLadder.Level.A3
+                : waitCrossStreak == 2 ? WaitLadder.Level.A2 : WaitLadder.Level.A1;
+            for (WaitLadder.Level level : waitLadder.noteEntered(target, tickIndex).entered()) {
+                waitLadder.noteEffective(level);
+            }
+        } else {
+            waitCrossStreak = 0;
+        }
+        waitLadder.noteTick(crossed);
     }
 
     /** Freezes the plan of one tick. The declarations the domains handed in since the last plan are
@@ -478,6 +600,28 @@ public final class KernelModule {
         return arena;
     }
 
+    /** The passthrough slot and the version slot of the arena face. Neither is on a production path
+     * in this build; the counters answer for a controlled round trip. */
+    public ArenaPassthrough passthrough() {
+        return passthrough;
+    }
+
+    /** The differential of the two arms. The controlled leg compares the arm a run computed with the
+     * arm the host path produced; a pair is counted once it was compared, not once it was equal. */
+    public DiffProbe arms() {
+        return arms;
+    }
+
+    /** The counter behind the planning period's clock ban. */
+    public PlanClockSeam planClock() {
+        return planClock;
+    }
+
+    /** The three rungs of the wait ladder and their return gates. */
+    public WaitLadder waitLadder() {
+        return waitLadder;
+    }
+
     /** The directory the intent payloads of the write path are bound in. */
     public IntentPayloadDirectory payloads() {
         return payloads;
@@ -642,6 +786,11 @@ public final class KernelModule {
             domain.reset();
         }
         arena.reset();
+        passthrough.reset();
+        arms.reset();
+        planClock.reset();
+        waitLadder.reset();
+        waitCrossStreak = 0;
         SelfTimers.resetAll();
         guard.resetReadings();
         waitSites.reset();

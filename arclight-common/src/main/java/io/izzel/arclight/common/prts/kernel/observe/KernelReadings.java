@@ -40,7 +40,12 @@ import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard;
 import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
 import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
 import io.izzel.arclight.common.prts.kernel.sites.ThreadOrigin;
+import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
+import io.izzel.arclight.common.prts.kernel.arena.ArenaPassthrough;
+import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
 import io.izzel.arclight.common.prts.kernel.waitpoints.CoverageReport;
+import io.izzel.arclight.common.prts.kernel.waitpoints.SiteInventory.WaitClass;
+import io.izzel.arclight.common.prts.kernel.waitpoints.WaitLadder;
 import io.izzel.arclight.common.prts.kernel.waitpoints.ForcedConvergence;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitProgress;
@@ -71,6 +76,7 @@ public final class KernelReadings {
         writePaths(lines, module);
         intentQueue(lines, module);
         tokens(lines, module);
+        arena(lines, module);
         rejectCodes(lines, module);
         shareBudget(lines, module);
         budgetStates(lines, module);
@@ -78,6 +84,8 @@ public final class KernelReadings {
         selfTimers(lines, module);
         domainReadings(lines, module);
         waitPoints(lines, module);
+        waitLadderReadings(lines, module);
+        differential(lines, module);
         contractLayers(lines, module);
         safety(lines, module);
         exits(lines, module);
@@ -285,6 +293,111 @@ public final class KernelReadings {
         add(lines, "token.reclaim_passes", owners.reclaimPasses());
     }
 
+    /** The arena face: the pin and release pairs of the slots, and the two reserved shapes that
+     * carry what the model does not name. Every field is an observation request; no gate reads one. */
+    private static void arena(List<String> lines, KernelModule module) {
+        ArenaLedger ledger = module.arena();
+        ArenaPassthrough passthrough = module.passthrough();
+        ArenaPassthrough.Reading reading = passthrough.reading();
+        add(lines, "arena.observation_only", 1);
+        add(lines, "arena.claims", ledger.claims());
+        add(lines, "arena.releases", ledger.releases());
+        add(lines, "arena.pinned", ledger.pinnedCount());
+        add(lines, "arena.generation_bumps", ledger.generationBumps());
+        add(lines, "arena.foreign_writes", ledger.foreignWrites());
+        add(lines, "arena.refusals", ledger.refusals());
+        add(lines, "arena.stale_releases", ledger.staleReleases());
+        add(lines, "arena.repeat_releases", ledger.repeatReleases());
+        add(lines, "arena.quarantined_slots", ledger.quarantinedSlots());
+        add(lines, "arena.pin_pairs_hold", ledger.pinPairsHold() ? 1 : 0);
+        add(lines, "arena.slots", reading.slots());
+        add(lines, "arena.slots_held", reading.held());
+        add(lines, "arena.passthrough_written", reading.written());
+        add(lines, "arena.passthrough_read", reading.read());
+        add(lines, "arena.passthrough_lost", reading.lost());
+        add(lines, "arena.roundtrip_pairs", reading.roundtripPairs());
+        add(lines, "arena.roundtrip_equal", reading.roundtripEqual());
+        add(lines, "arena.roundtrip_diff", reading.roundtripDiff());
+        add(lines, "arena.version_checks", reading.versionChecks());
+        add(lines, "arena.version_publishes", reading.versionPublishes());
+        add(lines, "arena.version_mismatch", reading.versionMismatch());
+        add(lines, "arena.bytes_kept", reading.bytesKept());
+    }
+
+    /** The differential of the two arms: how many tick pairs were compared and how many agreed, the
+     * first fork down to one row and one field, and what the comparison could not place. Every field
+     * is an observation request; no gate reads one. */
+    private static void differential(List<String> lines, KernelModule module) {
+        DiffProbe.DiffReport report = module.arms().report();
+        add(lines, "diff.observation_only", 1);
+        add(lines, "diff.arms", 2);
+        add(lines, "diff.tick_pairs", report.tickPairs());
+        add(lines, "diff.equal", report.equal());
+        add(lines, "diff.rate", format(report.rate()));
+        add(lines, "diff.algorithm", report.algorithmId().isEmpty() ? "none" : report.algorithmId());
+        add(lines, "diff.unattributed", report.unattributed());
+        add(lines, "diff.first_fork_tick", report.firstForkTick());
+        add(lines, "diff.first_fork_world", report.firstForkWorld().isEmpty() ? "none"
+            : safe(report.firstForkWorld()));
+        add(lines, "diff.first_fork_region", report.firstForkRegion().isEmpty() ? "none"
+            : safe(report.firstForkRegion()));
+        add(lines, "diff.first_fork_batch", report.firstForkBatch());
+        add(lines, "diff.first_fork_entity", report.firstForkEntityId());
+        add(lines, "diff.first_fork_host_ordinal", report.firstForkHostOrdinal());
+        add(lines, "diff.first_fork_field", report.firstForkField().isEmpty() ? "none"
+            : report.firstForkField());
+        add(lines, "diff.forked_fields", report.fieldCount());
+        add(lines, "diff.attributed_sites", report.attributedSites());
+        add(lines, "diff.located_rows", report.locatedRows());
+    }
+
+    /** The three rungs of the wait ladder: the four items each carries, the three counters whose
+     * sum is the reached and effective total, and the return gate that needs a clean run and the
+     * progress signal moving again. Every field is an observation request; no gate reads one. */
+    private static void waitLadderReadings(List<String> lines, KernelModule module) {
+        WaitLadder ladder = module.waitLadder();
+        WaitLadder.Sign sign = ladder.sign();
+        add(lines, "wait.ladder.observation_only", 1);
+        add(lines, "wait.ladder.levels", ladder.rungs().size());
+        add(lines, "wait.ladder.actions_enabled", sign.actionsEnabled() ? 1 : 0);
+        add(lines, "wait.ladder.rollback_ticks", KernelSettings.waitRollbackTicks());
+        add(lines, "wait.ladder.deepest", sign.deepest().name().toLowerCase(Locale.ROOT));
+        add(lines, "wait.ladder.entered_tick", sign.enteredTick());
+        add(lines, "wait.ladder.ticks_observed", sign.ticksObserved());
+        add(lines, "wait.ladder.ticks_clean", sign.cleanTicks());
+        add(lines, "wait.ladder.skipped_total", sign.skippedCount());
+        add(lines, "wait.ladder.entered_total", ladder.enteredTotal());
+        add(lines, "wait.ladder.effective_total", ladder.effectiveTotal());
+        add(lines, "wait.ladder.returned_total", ladder.returnedTotal());
+        for (WaitLadder.Rung rung : ladder.rungs()) {
+            String prefix = "wait.ladder.row." + rung.level().name().toLowerCase(Locale.ROOT) + ".";
+            add(lines, prefix + "code", rung.code().text());
+            add(lines, prefix + "trigger", rung.trigger());
+            add(lines, prefix + "action", rung.action());
+            add(lines, prefix + "signal", rung.signal());
+            add(lines, prefix + "return", rung.returnCondition());
+        }
+        for (WaitLadder.Counters counters : ladder.counters()) {
+            String prefix = "wait.ladder.row." + counters.level().name().toLowerCase(Locale.ROOT)
+                + ".";
+            add(lines, prefix + "entered", counters.entered());
+            add(lines, prefix + "effective", counters.effective());
+            add(lines, prefix + "returned", counters.returned());
+            add(lines, prefix + "in_force", counters.level() == sign.deepest() ? 1 : 0);
+        }
+        for (WaitLadder.Rung rung : ladder.rungs()) {
+            WaitLadder.Gate gate = ladder.gate(rung.level(), KernelSettings.waitRollbackTicks());
+            String prefix = "wait.gate." + rung.level().name().toLowerCase(Locale.ROOT) + ".";
+            add(lines, prefix + "window_ticks", gate.windowTicks());
+            add(lines, prefix + "clean_ticks", gate.cleanTicks());
+            add(lines, prefix + "second_bound", gate.secondBound() ? 1 : 0);
+            add(lines, prefix + "second_source", gate.secondSource());
+            add(lines, prefix + "second_satisfied", gate.secondSatisfied() ? 1 : 0);
+            add(lines, prefix + "ready", gate.ready() ? 1 : 0);
+            add(lines, prefix + "blocked_by", gate.blockedBy());
+        }
+    }
+
     private static void rejectCodes(List<String> lines, KernelModule module) {
         for (RejectCode code : RejectCode.values()) {
             add(lines, "reject." + code.text(), module.ledger().codeCount(code));
@@ -396,6 +509,7 @@ public final class KernelReadings {
     private static void contractLayers(List<String> lines, KernelModule module) {
         add(lines, "plan.observation_only", 1);
         add(lines, "plan.enabled", KernelSettings.tickPlan() ? 1 : 0);
+        add(lines, "plan.wallclock_reads", module.planClock().reads());
         add(lines, "plan.job_graph_enabled", KernelSettings.jobGraph() ? 1 : 0);
         add(lines, "plan.commit_log_enabled", KernelSettings.commitLog() ? 1 : 0);
         TickPlanStore store = module.plans();
@@ -745,8 +859,18 @@ public final class KernelReadings {
         add(lines, "wp.dec19_coverage_pct", format(coverage.coveragePct()));
         add(lines, "wp.site_inventory_total", coverage.siteInventoryTotal());
         add(lines, "wp.forced_convergence", coverage.forcedConvergence());
+        // The two class totals are the ones an acceptance line names; the per-row counters are
+        // published beside them under their own prefix, because one row carries call sites of both
+        // classes and a per-row total cannot say whether every class was walked.
+        for (WaitClass waitClass : WaitClass.classified()) {
+            add(lines, "wp.injection_walkthrough_" + waitClass.key(),
+                registry.walkthroughOf(waitClass));
+        }
+        add(lines, "wp.injection_walkthrough_classes", WaitClass.classified().size());
+        add(lines, "wp.injection_walkthrough_unclassified",
+            registry.walkthroughOf(WaitClass.UNCLASSIFIED));
         for (Map.Entry<String, Integer> entry : coverage.injectionWalkthrough().entrySet()) {
-            add(lines, "wp.injection_walkthrough_" + entry.getKey(), entry.getValue());
+            add(lines, "wp.walkthrough." + entry.getKey(), entry.getValue());
         }
         for (Map.Entry<String, Long> entry : registry.progressReadings().entrySet()) {
             add(lines, "wp.progress." + entry.getKey(), entry.getValue());

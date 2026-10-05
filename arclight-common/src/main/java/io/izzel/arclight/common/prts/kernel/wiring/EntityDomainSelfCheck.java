@@ -55,7 +55,7 @@ final class EntityDomainSelfCheck {
             DispatchPass pass = DispatchPass.dispatch(plan, pool, EntityIntegrator.INSTANCE, arena,
                 readings, ledger);
             MergeSegment.Frame frame = merge.merge(pass, System.nanoTime() + 2_000_000_000L, arena,
-                readings, new DiffProbe(), HashWhitelist.bitexact(), DOMAIN_ID, null);
+                readings, new DiffProbe(), null, HashWhitelist.bitexact(), DOMAIN_ID, null);
             lines.add("selftest.dispatch_tasks=" + plan.taskCount());
             lines.add("selftest.dispatch_worker_exec=" + readings.execByThread("prts-worker-0"));
             lines.add("selftest.dispatch_executed=" + readings.executed());
@@ -123,7 +123,7 @@ final class EntityDomainSelfCheck {
             DispatchPass pass = DispatchPass.dispatch(plan, pool, EntityIntegrator.INSTANCE, arena,
                 readings, ledger);
             merge.merge(pass, System.nanoTime() + 2_000_000_000L, arena, readings, new DiffProbe(),
-                HashWhitelist.bitexact(), DOMAIN_ID, writeBack);
+                null, HashWhitelist.bitexact(), DOMAIN_ID, writeBack);
             CommitSegment segment = new CommitSegment(intents, () -> true, () -> 64);
             segment.bindOwnerThread(Thread.currentThread());
             CommitSegment.Pass walk = segment.run(tick + 1);

@@ -110,6 +110,56 @@ public final class SiteInventory {
             "site census, blocking bucket, spawn position adjust")
     };
 
+
+    /** The two classes a blocking wait belongs to, told apart by the tick phase its call site runs
+     * at: a wait taken on the tick path and a wait taken on the command or lifecycle face. A wait
+     * that cannot be placed in either answers unclassified instead of being folded into one.
+     *
+     * <p>The classification exists so an injection walkthrough can be counted per class: a class
+     * with no walked wait point is a class nothing proved, and a single total would hide that. */
+    public enum WaitClass {
+
+        /** A wait taken while the host tick runs: entity, spawn, block, block entity, map or point
+         * of interest phase. */
+        TICK_PATH("A"),
+
+        /** A wait taken on the command and lifecycle face: structure query, respawn, command, chunk
+         * send or entity join phase. */
+        COMMAND_LIFECYCLE("B"),
+
+        /** A call site whose phase names neither face; it is reported instead of being assigned. */
+        UNCLASSIFIED("-");
+
+        private final String key;
+
+        WaitClass(String key) {
+            this.key = key;
+        }
+
+        public String key() {
+            return key;
+        }
+
+        /** The classes an injection walkthrough has to cover. */
+        public static List<WaitClass> classified() {
+            return List.of(TICK_PATH, COMMAND_LIFECYCLE);
+        }
+
+        /** Places one call site by the tick phase it runs at. */
+        public static WaitClass ofPhase(String tickPhase) {
+            if (tickPhase == null) {
+                return UNCLASSIFIED;
+            }
+            return switch (tickPhase) {
+                case "entity_tick", "spawn", "block_tick", "blockentity_tick", "map_update",
+                     "poi_update" -> TICK_PATH;
+                case "structure_query", "respawn", "command", "chunk_send", "entity_join" ->
+                    COMMAND_LIFECYCLE;
+                default -> UNCLASSIFIED;
+            };
+        }
+    }
+
     private final Map<String, WaitSite> sites = new LinkedHashMap<>();
     private final Map<String, LongAdder> observed = new ConcurrentHashMap<>();
 

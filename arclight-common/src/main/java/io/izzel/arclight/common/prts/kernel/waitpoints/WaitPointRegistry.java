@@ -2,9 +2,11 @@
 package io.izzel.arclight.common.prts.kernel.waitpoints;
 
 import io.izzel.arclight.common.prts.kernel.codes.RejectTrigger;
+import io.izzel.arclight.common.prts.kernel.waitpoints.SiteInventory.WaitClass;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers;
 
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -71,6 +73,7 @@ public final class WaitPointRegistry {
     private final Map<String, AtomicLong> observedMax = new ConcurrentHashMap<>();
     private final Map<String, LongAdder> overrunsByRow = new ConcurrentHashMap<>();
     private final Map<String, Integer> walkthrough = new ConcurrentHashMap<>();
+    private final Map<WaitClass, LongAdder> walkthroughByClass = new EnumMap<>(WaitClass.class);
     private final Map<String, Integer> unregisteredCallSites = new ConcurrentHashMap<>();
     private final WaitProgress progress = new WaitProgress();
     private final ForcedConvergence convergence = new ForcedConvergence();
@@ -213,9 +216,24 @@ public final class WaitPointRegistry {
 
     /** Records that a fixture walked one wait point through an injection. */
     public void noteInjectionWalkthrough(String wpId) {
+        noteInjectionWalkthrough(wpId, null);
+    }
+
+    /** Records a walked wait point and the class of the call site it was walked at. The class has to
+     * be handed in rather than derived from the row: one row carries call sites of both classes, so a
+     * per-row total cannot say whether every class was walked. */
+    public void noteInjectionWalkthrough(String wpId, WaitClass waitClass) {
         if (wpId != null) {
             walkthrough.merge(wpId, 1, Integer::sum);
         }
+        WaitClass placed = waitClass == null ? WaitClass.UNCLASSIFIED : waitClass;
+        walkthroughByClass.computeIfAbsent(placed, ignored -> new LongAdder()).increment();
+    }
+
+    /** How often an injection walked a call site of one class. */
+    public long walkthroughOf(WaitClass waitClass) {
+        LongAdder counter = waitClass == null ? null : walkthroughByClass.get(waitClass);
+        return counter == null ? 0L : counter.sum();
     }
 
     /** Closes one host tick on the rollback gate. Nothing is rolled back here: the gate only records
@@ -339,6 +357,7 @@ public final class WaitPointRegistry {
         overrunsByRow.clear();
         unregisteredCallSites.clear();
         walkthrough.clear();
+        walkthroughByClass.clear();
         progress.reset();
         convergence.reset();
         overrunThisTick = false;

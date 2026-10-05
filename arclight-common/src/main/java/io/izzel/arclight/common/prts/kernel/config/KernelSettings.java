@@ -63,6 +63,14 @@ public final class KernelSettings {
     /** Run of clean ticks a rung needs before it may return; a declared value, not a measured one. */
     public static final String DEGRADE_ROLLBACK_TICKS = "degrade-rollback-ticks";
 
+    /** Lets a rung of the wait ladder execute its action; off, a rung that was reached only
+     * publishes its counters. */
+    public static final String WAIT_ACTIONS = "wait-actions";
+
+    /** Run of clean ticks a wait rung needs before it may return, next to its progress signal
+     * having to move again; a declared value, not a measured one. */
+    public static final String WAIT_ROLLBACK_TICKS = "wait-rollback-ticks";
+
     /** Number of retries one attempt carries before a refusal is final. */
     public static final String RETRY_BUDGET = "retry-budget";
 
@@ -203,6 +211,14 @@ public final class KernelSettings {
 
     public static int degradeRollbackTicks() {
         return clamp(number(DEGRADE_ROLLBACK_TICKS), 1, 600);
+    }
+
+    public static boolean waitActions() {
+        return feature(WAIT_ACTIONS);
+    }
+
+    public static int waitRollbackTicks() {
+        return clamp(number(WAIT_ROLLBACK_TICKS), 1, 600);
     }
 
     public static boolean writePathGuard() {

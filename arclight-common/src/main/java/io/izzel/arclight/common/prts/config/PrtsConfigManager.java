@@ -223,7 +223,12 @@ public final class PrtsConfigManager {
                 + "# records and judges; it does not intercept a write.\n"
                 + "# 'job-queue-cap' is the upper bound of the declarations one tick may hand to the\n"
                 + "# planning period, 'commit-ring-cap' the capacity of one world and domain ring and\n"
-                + "# 'plan-history-cap' how many recent plans an order may be resolved against."));
+                + "# 'plan-history-cap' how many recent plans an order may be resolved against.\n"
+                + "# 'wait-actions: false' keeps the wait ladder counting only: a rung that was\n"
+                + "# reached publishes its entered count and no action runs. On, a rung may report\n"
+                + "# the action it ran, and 'wait-rollback-ticks' is the run of clean ticks its return\n"
+                + "# gate waits for beside the progress signal of the wait point having to move again.\n"
+                + "# Both are off or declared, so a shipped server keeps its wait behaviour."));
     }
 
     private static Map<String, Boolean> modSupportFeatures() {
@@ -260,6 +265,7 @@ public final class PrtsConfigManager {
         features.put("wait-registry", true);
         features.put("refuse-unregistered-waits", false);
         features.put("degrade-actions", false);
+        features.put("wait-actions", false);
         features.put("write-path-guard", true);
         features.put("commit-intents", false);
         features.put("route-unregistered-writes", false);
@@ -288,6 +294,7 @@ public final class PrtsConfigManager {
         numbers.put("commit-budget", new IntSetting(64, 1, 4096));
         numbers.put("wait-bound-ms", new IntSetting(50, 1, 60000));
         numbers.put("degrade-rollback-ticks", new IntSetting(3, 1, 600));
+        numbers.put("wait-rollback-ticks", new IntSetting(3, 1, 600));
         numbers.put("retry-budget", new IntSetting(2, 0, 16));
         numbers.put("worker-count", new IntSetting(0, 0, 8));
         numbers.put("worker-queue-cap", new IntSetting(32, 1, 256));

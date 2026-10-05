@@ -60,8 +60,18 @@ import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry.WaitPoi
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry.WaitSpan;
 import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteObserver;
+import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
+import io.izzel.arclight.common.prts.kernel.arena.ArenaPassthrough;
+import io.izzel.arclight.common.prts.kernel.arena.ArenaSlot;
+import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
+import io.izzel.arclight.common.prts.kernel.diff.DomainHash;
+import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
+import io.izzel.arclight.common.prts.kernel.diff.StateHasher;
+import io.izzel.arclight.common.prts.kernel.waitpoints.SiteInventory.WaitClass;
+import io.izzel.arclight.common.prts.kernel.waitpoints.WaitLadder;
 import io.izzel.arclight.common.prts.support.PrtsWaitSites;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashSet;
@@ -76,6 +86,9 @@ import java.util.function.IntSupplier;
 /** The check never touches the live counters: it builds its own registry, queue and ledger, drives
  * the paths a call site would drive and prints what came back. */
 public final class KernelSelfCheck {
+
+    /** The domain identity the differential arms are hashed under. */
+    private static final String DOMAIN_ID = "entity";
 
     private KernelSelfCheck() {
     }
@@ -251,6 +264,9 @@ public final class KernelSelfCheck {
         lines.addAll(siteCoverage(failures, waits));
         lines.addAll(waitSiteMatrix(failures, tick));
         lines.addAll(waitContractMatrix(failures, tick));
+        lines.addAll(waitLadderMatrix(failures, tick));
+        lines.addAll(arenaMatrix(failures, tick));
+        lines.addAll(armMatrix(failures, tick));
         lines.addAll(budgetGovernanceMatrix(failures, tick));
         lines.addAll(contractLayerMatrix(failures, tick));
         lines.addAll(domainSelfChecks(failures, tick));
@@ -1391,6 +1407,222 @@ public final class KernelSelfCheck {
             lines.addAll(domain.selfCheck(failures, tick));
         }
         return lines;
+    }
+
+    /** The three rungs of the wait ladder: the four items each carries, the walk that may not skip,
+     * the counters a reached rung publishes while no action may run, and the return gate that needs
+     * both the clean run and the recovered progress signal. The injection walkthrough is checked
+     * beside it, because a class of call sites that no injection walked is a class nothing proved. */
+    private static List<String> waitLadderMatrix(List<String> failures, long tick) {
+        List<String> lines = new ArrayList<>();
+        WaitLadder quiet = new WaitLadder(() -> false);
+        int complete = 0;
+        for (WaitLadder.Rung rung : quiet.rungs()) {
+            if (!rung.trigger().isBlank() && !rung.action().isBlank() && !rung.signal().isBlank()
+                && !rung.returnCondition().isBlank()) {
+                complete++;
+            }
+        }
+        WaitLadder.Advance walk = quiet.noteEntered(WaitLadder.Level.A1, tick);
+        WaitLadder.Advance further = quiet.noteEntered(WaitLadder.Level.A2, tick);
+        lines.add("selftest.wait_ladder_rungs=" + quiet.rungs().size() + "/" + complete);
+        lines.add("selftest.wait_ladder_walked=" + walk.entered().size() + "+"
+            + further.entered().size() + " skipped=" + (walk.skipped() ? 1 : 0)
+            + (further.skipped() ? 1 : 0) + " deepest=" + further.reached());
+        lines.add("selftest.wait_ladder_entered_a2=" + quiet.counters(WaitLadder.Level.A2).entered());
+        lines.add("selftest.wait_ladder_effective_off="
+            + (quiet.noteEffective(WaitLadder.Level.A2) ? 1 : 0));
+        WaitLadder.Gate early = quiet.gate(WaitLadder.Level.A1, 3);
+        for (int index = 0; index < 3; index++) {
+            quiet.noteTick(false);
+        }
+        WaitLadder.Gate unbound = quiet.gate(WaitLadder.Level.A2, 3);
+        WaitLadder acting = new WaitLadder(() -> true);
+        acting.bindSecondCondition(WaitLadder.Level.A1, "selftest.progress", () -> true);
+        acting.noteEntered(WaitLadder.Level.A1, tick);
+        for (int index = 0; index < 3; index++) {
+            acting.noteTick(false);
+        }
+        WaitLadder.Gate ready = acting.gate(WaitLadder.Level.A1, 3);
+        boolean effective = acting.noteEffective(WaitLadder.Level.A1);
+        boolean returned = acting.noteReturned(WaitLadder.Level.A1);
+        lines.add("selftest.wait_ladder_gate=" + early.blockedBy() + "/" + unbound.blockedBy() + "/"
+            + ready.blockedBy() + "/" + (ready.ready() ? 1 : 0));
+        lines.add("selftest.wait_ladder_acting=" + (effective ? 1 : 0) + "/" + (returned ? 1 : 0)
+            + " effective=" + acting.effectiveTotal() + " returned=" + acting.returnedTotal());
+        WaitLadder skipping = new WaitLadder(() -> true);
+        WaitLadder.Advance jumped = skipping.noteEntered(WaitLadder.Level.A3, tick);
+        lines.add("selftest.wait_ladder_skip=" + (jumped.skipped() ? 1 : 0) + " walked="
+            + jumped.entered().size());
+        if (quiet.rungs().size() != 3 || complete != 3) {
+            failures.add("a rung of the wait ladder does not carry all four items");
+        }
+        if (walk.entered().size() != 1 || further.entered().size() != 1 || walk.skipped()
+            || further.skipped()) {
+            failures.add("the wait ladder did not walk its rungs one at a time in order");
+        }
+        if (quiet.noteEffective(WaitLadder.Level.A2)) {
+            failures.add("a wait rung reported an action while its switch was off");
+        }
+        if (!"clean_ticks".equals(early.blockedBy())
+            || !"second_condition_unbound".equals(unbound.blockedBy()) || !ready.ready()) {
+            failures.add("the wait return gate did not answer both of its conditions");
+        }
+        if (!effective || !returned) {
+            failures.add("a wait rung did not report its action while the switch was on");
+        }
+        if (!jumped.skipped() || jumped.entered().size() != 3) {
+            failures.add("a single call that skipped rungs was not counted as a skip");
+        }
+        waitWalkthroughMatrix(lines, failures);
+        return lines;
+    }
+
+    /** The injection walkthrough, counted per class of call site: the two classes the inventory
+     * places, the call sites that fall in neither, and the two totals an acceptance line reads. */
+    private static void waitWalkthroughMatrix(List<String> lines, List<String> failures) {
+        WaitPointRegistry registry = new WaitPointRegistry(() -> 50);
+        int tickPathSites = 0;
+        int commandSites = 0;
+        int unplaced = 0;
+        for (WaitSite site : registry.sites().sites()) {
+            WaitClass placed = WaitClass.ofPhase(site.tickPhase());
+            if (placed == WaitClass.TICK_PATH) {
+                tickPathSites++;
+            } else if (placed == WaitClass.COMMAND_LIFECYCLE) {
+                commandSites++;
+            } else {
+                unplaced++;
+            }
+        }
+        WaitClass tickPath = WaitClass.classified().get(0);
+        WaitClass commandFace = WaitClass.classified().get(1);
+        registry.noteInjectionWalkthrough("chunk", tickPath);
+        registry.noteInjectionWalkthrough("region", commandFace);
+        lines.add("selftest.wait_site_classes=" + tickPathSites + "/" + commandSites + "/" + unplaced);
+        lines.add("selftest.wait_walkthrough_keys=" + tickPath.key() + commandFace.key());
+        lines.add("selftest.wait_walkthrough_classes=" + registry.walkthroughOf(tickPath) + "/"
+            + registry.walkthroughOf(commandFace));
+        if (tickPathSites == 0 || commandSites == 0 || unplaced != 0) {
+            failures.add("the call site inventory does not place every site in a wait class");
+        }
+        if (registry.walkthroughOf(tickPath) < 1L || registry.walkthroughOf(commandFace) < 1L) {
+            failures.add("an injection walkthrough did not land in its call-site class");
+        }
+    }
+
+    /** The round trip of the two reserved arena shapes. The negative controls - a dropped passthrough
+     * and a write that names a stale version - run on a carrier of their own, so the counters the
+     * readout publishes stay a measurement of the live round trip; the live one claims a real slot,
+     * keeps a payload, publishes it against the generation it read and reads it back. */
+    private static List<String> arenaMatrix(List<String> failures, long tick) {
+        List<String> lines = new ArrayList<>();
+        ArenaPassthrough scratch = new ArenaPassthrough();
+        scratch.write("scratch", new byte[] {1, 2, 3});
+        boolean scratchEqual = scratch.readBack("scratch");
+        scratch.drop("scratch");
+        long stale = scratch.generation("scratch") + 1L;
+        boolean staleRefused = !scratch.publish("scratch", stale);
+        ArenaPassthrough.Reading negative = scratch.reading();
+        lines.add("selftest.arena_scratch_roundtrip=" + (scratchEqual ? 1 : 0));
+        lines.add("selftest.arena_scratch_lost=" + negative.lost());
+        lines.add("selftest.arena_scratch_version_refused=" + (staleRefused ? 1 : 0));
+        lines.add("selftest.arena_scratch_version_mismatch=" + negative.versionMismatch());
+        if (!scratchEqual || negative.lost() != 1L || !staleRefused
+            || negative.versionMismatch() != 1L || negative.roundtripDiff() != 0L) {
+            failures.add("the arena counters did not move for the negative controls");
+        }
+
+        KernelModule module = KernelModule.instance();
+        ArenaPassthrough live = module.passthrough();
+        ArenaLedger ledger = module.arena();
+        String world = "selftest-world";
+        long generation = live.write(world, "unmodelled-subtree".getBytes(StandardCharsets.UTF_8));
+        boolean published = live.publish(world, generation);
+        boolean held = live.readBack(world);
+        ArenaSlot slot = ledger.claim(1L, world, "r0.0", 0, 8);
+        boolean released = false;
+        if (slot != null) {
+            released = ledger.release(slot.lease(1L), true) == ArenaSlot.Release.RELEASED;
+        }
+        ArenaPassthrough.Reading reading = live.reading();
+        lines.add("selftest.arena_live_published=" + (published ? 1 : 0));
+        lines.add("selftest.arena_live_roundtrip=" + (held ? 1 : 0));
+        lines.add("selftest.arena_live_slot=" + (slot == null ? 0 : 1));
+        lines.add("selftest.arena_live_released=" + (released ? 1 : 0));
+        lines.add("selftest.arena_live_passthrough_lost=" + reading.lost());
+        lines.add("selftest.arena_live_roundtrip_diff=" + reading.roundtripDiff());
+        lines.add("selftest.arena_live_version_mismatch=" + reading.versionMismatch());
+        if (!published || !held || slot == null || !released) {
+            failures.add("the live arena round trip did not complete");
+        }
+        if (reading.lost() != 0L || reading.roundtripDiff() != 0L
+            || reading.versionMismatch() != 0L) {
+            failures.add("the live arena round trip reported a lost passthrough or a difference");
+        }
+        lines.add("selftest.arena_tick=" + tick);
+        return lines;
+    }
+
+    /** The two differential arms: the same rows hashed twice over one window of ticks, once as the
+     * arm a run computed and once as the arm the host path produced, and then the same pair with one
+     * row of the first arm deviated. Both controls run on a comparison of their own, so the pairs
+     * the readout publishes stay the pairs a live merge compared; the deviated pair is part of the
+     * same fixture, because a comparison that agreed on everything would prove nothing. */
+    private static List<String> armMatrix(List<String> failures, long tick) {
+        List<String> lines = new ArrayList<>();
+        DiffProbe probe = new DiffProbe();
+        List<StateHasher.Slice> computed = armRows(8);
+        List<StateHasher.Slice> produced = armRows(8);
+        for (int offset = 0; offset < 8; offset++) {
+            probe.compare(arm(DOMAIN_ID, tick + offset, computed), arm(DOMAIN_ID, tick + offset,
+                produced));
+        }
+        long pairsAfterAgreeing = probe.tickPairs();
+        long equalAfterAgreeing = probe.equal();
+        List<StateHasher.Slice> deviated = armRows(8);
+        StateHasher.Slice row = deviated.get(5);
+        deviated.set(5, new StateHasher.Slice(row.worldId(), row.regionId(), row.batchId(),
+            row.entitySeq(), row.x(), row.y(), row.z(), row.yaw(), row.pitch(), row.velX(),
+            row.velY(), row.velZ(), row.flags() ^ 1L, row.slotGeneration(), row.segmentRef()));
+        probe.compare(arm(DOMAIN_ID, tick, deviated), arm(DOMAIN_ID, tick, produced));
+        DiffProbe.DiffReport report = probe.report();
+        lines.add("selftest.arm_agreeing_window=" + pairsAfterAgreeing + "/" + equalAfterAgreeing);
+        lines.add("selftest.arm_deviated_pair=" + (report.tickPairs() - pairsAfterAgreeing) + "/"
+            + (report.equal() - equalAfterAgreeing));
+        lines.add("selftest.arm_fork_field=" + report.firstForkField() + " located="
+            + report.locatedRows() + " unattributed=" + report.unattributed());
+        KernelModule.PlanClockSeam scratchSeam = new KernelModule.PlanClockSeam();
+        long seamBefore = scratchSeam.reads();
+        scratchSeam.stampNanos();
+        lines.add("selftest.plan_clock_seam=" + seamBefore + "->" + scratchSeam.reads());
+        if (pairsAfterAgreeing != 8L || equalAfterAgreeing != 8L) {
+            failures.add("the two arms that carry the same rows were not counted as equal pairs");
+        }
+        if (report.tickPairs() - pairsAfterAgreeing != 1L
+            || report.equal() - equalAfterAgreeing != 0L) {
+            failures.add("the deviated arm was not compared and refused as an unequal pair");
+        }
+        if (report.locatedRows() < 1L || report.firstForkEntityId() != 100005L) {
+            failures.add("the differential did not locate the row the deviated arm changed");
+        }
+        if (scratchSeam.reads() != 1L) {
+            failures.add("the planning period's clock counter did not move when the seam was used");
+        }
+        return lines;
+    }
+
+    private static List<StateHasher.Slice> armRows(int count) {
+        List<StateHasher.Slice> rows = new ArrayList<>(count);
+        for (int index = 0; index < count; index++) {
+            rows.add(new StateHasher.Slice("world", "r0.0", 1L, 100000L + index, index, 64.0, 0.0,
+                0.0, 0.0, 0.1, 0.0, 0.0, 0L, 0L, 0L));
+        }
+        return rows;
+    }
+
+    private static DomainHash arm(String domainId, long tick, List<StateHasher.Slice> rows) {
+        return StateHasher.hash(domainId, tick, rows, HashWhitelist.bitexact());
     }
 
     private static List<String> siteCoverage(List<String> failures, WaitPointRegistry waits) {

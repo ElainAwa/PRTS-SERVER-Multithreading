@@ -49,10 +49,18 @@ public final class MergeSegment {
         }
     }
 
-    /** Merges one dispatched pass. */
+    /** Merges one dispatched pass, comparing the two arms for the domain alone. */
     public Frame merge(DispatchPass pass, long deadlineNanos, ArenaLedger arena,
                        DispatchReadings readings, DiffProbe probe, HashWhitelist whitelist,
                        String domainId, DispatchWriteBack writeBack) {
+        return merge(pass, deadlineNanos, arena, readings, probe, null, whitelist, domainId,
+            writeBack);
+    }
+
+    /** Merges one dispatched pass; the mirror carries the same pair to the module's differential. */
+    public Frame merge(DispatchPass pass, long deadlineNanos, ArenaLedger arena,
+                       DispatchReadings readings, DiffProbe probe, DiffProbe mirror,
+                       HashWhitelist whitelist, String domainId, DispatchWriteBack writeBack) {
         Thread owner = ownerThread;
         if (owner != null && owner != Thread.currentThread()) {
             foreignRuns++;
@@ -186,6 +194,9 @@ public final class MergeSegment {
         boolean equal = parallel.comparable() && serial.comparable()
             && parallel.value() == serial.value();
         probe.compare(parallel, serial);
+        if (mirror != null) {
+            mirror.compare(parallel, serial);
+        }
         frameNanos += System.nanoTime() - hashStartedAt;
         readings.noteComputeWait(waitNanos);
         readings.noteComputeFrame(frameNanos);
