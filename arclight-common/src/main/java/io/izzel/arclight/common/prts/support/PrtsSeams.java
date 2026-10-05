@@ -62,7 +62,16 @@ public final class PrtsSeams {
         waitSite("chunk_map", "PrtsChunkMapWaitSiteMixin", "net.minecraft.server.level.ChunkMap"),
         new Seam("pipeline_mailbox",
             "io.izzel.arclight.common.prts.fixes.pipeline.PrtsPipelineMailboxMixin",
-            "net.minecraft.util.thread.ProcessorMailbox", FIXES_CATEGORY));
+            "net.minecraft.util.thread.ProcessorMailbox", FIXES_CATEGORY),
+        new Seam("chunk_flow",
+            "io.izzel.arclight.common.prts.fixes.pipeline.PrtsChunkFlowMailboxMixin",
+            "net.minecraft.util.thread.ProcessorMailbox", FIXES_CATEGORY),
+        new Seam("entity_self_cost",
+            "io.izzel.arclight.common.prts.fixes.observation.PrtsEntitySelfCostMixin",
+            "net.minecraft.server.level.ServerLevel", FIXES_CATEGORY),
+        new Seam("block_entity_self_cost",
+            "io.izzel.arclight.common.prts.fixes.observation.PrtsBlockEntitySelfCostMixin",
+            "net.minecraft.world.level.Level", FIXES_CATEGORY));
 
     private static final Map<String, Boolean> DECISIONS = new ConcurrentHashMap<>();
     private static final Map<String, Boolean> APPLIED = new ConcurrentHashMap<>();

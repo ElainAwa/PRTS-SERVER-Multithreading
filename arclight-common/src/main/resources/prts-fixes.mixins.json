@@ -50,6 +50,9 @@
     "waitpoints.PrtsPlayerRespawnLogicWaitSiteMixin",
     "waitpoints.PrtsServerLevelWaitSiteMixin",
     "waitpoints.PrtsChunkMapWaitSiteMixin",
-    "pipeline.PrtsPipelineMailboxMixin"
+    "pipeline.PrtsPipelineMailboxMixin",
+    "pipeline.PrtsChunkFlowMailboxMixin",
+    "observation.PrtsEntitySelfCostMixin",
+    "observation.PrtsBlockEntitySelfCostMixin"
   ]
 }

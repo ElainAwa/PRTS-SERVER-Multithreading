@@ -10,6 +10,8 @@ import io.izzel.arclight.common.prts.kernel.codes.RejectTrigger;
 import io.izzel.arclight.common.prts.kernel.commit.CommitLog;
 import io.izzel.arclight.common.prts.kernel.commit.CommitRing;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
+import io.izzel.arclight.common.prts.support.PrtsChunkFlow;
+import io.izzel.arclight.common.prts.support.PrtsLoadProbe;
 import io.izzel.arclight.common.prts.support.PrtsPipelineRows;
 import io.izzel.arclight.common.prts.kernel.jobs.JobScheduler;
 import io.izzel.arclight.common.prts.kernel.jobs.ShareMeterPoint;
@@ -91,6 +93,7 @@ public final class KernelReadings {
         safety(lines, module);
         exits(lines, module);
         pipelineRows(lines, module);
+        loadObservation(lines, module);
         control(lines, module);
         return lines;
     }
@@ -527,6 +530,12 @@ public final class KernelReadings {
         add(lines, "plan.unknown_sites", store.unknownSites());
         add(lines, "plan.history", store.historySize() + "/" + store.historyCap());
         add(lines, "plan.unresolved_lookups", store.unresolvedLookups());
+        add(lines, "plan.nanos_last", module.planNanosLast());
+        add(lines, "plan.nanos_total", module.planNanosTotal());
+        add(lines, "plan.nanos_max", module.planNanosMax());
+        add(lines, "plan.nanos_builds", module.planNanosBuilds());
+        add(lines, "plan.nanos_per_build", module.planNanosBuilds() == 0L ? 0L
+            : module.planNanosTotal() / module.planNanosBuilds());
         add(lines, "plan.control_observed", control.observed() ? 1 : 0);
         add(lines, "plan.control_tick", control.tickIndex());
         add(lines, "plan.control_sequence", control.planSequence());
@@ -1116,6 +1125,119 @@ public final class KernelReadings {
 
     static String join(List<String> values) {
         return values.isEmpty() ? "-" : String.join(",", values);
+    }
+
+
+    /** The real-save observation face: the waits of the server thread inside and between ticks, the
+     * mailbox flow of the chunk pipeline, the identity of the save and the counters that mean work
+     * was dropped. Every field is an observation request; no gate, verdict or release reads one. */
+    private static void loadObservation(List<String> lines, KernelModule module) {
+        LoadThreadObserver watcher = module.loadThread();
+        double interval = LoadThreadObserver.SAMPLE_INTERVAL_MILLIS;
+        add(lines, "load.observation_only", 1);
+        add(lines, "load.probe_installed", PrtsLoadProbe.installed() ? 1 : 0);
+        add(lines, "load.sampler_running", watcher.installed() ? 1 : 0);
+        add(lines, "load.sampler_interval_ms", format(interval));
+        add(lines, "wait.park.thread", safe(watcher.threadName()));
+        add(lines, "wait.park.samples", watcher.samples());
+        add(lines, "wait.park.frames", watcher.parkFrames());
+        add(lines, "wait.park.ms", format(watcher.parkFrames() * interval));
+        add(lines, "wait.park.in_tick_frames", watcher.parkInTickFrames());
+        add(lines, "wait.park.in_tick_ms", ms(watcher.parkInTickNanos()));
+        add(lines, "wait.park.between_tick_frames", watcher.parkBetweenTickFrames());
+        add(lines, "wait.park.between_tick_ms", ms(watcher.parkBetweenTickNanos()));
+        add(lines, "wait.park.startup_frames", watcher.parkStartupFrames());
+        add(lines, "wait.park.startup_ms", ms(watcher.parkStartupNanos()));
+        add(lines, "wait.park.episodes", watcher.episodes());
+        add(lines, "wait.park.max_episode_ms", ms(watcher.maxEpisodeNanos()));
+        add(lines, "wait.dep.frames", watcher.dependencyFrames());
+        add(lines, "wait.dep.ms", format(watcher.dependencyFrames() * interval));
+        add(lines, "wait.queue.frames", watcher.queueFrames());
+        add(lines, "wait.queue.ms", format(watcher.queueFrames() * interval));
+        add(lines, "wait.lock.frames", watcher.lockFrames());
+        add(lines, "wait.lock.ms", format(watcher.lockFrames() * interval));
+        add(lines, "wait.other.frames", watcher.otherFrames());
+        add(lines, "wait.other.ms", format(watcher.otherFrames() * interval));
+        add(lines, "wait.axis.classify", "stack-signature");
+        add(lines, "stall.threshold_ms", ms(LoadThreadObserver.STALL_TICK_NANOS));
+        add(lines, "stall.windows", watcher.stallWindows());
+        add(lines, "stall.ticks", watcher.stallTicks());
+        add(lines, "stall.ms", ms(watcher.stallNanos()));
+        add(lines, "stall.max_ms", ms(watcher.stallMaxNanos()));
+        add(lines, "stall.frames", watcher.stallFrames());
+        add(lines, "stall.entered_tick", watcher.stallEnteredTick());
+        add(lines, "stall.in_window", watcher.stallInWindow() ? 1 : 0);
+        add(lines, "startup.first_tick_seen", watcher.firstTickSeen() ? 1 : 0);
+        add(lines, "startup.ms", watcher.firstTickSeen()
+            ? ms(watcher.firstTickNanos() - watcher.startedAtNanos()) : "0.000");
+        add(lines, "startup.stalled", watcher.startupStalled() ? 1 : 0);
+        long workerSamples = watcher.workerSamples();
+        add(lines, "worker.samples", workerSamples);
+        add(lines, "worker.busy_frames", watcher.workerBusyFrames());
+        add(lines, "worker.busy_pct", workerSamples == 0L ? "0.000"
+            : format(watcher.workerBusyFrames() * 100.0 / workerSamples));
+        add(lines, "worker.threads", watcher.workerThreads());
+        add(lines, "worker.threads_peak", watcher.workerThreadsPeak());
+        add(lines, "worker.name_filter", "Worker");
+        ChunkFlowObserver flow = module.chunkFlow();
+        add(lines, "chunk.flow.installed", PrtsChunkFlow.installed() ? 1 : 0);
+        add(lines, "chunk.flow.submitted", flow.submitted());
+        add(lines, "chunk.flow.completed", flow.completed());
+        add(lines, "chunk.flow.submitted_per_s", format(flow.submittedPerSecond()));
+        add(lines, "chunk.flow.completed_per_s", format(flow.completedPerSecond()));
+        add(lines, "chunk.flow.depth", flow.depth());
+        add(lines, "chunk.flow.depth_peak", flow.depthPeak());
+        add(lines, "chunk.flow.observed_ms", ms(flow.observedNanos()));
+        add(lines, "chunk.flow.mailboxes", join(flow.mailboxes()));
+        for (String mailbox : flow.mailboxes()) {
+            String prefix = "chunk.flow.mailbox." + flow.key(mailbox) + ".";
+            add(lines, prefix + "submitted", flow.submitted(mailbox));
+            add(lines, prefix + "completed", flow.completed(mailbox));
+            add(lines, prefix + "depth", flow.depth(mailbox));
+            add(lines, prefix + "depth_peak", flow.depthPeak(mailbox));
+        }
+        SaveIdentityObserver save = module.saveIdentity();
+        add(lines, "save.identity_installed", save.installed() ? 1 : 0);
+        List<SaveIdentityObserver.World> worlds = save.worlds();
+        add(lines, "save.worlds", worlds.size());
+        add(lines, "save.level_dat_md5", save.levelDatMd5());
+        add(lines, "save.manifest_hash", save.manifestHash());
+        add(lines, "save.manifest_files", save.manifestFiles());
+        add(lines, "save.manifest_bytes", save.manifestBytes());
+        add(lines, "save.manifest_cached", save.manifestTaken() ? 1 : 0);
+        for (SaveIdentityObserver.World world : worlds) {
+            String prefix = "save.world." + safe(world.id()) + ".";
+            add(lines, prefix + "id", safe(world.id()));
+            add(lines, prefix + "region_id", safe(world.regionId()));
+            add(lines, prefix + "players", world.players());
+            add(lines, prefix + "loaded_chunks", world.loadedChunks());
+        }
+        fallback(lines, module);
+    }
+
+    /** The counters that mean work did not reach its destination: an unbound, dropped or abandoned
+     * payload, a lost passthrough slot, a refused plan and a dropped commit. The total is a sum of
+     * those counters and not a verdict on any of them. */
+    private static void fallback(List<String> lines, KernelModule module) {
+        long unbound = module.guard().payloads().unboundCount();
+        long dropped = module.guard().payloads().droppedCount();
+        long abandoned = module.guard().payloads().abandonedCount();
+        long lost = module.passthrough().reading().lost();
+        long planFailures = module.plans().failures();
+        long commitDropped = module.commits().dropped();
+        add(lines, "fallback.observation_only", 1);
+        add(lines, "fallback.payload_unbound", unbound);
+        add(lines, "fallback.payload_dropped", dropped);
+        add(lines, "fallback.payload_abandoned", abandoned);
+        add(lines, "fallback.passthrough_lost", lost);
+        add(lines, "fallback.plan_failures", planFailures);
+        add(lines, "fallback.commit_dropped", commitDropped);
+        add(lines, "fallback.total", unbound + dropped + abandoned + lost + planFailures
+            + commitDropped);
+    }
+
+    static String ms(long nanos) {
+        return format(nanos / 1_000_000.0);
     }
 
     static String safe(String value) {

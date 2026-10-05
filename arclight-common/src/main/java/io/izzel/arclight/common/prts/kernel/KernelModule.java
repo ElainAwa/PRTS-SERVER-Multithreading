@@ -49,7 +49,12 @@ import io.izzel.arclight.common.prts.kernel.waitpoints.WaitProgress;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSite;
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
 import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteObserver;
+import io.izzel.arclight.common.prts.kernel.observe.ChunkFlowObserver;
+import io.izzel.arclight.common.prts.kernel.observe.LoadThreadObserver;
 import io.izzel.arclight.common.prts.kernel.observe.PipelineRowObserver;
+import io.izzel.arclight.common.prts.kernel.observe.SaveIdentityObserver;
+import io.izzel.arclight.common.prts.kernel.meter.SelfCostTap;
+import io.izzel.arclight.common.prts.support.PrtsSelfCosts;
 import io.izzel.arclight.common.prts.support.PrtsWaitSites;
 import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
 import org.apache.logging.log4j.LogManager;
@@ -131,6 +136,10 @@ public final class KernelModule {
     private final WaitSiteObserver waitSites = new WaitSiteObserver(waitPoints, this::tickIndex,
         KernelSettings::waitBoundMs);
     private final PipelineRowObserver pipelineRows = new PipelineRowObserver();
+    private final LoadThreadObserver loadThread = new LoadThreadObserver();
+    private final ChunkFlowObserver chunkFlow = new ChunkFlowObserver();
+    private final SaveIdentityObserver saveIdentity = new SaveIdentityObserver();
+    private final SelfCostTap selfCosts = new SelfCostTap();
     private final SharePlanner shares = new SharePlanner();
     private final BudgetStateMachine budgetStates = new BudgetStateMachine();
     private final DegradeLadder ladder = new DegradeLadder(KernelSettings::degradeActions);
@@ -155,6 +164,11 @@ public final class KernelModule {
     private int waitCrossStreak;
     private boolean waitSiteTapInstalled;
     private boolean pipelineRowTapInstalled;
+    private boolean loadProbeInstalled;
+    private long planNanosLast;
+    private long planNanosTotal;
+    private long planNanosMax;
+    private long planNanosBuilds;
     private long windowStartTick;
     private boolean started;
     private MeterWindow lastWindow;
@@ -209,11 +223,13 @@ public final class KernelModule {
             guard.refresh(false, false, false, tickIndex);
             syncWaitSiteTap(false);
             syncPipelineRowTap(false);
+            syncLoadProbe(false);
             shutdownDomains();
             return;
         }
         long startedAt = System.nanoTime();
         tickIndex++;
+        loadThread.noteTick(tickIndex);
         if (!started) {
             started = true;
             windowStartTick = tickIndex;
@@ -228,6 +244,7 @@ public final class KernelModule {
             KernelSettings.routeUnregisteredWrites(), tickIndex);
         syncWaitSiteTap(KernelSettings.waitRegistry());
         syncPipelineRowTap(true);
+        syncLoadProbe(true);
         if (KernelSettings.commitLog()) {
             // The log of this tick collects what the commit walk and the domain work reach. The
             // order it judges against comes from the plans of the recent ticks, so a write that was
@@ -302,6 +319,37 @@ public final class KernelModule {
     /** Removes the chunk pipeline row watcher. */
     public void removePipelineRowTap() {
         syncPipelineRowTap(false);
+    }
+
+    /** Installs the load observation: the tick boundary, the mailbox flow tap and the sampler. */
+    public void installLoadProbe() {
+        syncLoadProbe(KernelSettings.enabled());
+    }
+
+    /** Removes the load observation. */
+    public void removeLoadProbe() {
+        syncLoadProbe(false);
+    }
+
+    /** Remembers the server the tick source is, so the save identity can be named at a read. */
+    public void noteTickSource(net.minecraft.server.MinecraftServer server) {
+        saveIdentity.source(server);
+    }
+
+    private void syncLoadProbe(boolean wanted) {
+        if (loadProbeInstalled == wanted) {
+            return;
+        }
+        loadProbeInstalled = wanted;
+        if (wanted) {
+            loadThread.install();
+            chunkFlow.attach();
+            PrtsSelfCosts.install(selfCosts);
+        } else {
+            loadThread.uninstall();
+            chunkFlow.detach();
+            PrtsSelfCosts.install(null);
+        }
     }
 
     private void syncPipelineRowTap(boolean wanted) {
@@ -459,9 +507,17 @@ public final class KernelModule {
         }
         TickPlanStore.Feedback feedback = KernelSettings.planFeedback() ? plans.feedback()
             : TickPlanStore.Feedback.none();
+        long freezeStartedAt = System.nanoTime();
         TickPlanPlanner.Result result = TickPlanPlanner.plan(new TickPlanPlanner.Input(tickIndex,
             planSequence, worldGeneration, worlds, domainIds, previousControl, jobIntake.take(),
             shares.lastTable(), KernelSettings.jobQueueCap(), feedback));
+        long freezeNanos = System.nanoTime() - freezeStartedAt;
+        planNanosLast = freezeNanos;
+        planNanosTotal += freezeNanos;
+        planNanosBuilds++;
+        if (freezeNanos > planNanosMax) {
+            planNanosMax = freezeNanos;
+        }
         if (result.ok()) {
             plans.publish(result.plan());
         } else {
@@ -731,6 +787,41 @@ public final class KernelModule {
         return pipelineRows;
     }
 
+    /** The thread-state sampler of the load windows. */
+    public LoadThreadObserver loadThread() {
+        return loadThread;
+    }
+
+    /** The mailbox flow counters of the chunk pipeline. */
+    public ChunkFlowObserver chunkFlow() {
+        return chunkFlow;
+    }
+
+    /** The identity of the save the run was made on. */
+    public SaveIdentityObserver saveIdentity() {
+        return saveIdentity;
+    }
+
+    /** How long the last plan build took, in nanoseconds. */
+    public long planNanosLast() {
+        return planNanosLast;
+    }
+
+    /** How long every plan build took together, in nanoseconds. */
+    public long planNanosTotal() {
+        return planNanosTotal;
+    }
+
+    /** The longest plan build so far, in nanoseconds. */
+    public long planNanosMax() {
+        return planNanosMax;
+    }
+
+    /** How many plan builds were timed. */
+    public long planNanosBuilds() {
+        return planNanosBuilds;
+    }
+
     /** The bounded intake a domain hands its declarations to. */
     public JobIntake jobIntake() {
         return jobIntake;
@@ -817,6 +908,13 @@ public final class KernelModule {
         for (KernelDomain domain : domains) {
             domain.reset();
         }
+        loadThread.reset();
+        chunkFlow.reset();
+        saveIdentity.reset();
+        planNanosLast = 0L;
+        planNanosTotal = 0L;
+        planNanosMax = 0L;
+        planNanosBuilds = 0L;
         arena.reset();
         passthrough.reset();
         arms.reset();
