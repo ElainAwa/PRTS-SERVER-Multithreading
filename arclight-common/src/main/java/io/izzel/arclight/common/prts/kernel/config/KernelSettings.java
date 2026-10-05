@@ -56,6 +56,13 @@ public final class KernelSettings {
     /** Answers a wait no row covers with a refusal code; off, such a wait is only counted. */
     public static final String REFUSE_UNREGISTERED_WAITS = "refuse-unregistered-waits";
 
+    /** Lets a rung of the resource ladder execute its action; off, a rung that was reached only
+     * publishes its counters. */
+    public static final String DEGRADE_ACTIONS = "degrade-actions";
+
+    /** Run of clean ticks a rung needs before it may return; a declared value, not a measured one. */
+    public static final String DEGRADE_ROLLBACK_TICKS = "degrade-rollback-ticks";
+
     /** Number of retries one attempt carries before a refusal is final. */
     public static final String RETRY_BUDGET = "retry-budget";
 
@@ -137,6 +144,14 @@ public final class KernelSettings {
 
     public static boolean refuseUnregisteredWaits() {
         return feature(REFUSE_UNREGISTERED_WAITS);
+    }
+
+    public static boolean degradeActions() {
+        return feature(DEGRADE_ACTIONS);
+    }
+
+    public static int degradeRollbackTicks() {
+        return clamp(number(DEGRADE_ROLLBACK_TICKS), 1, 600);
     }
 
     public static boolean writePathGuard() {

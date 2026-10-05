@@ -3,11 +3,9 @@ package io.izzel.arclight.common.prts.kernel.shares;
 
 import io.izzel.arclight.common.prts.kernel.codes.DegradeLevel;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
-import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
 
 import java.util.ArrayList;
 import java.util.EnumMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -53,13 +51,27 @@ public final class SharePlanner {
     /** Recomputes the budget conservation of a table. */
     public ConservationCheck checkConservation(ShareTable table) {
         if (table == null) {
-            return new ConservationCheck(false, "table", 0.0);
+            return ConservationCheck.unplanned();
         }
-        double planned = table.sumSharesMs() + table.reserve().reserveMs() + table.hostOverheadMs();
-        if (planned <= table.eBudgetMs()) {
-            return ConservationCheck.holds();
+        double shares = table.sumSharesMs();
+        double reserve = table.reserve().reserveMs();
+        double host = table.hostOverheadMs();
+        double planned = shares + reserve + host;
+        double budget = table.eBudgetMs();
+        double slack = budget - planned;
+        ConservationCheck.Verdict verdict;
+        String item = "";
+        if (slack < 0.0) {
+            verdict = ConservationCheck.Verdict.OVER;
+            item = "time budget";
+        } else if (slack <= budget * ConservationCheck.CRITICAL_SLACK_FRACTION) {
+            verdict = ConservationCheck.Verdict.CRITICAL;
+            item = "slack";
+        } else {
+            verdict = ConservationCheck.Verdict.OK;
         }
-        return new ConservationCheck(false, "time budget", planned - table.eBudgetMs());
+        return new ConservationCheck(true, verdict, item, shares, reserve, host, planned, budget,
+            slack);
     }
 
     /** Counts an overrun and answers what a degradation would do. */
@@ -121,27 +133,12 @@ public final class SharePlanner {
         };
     }
 
-    /** Converts the per-world tick totals of the timer into per-class sums. */
+    /** Converts the per-world tick totals of the timer into per-class sums. The conversion itself
+     * lives with the metering reading, so the table and the readout can never disagree about what a
+     * class cost. */
     public static Map<String, EnumMap<ShareClass, Double>> usedFromTickTotals(
         Map<String, long[]> tickTotals) {
-        Map<String, EnumMap<ShareClass, Double>> used = new LinkedHashMap<>();
-        if (tickTotals == null) {
-            return used;
-        }
-        SelfClass[] classes = SelfClass.values();
-        for (Map.Entry<String, long[]> entry : tickTotals.entrySet()) {
-            EnumMap<ShareClass, Double> perClass = new EnumMap<>(ShareClass.class);
-            long[] totals = entry.getValue();
-            for (int index = 0; index < classes.length && index < totals.length; index++) {
-                ShareClass shareClass = ShareClass.of(classes[index]);
-                if (shareClass == null || totals[index] == 0L) {
-                    continue;
-                }
-                perClass.merge(shareClass, totals[index] / 1_000_000.0, Double::sum);
-            }
-            used.put(entry.getKey(), perClass);
-        }
-        return used;
+        return ShareMeter.usedFromTickTotals(tickTotals);
     }
 
     public ShareTable lastTable() {
@@ -214,11 +211,36 @@ public final class SharePlanner {
 
     /** The result of recomputing the budget conservation of one table. The check is an equation, not a
      * memory: the sum of every class share, the reserved column and the fixed host overhead has to fit
-     * into the budget of the tick. */
-    public record ConservationCheck(boolean ok, String item, double overByMs) {
+     * into the budget of the tick, and all three terms are carried so the equation can be recomputed
+     * from the reading alone. */
+    public record ConservationCheck(boolean planned, Verdict verdict, String item, double sumSharesMs,
+                                    double reserveMs, double hostOverheadMs, double plannedMs,
+                                    double eBudgetMs, double slackMs) {
 
-        public static ConservationCheck holds() {
-            return new ConservationCheck(true, "", 0.0);
+        /** The band a plan sits in. A plan that fits but leaves this fraction of the budget or less
+         * is called out before it crosses into the over band. The fraction is a declared value, not
+         * a measured one. */
+        public static final double CRITICAL_SLACK_FRACTION = 0.10;
+
+        public enum Verdict {
+            OK,
+            CRITICAL,
+            OVER
+        }
+
+        public boolean ok() {
+            return planned && verdict != Verdict.OVER;
+        }
+
+        public double overByMs() {
+            return slackMs < 0.0 ? -slackMs : 0.0;
+        }
+
+        /** A table that was never planned: no term exists, and the reading says so instead of
+         * publishing zeroes that would look like a plan of zero cost. */
+        public static ConservationCheck unplanned() {
+            return new ConservationCheck(false, Verdict.OK, "unplanned", 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0);
         }
     }
 }

@@ -242,6 +242,7 @@ public final class PrtsConfigManager {
         features.put("share-table", true);
         features.put("wait-registry", true);
         features.put("refuse-unregistered-waits", false);
+        features.put("degrade-actions", false);
         features.put("write-path-guard", true);
         features.put("commit-intents", false);
         features.put("route-unregistered-writes", false);
@@ -262,6 +263,7 @@ public final class PrtsConfigManager {
         numbers.put("intent-queue-cap", new IntSetting(256, 1, 65536));
         numbers.put("commit-budget", new IntSetting(64, 1, 4096));
         numbers.put("wait-bound-ms", new IntSetting(50, 1, 60000));
+        numbers.put("degrade-rollback-ticks", new IntSetting(3, 1, 600));
         numbers.put("retry-budget", new IntSetting(2, 0, 16));
         numbers.put("worker-count", new IntSetting(0, 0, 8));
         numbers.put("worker-queue-cap", new IntSetting(32, 1, 256));

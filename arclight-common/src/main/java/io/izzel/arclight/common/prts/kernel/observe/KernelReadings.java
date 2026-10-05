@@ -8,6 +8,7 @@ import io.izzel.arclight.common.prts.kernel.codes.DegradeLevel;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.codes.RejectTrigger;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
+import io.izzel.arclight.common.prts.kernel.degrade.DegradeLadder;
 import io.izzel.arclight.common.prts.kernel.DomainReadings;
 import io.izzel.arclight.common.prts.kernel.KernelDomain;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
@@ -16,9 +17,11 @@ import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.MeterWindow;
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.SelfRow;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers;
+import io.izzel.arclight.common.prts.kernel.shares.BudgetStateMachine;
 import io.izzel.arclight.common.prts.kernel.shares.SharePlanner.ConservationCheck;
 import io.izzel.arclight.common.prts.kernel.shares.OverrunRecord;
 import io.izzel.arclight.common.prts.kernel.shares.ShareClass;
+import io.izzel.arclight.common.prts.kernel.shares.ShareMeter;
 import io.izzel.arclight.common.prts.kernel.shares.SharePlanner;
 import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
 import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard.WriteDecision;
@@ -37,9 +40,11 @@ import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteReadings;
 import io.izzel.arclight.common.prts.support.PrtsSeams;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /** Renders the full readout of the four pieces. The fields are observation requests: they are
  * published so an operator and the tests can see them, but they are not part of an approved
@@ -59,6 +64,8 @@ public final class KernelReadings {
         tokens(lines, module);
         rejectCodes(lines, module);
         shareBudget(lines, module);
+        budgetStates(lines, module);
+        degradation(lines, module);
         selfTimers(lines, module);
         domainReadings(lines, module);
         waitPoints(lines, module);
@@ -75,6 +82,8 @@ public final class KernelReadings {
         add(lines, "kernel.write_path_guard", KernelSettings.writePathGuard());
         add(lines, "kernel.commit_intents", KernelSettings.commitIntents());
         add(lines, "kernel.route_unregistered_writes", KernelSettings.routeUnregisteredWrites());
+        add(lines, "kernel.degrade_actions", KernelSettings.degradeActions());
+        add(lines, "kernel.degrade_rollback_ticks", KernelSettings.degradeRollbackTicks());
         add(lines, "kernel.intent_commit_mode", module.commitSegment().mode());
         add(lines, "kernel.write_path_tap_installed",
             io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps.installed() ? 1 : 0);
@@ -281,6 +290,18 @@ public final class KernelReadings {
         add(lines, "budget.overrun_dims", 2);
         add(lines, "budget.conservation_ok", conservation.ok() ? 1 : 0);
         add(lines, "budget.conservation_over_ms", format(conservation.overByMs()));
+        add(lines, "budget.conservation_planned", conservation.planned() ? 1 : 0);
+        add(lines, "budget.conservation_state", conservation.verdict().name().toLowerCase(Locale.ROOT));
+        add(lines, "budget.conservation_item",
+            conservation.item().isEmpty() ? "none" : conservation.item());
+        add(lines, "budget.conservation_term_shares_ms", format(conservation.sumSharesMs()));
+        add(lines, "budget.conservation_term_reserve_ms", format(conservation.reserveMs()));
+        add(lines, "budget.conservation_term_host_ms", format(conservation.hostOverheadMs()));
+        add(lines, "budget.conservation_planned_ms", format(conservation.plannedMs()));
+        add(lines, "budget.conservation_slack_ms", format(conservation.slackMs()));
+        add(lines, "budget.conservation_critical_slack_ms", format(conservation.eBudgetMs()
+            * ConservationCheck.CRITICAL_SLACK_FRACTION));
+        add(lines, "budget.conservation_reserve_borrowed", shares.reserveBorrowedCount());
         add(lines, "budget.e_budget_ms", format(KernelSettings.eBudgetMs()));
         add(lines, "budget.host_overhead_ms", format(KernelSettings.hostOverheadMs()));
         add(lines, "budget.sum_shares_ms", table == null ? "0.000" : format(table.sumSharesMs()));
@@ -333,6 +354,131 @@ public final class KernelReadings {
         for (String world : shares.overrunWorlds()) {
             add(lines, "budget.over_world_" + safe(world), shares.worldOverrunCount(world));
         }
+        metering(lines, module);
+    }
+
+    /** The per-class metering of one tick: one row per share class, zero values included, the timer
+     * rows that fed it and the timer rows that feed no class. */
+    private static void metering(List<String> lines, KernelModule module) {
+        ShareMeter.TickReading metering = module.metering();
+        add(lines, "budget.meter.enabled", metering != null && metering.timerEnabled() ? 1 : 0);
+        add(lines, "budget.meter.classes", metering == null ? 0 : metering.rowCount());
+        add(lines, "budget.meter.expected_classes", ShareClass.rowCount());
+        add(lines, "budget.meter.complete", metering != null && metering.complete() ? 1 : 0);
+        add(lines, "budget.meter.unmapped", metering == null ? "-" : selfKeys(metering.unmapped()));
+        add(lines, "budget.meter.missing", metering == null ? "-" : classKeys(metering.missing()));
+        for (ShareClass shareClass : ShareClass.values()) {
+            ShareMeter.ClassReading row = metering == null ? null : metering.row(shareClass);
+            add(lines, "budget.meter." + shareClass.key() + ".used_ms",
+                row == null ? "0.000" : format(row.usedMs()));
+            add(lines, "budget.meter." + shareClass.key() + ".sample_nanos",
+                row == null ? 0L : row.sampleNanos());
+            add(lines, "budget.meter." + shareClass.key() + ".sources",
+                row == null ? "-" : selfKeys(row.sources()));
+        }
+    }
+
+    /** The two states of the budget and the four conditions the control plane judges them by. */
+    private static void budgetStates(List<String> lines, KernelModule module) {
+        BudgetStateMachine.Decision decision = module.budgetState();
+        BudgetStateMachine machine = module.budgetStates();
+        add(lines, "budget.state.observation_only", 1);
+        add(lines, "budget.state.phase", BudgetStateMachine.key(machine.phase()));
+        add(lines, "budget.state.reason", decision == null ? "unplanned" : decision.reason());
+        add(lines, "budget.state.margins_within", decision == null ? -1
+            : (decision.marginsWithin() ? 1 : 0));
+        add(lines, "budget.state.wait_bound_clean", decision == null ? -1
+            : (decision.waitBoundClean() ? 1 : 0));
+        add(lines, "budget.state.reserve_within", decision == null ? -1
+            : (decision.reserveWithin() ? 1 : 0));
+        add(lines, "budget.state.conservation_holds", decision == null ? -1
+            : (decision.conservationHolds() ? 1 : 0));
+        add(lines, "budget.state.overrun_hits", decision == null ? 0L : decision.overrunHits());
+        add(lines, "budget.state.entered_tick", decision == null ? 0L : decision.enteredTick());
+        add(lines, "budget.state.normal_ticks", decision == null ? 0L : decision.normalTicks());
+        add(lines, "budget.state.degraded_ticks", decision == null ? 0L : decision.degradedTicks());
+        add(lines, "budget.state.entered", decision == null ? 0L : decision.enteredCount());
+        add(lines, "budget.state.left", decision == null ? 0L : decision.leftCount());
+    }
+
+    /** The five rungs of the resource ladder: the four items each carries, the three counters and
+     * the return gate. */
+    private static void degradation(List<String> lines, KernelModule module) {
+        DegradeLadder ladder = module.ladder();
+        DegradeLadder.Sign sign = ladder.sign();
+        add(lines, "degrade.observation_only", 1);
+        add(lines, "degrade.levels", ladder.rungs().size());
+        add(lines, "degrade.actions_enabled", sign.actionsEnabled() ? 1 : 0);
+        add(lines, "degrade.rollback_ticks", KernelSettings.degradeRollbackTicks());
+        add(lines, "degrade.deepest", sign.deepest().name().toLowerCase(Locale.ROOT));
+        add(lines, "degrade.entered_tick", sign.enteredTick());
+        add(lines, "degrade.ticks_observed", sign.ticksObserved());
+        add(lines, "degrade.ticks_clean", sign.cleanTicks());
+        add(lines, "degrade.skipped_total", sign.skippedCount());
+        add(lines, "degrade.entered_total", ladder.enteredTotal());
+        add(lines, "degrade.effective_total", ladder.effectiveTotal());
+        add(lines, "degrade.returned_total", ladder.returnedTotal());
+        add(lines, "degrade.effective_zero",
+            ladder.enteredTotal() > 0L && ladder.effectiveTotal() == 0L ? 1 : 0);
+        for (DegradeLadder.Rung rung : ladder.rungs()) {
+            String prefix = "degrade.row." + key(rung.level()) + ".";
+            add(lines, prefix + "code", rung.code().text());
+            add(lines, prefix + "trigger", rung.trigger());
+            add(lines, prefix + "action", rung.action());
+            add(lines, prefix + "signal", rung.signal());
+            add(lines, prefix + "return", rung.returnCondition());
+        }
+        for (DegradeLadder.Counters counters : ladder.counters()) {
+            String prefix = "degrade.row." + key(counters.level()) + ".";
+            add(lines, prefix + "entered", counters.entered());
+            add(lines, prefix + "effective", counters.effective());
+            add(lines, prefix + "returned", counters.returned());
+            add(lines, prefix + "in_force", counters.level() == sign.deepest() ? 1 : 0);
+        }
+        for (DegradeLadder.Rung rung : ladder.rungs()) {
+            DegradeLadder.Gate gate = ladder.gate(rung.level(), KernelSettings.degradeRollbackTicks());
+            String prefix = "degrade.gate." + key(rung.level()) + ".";
+            add(lines, prefix + "window_ticks", gate.windowTicks());
+            add(lines, prefix + "clean_ticks", gate.cleanTicks());
+            add(lines, prefix + "second_bound", gate.secondBound() ? 1 : 0);
+            add(lines, prefix + "second_source", gate.secondSource());
+            add(lines, prefix + "second_satisfied", gate.secondSatisfied() ? 1 : 0);
+            add(lines, prefix + "ready", gate.ready() ? 1 : 0);
+            add(lines, prefix + "blocked_by", gate.blockedBy());
+        }
+        add(lines, "degrade.skipping_code", RejectCode.TICK_BUDGET_EXHAUSTED.text());
+        for (RejectCode code : ladderCodes(ladder)) {
+            add(lines, "degrade.code." + code.text(), ladder.codeCount(code));
+        }
+    }
+
+    private static Set<RejectCode> ladderCodes(DegradeLadder ladder) {
+        Set<RejectCode> codes = new LinkedHashSet<>();
+        for (DegradeLadder.Rung rung : ladder.rungs()) {
+            codes.add(rung.code());
+        }
+        codes.add(RejectCode.TICK_BUDGET_EXHAUSTED);
+        return codes;
+    }
+
+    private static String key(DegradeLevel level) {
+        return level == null ? "none" : level.name().toLowerCase(Locale.ROOT);
+    }
+
+    private static String selfKeys(List<SelfClass> classes) {
+        List<String> keys = new ArrayList<>(classes.size());
+        for (SelfClass selfClass : classes) {
+            keys.add(selfClass.key());
+        }
+        return join(keys);
+    }
+
+    private static String classKeys(List<ShareClass> classes) {
+        List<String> keys = new ArrayList<>(classes.size());
+        for (ShareClass shareClass : classes) {
+            keys.add(shareClass.key());
+        }
+        return join(keys);
     }
 
     private static String degradeLevel(SharePlanner shares) {
@@ -507,6 +653,7 @@ public final class KernelReadings {
         add(lines, "control.reserve_used_ms", format(frame.reserveUsedMs()));
         add(lines, "control.reserve_remaining_ms", format(frame.reserveRemainingMs()));
         add(lines, "control.degrade_state", frame.degradeState());
+        add(lines, "control.degrade_entered_tick", frame.degradeEnteredTick());
     }
 
     static void add(List<String> lines, String name, Object value) {

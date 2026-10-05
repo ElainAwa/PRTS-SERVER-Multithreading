@@ -5,15 +5,19 @@ import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
 import io.izzel.arclight.common.prts.kernel.auth.WriteAuthority;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
+import io.izzel.arclight.common.prts.kernel.codes.DegradeLevel;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
+import io.izzel.arclight.common.prts.kernel.degrade.DegradeLadder;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.MeterWindow;
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers;
+import io.izzel.arclight.common.prts.kernel.shares.BudgetStateMachine;
 import io.izzel.arclight.common.prts.kernel.shares.SharePlanner.ConservationCheck;
 import io.izzel.arclight.common.prts.kernel.shares.OverrunRecord;
 import io.izzel.arclight.common.prts.kernel.shares.ShareClass;
+import io.izzel.arclight.common.prts.kernel.shares.ShareMeter;
 import io.izzel.arclight.common.prts.kernel.shares.SharePlanner;
 import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
 import io.izzel.arclight.common.prts.kernel.sites.IntentPayloadDirectory;
@@ -29,6 +33,7 @@ import org.apache.logging.log4j.Logger;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /** The driver reclaims expired tokens, plans the time budget, turns overruns into records that are
@@ -36,13 +41,15 @@ import java.util.Map;
  * has passed. */
 public final class KernelModule {
 
-    /** The control plane of one tick: the five values the next tick would plan with. */
+    /** The control plane of one tick: the five values the next tick would plan with. The state, the
+     * rung it names and the tick that state was entered are read-only: nothing in this build plans
+     * from them. */
     public record ControlFrame(long tickIndex, double minMarginMs, long overrunHits,
                                long waitBoundHits, double reserveUsedMs, double reserveRemainingMs,
-                               String degradeState) {
+                               String degradeState, long degradeEnteredTick) {
 
         public static ControlFrame empty() {
-            return new ControlFrame(0L, 0.0, 0L, 0L, 0.0, 0.0, "none");
+            return new ControlFrame(0L, 0.0, 0L, 0L, 0.0, 0.0, "none", 0L);
         }
     }
 
@@ -67,6 +74,8 @@ public final class KernelModule {
     private final WaitSiteObserver waitSites = new WaitSiteObserver(waitPoints, this::tickIndex,
         KernelSettings::waitBoundMs);
     private final SharePlanner shares = new SharePlanner();
+    private final BudgetStateMachine budgetStates = new BudgetStateMachine();
+    private final DegradeLadder ladder = new DegradeLadder(KernelSettings::degradeActions);
 
     private final ArenaLedger arena = new ArenaLedger();
     private final List<KernelDomain> domains = new ArrayList<>();
@@ -75,7 +84,9 @@ public final class KernelModule {
     private long windowStartTick;
     private boolean started;
     private MeterWindow lastWindow;
-    private ConservationCheck lastConservation = ConservationCheck.holds();
+    private ConservationCheck lastConservation = ConservationCheck.unplanned();
+    private ShareMeter.TickReading lastMetering;
+    private BudgetStateMachine.Decision lastDecision;
     private ControlFrame control = ControlFrame.empty();
 
     private KernelModule() {
@@ -86,6 +97,12 @@ public final class KernelModule {
         waitPoints.progress().bind("xdomain", "intent.queue_depth", intents::depth);
         waitPoints.progress().bind("worldlife", "write.world_epochs_changes",
             () -> guard.worldEpochs().epochChanges());
+        // The two return conditions whose producer already exists are bound to the same values the
+        // readout publishes; the other three rungs stay unbound and say so instead of reporting a
+        // condition nothing observes.
+        ladder.bindSecondCondition(DegradeLevel.B1, "budget.margin.ai", this::aiMarginWithin);
+        ladder.bindSecondCondition(DegradeLevel.B5, "budget.conservation_ok",
+            () -> lastConservation.ok());
     }
 
     public static KernelModule instance() {
@@ -178,9 +195,10 @@ public final class KernelModule {
     }
 
     private void planBudget(List<String> worldIds) {
-        Map<String, EnumMap<ShareClass, Double>> used = KernelSettings.selfTimers()
-            ? SharePlanner.usedFromTickTotals(SelfTimers.consumeTickTotals())
+        Map<String, long[]> totals = KernelSettings.selfTimers() ? SelfTimers.consumeTickTotals()
             : Map.of();
+        Map<String, EnumMap<ShareClass, Double>> used = ShareMeter.usedFromTickTotals(totals);
+        lastMetering = ShareMeter.read(tickIndex, KernelSettings.selfTimers(), totals);
         ShareTable table = shares.plan(worldIds == null ? List.of() : worldIds, tickIndex, used);
         lastConservation = shares.checkConservation(table);
         double minMargin = Double.POSITIVE_INFINITY;
@@ -192,13 +210,48 @@ public final class KernelModule {
             }
             OverrunRecord record = shares.record(row, "runtime", tickIndex);
             shares.recordWouldDegrade(record);
+            ladder.noteEntered(record.wouldDegradeLevel(), tickIndex);
             overruns++;
         }
         if (minMargin == Double.POSITIVE_INFINITY) {
             minMargin = 0.0;
         }
+        lastDecision = budgetStates.judge(tickIndex, table, overruns, waitPoints.waitOverrunCount(),
+            lastConservation);
+        ladder.noteTick(lastDecision.degraded());
         control = new ControlFrame(tickIndex, minMargin, overruns, waitPoints.waitOverrunCount(),
-            reserveUsedMs(), shares.lastTable().reserve().remainingMs(), "none");
+            reserveUsedMs(), table.reserve().remainingMs(), degradeStateKey(),
+            lastDecision.enteredTick());
+    }
+
+    /** The state the control plane publishes: the phase, and the rung the ladder stands on when it
+     * is a degraded tick. */
+    private String degradeStateKey() {
+        BudgetStateMachine.Decision decision = lastDecision;
+        if (decision == null) {
+            return "none";
+        }
+        String phase = BudgetStateMachine.key(decision.phase());
+        DegradeLevel deepest = ladder.sign().deepest();
+        if (decision.degraded() && deepest != DegradeLevel.NONE) {
+            return phase + ":" + deepest.name().toLowerCase(Locale.ROOT);
+        }
+        return phase;
+    }
+
+    /** No AI row of the newest table is over its share. Used as the second return condition of a
+     * rung, so it answers about the newest table and not about the tick that entered the rung. */
+    private boolean aiMarginWithin() {
+        ShareTable table = shares.lastTable();
+        if (table == null) {
+            return false;
+        }
+        for (ShareTable.ShareRow row : table.rows()) {
+            if (row.shareClass() == ShareClass.AI && row.overrun()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void publishWindowIfDue() {
@@ -305,6 +358,24 @@ public final class KernelModule {
         return shares;
     }
 
+    public BudgetStateMachine budgetStates() {
+        return budgetStates;
+    }
+
+    public DegradeLadder ladder() {
+        return ladder;
+    }
+
+    /** The state the newest tick was judged into; null before the first planned tick. */
+    public BudgetStateMachine.Decision budgetState() {
+        return lastDecision;
+    }
+
+    /** The per-class metering of the newest tick; null before the first planned tick. */
+    public ShareMeter.TickReading metering() {
+        return lastMetering;
+    }
+
     public ConservationCheck conservation() {
         return lastConservation;
     }
@@ -328,7 +399,11 @@ public final class KernelModule {
         windowStartTick = 0L;
         started = false;
         lastWindow = null;
-        lastConservation = ConservationCheck.holds();
+        lastConservation = ConservationCheck.unplanned();
+        lastMetering = null;
+        lastDecision = null;
+        budgetStates.reset();
+        ladder.reset();
         control = ControlFrame.empty();
     }
 }

@@ -6,6 +6,9 @@ import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.MeterWindow;
 import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
+import io.izzel.arclight.common.prts.kernel.degrade.DegradeLadder;
+import io.izzel.arclight.common.prts.kernel.shares.BudgetStateMachine;
+import io.izzel.arclight.common.prts.kernel.shares.SharePlanner.ConservationCheck;
 import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
 import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
 import io.izzel.arclight.common.prts.kernel.waitpoints.CoverageReport;
@@ -17,6 +20,7 @@ import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 /** The compact kernel section the status command shows. The section is a summary, not a second
  * source of numbers: every value here is the same value the full export publishes, so a reader can
@@ -117,6 +121,21 @@ public final class KernelStatusLines {
                 + " reserve=" + KernelReadings.format(table.reserve().reserveMs()) + "/"
                 + KernelReadings.format(table.reserve().usedMs()));
         }
+        ConservationCheck conservation = module.conservation();
+        BudgetStateMachine.Decision state = module.budgetState();
+        DegradeLadder ladder = module.ladder();
+        lines.add("[PRTS] kernel: budget state="
+            + (state == null ? "unplanned" : BudgetStateMachine.key(state.phase()))
+            + " reason=" + (state == null ? "unplanned" : state.reason())
+            + " conservation=" + conservation.verdict().name().toLowerCase(Locale.ROOT)
+            + " planned=" + KernelReadings.format(conservation.plannedMs())
+            + "/" + KernelReadings.format(conservation.eBudgetMs())
+            + " ladder=" + ladder.sign().deepest().name().toLowerCase(Locale.ROOT)
+            + " rungs=" + ladder.rungs().size()
+            + " entered=" + ladder.enteredTotal()
+            + " effective=" + ladder.effectiveTotal()
+            + " rollback_ticks=" + KernelSettings.degradeRollbackTicks()
+            + " observation_only=1");
         CoverageReport coverage = module.waitPoints().reportCoverage();
         lines.add("[PRTS] kernel: wait points registered=" + coverage.registeredTotal()
             + " unregistered=" + coverage.unregistered()

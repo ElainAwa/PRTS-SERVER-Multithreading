@@ -12,8 +12,10 @@ import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLevel;
 import io.izzel.arclight.common.prts.kernel.auth.WriteVerdict;
 import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
+import io.izzel.arclight.common.prts.kernel.codes.DegradeLevel;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.codes.RejectTrigger;
+import io.izzel.arclight.common.prts.kernel.degrade.DegradeLadder;
 import io.izzel.arclight.common.prts.kernel.intent.CommitOrder;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentPayload;
@@ -26,9 +28,13 @@ import io.izzel.arclight.common.prts.kernel.sites.ThreadOrigin;
 import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard;
 import io.izzel.arclight.common.prts.kernel.waitpoints.SiteInventory.SiteRegisterResult;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSite;
+import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
+import io.izzel.arclight.common.prts.kernel.shares.BudgetStateMachine;
 import io.izzel.arclight.common.prts.kernel.shares.OverrunRecord;
 import io.izzel.arclight.common.prts.kernel.shares.ShareClass;
+import io.izzel.arclight.common.prts.kernel.shares.ShareMeter;
 import io.izzel.arclight.common.prts.kernel.shares.SharePlanner;
+import io.izzel.arclight.common.prts.kernel.shares.SharePlanner.ConservationCheck;
 import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
 import io.izzel.arclight.common.prts.kernel.waitpoints.CoverageReport;
 import io.izzel.arclight.common.prts.kernel.waitpoints.Dec19Elements;
@@ -230,6 +236,7 @@ public final class KernelSelfCheck {
         lines.addAll(siteCoverage(failures, waits));
         lines.addAll(waitSiteMatrix(failures, tick));
         lines.addAll(waitContractMatrix(failures, tick));
+        lines.addAll(budgetGovernanceMatrix(failures, tick));
         lines.addAll(domainSelfChecks(failures, tick));
 
         lines.add("selftest.failures=" + failures.size());
@@ -658,6 +665,166 @@ public final class KernelSelfCheck {
             failures.add("a wait over the bound was not counted against its row");
         }
         return lines;
+    }
+
+
+    /** The budget side: the conservation equation with all three of its terms, the two states and
+     * their conditions, the per-class metering and the five rungs of the resource ladder. Every
+     * fixture builds its own objects, so the live counters are never touched. */
+    private static List<String> budgetGovernanceMatrix(List<String> failures, long tick) {
+        List<String> lines = new ArrayList<>();
+        SharePlanner planner = new SharePlanner();
+        ShareTable table = planner.plan(List.of("world-a", "world-b"), tick, Map.of());
+        ConservationCheck planned = planner.checkConservation(table);
+        ConservationCheck critical = planner.checkConservation(
+            squeeze(table, planned.plannedMs() + 0.5));
+        ConservationCheck over = planner.checkConservation(squeeze(table, planned.plannedMs() - 1.0));
+        ConservationCheck unplanned = planner.checkConservation(null);
+        lines.add("selftest.budget_terms=" + fmt(planned.sumSharesMs()) + "/"
+            + fmt(planned.reserveMs()) + "/" + fmt(planned.hostOverheadMs()));
+        lines.add("selftest.budget_planned=" + fmt(planned.plannedMs()) + "/"
+            + fmt(planned.eBudgetMs()) + "/" + fmt(planned.slackMs()));
+        lines.add("selftest.budget_verdicts=" + planned.verdict() + "/" + critical.verdict() + "/"
+            + over.verdict() + "/" + unplanned.planned());
+        lines.add("selftest.budget_over_ms=" + fmt(over.overByMs()));
+        if (planned.verdict() != ConservationCheck.Verdict.OK
+            || critical.verdict() != ConservationCheck.Verdict.CRITICAL
+            || over.verdict() != ConservationCheck.Verdict.OVER || unplanned.planned()) {
+            failures.add("the conservation equation did not publish its three bands");
+        }
+        if (Math.abs(planned.plannedMs()
+            - (planned.sumSharesMs() + planned.reserveMs() + planned.hostOverheadMs())) > 1.0e-9) {
+            failures.add("the planned total is not the sum of its three terms");
+        }
+
+        BudgetStateMachine machine = new BudgetStateMachine();
+        BudgetStateMachine.Decision normal = machine.judge(tick, table, 0L, 0L, planned);
+        BudgetStateMachine.Decision overrun = machine.judge(tick + 1L, table, 1L, 0L, planned);
+        BudgetStateMachine.Decision waitHit = machine.judge(tick + 2L, table, 0L, 1L, planned);
+        BudgetStateMachine.Decision broken = machine.judge(tick + 3L, table, 0L, 0L, over);
+        BudgetStateMachine.Decision drawn = machine.judge(tick + 4L, drawnReserve(table), 0L, 0L,
+            planned);
+        BudgetStateMachine.Decision back = machine.judge(tick + 5L, table, 0L, 0L, planned);
+        lines.add("selftest.budget_phase=" + normal.phase() + "/" + overrun.phase() + "/"
+            + waitHit.phase() + "/" + broken.phase() + "/" + drawn.phase() + "/" + back.phase());
+        lines.add("selftest.budget_reason=" + overrun.reason() + "|" + back.reason());
+        lines.add("selftest.budget_transitions=" + back.enteredCount() + "/" + back.leftCount()
+            + " entered_tick=" + overrun.enteredTick());
+        if (normal.phase() != BudgetStateMachine.Phase.NORMAL
+            || !overrun.degraded() || !waitHit.degraded() || !broken.degraded()
+            || !drawn.degraded() || back.phase() != BudgetStateMachine.Phase.NORMAL) {
+            failures.add("the two budget states did not follow their four conditions");
+        }
+        if (back.enteredCount() != 1L || back.leftCount() != 1L) {
+            failures.add("the two budget states did not count their transitions");
+        }
+        if (overrun.enteredTick() != tick + 1L) {
+            failures.add("the degraded state did not publish the tick it was entered on");
+        }
+
+        long[] totals = new long[SelfClass.values().length];
+        totals[SelfClass.ENTITY.ordinal()] = 2_000_000L;
+        totals[SelfClass.AI.ordinal()] = 500_000L;
+        ShareMeter.TickReading reading = ShareMeter.read(tick, true, Map.of("world-a", totals));
+        int zeroRows = 0;
+        for (ShareMeter.ClassReading row : reading.rows()) {
+            if (row.usedMs() == 0.0) {
+                zeroRows++;
+            }
+        }
+        lines.add("selftest.meter_rows=" + reading.rowCount() + "/" + ShareClass.rowCount()
+            + " complete=" + (reading.complete() ? 1 : 0));
+        lines.add("selftest.meter_entity_ms=" + fmt(reading.row(ShareClass.ENTITY).usedMs())
+            + " ai_ms=" + fmt(reading.row(ShareClass.AI).usedMs()) + " zero_rows=" + zeroRows);
+        lines.add("selftest.meter_unmapped=" + reading.unmapped().size());
+        if (!reading.complete() || reading.rowCount() != ShareClass.rowCount()) {
+            failures.add("the per-class metering does not carry one row per share class");
+        }
+        if (Math.abs(reading.row(ShareClass.ENTITY).usedMs() - 2.0) > 1.0e-9
+            || Math.abs(reading.row(ShareClass.AI).usedMs() - 0.5) > 1.0e-9) {
+            failures.add("the per-class metering did not convert the samples of its source rows");
+        }
+        if (reading.row(ShareClass.GRAPH) == null || reading.row(ShareClass.GRAPH).usedMs() != 0.0) {
+            failures.add("a share class without samples did not publish a zero row");
+        }
+        if (reading.unmapped().size() != 3) {
+            failures.add("the timer rows that feed no share class were not named");
+        }
+
+        DegradeLadder ladder = new DegradeLadder(() -> false);
+        DegradeLadder.Advance advance = ladder.noteEntered(DegradeLevel.B3, tick);
+        int completeRungs = 0;
+        for (DegradeLadder.Rung rung : ladder.rungs()) {
+            if (!rung.trigger().isBlank() && !rung.action().isBlank() && !rung.signal().isBlank()
+                && !rung.returnCondition().isBlank() && rung.code() != null) {
+                completeRungs++;
+            }
+        }
+        lines.add("selftest.ladder_rungs=" + ladder.rungs().size() + "/" + completeRungs);
+        lines.add("selftest.ladder_walked=" + advance.entered().size() + " skipped="
+            + (advance.skipped() ? 1 : 0) + " deepest=" + advance.reached());
+        lines.add("selftest.ladder_entered_b3=" + ladder.counters(DegradeLevel.B3).entered());
+        lines.add("selftest.ladder_effective_off=" + (ladder.noteEffective(DegradeLevel.B3) ? 1 : 0)
+            + " effective_total=" + ladder.effectiveTotal());
+        lines.add("selftest.ladder_code_skip="
+            + ladder.codeCount(RejectCode.TICK_BUDGET_EXHAUSTED));
+        if (ladder.rungs().size() != 5 || completeRungs != 5) {
+            failures.add("a rung of the resource ladder is missing one of its four items");
+        }
+        if (advance.entered().size() != 3 || !advance.skipped()
+            || ladder.counters(DegradeLevel.B1).entered() != 1L
+            || ladder.counters(DegradeLevel.B2).entered() != 1L
+            || ladder.counters(DegradeLevel.B3).entered() != 1L) {
+            failures.add("the resource ladder did not walk its order one rung at a time");
+        }
+        if (ladder.effectiveTotal() != 0L
+            || ladder.codeCount(RejectCode.TICK_BUDGET_EXHAUSTED) == 0L) {
+            failures.add("a rung that may not act reported an action, or a skip raised no code");
+        }
+        ladder.noteTick(false);
+        ladder.noteTick(false);
+        DegradeLadder.Gate early = ladder.gate(DegradeLevel.B3, 3);
+        ladder.noteTick(false);
+        DegradeLadder.Gate unbound = ladder.gate(DegradeLevel.B3, 3);
+        ladder.bindSecondCondition(DegradeLevel.B3, "fixture.deferred_batches", () -> true);
+        DegradeLadder.Gate ready = ladder.gate(DegradeLevel.B3, 3);
+        lines.add("selftest.ladder_gate=" + early.blockedBy() + "/" + unbound.blockedBy() + "/"
+            + ready.blockedBy() + "/" + (ready.ready() ? 1 : 0));
+        if (early.ready() || unbound.ready() || !ready.ready()) {
+            failures.add("the return gate did not keep a rung until both of its conditions held");
+        }
+        DegradeLadder acting = new DegradeLadder(() -> true);
+        acting.noteEntered(DegradeLevel.B1, tick);
+        boolean effective = acting.noteEffective(DegradeLevel.B1);
+        boolean returned = acting.noteReturned(DegradeLevel.B1);
+        lines.add("selftest.ladder_acting=" + (effective ? 1 : 0) + "/" + (returned ? 1 : 0)
+            + " deepest=" + acting.sign().deepest() + " total=" + acting.effectiveTotal());
+        if (!effective || !returned || acting.sign().deepest() != DegradeLevel.NONE) {
+            failures.add("a ladder allowed to act did not count its action or its return");
+        }
+        ladder.noteTick(true);
+        lines.add("selftest.ladder_ticks=" + ladder.sign().ticksObserved() + "/"
+            + ladder.sign().cleanTicks());
+        if (ladder.sign().cleanTicks() != 0L) {
+            failures.add("a tick that carried an overrun did not end the clean run");
+        }
+        return lines;
+    }
+
+    private static ShareTable squeeze(ShareTable table, double budgetMs) {
+        return new ShareTable(table.tickIndex(), table.rows(), table.reserve(),
+            table.hostOverheadMs(), budgetMs);
+    }
+
+    private static ShareTable drawnReserve(ShareTable table) {
+        double drawn = Math.max(1.0, table.reserve().reserveMs());
+        return new ShareTable(table.tickIndex(), table.rows(),
+            new ShareTable.ReserveRow(drawn, drawn, Map.of()), table.hostOverheadMs(),
+            table.eBudgetMs());
+    }
+
+    private static String fmt(double value) {
+        return String.format(Locale.ROOT, "%.3f", value);
     }
 
     /** Runs the self checks the installed domains contribute; a domain that is not installed
