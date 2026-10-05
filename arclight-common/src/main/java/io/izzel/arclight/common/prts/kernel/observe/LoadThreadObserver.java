@@ -59,6 +59,9 @@ public final class LoadThreadObserver implements PrtsLoadProbe.Probe {
     /** Two watchdog samples of the same tick are at least this far apart. */
     public static final long WATCHDOG_EVERY_NANOS = 10_000_000_000L;
     public static final int WATCHDOG_DEPTH = 24;
+    /** Frames a watchdog sample keeps: the caller chain of the busy path must survive, so a
+     * sample can name the method that called the loop it caught instead of only the loop. */
+    public static final int WATCHDOG_FRAMES = WATCHDOG_DEPTH;
     public static final int WATCHDOG_RING = 8;
     private static final int WORKER_EVERY = 25;
 
@@ -483,7 +486,7 @@ public final class LoadThreadObserver implements PrtsLoadProbe.Probe {
         StringBuilder builder = new StringBuilder();
         int kept = 0;
         for (StackTraceElement frame : frames) {
-            if (kept == 6) {
+            if (kept == WATCHDOG_FRAMES) {
                 break;
             }
             if (kept > 0) {
