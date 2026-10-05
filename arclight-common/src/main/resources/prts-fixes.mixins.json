@@ -49,6 +49,7 @@
     "waitpoints.PrtsStructureManagerWaitSitesMixin",
     "waitpoints.PrtsPlayerRespawnLogicWaitSiteMixin",
     "waitpoints.PrtsServerLevelWaitSiteMixin",
-    "waitpoints.PrtsChunkMapWaitSiteMixin"
+    "waitpoints.PrtsChunkMapWaitSiteMixin",
+    "pipeline.PrtsPipelineMailboxMixin"
   ]
 }

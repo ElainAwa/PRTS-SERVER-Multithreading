@@ -10,6 +10,7 @@ import io.izzel.arclight.common.prts.kernel.codes.RejectTrigger;
 import io.izzel.arclight.common.prts.kernel.commit.CommitLog;
 import io.izzel.arclight.common.prts.kernel.commit.CommitRing;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
+import io.izzel.arclight.common.prts.support.PrtsPipelineRows;
 import io.izzel.arclight.common.prts.kernel.jobs.JobScheduler;
 import io.izzel.arclight.common.prts.kernel.jobs.ShareMeterPoint;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
@@ -89,6 +90,7 @@ public final class KernelReadings {
         contractLayers(lines, module);
         safety(lines, module);
         exits(lines, module);
+        pipelineRows(lines, module);
         control(lines, module);
         return lines;
     }
@@ -1063,6 +1065,33 @@ public final class KernelReadings {
         add(lines, "exit.control_window_feeds", exits.controlWindowFeeds());
         add(lines, "exit.judgement_write_dependencies", exits.judgementWriteDependencies());
         add(lines, "exit.missing_total", exits.missingTotal());
+    }
+
+    /** The chunk pipeline's own rows, counted where the pipeline runs them. Observation only: the
+     * two class rows the batch interface of the chunk pipeline would carry, the widened host row
+     * total they are read against, and the mailbox split behind them. */
+    private static void pipelineRows(List<String> lines, KernelModule module) {
+        PipelineRowObserver rows = module.pipelineRows();
+        add(lines, "pipeline.row_tap_installed", PrtsPipelineRows.installed() ? 1 : 0);
+        for (String bucket : PipelineRowObserver.buckets()) {
+            add(lines, "pipeline.mailbox." + bucket + ".tasks", rows.tasks(bucket));
+            add(lines, "pipeline.mailbox." + bucket + ".task_ms",
+                format(rows.taskNanos(bucket) / 1_000_000.0));
+            add(lines, "pipeline.mailbox." + bucket + ".rounds", rows.rounds(bucket));
+        }
+        add(lines, "pipeline.mailbox.tasks_total", rows.tasksTotal());
+        add(lines, "pipeline.mailbox.rounds_total", rows.roundsTotal());
+        long worldgen = rows.tasks(PipelineRowObserver.WORLDGEN);
+        long light = rows.tasks(PipelineRowObserver.LIGHT);
+        long writes = module.guard().counters().attemptsAt(WritePath.BLOCK_WRITE);
+        add(lines, "pipeline.row.cls01", worldgen);
+        add(lines, "pipeline.row.cls01_ms",
+            format(rows.taskNanos(PipelineRowObserver.WORLDGEN) / 1_000_000.0));
+        add(lines, "pipeline.row.cls03", light);
+        add(lines, "pipeline.row.cls03_ms",
+            format(rows.taskNanos(PipelineRowObserver.LIGHT) / 1_000_000.0));
+        add(lines, "pipeline.row.cls02", writes);
+        add(lines, "pipeline.row.widened_total", worldgen + light + writes);
     }
 
     private static void control(List<String> lines, KernelModule module) {

@@ -59,7 +59,10 @@ public final class PrtsSeams {
             "net.minecraft.world.level.PlayerRespawnLogic"),
         waitSite("server_level", "PrtsServerLevelWaitSiteMixin",
             "net.minecraft.server.level.ServerLevel"),
-        waitSite("chunk_map", "PrtsChunkMapWaitSiteMixin", "net.minecraft.server.level.ChunkMap"));
+        waitSite("chunk_map", "PrtsChunkMapWaitSiteMixin", "net.minecraft.server.level.ChunkMap"),
+        new Seam("pipeline_mailbox",
+            "io.izzel.arclight.common.prts.fixes.pipeline.PrtsPipelineMailboxMixin",
+            "net.minecraft.util.thread.ProcessorMailbox", FIXES_CATEGORY));
 
     private static final Map<String, Boolean> DECISIONS = new ConcurrentHashMap<>();
     private static final Map<String, Boolean> APPLIED = new ConcurrentHashMap<>();

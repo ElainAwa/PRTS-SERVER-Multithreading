@@ -49,6 +49,7 @@ import io.izzel.arclight.common.prts.kernel.waitpoints.WaitProgress;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSite;
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
 import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteObserver;
+import io.izzel.arclight.common.prts.kernel.observe.PipelineRowObserver;
 import io.izzel.arclight.common.prts.support.PrtsWaitSites;
 import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
 import org.apache.logging.log4j.LogManager;
@@ -129,6 +130,7 @@ public final class KernelModule {
         KernelSettings::refuseUnregisteredWaits);
     private final WaitSiteObserver waitSites = new WaitSiteObserver(waitPoints, this::tickIndex,
         KernelSettings::waitBoundMs);
+    private final PipelineRowObserver pipelineRows = new PipelineRowObserver();
     private final SharePlanner shares = new SharePlanner();
     private final BudgetStateMachine budgetStates = new BudgetStateMachine();
     private final DegradeLadder ladder = new DegradeLadder(KernelSettings::degradeActions);
@@ -152,6 +154,7 @@ public final class KernelModule {
     private long tickIndex;
     private int waitCrossStreak;
     private boolean waitSiteTapInstalled;
+    private boolean pipelineRowTapInstalled;
     private long windowStartTick;
     private boolean started;
     private MeterWindow lastWindow;
@@ -205,6 +208,7 @@ public final class KernelModule {
         if (!KernelSettings.enabled()) {
             guard.refresh(false, false, false, tickIndex);
             syncWaitSiteTap(false);
+            syncPipelineRowTap(false);
             shutdownDomains();
             return;
         }
@@ -223,6 +227,7 @@ public final class KernelModule {
             KernelSettings.enforceUnregisteredWrites(),
             KernelSettings.routeUnregisteredWrites(), tickIndex);
         syncWaitSiteTap(KernelSettings.waitRegistry());
+        syncPipelineRowTap(true);
         if (KernelSettings.commitLog()) {
             // The log of this tick collects what the commit walk and the domain work reach. The
             // order it judges against comes from the plans of the recent ticks, so a write that was
@@ -287,6 +292,28 @@ public final class KernelModule {
     /** Removes the wait observation watcher. */
     public void removeWaitSiteTap() {
         syncWaitSiteTap(false);
+    }
+
+    /** Installs the chunk pipeline row watcher; counting only, nothing the pipeline runs changes. */
+    public void installPipelineRowTap() {
+        syncPipelineRowTap(KernelSettings.enabled());
+    }
+
+    /** Removes the chunk pipeline row watcher. */
+    public void removePipelineRowTap() {
+        syncPipelineRowTap(false);
+    }
+
+    private void syncPipelineRowTap(boolean wanted) {
+        if (pipelineRowTapInstalled == wanted) {
+            return;
+        }
+        pipelineRowTapInstalled = wanted;
+        if (wanted) {
+            pipelineRows.attach();
+        } else {
+            pipelineRows.detach();
+        }
     }
 
     /** A tool that borrows the seam - the self check is one - hands it back here instead of
@@ -697,6 +724,11 @@ public final class KernelModule {
 
     public WaitSiteObserver waitSites() {
         return waitSites;
+    }
+
+    /** The counters of the chunk pipeline's own mailboxes: observation only, never a decision. */
+    public PipelineRowObserver pipelineRows() {
+        return pipelineRows;
     }
 
     /** The bounded intake a domain hands its declarations to. */
