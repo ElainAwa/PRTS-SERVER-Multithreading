@@ -269,6 +269,10 @@ public final class PrtsConfigManager {
         features.put("tick-plan", false);
         features.put("job-graph", false);
         features.put("commit-log", false);
+        features.put("safety-net", false);
+        features.put("safety-degrade", false);
+        features.put("dual-exits", false);
+        features.put("plan-feedback", false);
         return features;
     }
 
@@ -293,6 +297,9 @@ public final class PrtsConfigManager {
         numbers.put("job-queue-cap", new IntSetting(256, 1, 4096));
         numbers.put("commit-ring-cap", new IntSetting(512, 1, 65536));
         numbers.put("plan-history-cap", new IntSetting(8, 1, 64));
+        numbers.put("safety-zero-effect-ticks", new IntSetting(100, 1, 6000));
+        numbers.put("safety-cascade-cap", new IntSetting(3, 1, 64));
+        numbers.put("exit-window-ticks", new IntSetting(20, 1, 6000));
         return numbers;
     }
 

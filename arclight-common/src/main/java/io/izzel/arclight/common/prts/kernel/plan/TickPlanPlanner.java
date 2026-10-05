@@ -27,7 +27,8 @@ public final class TickPlanPlanner {
     /** What one build was given. */
     public record Input(long tickIndex, long planSequence, long worldSetGeneration,
                         List<String> worlds, List<String> declaredDomains, TickPlanStore.Control control,
-                        List<JobDeclaration> declarations, ShareTable shareTable, int queueCap) {
+                        List<JobDeclaration> declarations, ShareTable shareTable, int queueCap,
+                        TickPlanStore.Feedback feedback) {
 
         public Input {
             worlds = List.copyOf(worlds);
@@ -65,6 +66,14 @@ public final class TickPlanPlanner {
             // The five values of the previous tick are an input, not a suggestion: a planning period
             // that has none refuses to build instead of planning from zeroes nobody measured.
             return Result.refused(RejectCode.COUNTER_MISSING, "control frame");
+        }
+        TickPlanStore.Feedback feedback = input.feedback() == null ? TickPlanStore.Feedback.none()
+            : input.feedback();
+        if (feedback.observed() && !feedback.tickScoped()) {
+            // The control plane takes the readings of one tick. A frame taken over a window is
+            // refused here rather than folded into a plan, so the two exits cannot be crossed at
+            // the one point where the crossing would matter.
+            return Result.refused(RejectCode.COUNTER_MISSING, "feedback scope " + feedback.scope());
         }
         if (input.shareTable() == null) {
             return Result.refused(RejectCode.COUNTER_MISSING, "share table");
@@ -115,11 +124,11 @@ public final class TickPlanPlanner {
             }
         }
 
-        List<TickPlan.DomainMode> modes = modes(input, graph, unknownSites);
-        long hash = contentHash(input, graph, commitOrder, modes, unknownSites);
+        List<TickPlan.DomainMode> modes = modes(input, graph, unknownSites, feedback);
+        long hash = contentHash(input, graph, commitOrder, modes, unknownSites, feedback);
         TickPlan plan = new TickPlan(input.tickIndex(), input.planSequence(),
             input.worldSetGeneration(), input.worlds(), graph, topologicalOrder, commitOrder,
-            input.shareTable(), modes, unknownSites, graph.splitIntents(), hash);
+            input.shareTable(), modes, unknownSites, graph.splitIntents(), hash, feedback);
         return new Result(plan, null, "");
     }
 
@@ -137,7 +146,8 @@ public final class TickPlanPlanner {
         return new ArrayList<>(ordered);
     }
 
-    private static List<TickPlan.DomainMode> modes(Input input, JobGraph graph, int unknownSites) {
+    private static List<TickPlan.DomainMode> modes(Input input, JobGraph graph, int unknownSites,
+                                                  TickPlanStore.Feedback feedback) {
         Map<String, List<JobGraph.Node>> byPair = new LinkedHashMap<>();
         for (JobGraph.Node node : graph.nodes()) {
             byPair.computeIfAbsent(node.worldId() + "/" + node.domainId(),
@@ -152,6 +162,12 @@ public final class TickPlanPlanner {
         boolean degraded = input.control() != null
             && input.control().degradeState() != null
             && input.control().degradeState().startsWith("degraded");
+        // The two readings the planning period used to publish and nobody consumed: a declared pair
+        // is held conservative for one tick after the previous plan was refused and for one tick
+        // after it met an unknown site. The carry is driven by the tick deltas, so it fades by
+        // itself; the totals and the rate travel with the plan as values it was planned against.
+        boolean carryUnknown = feedback.observed() && feedback.tickUnknownSites() > 0L;
+        boolean carryDegraded = feedback.observed() && feedback.tickFailures() > 0L;
         List<TickPlan.DomainMode> modes = new ArrayList<>();
         for (String world : worldOrder(input.worlds(), graph)) {
             for (String domain : sortedDomains) {
@@ -169,9 +185,14 @@ public final class TickPlanPlanner {
                     serial |= node.siteClass() == JobDeclaration.SiteClass.SERIAL;
                     shareClass = node.shareClass();
                 }
-                if (unknown) {
+                if (carryUnknown || unknown) {
                     modes.add(new TickPlan.DomainMode(world, domain, TickPlan.Mode.CONSERVATIVE,
                         TickPlan.Reason.UNKNOWN_SITE));
+                    continue;
+                }
+                if (carryDegraded) {
+                    modes.add(new TickPlan.DomainMode(world, domain, TickPlan.Mode.CONSERVATIVE,
+                        TickPlan.Reason.DEGRADED));
                     continue;
                 }
                 if (serial) {
@@ -203,7 +224,8 @@ public final class TickPlanPlanner {
     /** The content hash of one plan: a fold over the identity of the plan and of every step it
      * orders. Two plans of the same input fold to the same value without either being kept. */
     private static long contentHash(Input input, JobGraph graph, List<TickPlan.CommitStep> steps,
-                                    List<TickPlan.DomainMode> modes, int unknownSites) {
+                                    List<TickPlan.DomainMode> modes, int unknownSites,
+                                    TickPlanStore.Feedback feedback) {
         long hash = OFFSET_BASIS;
         hash = fold(hash, Long.toString(input.tickIndex()));
         hash = fold(hash, Long.toString(input.planSequence()));
@@ -227,6 +249,11 @@ public final class TickPlanPlanner {
                 + ":" + mode.reason());
         }
         hash = fold(hash, "u:" + unknownSites);
+        if (feedback.observed()) {
+            hash = fold(hash, "f:" + feedback.scope() + ":" + feedback.tickIndex() + ":"
+                + feedback.tickFailures() + ":" + feedback.tickUnknownSites() + ":"
+                + feedback.totalFailures() + ":" + feedback.totalUnknownSites());
+        }
         return hash;
     }
 

@@ -48,7 +48,7 @@ class TickPlanPlannerTest {
 
     private static TickPlanPlanner.Input input(JobDeclaration.SiteClass siteClass, long sequence) {
         return new TickPlanPlanner.Input(10L, sequence, 1L, List.of(WORLD), List.of("entity"),
-            control(), declarations(siteClass), table(10L), 64);
+            control(), declarations(siteClass), table(10L), 64, TickPlanStore.Feedback.none());
     }
 
     @Test
@@ -90,7 +90,8 @@ class TickPlanPlannerTest {
     @Test
     void aWorldWithoutDeclarationsIsDeferred() {
         TickPlanPlanner.Result result = TickPlanPlanner.plan(new TickPlanPlanner.Input(10L, 2L, 1L,
-            List.of(WORLD), List.of("entity"), control(), List.of(), table(10L), 64));
+            List.of(WORLD), List.of("entity"), control(), List.of(), table(10L), 64,
+            TickPlanStore.Feedback.none()));
 
         assertTrue(result.ok());
         // An empty job set still freezes a plan: the modes of the pairs nobody declared are part of
@@ -121,13 +122,16 @@ class TickPlanPlannerTest {
         TickPlanPlanner.Input base = input(JobDeclaration.SiteClass.PARALLEL, 2L);
         TickPlanPlanner.Result noControl = TickPlanPlanner.plan(new TickPlanPlanner.Input(10L, 2L, 1L,
             List.of(WORLD), List.of("entity"), TickPlanStore.Control.missing(), base.declarations(),
-            base.shareTable(), 64));
+            base.shareTable(), 64, TickPlanStore.Feedback.none()));
         TickPlanPlanner.Result noTable = TickPlanPlanner.plan(new TickPlanPlanner.Input(10L, 2L, 1L,
-            List.of(WORLD), List.of("entity"), control(), base.declarations(), null, 64));
+            List.of(WORLD), List.of("entity"), control(), base.declarations(), null, 64,
+            TickPlanStore.Feedback.none()));
         TickPlanPlanner.Result rolledBack = TickPlanPlanner.plan(new TickPlanPlanner.Input(10L, 2L, 0L,
-            List.of(WORLD), List.of("entity"), control(), base.declarations(), base.shareTable(), 64));
+            List.of(WORLD), List.of("entity"), control(), base.declarations(), base.shareTable(),
+            64, TickPlanStore.Feedback.none()));
         TickPlanPlanner.Result regressed = TickPlanPlanner.plan(new TickPlanPlanner.Input(10L, 1L, 1L,
-            List.of(WORLD), List.of("entity"), control(), base.declarations(), base.shareTable(), 64));
+            List.of(WORLD), List.of("entity"), control(), base.declarations(), base.shareTable(),
+            64, TickPlanStore.Feedback.none()));
 
         assertEquals(RejectCode.COUNTER_MISSING, noControl.code());
         assertEquals(RejectCode.COUNTER_MISSING, noTable.code());
@@ -144,7 +148,8 @@ class TickPlanPlannerTest {
             "region", List.of(entity, lighting), List.of(entity, lighting), ShareClass.ENTITY,
             JobDeclaration.SiteClass.PARALLEL, 0, 4);
         TickPlanPlanner.Result result = TickPlanPlanner.plan(new TickPlanPlanner.Input(10L, 2L, 1L,
-            List.of(WORLD), List.of("entity"), control(), List.of(split), table(10L), 64));
+            List.of(WORLD), List.of("entity"), control(), List.of(split), table(10L), 64,
+            TickPlanStore.Feedback.none()));
 
         assertTrue(result.ok());
         assertEquals(2, result.plan().commitOrder().size());

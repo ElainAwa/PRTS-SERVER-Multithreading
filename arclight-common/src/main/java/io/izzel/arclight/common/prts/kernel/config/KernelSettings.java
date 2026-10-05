@@ -84,6 +84,27 @@ public final class KernelSettings {
     /** How many recent plans the commit log may resolve the order of a commit against. */
     public static final String PLAN_HISTORY_CAP = "plan-history-cap";
 
+    /** Runs the four detectors of the safety net and counts what they see; off. */
+    public static final String SAFETY_NET = "safety-net";
+
+    /** Lets a violation become an escalation candidate the net reports; off, it is only counted. */
+    public static final String SAFETY_DEGRADE = "safety-degrade";
+
+    /** How long the zero-effect detector waits before it judges a rung of the ladder. */
+    public static final String SAFETY_ZERO_EFFECT_TICKS = "safety-zero-effect-ticks";
+
+    /** How many violations of one kind in one world a tick may carry before the cascade stops. */
+    public static final String SAFETY_CASCADE_CAP = "safety-cascade-cap";
+
+    /** Publishes the control frame and the judgement frame of one tick as two separate exits; off. */
+    public static final String DUAL_EXITS = "dual-exits";
+
+    /** How many ticks the judgement exit folds into one of its windows; a declared value. */
+    public static final String EXIT_WINDOW_TICKS = "exit-window-ticks";
+
+    /** Lets the next plan consume the planning period's own readings of the previous tick; off. */
+    public static final String PLAN_FEEDBACK = "plan-feedback";
+
     /** Turns the parallel dispatch of the first domain on; off, so nothing is dispatched. */
     public static final String DISPATCH_PARALLEL = "dispatch-parallel";
 
@@ -127,6 +148,12 @@ public final class KernelSettings {
     public static final int COMMIT_RING_CAP_MAX = 65536;
 
     public static final int PLAN_HISTORY_CAP_MAX = 64;
+
+    public static final int SAFETY_ZERO_EFFECT_TICKS_MAX = 6000;
+
+    public static final int EXIT_WINDOW_TICKS_MAX = 6000;
+
+    public static final int SAFETY_CASCADE_CAP_MAX = 64;
 
     private KernelSettings() {
     }
@@ -299,6 +326,34 @@ public final class KernelSettings {
 
     public static int planHistoryCap() {
         return clamp(number(PLAN_HISTORY_CAP), 1, PLAN_HISTORY_CAP_MAX);
+    }
+
+    public static boolean safetyNet() {
+        return feature(SAFETY_NET);
+    }
+
+    public static boolean safetyDegrade() {
+        return feature(SAFETY_DEGRADE);
+    }
+
+    public static int safetyZeroEffectTicks() {
+        return clamp(number(SAFETY_ZERO_EFFECT_TICKS), 1, SAFETY_ZERO_EFFECT_TICKS_MAX);
+    }
+
+    public static int safetyCascadeCap() {
+        return clamp(number(SAFETY_CASCADE_CAP), 1, SAFETY_CASCADE_CAP_MAX);
+    }
+
+    public static boolean dualExits() {
+        return feature(DUAL_EXITS);
+    }
+
+    public static int exitWindowTicks() {
+        return clamp(number(EXIT_WINDOW_TICKS), 1, EXIT_WINDOW_TICKS_MAX);
+    }
+
+    public static boolean planFeedback() {
+        return feature(PLAN_FEEDBACK);
     }
 
     private static boolean feature(String name) {

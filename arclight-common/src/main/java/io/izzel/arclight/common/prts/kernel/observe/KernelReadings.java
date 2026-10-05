@@ -15,6 +15,9 @@ import io.izzel.arclight.common.prts.kernel.jobs.ShareMeterPoint;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlanStore;
 import io.izzel.arclight.common.prts.kernel.degrade.DegradeLadder;
+import io.izzel.arclight.common.prts.kernel.exits.DualExits;
+import io.izzel.arclight.common.prts.kernel.safety.SafetyNet;
+import io.izzel.arclight.common.prts.kernel.safety.ZeroEffectDetector;
 import io.izzel.arclight.common.prts.kernel.DomainReadings;
 import io.izzel.arclight.common.prts.kernel.KernelDomain;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
@@ -76,6 +79,8 @@ public final class KernelReadings {
         domainReadings(lines, module);
         waitPoints(lines, module);
         contractLayers(lines, module);
+        safety(lines, module);
+        exits(lines, module);
         control(lines, module);
         return lines;
     }
@@ -415,6 +420,31 @@ public final class KernelReadings {
         add(lines, "plan.control_wait_bound_hits", control.waitBoundHits());
         add(lines, "plan.control_reserve_remaining_ms", format(control.reserveRemainingMs()));
         add(lines, "plan.control_degrade_state", control.degradeState());
+        TickPlanStore.Feedback feedback = store.feedback();
+        add(lines, "plan.feedback_enabled", KernelSettings.planFeedback() ? 1 : 0);
+        add(lines, "plan.feedback_taken", feedback.observed() ? 1 : 0);
+        add(lines, "plan.feedback_scope", feedback.scope());
+        add(lines, "plan.feedback_taken_tick", feedback.tickIndex());
+        add(lines, "plan.feedback_taken_sequence", feedback.planSequence());
+        add(lines, "plan.feedback_tick_failures", feedback.tickFailures());
+        add(lines, "plan.feedback_tick_unknown_sites", feedback.tickUnknownSites());
+        add(lines, "plan.feedback_total_failures", feedback.totalFailures());
+        add(lines, "plan.feedback_total_unknown_sites", feedback.totalUnknownSites());
+        add(lines, "plan.feedback_taken_failure_rate", format(feedback.failureRate()));
+        TickPlanStore.Feedback consumed = plan == null ? TickPlanStore.Feedback.none()
+            : plan.feedback();
+        add(lines, "plan.consumed", consumed.observed() ? 1 : 0);
+        add(lines, "plan.consumed_scope", consumed.scope());
+        add(lines, "plan.consumed_tick", consumed.tickIndex());
+        add(lines, "plan.consumed_sequence", consumed.planSequence());
+        add(lines, "plan.consumed_failure_rate", format(consumed.failureRate()));
+        add(lines, "plan.consumed_unknown_sites", consumed.totalUnknownSites());
+        add(lines, "plan.consumed_tick_failures", consumed.tickFailures());
+        add(lines, "plan.consumed_tick_unknown_sites", consumed.tickUnknownSites());
+        long carried = plan == null || !consumed.observed() ? -1L
+            : plan.tickIndex() - consumed.tickIndex();
+        add(lines, "plan.feedback_carried_ticks", carried);
+        add(lines, "plan.feedback_stale", carried > 1L ? 1 : 0);
         if (plan == null) {
             add(lines, "plan.tick", 0L);
             add(lines, "plan.sequence", 0L);
@@ -813,6 +843,102 @@ public final class KernelReadings {
             add(lines, prefix + "forced_convergence_candidates",
                 readings.convergenceCandidates(index));
         }
+    }
+
+    /** The safety net: the five kinds on both dimensions, the cascade of the newest window and the
+     * zero-effect verdict of every rung. Every field is an observation request; no gate reads one. */
+    private static void safety(List<String> lines, KernelModule module) {
+        SafetyNet net = module.safety();
+        ZeroEffectDetector zeroEffect = module.zeroEffect();
+        SafetyNet.Cascade cascade = net.cascade();
+        add(lines, "safety.observation_only", 1);
+        add(lines, "safety.enabled", KernelSettings.safetyNet() ? 1 : 0);
+        add(lines, "safety.kinds", SafetyNet.ViolationKind.kindCount());
+        add(lines, "safety.escalation_switch", net.switchEnabled() ? 1 : 0);
+        add(lines, "safety.escalation_off_by_default", KernelSettings.safetyDegrade() ? 0 : 1);
+        add(lines, "safety.cascade_cap", cascade.cap());
+        add(lines, "safety.cascade_depth", cascade.depth());
+        add(lines, "safety.cascade_steps", cascade.steps());
+        add(lines, "safety.cascade_capped", cascade.capped());
+        add(lines, "safety.cascade_stopped", cascade.stopped());
+        add(lines, "safety.violations_total", net.total());
+        add(lines, "safety.evidence_empty", net.evidenceEmpty());
+        add(lines, "safety.escalated", net.escalated());
+        for (SafetyNet.KindCounts counts : net.kinds()) {
+            SafetyNet.ViolationKind kind = SafetyNet.ViolationKind.of(counts.kind());
+            String prefix = "safety.kind." + counts.kind() + ".";
+            add(lines, prefix + "code", kind == null ? "none" : kind.code().text());
+            add(lines, prefix + "detector", kind == null ? "none" : kind.detector());
+            add(lines, prefix + "total", counts.total());
+            add(lines, prefix + "escalated", counts.escalated());
+            for (SafetyNet.Cell cell : net.sites(kind)) {
+                add(lines, prefix + "site." + safe(cell.key()), cell.count());
+            }
+            for (SafetyNet.Cell cell : net.worlds(kind)) {
+                add(lines, prefix + "world." + safe(cell.key()), cell.count());
+            }
+        }
+        add(lines, "safety.zero_effect.window_ticks", KernelSettings.safetyZeroEffectTicks());
+        add(lines, "safety.zero_effect.detected", zeroEffect.zeroEffectTotal());
+        add(lines, "safety.zero_effect.changed", zeroEffect.changedTotal());
+        add(lines, "safety.zero_effect.unproven", zeroEffect.unprovenTotal());
+        add(lines, "safety.zero_effect.pending", zeroEffect.pending());
+        add(lines, "safety.zero_effect.last_states", join(zeroEffect.lastStates()));
+        add(lines, "safety.zero_effect.criterion",
+            "zero_effect := entered>0 and effective>0 and metric(window)-metric(entry)==0");
+    }
+
+    /** The two exits: the frame each published last, the fields they share and the two guards that
+     * keep them apart. Every field is an observation request; no gate reads one. */
+    private static void exits(List<String> lines, KernelModule module) {
+        DualExits exits = module.exits();
+        DualExits.Frame control = exits.control();
+        DualExits.Frame judgement = exits.judgement();
+        DualExits.SameSource same = exits.sameSource();
+        add(lines, "exit.observation_only", 1);
+        add(lines, "exit.enabled", KernelSettings.dualExits() ? 1 : 0);
+        add(lines, "exit.window_ticks", exits.windowTicks());
+        add(lines, "exit.control_frames", exits.controlFrames());
+        add(lines, "exit.judgement_frames", exits.judgementFrames());
+        add(lines, "exit.control.complete", control.complete() ? 1 : 0);
+        add(lines, "exit.control.tick", control.tickIndex());
+        add(lines, "exit.control.missing", join(control.missing()));
+        for (DualExits.Reading reading : control.readings()) {
+            add(lines, "exit.control." + reading.name(), reading.text());
+            add(lines, "exit.control." + reading.name() + ".origin", reading.origin());
+            add(lines, "exit.control." + reading.name() + ".group",
+                reading.group().name().toLowerCase(Locale.ROOT));
+        }
+        add(lines, "exit.judgement.complete", judgement.complete() ? 1 : 0);
+        add(lines, "exit.judgement.tick", judgement.tickIndex());
+        add(lines, "exit.judgement.first_tick", judgement.firstTick());
+        add(lines, "exit.judgement.window_ticks", judgement.windowTicks());
+        add(lines, "exit.judgement.missing", join(judgement.missing()));
+        for (DualExits.Reading reading : judgement.readings()) {
+            add(lines, "exit.judgement." + reading.name(), reading.text());
+        }
+        for (DualExits.Reading reading : judgement.tail()) {
+            add(lines, "exit.judgement.tail." + reading.name(), reading.text());
+        }
+        add(lines, "exit.same_source.control_tick", same.controlTick());
+        add(lines, "exit.same_source.judgement_tick", same.judgementTick());
+        add(lines, "exit.same_source.fields", same.fields());
+        add(lines, "exit.same_source.same_origin", same.sameOrigin());
+        add(lines, "exit.same_source.same_value", same.sameValue());
+        add(lines, "exit.same_source.equal", same.equal() ? 1 : 0);
+        for (DualExits.CrossCheck check : same.checks()) {
+            String prefix = "exit.same_source." + check.name() + ".";
+            add(lines, prefix + "origin", check.origin());
+            add(lines, prefix + "control", check.control());
+            add(lines, prefix + "judgement", check.judgement());
+            add(lines, prefix + "equal", check.equal() ? 1 : 0);
+        }
+        for (Map.Entry<String, Boolean> group : exits.groups().entrySet()) {
+            add(lines, "exit.group." + group.getKey(), group.getValue() ? 1 : 0);
+        }
+        add(lines, "exit.control_window_feeds", exits.controlWindowFeeds());
+        add(lines, "exit.judgement_write_dependencies", exits.judgementWriteDependencies());
+        add(lines, "exit.missing_total", exits.missingTotal());
     }
 
     private static void control(List<String> lines, KernelModule module) {

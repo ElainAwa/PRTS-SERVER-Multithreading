@@ -13,7 +13,7 @@ public record TickPlan(long tickIndex, long planSequence, long worldSetGeneratio
                        List<String> worlds, JobGraph graph, List<Long> topologicalOrder,
                        List<CommitStep> commitOrder, ShareTable shareTable,
                        List<DomainMode> domainModes, int unknownSites, int splitIntents,
-                       long contentHash) {
+                       long contentHash, TickPlanStore.Feedback feedback) {
 
     public TickPlan {
         worlds = List.copyOf(worlds);

@@ -18,6 +18,9 @@ import io.izzel.arclight.common.prts.kernel.codes.RejectTrigger;
 import io.izzel.arclight.common.prts.kernel.commit.CommitLog;
 import io.izzel.arclight.common.prts.kernel.commit.CommitRing;
 import io.izzel.arclight.common.prts.kernel.degrade.DegradeLadder;
+import io.izzel.arclight.common.prts.kernel.exits.DualExits;
+import io.izzel.arclight.common.prts.kernel.safety.SafetyNet;
+import io.izzel.arclight.common.prts.kernel.safety.ZeroEffectDetector;
 import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraphBuilder;
@@ -62,6 +65,7 @@ import io.izzel.arclight.common.prts.support.PrtsWaitSites;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -480,7 +484,205 @@ public final class KernelSelfCheck {
             || binding.foreignRuns() != 1L || foreignQueue.depth("world-a") != 1) {
             failures.add("a commit asked for from a foreign thread was not refused");
         }
+        safetyMatrix(lines, failures);
+        exitsMatrix(lines, failures);
+        feedbackMatrix(lines, failures);
         return lines;
+    }
+
+    /** Drives the five kinds of the safety net on both dimensions, the cascade cap, the escalation
+     * switch, the empty-evidence refusal and the zero-effect criterion with one positive and three
+     * counter-examples. */
+    private static void safetyMatrix(List<String> lines, List<String> failures) {
+        Map<SafetyNet.Point, Long> denied = new LinkedHashMap<>();
+        denied.put(new SafetyNet.Point("world-a", "block_write|main|registered"), 2L);
+        denied.put(new SafetyNet.Point("world-b", "platform_write|worker|unregistered"), 1L);
+        Map<SafetyNet.Point, Long> waits = new LinkedHashMap<>();
+        waits.put(new SafetyNet.Point(SafetyNet.NO_WORLD_SITE, "wait:chunk"), 1L);
+        SafetyNet net = new SafetyNet(() -> false, () -> 3);
+        List<SafetyNet.ViolationReport> reports = net.review(new SafetyNet.TickSources(denied, Map.of(), waits,
+            1L, 1L, 0L, 1L), 10L);
+        lines.add("selftest.safety_reports=" + reports.size() + " total=" + net.total());
+        StringBuilder kinds = new StringBuilder();
+        for (SafetyNet.KindCounts counts : net.kinds()) {
+            if (kinds.length() > 0) {
+                kinds.append(",");
+            }
+            kinds.append(counts.kind()).append("=").append(counts.total());
+        }
+        lines.add("selftest.safety_by_kind=" + kinds);
+        lines.add("selftest.safety_sites=" + net.sites(SafetyNet.ViolationKind.CROSS_OWNER_WRITE).size()
+            + " first=" + net.countAt(SafetyNet.ViolationKind.CROSS_OWNER_WRITE,
+                "block_write|main|registered"));
+        lines.add("selftest.safety_worlds=" + net.worlds(SafetyNet.ViolationKind.CROSS_OWNER_WRITE).size()
+            + " world_a=" + net.countIn(SafetyNet.ViolationKind.CROSS_OWNER_WRITE, "world-a")
+            + " world_b=" + net.countIn(SafetyNet.ViolationKind.CROSS_OWNER_WRITE, "world-b"));
+        if (net.total() != 7L || net.kinds().size() != SafetyNet.ViolationKind.kindCount()
+            || net.count(SafetyNet.ViolationKind.CROSS_OWNER_WRITE) != 3L
+            || net.sites(SafetyNet.ViolationKind.CROSS_OWNER_WRITE).size() != 2
+            || net.countIn(SafetyNet.ViolationKind.CROSS_OWNER_WRITE, "world-b") != 1L
+            || net.count(SafetyNet.ViolationKind.HARD_TIMEOUT) != 1L
+            || net.count(SafetyNet.ViolationKind.UNKNOWN_ACCESS) != 1L
+            || net.count(SafetyNet.ViolationKind.VERSION_CONFLICT) != 1L
+            || net.count(SafetyNet.ViolationKind.ESCALATE_SERIAL) != 1L) {
+            failures.add("the safety net did not count the five kinds on both dimensions");
+        }
+        for (int index = 0; index < 3; index++) {
+            net.report(SafetyNet.ViolationKind.VERSION_CONFLICT, "world-a", "site:cascade", 11L + index, "one",
+                "counted");
+        }
+        SafetyNet.Cascade cascade = net.cascade();
+        lines.add("selftest.safety_cascade=" + cascade.cap() + "/" + cascade.depth() + " steps="
+            + cascade.steps() + " capped=" + cascade.capped() + " stopped=" + cascade.stopped());
+        if (cascade.capped() == 0L || cascade.stopped() == 0L) {
+            failures.add("the cascade cap did not stop a repeated violation");
+        }
+        long before = net.total();
+        net.report(SafetyNet.ViolationKind.CROSS_OWNER_WRITE, "world-a", "site:a", 14L, "", "counted");
+        lines.add("selftest.safety_evidence_empty=" + net.evidenceEmpty() + " total_held="
+            + (net.total() == before ? 1 : 0));
+        if (net.total() != before || net.evidenceEmpty() != 1L) {
+            failures.add("a violation without evidence was stored instead of refused");
+        }
+        SafetyNet switched = new SafetyNet(() -> true, () -> 8);
+        switched.report(SafetyNet.ViolationKind.VERSION_CONFLICT, "world-a", "site:a", 1L, "one", "counted");
+        lines.add("selftest.safety_escalation=" + net.escalated() + "/" + switched.escalated());
+        if (net.escalated() != 0L || switched.escalated() != 1L) {
+            failures.add("the escalation switch did not stay off, or did not count when on");
+        }
+        ZeroEffectDetector detector = new ZeroEffectDetector();
+        detector.watch("b1", 10L, 5.0);
+        ZeroEffectDetector.State still = detector.evaluate("b1", 15L, 5.0, 1L, 1L, 5).state();
+        detector.watch("b2", 10L, 5.0);
+        ZeroEffectDetector.State moved = detector.evaluate("b2", 15L, 9.0, 1L, 1L, 5).state();
+        detector.watch("b3", 10L, 5.0);
+        ZeroEffectDetector.State unproven = detector.evaluate("b3", 15L, 5.0, 1L, 0L, 5).state();
+        detector.watch("b4", 10L, 5.0);
+        ZeroEffectDetector.State pending = detector.evaluate("b4", 12L, 5.0, 1L, 1L, 5).state();
+        lines.add("selftest.safety_zero_effect=" + still + "/" + moved + "/" + unproven + "/"
+            + pending + " detected=" + detector.zeroEffectTotal() + " changed="
+            + detector.changedTotal() + " unproven=" + detector.unprovenTotal());
+        if (still != ZeroEffectDetector.State.ZERO_EFFECT
+            || moved != ZeroEffectDetector.State.CHANGED
+            || unproven != ZeroEffectDetector.State.UNPROVEN
+            || pending != ZeroEffectDetector.State.PENDING
+            || detector.zeroEffectTotal() != 1L) {
+            failures.add("the zero-effect criterion did not separate its four outcomes");
+        }
+    }
+
+    /** Drives the two exits over one window: the shared origins, the tail comparison, the refusal of
+     * a window statistic on the control side, the refusal to serve a write path and the missing
+     * counter that is named instead of zeroed. */
+    private static void exitsMatrix(List<String> lines, List<String> failures) {
+        DualExits exits = new DualExits(3);
+        for (int index = 1; index <= 3; index++) {
+            exits.noteTick(new DualExits.Sample(index, 1.0 * index, index, 0L, 0.5, 4.0, "normal"),
+                List.of());
+        }
+        DualExits.SameSource same = exits.sameSource();
+        lines.add("selftest.exit_frames=" + exits.controlFrames() + "/" + exits.judgementFrames()
+            + " window=" + exits.judgement().windowTicks() + " tick=" + exits.judgement().tickIndex());
+        lines.add("selftest.exit_same_source=" + same.sameOrigin() + "/" + same.sameValue() + " of "
+            + same.fields() + " equal=" + (same.equal() ? 1 : 0) + " at=" + same.controlTick() + "/"
+            + same.judgementTick());
+        lines.add("selftest.exit_groups=" + exits.groups());
+        DualExits other = new DualExits(3);
+        for (int index = 1; index <= 3; index++) {
+            other.noteTick(new DualExits.Sample(index, 9.0, index + 7, 0L, 0.5, 1.0, "normal"),
+                List.of());
+        }
+        DualExits.SameSource mismatch = DualExits.compare(exits.control(), other.judgement());
+        lines.add("selftest.exit_same_source_negative=" + mismatch.sameValue() + " of "
+            + mismatch.fields() + " equal=" + (mismatch.equal() ? 1 : 0));
+        DualExits partial = new DualExits(1);
+        List<String> absent = List.of("reserve_remaining_ms");
+        DualExits.Frame cut = partial.noteTick(
+            new DualExits.Sample(1L, 0.0, 0L, 0L, 0.0, 0.0, "none"), absent);
+        lines.add("selftest.exit_missing=" + (cut.complete() ? 0 : 1) + " named="
+            + cut.missing().size() + " value=" + cut.reading("reserve_remaining_ms").text()
+            + " rows=" + cut.readings().size());
+        lines.add("selftest.exit_guards=" + exits.offerWindowStatistic("overrun_hits.window_sum", 1.0)
+            + "/" + exits.noteWriteDependency(DualExits.Plane.JUDGEMENT) + " feeds="
+            + exits.controlWindowFeeds() + " deps=" + exits.judgementWriteDependencies());
+        if (!same.equal() || same.fields() != DualExits.controlNames().size()
+            || mismatch.equal() || !cut.missing().contains("reserve_remaining_ms")
+            || cut.complete() || cut.readings().size() != 6
+            || exits.controlWindowFeeds() != 1L || exits.judgementWriteDependencies() != 1L) {
+            failures.add("the two exits crossed, or a missing counter was published as a zero");
+        }
+    }
+
+    /** Drives the closed loop of the planning period: the frame is taken on one tick, consumed by
+     * the next plan, and a frame taken over a window is refused. */
+    private static void feedbackMatrix(List<String> lines, List<String> failures) {
+        TickPlanPlanner.Input base = new TickPlanPlanner.Input(10L, 2L, 1L, List.of("world-a"),
+            List.of("entity"), TickPlanStore.Control.of(9L, 1L, 1L, 1.0, 0L, 0L, 4.0, "normal"),
+            declarationsForFeedback(), new SharePlanner().plan(List.of("world-a"), 10L, Map.of()),
+            64, TickPlanStore.Feedback.tick(9L, 1L, 1L, 0L, 3L, 5L, 0.25));
+        TickPlanPlanner.Result carried = TickPlanPlanner.plan(base);
+        TickPlanPlanner.Result refused = TickPlanPlanner.plan(new TickPlanPlanner.Input(10L, 2L, 1L,
+            List.of("world-a"), List.of("entity"),
+            TickPlanStore.Control.of(9L, 1L, 1L, 1.0, 0L, 0L, 4.0, "normal"),
+            declarationsForFeedback(), new SharePlanner().plan(List.of("world-a"), 10L, Map.of()),
+            64, TickPlanStore.Feedback.overWindow(9L, 600L, 0.25)));
+        TickPlan.DomainMode mode = carried.ok() ? carried.plan().modeOf("world-a", "entity") : null;
+        lines.add("selftest.feedback_consumed=" + (carried.ok() ? 1 : 0) + " mode="
+            + (mode == null ? "none" : mode.mode() + "/" + mode.reason()) + " rate="
+            + (carried.ok() ? carried.plan().feedback().failureRate() : -1.0) + " carried="
+            + (carried.ok() ? carried.plan().tickIndex() - carried.plan().feedback().tickIndex()
+                : -1L));
+        TickPlanPlanner.Result carriedUnknown = TickPlanPlanner.plan(new TickPlanPlanner.Input(10L,
+            2L, 1L, List.of("world-a"), List.of("entity"),
+            TickPlanStore.Control.of(9L, 1L, 1L, 1.0, 0L, 0L, 4.0, "normal"),
+            declarationsForFeedback(), new SharePlanner().plan(List.of("world-a"), 10L, Map.of()),
+            64, TickPlanStore.Feedback.tick(9L, 1L, 0L, 2L, 0L, 2L, 0.0)));
+        TickPlan.DomainMode unknownMode = carriedUnknown.ok()
+            ? carriedUnknown.plan().modeOf("world-a", "entity") : null;
+        lines.add("selftest.feedback_unknown_carried="
+            + (unknownMode == null ? "none" : unknownMode.mode() + "/" + unknownMode.reason()));
+        lines.add("selftest.feedback_window_refused="
+            + (refused.code() == null ? "none" : refused.code().text()));
+        TickPlanStore store = new TickPlanStore(4);
+        store.noteControl(TickPlanStore.Control.of(9L, 1L, 1L, 1.0, 0L, 0L, 4.0, "normal"));
+        store.noteFailure(RejectCode.DAG_CYCLE);
+        store.takeFeedback(9L, 1L);
+        TickPlanStore.Feedback taken = store.feedback();
+        lines.add("selftest.feedback_taken=" + taken.scope() + "/" + taken.tickIndex() + " tick_failures="
+            + taken.tickFailures() + " rate=" + taken.failureRate());
+        // The one hop the loop has to make: the frame the store took is the frame the planner of
+        // the next tick consumes, and the values it carries are the values it was read with.
+        TickPlanPlanner.Result closedLoop = TickPlanPlanner.plan(new TickPlanPlanner.Input(10L, 2L,
+            1L, List.of("world-a"), List.of("entity"),
+            TickPlanStore.Control.of(9L, 1L, 1L, 1.0, 0L, 0L, 4.0, "normal"),
+            declarationsForFeedback(), new SharePlanner().plan(List.of("world-a"), 10L, Map.of()),
+            64, taken));
+        TickPlan.DomainMode loopMode = closedLoop.ok()
+            ? closedLoop.plan().modeOf("world-a", "entity") : null;
+        boolean loopLinked = closedLoop.ok()
+            && closedLoop.plan().feedback().failureRate() == taken.failureRate()
+            && closedLoop.plan().feedback().tickIndex() == taken.tickIndex()
+            && closedLoop.plan().feedback().tickFailures() == taken.tickFailures();
+        lines.add("selftest.feedback_loop=" + (loopMode == null ? "none"
+            : loopMode.mode() + "/" + loopMode.reason()) + " linked=" + (loopLinked ? 1 : 0)
+            + " rate=" + taken.failureRate() + " fired=" + taken.tickFailures());
+        if (!loopLinked || loopMode == null || loopMode.reason() != TickPlan.Reason.DEGRADED) {
+            failures.add("the frame the store took did not reach the next plan unchanged");
+        }
+        if (!carried.ok() || mode == null || mode.mode() != TickPlan.Mode.CONSERVATIVE
+            || mode.reason() != TickPlan.Reason.DEGRADED
+            || carried.plan().feedback().failureRate() != 0.25
+            || refused.code() != RejectCode.COUNTER_MISSING
+            || !taken.tickScoped() || taken.tickFailures() != 1L || taken.failureRate() <= 0.0) {
+            failures.add("the plan did not consume the tick-scoped frame, or consumed a window one");
+        }
+    }
+
+    private static List<JobDeclaration> declarationsForFeedback() {
+        JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef("world-a", "entity", 0);
+        return List.of(new JobDeclaration("a/0", 1L, "world-a", "entity", 0, List.of(), 0, "a",
+            "region", List.of(ref), List.of(ref), ShareClass.ENTITY,
+            JobDeclaration.SiteClass.PARALLEL, 0, 4));
     }
 
     private static void join(Thread thread) {
@@ -975,7 +1177,7 @@ public final class KernelSelfCheck {
         ShareTable table = planner.plan(List.of(world), tick, Map.of());
         TickPlanPlanner.Input input = new TickPlanPlanner.Input(tick, 1L, 1L, List.of(world),
             List.of("entity"), TickPlanStore.Control.of(tick - 1L, 0L, 1L, 1.0, 0L, 0L, 4.0, "normal"),
-            declarations, table, 64);
+            declarations, table, 64, TickPlanStore.Feedback.none());
         TickPlanPlanner.Result planned = TickPlanPlanner.plan(input);
         TickPlanPlanner.Result again = TickPlanPlanner.plan(input);
         lines.add("selftest.plan_nodes=" + (planned.ok() ? planned.plan().graph().nodeCount() : -1)
@@ -1010,13 +1212,16 @@ public final class KernelSelfCheck {
             }
         }
         TickPlanPlanner.Result noControl = TickPlanPlanner.plan(new TickPlanPlanner.Input(tick, 1L, 1L,
-            List.of(world), List.of("entity"), TickPlanStore.Control.missing(), declarations, table, 64));
+            List.of(world), List.of("entity"), TickPlanStore.Control.missing(), declarations, table,
+            64, TickPlanStore.Feedback.none()));
         TickPlanPlanner.Result rollback = TickPlanPlanner.plan(new TickPlanPlanner.Input(tick, 1L, 0L,
             List.of(world), List.of("entity"),
-            TickPlanStore.Control.of(tick - 1L, 0L, 1L, 1.0, 0L, 0L, 4.0, "normal"), declarations, table, 64));
+            TickPlanStore.Control.of(tick - 1L, 0L, 1L, 1.0, 0L, 0L, 4.0, "normal"), declarations,
+            table, 64, TickPlanStore.Feedback.none()));
         TickPlanPlanner.Result regression = TickPlanPlanner.plan(new TickPlanPlanner.Input(tick, 0L, 1L,
             List.of(world), List.of("entity"),
-            TickPlanStore.Control.of(tick - 1L, 0L, 1L, 1.0, 0L, 0L, 4.0, "normal"), declarations, table, 64));
+            TickPlanStore.Control.of(tick - 1L, 0L, 1L, 1.0, 0L, 0L, 4.0, "normal"), declarations,
+            table, 64, TickPlanStore.Feedback.none()));
         lines.add("selftest.plan_refusals=" + codeOf(noControl) + "/" + codeOf(rollback) + "/"
             + codeOf(regression));
         if (noControl.code() != RejectCode.COUNTER_MISSING

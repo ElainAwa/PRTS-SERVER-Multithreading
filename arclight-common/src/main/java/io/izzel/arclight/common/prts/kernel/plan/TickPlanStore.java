@@ -48,6 +48,9 @@ public final class TickPlanStore {
     private long unknownSites;
     private long unresolved;
     private RejectCode lastFailure;
+    private Feedback feedback = Feedback.none();
+    private long feedbackFailures;
+    private long feedbackUnknownSites;
 
     public TickPlanStore(int historyCap) {
         this.historyCap = Math.max(1, historyCap);
@@ -160,6 +163,65 @@ public final class TickPlanStore {
         return lastFailure;
     }
 
+    /** The planning period's own readings of one tick, as the next planning period consumes them.
+     * A frame is tick scoped by construction: it names the tick it was taken on and says its window
+     * is one tick long. The planner refuses a frame whose scope is not the tick, because a window
+     * statistic may not become a plan input. */
+    public record Feedback(boolean observed, String scope, long tickIndex, long planSequence,
+                           long tickFailures, long tickUnknownSites, long totalFailures,
+                           long totalUnknownSites, double failureRate) {
+
+        public static final String TICK = "tick";
+
+        public static final String WINDOW = "window";
+
+        public static Feedback none() {
+            return new Feedback(false, TICK, 0L, 0L, 0L, 0L, 0L, 0L, 0.0);
+        }
+
+        public static Feedback tick(long tickIndex, long planSequence, long tickFailures,
+                                    long tickUnknownSites, long totalFailures,
+                                    long totalUnknownSites, double failureRate) {
+            return new Feedback(true, TICK, tickIndex, planSequence, tickFailures, tickUnknownSites,
+                totalFailures, totalUnknownSites, failureRate);
+        }
+
+        /** A frame taken over a longer window. It exists so the refusal of one can be driven; no
+         * production path builds it. */
+        public static Feedback overWindow(long tickIndex, long windowTicks, double failureRate) {
+            return new Feedback(true, WINDOW, tickIndex, 0L, 0L, 0L, 0L, 0L, failureRate);
+        }
+
+        public boolean tickScoped() {
+            return TICK.equals(scope);
+        }
+    }
+
+    /** Takes the frame the next planning period consumes: the counters of this tick and their
+     * deltas against the frame taken last. */
+    public void takeFeedback(long tickIndex, long planSequence) {
+        long tickFailures = failures - feedbackFailures;
+        long tickUnknown = unknownSites - feedbackUnknownSites;
+        feedbackFailures = failures;
+        feedbackUnknownSites = unknownSites;
+        feedback = Feedback.tick(tickIndex, planSequence, tickFailures, tickUnknown, failures,
+            unknownSites, failureRate());
+    }
+
+    /** Publishes a frame directly. The self check drives the window-scoped refusal through it. */
+    public void noteFeedback(Feedback frame) {
+        if (frame != null) {
+            feedback = frame;
+        }
+        feedbackFailures = failures;
+        feedbackUnknownSites = unknownSites;
+    }
+
+    /** The frame the next planning period consumes. */
+    public Feedback feedback() {
+        return feedback;
+    }
+
     /** The share of ticks whose plan build was refused. It is a reading: no decision reads it. */
     public double failureRate() {
         long attempts = built + failures + bootstrapSkips;
@@ -177,5 +239,8 @@ public final class TickPlanStore {
         unknownSites = 0L;
         unresolved = 0L;
         lastFailure = null;
+        feedback = Feedback.none();
+        feedbackFailures = 0L;
+        feedbackUnknownSites = 0L;
     }
 }

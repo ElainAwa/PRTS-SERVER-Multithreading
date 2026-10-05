@@ -7,6 +7,8 @@ import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.MeterWindow;
 import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
 import io.izzel.arclight.common.prts.kernel.degrade.DegradeLadder;
+import io.izzel.arclight.common.prts.kernel.exits.DualExits;
+import io.izzel.arclight.common.prts.kernel.safety.SafetyNet;
 import io.izzel.arclight.common.prts.kernel.shares.BudgetStateMachine;
 import io.izzel.arclight.common.prts.kernel.shares.SharePlanner.ConservationCheck;
 import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
@@ -29,6 +31,18 @@ import java.util.Locale;
 public final class KernelStatusLines {
 
     private KernelStatusLines() {
+    }
+
+    /** How many of the closed set of kinds the net saw at least once. A kind that was never seen is
+     * still published with its zero, so this is a summary and not the census. */
+    private static int seenKinds(SafetyNet net) {
+        int seen = 0;
+        for (SafetyNet.KindCounts counts : net.kinds()) {
+            if (counts.total() > 0L) {
+                seen++;
+            }
+        }
+        return seen;
     }
 
     /** Renders the status section. */
@@ -189,6 +203,31 @@ public final class KernelStatusLines {
             + " dropped=" + module.commits().dropped()
             + " order_violations=" + module.commits().orderViolations()
             + " rings=" + module.commits().ringCount()
+            + " observation_only=1");
+        SafetyNet net = module.safety();
+        DualExits exits = module.exits();
+        DualExits.SameSource same = exits.sameSource();
+        lines.add("[PRTS] kernel: safety kinds=" + SafetyNet.ViolationKind.kindCount()
+            + " violations=" + net.total()
+            + " kinds_seen=" + seenKinds(net)
+            + " escalated=" + net.escalated()
+            + " escalation_switch=" + (net.switchEnabled() ? 1 : 0)
+            + " cascade_cap=" + net.cascade().cap()
+            + " cascade_capped=" + net.cascade().capped()
+            + " zero_effect=" + module.zeroEffect().zeroEffectTotal()
+            + " zero_effect_unproven=" + module.zeroEffect().unprovenTotal()
+            + " evidence_empty=" + net.evidenceEmpty()
+            + " observation_only=1");
+        lines.add("[PRTS] kernel: exits control_frames=" + exits.controlFrames()
+            + " judgement_frames=" + exits.judgementFrames()
+            + " window_ticks=" + exits.windowTicks()
+            + " same_source=" + same.sameValue() + "/" + same.fields()
+            + " equal=" + (same.equal() ? 1 : 0)
+            + " window_feed_refused=" + exits.controlWindowFeeds()
+            + " judgement_write_deps=" + exits.judgementWriteDependencies()
+            + " groups=" + (exits.groups().getOrDefault("a", false) ? 1 : 0)
+            + "/" + (exits.groups().getOrDefault("b", false) ? 1 : 0)
+            + "/" + (exits.groups().getOrDefault("shared", false) ? 1 : 0)
             + " observation_only=1");
         lines.add("[PRTS] kernel: observation requests, not an approved counter table;"
             + " run '/prts kernel' for the full export");

@@ -6,7 +6,13 @@ import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
 import io.izzel.arclight.common.prts.kernel.auth.WriteAuthority;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
 import io.izzel.arclight.common.prts.kernel.codes.DegradeLevel;
+import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
+import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
 import io.izzel.arclight.common.prts.kernel.commit.CommitLog;
+import io.izzel.arclight.common.prts.kernel.commit.CommitRing;
+import io.izzel.arclight.common.prts.kernel.exits.DualExits;
+import io.izzel.arclight.common.prts.kernel.safety.SafetyNet;
+import io.izzel.arclight.common.prts.kernel.safety.ZeroEffectDetector;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.degrade.DegradeLadder;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
@@ -29,8 +35,11 @@ import io.izzel.arclight.common.prts.kernel.shares.ShareMeter;
 import io.izzel.arclight.common.prts.kernel.shares.SharePlanner;
 import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
 import io.izzel.arclight.common.prts.kernel.sites.IntentPayloadDirectory;
+import io.izzel.arclight.common.prts.kernel.sites.ThreadOrigin;
+import io.izzel.arclight.common.prts.kernel.sites.WritePath;
 import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
 import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard;
+import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry;
 import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteObserver;
 import io.izzel.arclight.common.prts.support.PrtsWaitSites;
@@ -95,6 +104,10 @@ public final class KernelModule {
     private final JobScheduler scheduler = new JobScheduler();
     private final ShareMeterPoint jobMeter = new ShareMeterPoint();
     private final TickPlanStore plans = new TickPlanStore(KernelSettings.planHistoryCap());
+    private final SafetyNet safety = new SafetyNet(KernelSettings::safetyDegrade,
+        KernelSettings::safetyCascadeCap);
+    private final ZeroEffectDetector zeroEffect = new ZeroEffectDetector();
+    private final DualExits exits = new DualExits(KernelSettings.exitWindowTicks());
     private final CommitLog commits = new CommitLog(KernelSettings::commitRingCap,
         this::resolveCommitOrder);
     private long tickIndex;
@@ -174,8 +187,14 @@ public final class KernelModule {
         } else {
             SelfTimers.discardTickTotals();
         }
+        if (KernelSettings.safetyNet()) {
+            reviewSafety();
+        }
         if (KernelSettings.tickPlan()) {
             freezePlan(worldIds);
+        }
+        if (KernelSettings.dualExits()) {
+            exits.noteTick(exitSample(), List.of());
         }
         if (KernelSettings.selfTimers()) {
             publishWindowIfDue();
@@ -281,6 +300,7 @@ public final class KernelModule {
             plans.noteBootstrapSkip();
             plans.noteControl(controlFrameOf(worldGeneration));
             previousControl = plans.control();
+            plans.takeFeedback(tickIndex, planSequence);
             return;
         }
         planSequence++;
@@ -288,9 +308,11 @@ public final class KernelModule {
         for (KernelDomain domain : domains) {
             domainIds.add(domain.id());
         }
+        TickPlanStore.Feedback feedback = KernelSettings.planFeedback() ? plans.feedback()
+            : TickPlanStore.Feedback.none();
         TickPlanPlanner.Result result = TickPlanPlanner.plan(new TickPlanPlanner.Input(tickIndex,
             planSequence, worldGeneration, worlds, domainIds, previousControl, jobIntake.take(),
-            shares.lastTable(), KernelSettings.jobQueueCap()));
+            shares.lastTable(), KernelSettings.jobQueueCap(), feedback));
         if (result.ok()) {
             plans.publish(result.plan());
         } else {
@@ -298,6 +320,93 @@ public final class KernelModule {
         }
         plans.noteControl(controlFrameOf(worldGeneration));
         previousControl = plans.control();
+        // Taken last, so the frame the next tick consumes carries this tick's deltas and nothing of
+        // the plan that just read the previous one.
+        plans.takeFeedback(tickIndex, planSequence);
+    }
+
+    /** The four detectors of the safety net, reading the counters the layers around it published
+     * and reporting the difference against the tick before. */
+    private void reviewSafety() {
+        WritePathCounters paths = guard.counters();
+        Map<SafetyNet.Point, Long> denied = new java.util.LinkedHashMap<>();
+        for (WritePath path : WritePath.values()) {
+            for (ThreadOrigin origin : ThreadOrigin.values()) {
+                for (HolderKind holder : HolderKind.values()) {
+                    long count = paths.count(path, origin, holder, WriteDisposition.DENY);
+                    if (count > 0L) {
+                        denied.put(new SafetyNet.Point(SafetyNet.NO_WORLD_SITE,
+                            path.key() + "|" + origin.key() + "|" + holder.name().toLowerCase(Locale.ROOT)),
+                            count);
+                    }
+                }
+            }
+        }
+        Map<SafetyNet.Point, Long> commitViolations = new java.util.LinkedHashMap<>();
+        long order = commits.orderViolations() + commits.unplanned() + commits.retried();
+        if (order > 0L) {
+            commitViolations.put(new SafetyNet.Point(SafetyNet.NO_WORLD_SITE, "commit:order"), order);
+        }
+        for (CommitRing ring : commits.rings()) {
+            if (ring.refusedFull() > 0L) {
+                commitViolations.put(new SafetyNet.Point(ring.worldId(),
+                    "commit:ring|" + ring.domainId()), ring.refusedFull());
+            }
+        }
+        Map<SafetyNet.Point, Long> waitOverruns = new java.util.LinkedHashMap<>();
+        for (WaitPointRegistry.WaitPointEntry row : waitPoints.rows()) {
+            long overrun = waitPoints.overrunOf(row.wpId());
+            if (overrun > 0L) {
+                waitOverruns.put(new SafetyNet.Point(SafetyNet.NO_WORLD_SITE,
+                    "wait:" + row.wpId()), overrun);
+            }
+        }
+        SafetyNet.TickSources sources = new SafetyNet.TickSources(denied, commitViolations,
+            waitOverruns, ledger.codeCount(RejectCode.VERSION_MISMATCH),
+            waitPoints.unregisteredCallSites(), ladder.enteredTotal(),
+            ladder.sign().skippedCount());
+        safety.review(sources, tickIndex);
+        reviewZeroEffect();
+    }
+
+    /** Watches the metered value of the class each rung of the ladder stands for and asks, one
+     * window after the rung was entered, whether it moved. */
+    private void reviewZeroEffect() {
+        int window = KernelSettings.safetyZeroEffectTicks();
+        for (DegradeLadder.Counters counters : ladder.counters()) {
+            String target = counters.level().name().toLowerCase(Locale.ROOT);
+            double metric = shareMetric(counters.level());
+            if (counters.entered() > 0L) {
+                zeroEffect.watch(target, tickIndex, metric);
+            }
+            zeroEffect.evaluate(target, tickIndex, metric, counters.entered(), counters.effective(),
+                window);
+        }
+    }
+
+    /** The metered milliseconds of the class one rung degrades; the value the zero-effect detector
+     * compares across its window. */
+    private double shareMetric(DegradeLevel level) {
+        ShareClass shareClass = switch (level) {
+            case B1 -> ShareClass.AI;
+            case B2 -> ShareClass.GRAPH;
+            case B3 -> ShareClass.ENTITY;
+            case B4 -> ShareClass.EVENT;
+            case B5 -> ShareClass.BLOCKENTITY;
+            case NONE -> null;
+        };
+        if (shareClass == null || lastMetering == null) {
+            return 0.0;
+        }
+        ShareMeter.ClassReading row = lastMetering.row(shareClass);
+        return row == null ? 0.0 : row.usedMs();
+    }
+
+    /** The five values of this tick as both exits read them: one sample, one set of origins. */
+    private DualExits.Sample exitSample() {
+        return new DualExits.Sample(tickIndex, control.minMarginMs(), control.overrunHits(),
+            control.waitBoundHits(), reserveUsedMs(), control.reserveRemainingMs(),
+            control.degradeState());
     }
 
     /** The five control values of this tick, as the next planning period reads them. */
@@ -467,6 +576,21 @@ public final class KernelModule {
         return plans;
     }
 
+    /** The safety net: the violations it counted and the escalation candidates it published. */
+    public SafetyNet safety() {
+        return safety;
+    }
+
+    /** The detector that asks whether a rung that claims an effect moved what it acted on. */
+    public ZeroEffectDetector zeroEffect() {
+        return zeroEffect;
+    }
+
+    /** The two exits of the observation layer. */
+    public DualExits exits() {
+        return exits;
+    }
+
     /** The single write entry of this tick. */
     public CommitLog commits() {
         return commits;
@@ -543,5 +667,8 @@ public final class KernelModule {
         jobMeter.reset();
         plans.reset();
         commits.reset();
+        safety.reset();
+        zeroEffect.reset();
+        exits.reset();
     }
 }
