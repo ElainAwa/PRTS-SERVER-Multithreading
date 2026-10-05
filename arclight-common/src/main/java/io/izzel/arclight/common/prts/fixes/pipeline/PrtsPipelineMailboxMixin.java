@@ -15,7 +15,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /** Counts an executed task and a drain round of the chunk pipeline's own mailboxes: nothing is
- * cancelled, delayed or reordered, and the count is a counter update while a watcher is installed. */
+ * cancelled, delayed or reordered, and the count is a counter update while a watcher is installed.
+ * The same two points carry the mailbox itself to the owner aware face, which is what lets a tick
+ * digest name the world a row belongs to; that face has no watcher unless one is declared. */
 @OnlyInPlatform(ArclightPlatform.NEOFORGE)
 @Mixin(ProcessorMailbox.class)
 public abstract class PrtsPipelineMailboxMixin {
@@ -38,11 +40,13 @@ public abstract class PrtsPipelineMailboxMixin {
     private void prts$countPipelineTask(CallbackInfoReturnable<Boolean> cir) {
         if (cir.getReturnValueZ()) {
             PrtsPipelineRows.task(name(), System.nanoTime() - prts$taskStartedAt);
+            PrtsPipelineRows.ownerTask(this, name());
         }
     }
 
     @Inject(method = "run", at = @At("RETURN"))
     private void prts$countPipelineRound(CallbackInfo ci) {
         PrtsPipelineRows.round(name());
+        PrtsPipelineRows.ownerRound(this, name());
     }
 }

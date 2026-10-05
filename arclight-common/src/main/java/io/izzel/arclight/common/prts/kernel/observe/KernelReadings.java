@@ -93,6 +93,7 @@ public final class KernelReadings {
         safety(lines, module);
         exits(lines, module);
         pipelineRows(lines, module);
+        tickDigest(lines, module);
         loadObservation(lines, module);
         stallAttribution(lines, module);
         chunkDemand(lines, module);
@@ -1104,6 +1105,51 @@ public final class KernelReadings {
             format(rows.taskNanos(PipelineRowObserver.LIGHT) / 1_000_000.0));
         add(lines, "pipeline.row.cls02", writes);
         add(lines, "pipeline.row.widened_total", worldgen + light + writes);
+    }
+
+    /** The per tick digest of the chunk pipeline, one row per (tick, world, probe). The window is
+     * off unless a process declares one, so a run that declares nothing exports the shape of the
+     * face and no row. Every value below is a count or the exact bits of one, never a duration: a
+     * digest that folded a schedule would differ between two runs of one scenario. */
+    private static void tickDigest(List<String> lines, KernelModule module) {
+        TickDigestObserver digest = module.tickDigest();
+        add(lines, "digest.observation_only", 1);
+        add(lines, "digest.armed", digest.armed() ? 1 : 0);
+        add(lines, "digest.window_ticks", digest.windowTicks());
+        add(lines, "digest.tap_installed", PrtsPipelineRows.ownerTapInstalled() ? 1 : 0);
+        add(lines, "digest.probes", TickDigestObserver.PROBES.length);
+        add(lines, "digest.probe_names", String.join(",", TickDigestObserver.PROBES));
+        add(lines, "digest.worlds", digest.worlds().size());
+        add(lines, "digest.worlds_list", digest.worlds().isEmpty() ? "none"
+            : String.join(",", digest.worlds()));
+        add(lines, "digest.ticks", digest.ticks());
+        add(lines, "digest.ticks_folded", digest.foldedTicks());
+        add(lines, "digest.rows", digest.rowsFolded());
+        add(lines, "digest.placed_mailboxes", digest.placedMailboxes());
+        add(lines, "digest.unplaced_rows", digest.unplacedRows());
+        add(lines, "digest.other_mailbox_rows", digest.otherMailboxRows());
+        add(lines, "digest.dropped_ticks", digest.droppedTicks());
+        add(lines, "digest.deviated_rows", digest.deviatedRows());
+        add(lines, "digest.first_tick", digest.firstTick());
+        add(lines, "digest.last_tick", digest.lastTick());
+        add(lines, "digest.dump_begin", 1);
+        for (TickDigestObserver.Row row : digest.rows()) {
+            lines.add("digest.row=" + row.tick() + "|" + row.world() + "|" + row.probe() + "|"
+                + row.regionId() + "|" + row.probeIndex() + "|" + row.entitySeq() + "|"
+                + bits(row.rows()) + "|" + bits(row.rounds()) + "|" + bits(row.rowsTotal()) + "|"
+                + bits(row.roundsTotal()) + "|" + bits(row.ticksActive()) + "|"
+                + bits(row.tickFirst()) + "|" + bits(row.rowsPeak()) + "|" + bits(row.seen()) + "|0|"
+                + row.tick() + "|" + row.probeIndex() + "|" + Long.toHexString(row.value()) + "|"
+                + row.algorithmId() + "|" + Long.toHexString(row.headerDigest()) + "|"
+                + Long.toHexString(row.rowDigest()));
+        }
+        add(lines, "digest.dump_end", 1);
+    }
+
+    /** The exact bits of one digest value, so a reader on the other side of an export can rebuild
+     *  the double the fold used instead of the six digits a decimal form would keep. */
+    private static String bits(long value) {
+        return Long.toHexString(Double.doubleToRawLongBits(value));
     }
 
     /** The regions the loaded chunks of every world fall into: the identity a stability window and

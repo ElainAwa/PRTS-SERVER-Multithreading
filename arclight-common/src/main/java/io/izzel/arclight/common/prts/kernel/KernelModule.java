@@ -56,6 +56,7 @@ import io.izzel.arclight.common.prts.kernel.observe.PipelineRowObserver;
 import io.izzel.arclight.common.prts.kernel.observe.RegionIdentityObserver;
 import io.izzel.arclight.common.prts.kernel.observe.SaveIdentityObserver;
 import io.izzel.arclight.common.prts.kernel.observe.StallAttributionObserver;
+import io.izzel.arclight.common.prts.kernel.observe.TickDigestObserver;
 import io.izzel.arclight.common.prts.kernel.meter.SelfCostTap;
 import io.izzel.arclight.common.prts.support.PrtsSelfCosts;
 import io.izzel.arclight.common.prts.support.PrtsWaitSites;
@@ -139,6 +140,7 @@ public final class KernelModule {
     private final WaitSiteObserver waitSites = new WaitSiteObserver(waitPoints, this::tickIndex,
         KernelSettings::waitBoundMs);
     private final PipelineRowObserver pipelineRows = new PipelineRowObserver();
+    private final TickDigestObserver tickDigest = new TickDigestObserver();
     private final LoadThreadObserver loadThread = new LoadThreadObserver();
     private final ChunkFlowObserver chunkFlow = new ChunkFlowObserver();
     private final SaveIdentityObserver saveIdentity = new SaveIdentityObserver();
@@ -284,6 +286,7 @@ public final class KernelModule {
         }
         ledger.verifyClosure();
         tickDomains();
+        tickDigest.noteTick(tickIndex);
         if (KernelSettings.commitLog()) {
             lastCommitReplay = commits.closeTick();
         }
@@ -342,6 +345,9 @@ public final class KernelModule {
     public void noteTickSource(net.minecraft.server.MinecraftServer server) {
         saveIdentity.source(server);
         regionIdentity.source(server);
+        tickDigest.source(server);
+        tickDigest.ledger(ledger);
+        tickDigest.deviation(FaultInjection::tickDigestDeviates);
     }
 
     private void syncLoadProbe(boolean wanted) {
@@ -373,8 +379,10 @@ public final class KernelModule {
         pipelineRowTapInstalled = wanted;
         if (wanted) {
             pipelineRows.attach();
+            tickDigest.attach();
         } else {
             pipelineRows.detach();
+            tickDigest.detach();
         }
     }
 
@@ -799,6 +807,11 @@ public final class KernelModule {
     /** The counters of the chunk pipeline's own mailboxes: observation only, never a decision. */
     public PipelineRowObserver pipelineRows() {
         return pipelineRows;
+    }
+
+    /** The per tick digest of the chunk pipeline: observation only, armed by a declared window. */
+    public TickDigestObserver tickDigest() {
+        return tickDigest;
     }
 
     /** The thread-state sampler of the load windows. */

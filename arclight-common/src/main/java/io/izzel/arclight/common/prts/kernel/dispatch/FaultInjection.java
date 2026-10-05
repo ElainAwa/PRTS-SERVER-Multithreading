@@ -55,6 +55,10 @@ import java.util.function.Function;
  * row of the parallel arm's digest input in each of the first n merges, and {@code segBreakRow=<n>}
  * picks that row (one-based, default the first). Only the frame the digest folds sees the deviated
  * value, so the descent has to name that row by entity id and row offset.
+ *
+ * <p>The tick digest has its own fault, off by default: {@code tickDigestBreak=<n>} deviates one
+ * field of the first n digest rows at or after {@code tickDigestBreakTick=<tick>}, so a comparison
+ * of two runs has to name the tick, the world and the field of the first deviation.
  */
 public final class FaultInjection {
 
@@ -168,6 +172,8 @@ public final class FaultInjection {
         private final int ladderWalk;
         private final int ladderReturn;
         private final int waitWalk;
+        private final int tickDigestBreak;
+        private final long tickDigestBreakTick;
         private final AtomicLong delayTaken = new AtomicLong();
         private final AtomicLong ownFailTaken = new AtomicLong();
         private final AtomicLong ownDelayTaken = new AtomicLong();
@@ -185,6 +191,7 @@ public final class FaultInjection {
         private final AtomicLong ladderWalkTaken = new AtomicLong();
         private final AtomicLong ladderReturnTaken = new AtomicLong();
         private final AtomicLong waitWalkTaken = new AtomicLong();
+        private final AtomicLong tickDigestBreakTaken = new AtomicLong();
         private final Map<String, WorkPlan> holding = new ConcurrentHashMap<>();
         private final Set<String> holdSpent = ConcurrentHashMap.newKeySet();
 
@@ -192,7 +199,8 @@ public final class FaultInjection {
             long ownDelayNanos, int ownDelayRows, int ownEpochBreak, int ownWiden, int ownBreak,
             int ownSkipIgnored, int ownDoubleRun, int ownThrow, int ownEntityBreak,
             int ownSegmentBreak, int ownOrdinalBreak, int ownObserveClaim, int segBreak,
-            int segBreakRow, int ladderWalk, int ladderReturn, int waitWalk) {
+            int segBreakRow, int ladderWalk, int ladderReturn, int waitWalk, int tickDigestBreak,
+            long tickDigestBreakTick) {
             this.delayNanos = delayNanos;
             this.delayBatches = delayBatches;
             this.holdWorlds = Set.copyOf(holdWorlds);
@@ -214,11 +222,14 @@ public final class FaultInjection {
             this.ladderWalk = ladderWalk;
             this.ladderReturn = ladderReturn;
             this.waitWalk = waitWalk;
+            this.tickDigestBreak = tickDigestBreak;
+            this.tickDigestBreakTick = tickDigestBreakTick;
             this.enabled = delayNanos > 0L || !holdWorlds.isEmpty() || ownFail > 0
                 || ownDelayNanos > 0L || ownEpochBreak > 0 || ownWiden > 0 || ownBreak > 0
                 || ownSkipIgnored > 0 || ownDoubleRun > 0 || ownThrow > 0 || ownEntityBreak > 0
                 || ownSegmentBreak > 0 || ownOrdinalBreak > 0 || ownObserveClaim > 0
-                || segBreak > 0 || ladderWalk > 0 || ladderReturn > 0 || waitWalk > 0;
+                || segBreak > 0 || ladderWalk > 0 || ladderReturn > 0 || waitWalk > 0
+                || tickDigestBreak > 0;
         }
 
         static Spec parse(String directive) {
@@ -243,6 +254,8 @@ public final class FaultInjection {
             int ladderWalk = 0;
             int ladderReturn = 0;
             int waitWalk = 0;
+            int tickDigestBreak = 0;
+            long tickDigestBreakTick = 0L;
             if (directive != null) {
                 for (String token : directive.split(",")) {
                     String trimmed = token.trim();
@@ -298,13 +311,18 @@ public final class FaultInjection {
                         ladderReturn = (int) clampNumber(value, 0L, LADDER_MAX, 0L);
                     } else if ("waitWalk".equals(name)) {
                         waitWalk = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
+                    } else if ("tickDigestBreak".equals(name)) {
+                        tickDigestBreak = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
+                    } else if ("tickDigestBreakTick".equals(name)) {
+                        tickDigestBreakTick = clampNumber(value, 0L, Long.MAX_VALUE / 2L, 0L);
                     }
                 }
             }
             return new Spec(delayMs * 1_000_000L, batches, worlds, ownFail, ownDelayMs * 1_000_000L,
                 ownDelayRows, ownEpochBreak, ownWiden, ownBreak, ownSkipIgnored, ownDoubleRun,
                 ownThrow, ownEntityBreak, ownSegmentBreak, ownOrdinalBreak, ownObserveClaim,
-                segBreak, segBreakRow, ladderWalk, ladderReturn, waitWalk);
+                segBreak, segBreakRow, ladderWalk, ladderReturn, waitWalk, tickDigestBreak,
+                tickDigestBreakTick);
         }
 
         private static long clampNumber(String value, long low, long high, long fallback) {
@@ -401,6 +419,14 @@ public final class FaultInjection {
 
         int waitWalk() {
             return waitWalk;
+        }
+
+        int tickDigestBreak() {
+            return tickDigestBreak;
+        }
+
+        long tickDigestBreakTick() {
+            return tickDigestBreakTick;
         }
     }
 
@@ -568,6 +594,20 @@ public final class FaultInjection {
         }
         long taken = spec.waitWalkTaken.getAndIncrement();
         return taken >= spec.waitWalk ? 0 : (int) taken + 1;
+    }
+
+    /** Whether the digest row about to be folded has to carry a deviated value; off unless
+     * declared, and spent after the declared number of rows. The comparison of two runs has to
+     * name the tick, the world and the field of the first row this answered for. */
+    public static boolean tickDigestDeviates(long tick) {
+        return tickDigestDeviates(LIVE, tick);
+    }
+
+    static boolean tickDigestDeviates(Spec spec, long tick) {
+        if (spec.tickDigestBreak <= 0 || tick < spec.tickDigestBreakTick) {
+            return false;
+        }
+        return spec.tickDigestBreakTaken.getAndIncrement() < spec.tickDigestBreak;
     }
 
     private static int step(int declared, AtomicLong taken) {
