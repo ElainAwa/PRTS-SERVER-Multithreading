@@ -49,10 +49,12 @@ import io.izzel.arclight.common.prts.kernel.waitpoints.WaitProgress;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSite;
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
 import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteObserver;
+import io.izzel.arclight.common.prts.kernel.observe.ChunkDemandObserver;
 import io.izzel.arclight.common.prts.kernel.observe.ChunkFlowObserver;
 import io.izzel.arclight.common.prts.kernel.observe.LoadThreadObserver;
 import io.izzel.arclight.common.prts.kernel.observe.PipelineRowObserver;
 import io.izzel.arclight.common.prts.kernel.observe.SaveIdentityObserver;
+import io.izzel.arclight.common.prts.kernel.observe.StallAttributionObserver;
 import io.izzel.arclight.common.prts.kernel.meter.SelfCostTap;
 import io.izzel.arclight.common.prts.support.PrtsSelfCosts;
 import io.izzel.arclight.common.prts.support.PrtsWaitSites;
@@ -139,6 +141,8 @@ public final class KernelModule {
     private final LoadThreadObserver loadThread = new LoadThreadObserver();
     private final ChunkFlowObserver chunkFlow = new ChunkFlowObserver();
     private final SaveIdentityObserver saveIdentity = new SaveIdentityObserver();
+    private final StallAttributionObserver attribution = new StallAttributionObserver();
+    private final ChunkDemandObserver chunkDemand = new ChunkDemandObserver();
     private final SelfCostTap selfCosts = new SelfCostTap();
     private final SharePlanner shares = new SharePlanner();
     private final BudgetStateMachine budgetStates = new BudgetStateMachine();
@@ -342,12 +346,18 @@ public final class KernelModule {
         }
         loadProbeInstalled = wanted;
         if (wanted) {
+            loadThread.boundaryListener(attribution);
             loadThread.install();
             chunkFlow.attach();
+            attribution.attach();
+            chunkDemand.attach();
             PrtsSelfCosts.install(selfCosts);
         } else {
+            loadThread.boundaryListener(null);
             loadThread.uninstall();
             chunkFlow.detach();
+            attribution.detach();
+            chunkDemand.detach();
             PrtsSelfCosts.install(null);
         }
     }
@@ -802,6 +812,16 @@ public final class KernelModule {
         return saveIdentity;
     }
 
+    /** The per-instance attribution of the block entity and entity tick faces. */
+    public StallAttributionObserver attribution() {
+        return attribution;
+    }
+
+    /** The demand side counters of the chunk cache. */
+    public ChunkDemandObserver chunkDemand() {
+        return chunkDemand;
+    }
+
     /** How long the last plan build took, in nanoseconds. */
     public long planNanosLast() {
         return planNanosLast;
@@ -911,6 +931,8 @@ public final class KernelModule {
         loadThread.reset();
         chunkFlow.reset();
         saveIdentity.reset();
+        attribution.reset();
+        chunkDemand.reset();
         planNanosLast = 0L;
         planNanosTotal = 0L;
         planNanosMax = 0L;

@@ -53,6 +53,8 @@
     "pipeline.PrtsPipelineMailboxMixin",
     "pipeline.PrtsChunkFlowMailboxMixin",
     "observation.PrtsEntitySelfCostMixin",
-    "observation.PrtsBlockEntitySelfCostMixin"
+    "observation.PrtsBlockEntitySelfCostMixin",
+    "observation.PrtsBlockEntityTickCostMixin",
+    "pipeline.PrtsChunkDemandMixin"
   ]
 }

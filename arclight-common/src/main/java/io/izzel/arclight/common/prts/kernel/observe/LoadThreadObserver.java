@@ -1,11 +1,15 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.observe;
 
+import io.izzel.arclight.common.prts.support.PrtsCpuClock;
 import io.izzel.arclight.common.prts.support.PrtsLoadProbe;
 
+import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadInfo;
 import java.lang.management.ThreadMXBean;
+import java.util.List;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -21,6 +25,23 @@ import java.util.concurrent.atomic.LongAdder;
  */
 public final class LoadThreadObserver implements PrtsLoadProbe.Probe {
 
+    /** One finished tick as the boundary read it: how long its body took, how much of that the
+     * thread was parked, how much cpu it used, and whether the body was a wait stall or a busy one. */
+    public record Boundary(long tick, long bodyWallNanos, long bodyCpuNanos, long bodyParkNanos,
+                           long betweenWallNanos, long periodCpuNanos, boolean parkStall,
+                           boolean busyStall, long gcCollections, long gcMillis) {
+    }
+
+    /** Told about every finished tick, on the thread the tick ran on. */
+    public interface BoundaryListener {
+
+        void tickBoundary(Boundary boundary);
+    }
+
+    /** One sampled stack of a main thread that stayed runnable inside a tick. */
+    public record Watchdog(long atNanos, long bodyNanos, String top) {
+    }
+
     /** Why a wait was entered; UNKNOWN covers a stack the signatures do not name. */
     public static final String DEPENDENCY = "dependency";
     public static final String LOCK = "lock";
@@ -31,6 +52,14 @@ public final class LoadThreadObserver implements PrtsLoadProbe.Probe {
     public static final long SAMPLE_INTERVAL_NANOS = SAMPLE_INTERVAL_MILLIS * 1_000_000L;
     public static final long STALL_TICK_NANOS = 50_000_000L;
     public static final int STACK_DEPTH = 16;
+    /** A tick whose body is long and whose parked share is below this is a busy stall, not a wait. */
+    public static final long BUSY_PARK_SHARE_PERCENT = 50L;
+    /** A main thread runnable this long inside one tick is sampled for its stack. */
+    public static final long WATCHDOG_AFTER_NANOS = 5_000_000_000L;
+    /** Two watchdog samples of the same tick are at least this far apart. */
+    public static final long WATCHDOG_EVERY_NANOS = 10_000_000_000L;
+    public static final int WATCHDOG_DEPTH = 24;
+    public static final int WATCHDOG_RING = 8;
     private static final int WORKER_EVERY = 25;
 
     private static final String[] DEPENDENCY_FRAMES = {
@@ -95,6 +124,48 @@ public final class LoadThreadObserver implements PrtsLoadProbe.Probe {
     private long stallFrames;
     private long stallEnteredTick;
     private boolean stallOpen;
+    private volatile BoundaryListener boundaryListener;
+    private final List<GarbageCollectorMXBean> gcBeans = ManagementFactory.getGarbageCollectorMXBeans();
+    private final LongAdder watchdogSamples = new LongAdder();
+    private final ConcurrentLinkedDeque<Watchdog> watchdogs = new ConcurrentLinkedDeque<>();
+    private volatile long gcCollections;
+    private volatile long gcMillis;
+    private long boundaryTick;
+    private boolean boundarySeen;
+    private long lastBoundaryNanos;
+    private long lastBoundaryCpuNanos;
+    private long bodyStartNanos;
+    private long bodyEndNanos;
+    private long bodyCpuStartNanos;
+    private long bodyCpuEndNanos;
+    private long lastBodyParkNanos;
+    private long lastWatchdogNanos;
+    private long busyWindows;
+    private long busyTicks;
+    private long busyNanos;
+    private long busyCpuNanos;
+    private long busyParkNanos;
+    private long busyMaxNanos;
+    private long busyEnteredTick;
+    private boolean busyOpen;
+    private long tickCount;
+    private long tickBodyNanos;
+    private long tickCpuNanos;
+    private long tickParkNanos;
+    private long tickBetweenNanos;
+    private long tickPeriodNanos;
+    private long tickPeriodCpuNanos;
+    private long tickUnaccountedNanos;
+    private long lastPeriodWallNanos;
+    private long lastPeriodCpuNanos;
+    private long lastUnaccountedNanos;
+    private long lastBodyWallNanos;
+    private long lastBodyCpuNanos;
+    private long lastBodyParkNanosReading;
+    private long lastBetweenNanos;
+    private volatile String watchdogTop = "-";
+    private volatile long watchdogAtNanos;
+    private volatile long watchdogBodyNanos;
 
     /** Starts the sampler on the thread that calls it; the server reports its own tick boundary so a
      * later caller is corrected on the first tick. */
@@ -107,6 +178,8 @@ public final class LoadThreadObserver implements PrtsLoadProbe.Probe {
         thread = Thread.currentThread();
         threadName = thread.getName();
         startedAtNanos = System.nanoTime();
+        PrtsCpuClock.enable();
+        noteGc();
         PrtsLoadProbe.install(this);
         Thread sampler = new Thread(this::loop, "prts-load-sampler");
         sampler.setDaemon(true);
@@ -130,6 +203,7 @@ public final class LoadThreadObserver implements PrtsLoadProbe.Probe {
 
     @Override
     public void tickEntered() {
+        long now = System.nanoTime();
         Thread current = Thread.currentThread();
         if (current != thread) {
             thread = current;
@@ -137,15 +211,114 @@ public final class LoadThreadObserver implements PrtsLoadProbe.Probe {
         }
         if (!firstTickSeen) {
             firstTickSeen = true;
-            firstTickAtNanos = System.nanoTime();
+            firstTickAtNanos = now;
         }
+        if (boundarySeen) {
+            closeBoundary(now);
+        } else {
+            boundarySeen = true;
+            lastBoundaryCpuNanos = PrtsCpuClock.now();
+        }
+        boundaryTick++;
+        noteGc();
+        bodyStartNanos = now;
+        lastBoundaryNanos = now;
+        bodyCpuStartNanos = PrtsCpuClock.now();
+        lastWatchdogNanos = 0L;
         tickWaitNanos.set(0L);
         inTick = true;
     }
 
+    /** Closes the tick that just ended and publishes it to the listener; the wait window of that
+     * tick was already read by {@link #noteTick(long)}. */
+    private void closeBoundary(long now) {
+        long periodWall = now - lastBoundaryNanos;
+        long bodyWall = bodyEndNanos - bodyStartNanos;
+        long betweenWall = Math.max(0L, periodWall - bodyWall);
+        long bodyCpu = bodyCpuStartNanos < 0L || bodyCpuEndNanos < 0L ? -1L
+            : bodyCpuEndNanos - bodyCpuStartNanos;
+        long cpuNow = PrtsCpuClock.now();
+        long periodCpu = cpuNow < 0L || lastBoundaryCpuNanos < 0L ? -1L
+            : cpuNow - lastBoundaryCpuNanos;
+        lastBoundaryCpuNanos = cpuNow;
+        long parked = lastBodyParkNanos;
+        long busy = bodyWall - parked;
+        boolean parkStall = parked >= STALL_TICK_NANOS;
+        boolean busyStall = bodyWall >= STALL_TICK_NANOS
+            && busy * 100L >= bodyWall * BUSY_PARK_SHARE_PERCENT;
+        if (busyStall) {
+            if (!busyOpen) {
+                busyOpen = true;
+                busyEnteredTick = boundaryTick;
+                busyWindows++;
+            }
+            busyTicks++;
+            busyNanos += bodyWall;
+            busyParkNanos += parked;
+            if (bodyCpu > 0L) {
+                busyCpuNanos += bodyCpu;
+            }
+            if (bodyWall > busyMaxNanos) {
+                busyMaxNanos = bodyWall;
+            }
+        } else {
+            busyOpen = false;
+        }
+        long unaccounted = Math.max(0L, periodWall - bodyWall - betweenWall);
+        tickCount++;
+        tickBodyNanos += bodyWall;
+        tickParkNanos += parked;
+        tickBetweenNanos += betweenWall;
+        tickPeriodNanos += periodWall;
+        tickUnaccountedNanos += unaccounted;
+        if (bodyCpu > 0L) {
+            tickCpuNanos += bodyCpu;
+        }
+        if (periodCpu > 0L) {
+            tickPeriodCpuNanos += periodCpu;
+        }
+        lastBodyWallNanos = bodyWall;
+        lastBodyCpuNanos = bodyCpu;
+        lastBodyParkNanosReading = parked;
+        lastBetweenNanos = betweenWall;
+        lastPeriodWallNanos = periodWall;
+        lastPeriodCpuNanos = periodCpu;
+        lastUnaccountedNanos = unaccounted;
+        BoundaryListener listener = boundaryListener;
+        if (listener != null) {
+            try {
+                listener.tickBoundary(new Boundary(boundaryTick, bodyWall, bodyCpu, parked,
+                    betweenWall, periodCpu, parkStall, busyStall, gcCollections, gcMillis));
+            } catch (Throwable ignored) {
+                // A listener that throws must not end the observation of the process it watches.
+            }
+        }
+    }
+
     @Override
     public void tickLeft() {
+        long now = System.nanoTime();
+        bodyEndNanos = now;
+        bodyCpuEndNanos = PrtsCpuClock.now();
+        lastBodyParkNanos = tickWaitNanos.get();
         inTick = false;
+    }
+
+    private void noteGc() {
+        long collections = 0L;
+        long millis = 0L;
+        for (GarbageCollectorMXBean bean : gcBeans) {
+            long count = bean.getCollectionCount();
+            long time = bean.getCollectionTime();
+            if (count > 0L) {
+                collections += count;
+            }
+            if (time > 0L) {
+                millis += time;
+            }
+        }
+        gcCollections = collections;
+        gcMillis = millis;
     }
 
     /** Closes the wait window of the tick that just ended and opens a stall window if it was long
@@ -240,6 +413,7 @@ public final class LoadThreadObserver implements PrtsLoadProbe.Probe {
             || state == Thread.State.BLOCKED;
         if (!waiting) {
             closeEpisode();
+            sampleWatchdog(bean, watched, info);
             return;
         }
         String waitClass = episodeClass;
@@ -282,6 +456,50 @@ public final class LoadThreadObserver implements PrtsLoadProbe.Probe {
     private void closeEpisode() {
         episodeClass = null;
         episodeFrames = 0L;
+    }
+
+    /** Samples the stack of a main thread that has been runnable inside one tick long enough to be a
+     * busy stall. The interval and the threshold are declared values; the sample is a stack of the
+     * moment, not an attribution of the span. */
+    private void sampleWatchdog(ThreadMXBean bean, Thread watched, ThreadInfo info) {
+        if (info == null || info.getThreadState() != Thread.State.RUNNABLE
+            || !firstTickSeen || !inTick) {
+            return;
+        }
+        long now = System.nanoTime();
+        long inBody = now - bodyStartNanos;
+        if (inBody < WATCHDOG_AFTER_NANOS) {
+            return;
+        }
+        if (lastWatchdogNanos != 0L && now - lastWatchdogNanos < WATCHDOG_EVERY_NANOS) {
+            return;
+        }
+        lastWatchdogNanos = now;
+        ThreadInfo deep = bean.getThreadInfo(watched.threadId(), WATCHDOG_DEPTH);
+        if (deep == null || deep.getStackTrace() == null) {
+            return;
+        }
+        StackTraceElement[] frames = deep.getStackTrace();
+        StringBuilder builder = new StringBuilder();
+        int kept = 0;
+        for (StackTraceElement frame : frames) {
+            if (kept == 6) {
+                break;
+            }
+            if (kept > 0) {
+                builder.append(" | ");
+            }
+            builder.append(frame.getClassName()).append('.').append(frame.getMethodName());
+            kept++;
+        }
+        watchdogTop = builder.length() == 0 ? "-" : builder.toString();
+        watchdogAtNanos = now;
+        watchdogBodyNanos = inBody;
+        watchdogSamples.increment();
+        watchdogs.addLast(new Watchdog(now, inBody, watchdogTop));
+        while (watchdogs.size() > WATCHDOG_RING) {
+            watchdogs.pollFirst();
+        }
     }
 
     private void sampleWorkers() {
@@ -339,6 +557,44 @@ public final class LoadThreadObserver implements PrtsLoadProbe.Probe {
         firstTickSeen = false;
         workerThreadsPeak = 0;
         workerThreads = 0;
+        watchdogSamples.reset();
+        watchdogs.clear();
+        watchdogTop = "-";
+        watchdogAtNanos = 0L;
+        watchdogBodyNanos = 0L;
+        boundaryTick = 0L;
+        boundarySeen = false;
+        lastBoundaryNanos = 0L;
+        lastBoundaryCpuNanos = 0L;
+        bodyStartNanos = 0L;
+        bodyEndNanos = 0L;
+        bodyCpuStartNanos = 0L;
+        bodyCpuEndNanos = 0L;
+        lastBodyParkNanos = 0L;
+        lastWatchdogNanos = 0L;
+        busyWindows = 0L;
+        busyTicks = 0L;
+        busyNanos = 0L;
+        busyCpuNanos = 0L;
+        busyParkNanos = 0L;
+        busyMaxNanos = 0L;
+        busyEnteredTick = 0L;
+        busyOpen = false;
+        tickCount = 0L;
+        tickBodyNanos = 0L;
+        tickCpuNanos = 0L;
+        tickParkNanos = 0L;
+        tickBetweenNanos = 0L;
+        tickPeriodNanos = 0L;
+        tickPeriodCpuNanos = 0L;
+        tickUnaccountedNanos = 0L;
+        lastBodyWallNanos = 0L;
+        lastBodyCpuNanos = 0L;
+        lastBodyParkNanosReading = 0L;
+        lastBetweenNanos = 0L;
+        lastPeriodWallNanos = 0L;
+        lastPeriodCpuNanos = 0L;
+        lastUnaccountedNanos = 0L;
     }
 
     public long samples() {
@@ -459,5 +715,134 @@ public final class LoadThreadObserver implements PrtsLoadProbe.Probe {
 
     public int workerThreadsPeak() {
         return workerThreadsPeak;
+    }
+
+    public void boundaryListener(BoundaryListener listener) {
+        this.boundaryListener = listener;
+    }
+
+    public long boundaryTick() {
+        return boundaryTick;
+    }
+
+    public long tickCount() {
+        return tickCount;
+    }
+
+    public long tickBodyNanos() {
+        return tickBodyNanos;
+    }
+
+    public long tickCpuNanos() {
+        return tickCpuNanos;
+    }
+
+    public long tickParkNanos() {
+        return tickParkNanos;
+    }
+
+    public long tickBetweenNanos() {
+        return tickBetweenNanos;
+    }
+
+    public long tickPeriodNanos() {
+        return tickPeriodNanos;
+    }
+
+    public long tickPeriodCpuNanos() {
+        return tickPeriodCpuNanos;
+    }
+
+    public long tickUnaccountedNanos() {
+        return tickUnaccountedNanos;
+    }
+
+    public long lastPeriodWallNanos() {
+        return lastPeriodWallNanos;
+    }
+
+    public long lastUnaccountedNanos() {
+        return lastUnaccountedNanos;
+    }
+
+    public long lastBodyWallNanos() {
+        return lastBodyWallNanos;
+    }
+
+    public long lastBodyCpuNanos() {
+        return lastBodyCpuNanos;
+    }
+
+    public long lastBodyParkNanos() {
+        return lastBodyParkNanosReading;
+    }
+
+    public long lastBetweenNanos() {
+        return lastBetweenNanos;
+    }
+
+    public long gcCollections() {
+        return gcCollections;
+    }
+
+    public long gcMillis() {
+        return gcMillis;
+    }
+
+    public long busyWindows() {
+        return busyWindows;
+    }
+
+    public long busyTicks() {
+        return busyTicks;
+    }
+
+    public long busyNanos() {
+        return busyNanos;
+    }
+
+    public long busyCpuNanos() {
+        return busyCpuNanos;
+    }
+
+    public long busyParkNanos() {
+        return busyParkNanos;
+    }
+
+    public long busyMaxNanos() {
+        return busyMaxNanos;
+    }
+
+    public long busyEnteredTick() {
+        return busyEnteredTick;
+    }
+
+    public boolean busyInWindow() {
+        return busyOpen;
+    }
+
+    public long watchdogSamples() {
+        return watchdogSamples.sum();
+    }
+
+    public String watchdogTop() {
+        return watchdogTop;
+    }
+
+    public long watchdogBodyNanos() {
+        return watchdogBodyNanos;
+    }
+
+    public long watchdogAgeNanos() {
+        return watchdogAtNanos == 0L ? -1L : System.nanoTime() - watchdogAtNanos;
+    }
+
+    /** @return the newest watchdog samples, oldest first */
+    public List<Watchdog> watchdogs() {
+        return List.copyOf(watchdogs);
+    }
+
+    public boolean cpuSupported() {
+        return PrtsCpuClock.supported();
     }
 }

@@ -71,7 +71,16 @@ public final class PrtsSeams {
             "net.minecraft.server.level.ServerLevel", FIXES_CATEGORY),
         new Seam("block_entity_self_cost",
             "io.izzel.arclight.common.prts.fixes.observation.PrtsBlockEntitySelfCostMixin",
-            "net.minecraft.world.level.Level", FIXES_CATEGORY));
+            "net.minecraft.world.level.Level", FIXES_CATEGORY),
+        new Seam("block_entity_cost",
+            "io.izzel.arclight.common.prts.fixes.observation.PrtsBlockEntityTickCostMixin",
+            "net.minecraft.world.level.Level", FIXES_CATEGORY),
+        new Seam("entity_cost",
+            "io.izzel.arclight.common.prts.fixes.observation.PrtsEntitySelfCostMixin",
+            "net.minecraft.server.level.ServerLevel", FIXES_CATEGORY),
+        new Seam("chunk_demand",
+            "io.izzel.arclight.common.prts.fixes.pipeline.PrtsChunkDemandMixin",
+            "net.minecraft.server.level.ServerChunkCache", FIXES_CATEGORY));
 
     private static final Map<String, Boolean> DECISIONS = new ConcurrentHashMap<>();
     private static final Map<String, Boolean> APPLIED = new ConcurrentHashMap<>();

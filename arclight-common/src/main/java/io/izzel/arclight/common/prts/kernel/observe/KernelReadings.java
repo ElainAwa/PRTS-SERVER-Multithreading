@@ -94,6 +94,8 @@ public final class KernelReadings {
         exits(lines, module);
         pipelineRows(lines, module);
         loadObservation(lines, module);
+        stallAttribution(lines, module);
+        chunkDemand(lines, module);
         control(lines, module);
         return lines;
     }
@@ -1167,6 +1169,48 @@ public final class KernelReadings {
         add(lines, "stall.frames", watcher.stallFrames());
         add(lines, "stall.entered_tick", watcher.stallEnteredTick());
         add(lines, "stall.in_window", watcher.stallInWindow() ? 1 : 0);
+        add(lines, "tick.count", watcher.tickCount());
+        add(lines, "tick.body_ms", ms(watcher.tickBodyNanos()));
+        add(lines, "tick.cpu_ms", ms(watcher.tickCpuNanos()));
+        add(lines, "tick.park_ms", ms(watcher.tickParkNanos()));
+        add(lines, "tick.between_ms", ms(watcher.tickBetweenNanos()));
+        add(lines, "tick.period_ms", ms(watcher.tickPeriodNanos()));
+        add(lines, "tick.period_cpu_ms", ms(watcher.tickPeriodCpuNanos()));
+        add(lines, "tick.unaccounted_ms", ms(watcher.tickUnaccountedNanos()));
+        add(lines, "tick.period_ms_last", ms(watcher.lastPeriodWallNanos()));
+        add(lines, "tick.unaccounted_ms_last", ms(watcher.lastUnaccountedNanos()));
+        add(lines, "tick.cpu_supported", watcher.cpuSupported() ? 1 : 0);
+        add(lines, "tick.body_ms_last", ms(watcher.lastBodyWallNanos()));
+        add(lines, "tick.cpu_ms_last", ms(Math.max(0L, watcher.lastBodyCpuNanos())));
+        add(lines, "tick.park_ms_last", ms(watcher.lastBodyParkNanos()));
+        add(lines, "tick.between_ms_last", ms(watcher.lastBetweenNanos()));
+        add(lines, "gc.collections", watcher.gcCollections());
+        add(lines, "gc.time_ms", watcher.gcMillis());
+        add(lines, "stall.busy.threshold_ms", ms(LoadThreadObserver.STALL_TICK_NANOS));
+        add(lines, "stall.busy.park_share_max_pct", LoadThreadObserver.BUSY_PARK_SHARE_PERCENT);
+        add(lines, "stall.busy.windows", watcher.busyWindows());
+        add(lines, "stall.busy.ticks", watcher.busyTicks());
+        add(lines, "stall.busy.ms", ms(watcher.busyNanos()));
+        add(lines, "stall.busy.cpu_ms", ms(watcher.busyCpuNanos()));
+        add(lines, "stall.busy.park_ms", ms(watcher.busyParkNanos()));
+        add(lines, "stall.busy.offcpu_ms", ms(Math.max(0L,
+            watcher.busyNanos() - watcher.busyCpuNanos() - watcher.busyParkNanos())));
+        add(lines, "stall.busy.max_ms", ms(watcher.busyMaxNanos()));
+        add(lines, "stall.busy.entered_tick", watcher.busyEnteredTick());
+        add(lines, "stall.busy.in_window", watcher.busyInWindow() ? 1 : 0);
+        add(lines, "stall.relation", "park-defined-stall-keys;" + "busy-adds-tick-bodies-over-the-bound"
+            + "-whose-parked-share-is-below-" + LoadThreadObserver.BUSY_PARK_SHARE_PERCENT + "-pct");
+        add(lines, "stall.watchdog.after_ms", ms(LoadThreadObserver.WATCHDOG_AFTER_NANOS));
+        add(lines, "stall.watchdog.every_ms", ms(LoadThreadObserver.WATCHDOG_EVERY_NANOS));
+        add(lines, "stall.watchdog.samples", watcher.watchdogSamples());
+        add(lines, "stall.watchdog.top", safe(watcher.watchdogTop()));
+        add(lines, "stall.watchdog.body_ms", ms(watcher.watchdogBodyNanos()));
+        List<LoadThreadObserver.Watchdog> watchdogSamples = watcher.watchdogs();
+        for (int index = 0; index < watchdogSamples.size(); index++) {
+            LoadThreadObserver.Watchdog sample = watchdogSamples.get(index);
+            add(lines, "stall.watchdog." + index + ".body_ms", ms(sample.bodyNanos()));
+            add(lines, "stall.watchdog." + index + ".top", safe(sample.top()));
+        }
         add(lines, "startup.first_tick_seen", watcher.firstTickSeen() ? 1 : 0);
         add(lines, "startup.ms", watcher.firstTickSeen()
             ? ms(watcher.firstTickNanos() - watcher.startedAtNanos()) : "0.000");
@@ -1236,11 +1280,223 @@ public final class KernelReadings {
             + commitDropped);
     }
 
+    /** The per-instance attribution of the two tick faces: what the time inside a block entity tick
+     * and inside a non-passenger entity row went to, by type, by mod and by colony, with the identity
+     * of the costliest instance of each type and the record of every busy stall that was closed. Every
+     * field is an observation request; no gate, verdict or release reads one. */
+    private static void stallAttribution(List<String> lines, KernelModule module) {
+        StallAttributionObserver attribution = module.attribution();
+        add(lines, "attrib.observation_only", 1);
+        add(lines, "attrib.installed", attribution.installed() ? 1 : 0);
+        add(lines, "attrib.mod_source", attribution.modSource());
+        add(lines, "attrib.colony_api", attribution.colonyAvailable() ? 1 : 0);
+        add(lines, "attrib.cpu_supported", module.loadThread().cpuSupported() ? 1 : 0);
+        add(lines, "attrib.long_tick_ms", ms(StallAttributionObserver.LONG_TICK_NANOS));
+        add(lines, "attrib.live_dump_after_ms", ms(StallAttributionObserver.LIVE_DUMP_AFTER_NANOS));
+        add(lines, "attrib.live_dumps", attribution.liveDumps());
+        add(lines, "attrib.instances_capped", attribution.instancesCapped() ? 1 : 0);
+        add(lines, "attrib.top_types", StallAttributionObserver.TYPE_TOP);
+        add(lines, "attrib.unit", "milliseconds-wall-clock;cpu-is-thread-cpu-time");
+        long tickBody = module.loadThread().tickBodyNanos();
+        add(lines, "be.segment_per_body", format(tickBody <= 0L ? 0.0
+            : attribution.segmentWall(true) / (double) tickBody));
+        beFace(lines, attribution);
+        entityFace(lines, attribution);
+        add(lines, "stall.busy.episodes", attribution.episodeCount());
+        StallAttributionObserver.Episode open = attribution.openEpisode();
+        add(lines, "stall.busy.open", open == null ? 0 : 1);
+        if (open != null) {
+            episodeKeys(lines, "stall.busy.open.", open);
+        }
+        List<StallAttributionObserver.Episode> episodes = attribution.episodes();
+        for (int index = 0; index < episodes.size(); index++) {
+            episodeKeys(lines, "stall.busy.episode." + index + ".", episodes.get(index));
+        }
+        List<StallAttributionObserver.LongTick> longTicks = attribution.longTicks();
+        add(lines, "tick.long_kept", longTicks.size());
+        for (int index = 0; index < longTicks.size(); index++) {
+            StallAttributionObserver.LongTick tick = longTicks.get(index);
+            String prefix = "tick.long." + index + ".";
+            add(lines, prefix + "face", tick.blockEntity() ? "block-entity" : "entity");
+            add(lines, prefix + "ms", ms(tick.wallNanos()));
+            add(lines, prefix + "cpu_ms", ms(Math.max(0L, tick.cpuNanos())));
+            add(lines, prefix + "type", safe(tick.type()));
+            add(lines, prefix + "mod", safe(tick.mod()));
+            add(lines, prefix + "colony", safe(tick.colony()));
+            add(lines, prefix + "label", safe(tick.label()));
+            add(lines, prefix + "top", safe(tick.top()));
+        }
+    }
+
+    private static void episodeKeys(List<String> lines, String prefix,
+                                    StallAttributionObserver.Episode episode) {
+        add(lines, prefix + "tick", episode.tick());
+        add(lines, prefix + "wall_ms", ms(episode.wallNanos()));
+        add(lines, prefix + "cpu_ms", ms(episode.cpuNanos()));
+        add(lines, prefix + "park_ms", ms(episode.parkNanos()));
+        add(lines, prefix + "offcpu_ms", ms(Math.max(0L,
+            episode.wallNanos() - episode.cpuNanos() - episode.parkNanos())));
+        add(lines, prefix + "blockentity_ms", ms(episode.blockEntityNanos()));
+        add(lines, prefix + "blockentity_cpu_ms", ms(episode.blockEntityCpuNanos()));
+        add(lines, prefix + "entity_ms", ms(episode.entityNanos()));
+        add(lines, prefix + "entity_cpu_ms", ms(episode.entityCpuNanos()));
+        add(lines, prefix + "gc_collections", episode.gcCollections());
+        add(lines, prefix + "gc_ms", episode.gcMillis());
+        add(lines, prefix + "live_dumps", episode.liveDumps());
+        add(lines, prefix + "top_types", safe(joinTop(episode.topTypes())));
+        add(lines, prefix + "top_mods", safe(joinTop(episode.topMods())));
+        add(lines, prefix + "top_colonies", safe(joinTop(episode.topColonies())));
+    }
+
+    private static void beFace(List<String> lines, StallAttributionObserver attribution) {
+        add(lines, "be.segment_ms", ms(attribution.segmentWall(true)));
+        add(lines, "be.total_ms", ms(attribution.totalWall(true)));
+        add(lines, "be.total_cpu_ms", ms(attribution.totalCpu(true)));
+        add(lines, "be.ticks", attribution.totalTicks(true));
+        add(lines, "be.types", attribution.typeCount(true));
+        add(lines, "be.instances", attribution.totalInstances(true));
+        add(lines, "be.unattributed_ms", ms(Math.max(0L,
+            attribution.segmentWall(true) - attribution.totalWall(true))));
+        add(lines, "be.offcpu_ms", ms(Math.max(0L,
+            attribution.totalWall(true) - attribution.totalCpu(true))));
+        for (StallAttributionObserver.Row row : attribution.types(true,
+            StallAttributionObserver.TYPE_TOP)) {
+            String prefix = "be.type." + safe(row.key()) + ".";
+            add(lines, prefix + "ms", ms(row.wallNanos()));
+            add(lines, prefix + "cpu_ms", ms(row.cpuNanos()));
+            add(lines, prefix + "ticks", row.ticks());
+            add(lines, prefix + "instances", row.instances());
+            add(lines, prefix + "max_instance_ms", ms(row.maxInstanceNanos()));
+            add(lines, prefix + "worst", safe(row.worst()));
+        }
+        for (StallAttributionObserver.Row row : attribution.mods(true)) {
+            String prefix = "be.mod." + safe(row.key()) + ".";
+            add(lines, prefix + "ms", ms(row.wallNanos()));
+            add(lines, prefix + "cpu_ms", ms(row.cpuNanos()));
+            add(lines, prefix + "ticks", row.ticks());
+        }
+        for (StallAttributionObserver.Row row : attribution.colonies(true)) {
+            String prefix = "be.colony." + safe(row.key()) + ".";
+            add(lines, prefix + "ms", ms(row.wallNanos()));
+            add(lines, prefix + "ticks", row.ticks());
+        }
+    }
+
+    private static void entityFace(List<String> lines, StallAttributionObserver attribution) {
+        add(lines, "ent.total_ms", ms(attribution.totalWall(false)));
+        add(lines, "ent.total_cpu_ms", ms(attribution.totalCpu(false)));
+        add(lines, "ent.ticks", attribution.totalTicks(false));
+        add(lines, "ent.classes", attribution.typeCount(false));
+        add(lines, "ent.instances", attribution.totalInstances(false));
+        add(lines, "ent.offcpu_ms", ms(Math.max(0L,
+            attribution.totalWall(false) - attribution.totalCpu(false))));
+        for (StallAttributionObserver.Row row : attribution.types(false,
+            StallAttributionObserver.TYPE_TOP)) {
+            String prefix = "ent.type." + safe(row.key()) + ".";
+            add(lines, prefix + "ms", ms(row.wallNanos()));
+            add(lines, prefix + "cpu_ms", ms(row.cpuNanos()));
+            add(lines, prefix + "ticks", row.ticks());
+            add(lines, prefix + "instances", row.instances());
+            add(lines, prefix + "max_instance_ms", ms(row.maxInstanceNanos()));
+            add(lines, prefix + "worst", safe(row.worst()));
+        }
+        for (StallAttributionObserver.Row row : attribution.mods(false)) {
+            String prefix = "ent.mod." + safe(row.key()) + ".";
+            add(lines, prefix + "ms", ms(row.wallNanos()));
+            add(lines, prefix + "cpu_ms", ms(row.cpuNanos()));
+            add(lines, prefix + "ticks", row.ticks());
+        }
+        for (StallAttributionObserver.Row row : attribution.colonies(false)) {
+            String prefix = "ent.colony." + safe(row.key()) + ".";
+            add(lines, prefix + "ms", ms(row.wallNanos()));
+            add(lines, prefix + "ticks", row.ticks());
+        }
+    }
+
+    /** The demand side of the chunk cache: how many asks it was given, how many were answered with a
+     * chunk at the wanted status, how many futures are outstanding, and the long asks with the stack
+     * they were taken at. The outstanding futures are the queue depth of this face. Observation only. */
+    private static void chunkDemand(List<String> lines, KernelModule module) {
+        ChunkDemandObserver demand = module.chunkDemand();
+        long observedNanos = demand.observedNanos();
+        double seconds = observedNanos / 1_000_000_000.0;
+        add(lines, "demand.observation_only", 1);
+        add(lines, "demand.installed", demand.installed() ? 1 : 0);
+        add(lines, "demand.install_thread", safe(demand.mainThreadName()));
+        add(lines, "demand.observed_ms", ms(observedNanos));
+        add(lines, "demand.requests", demand.requests());
+        add(lines, "demand.satisfied", demand.satisfied());
+        add(lines, "demand.missed", demand.missed());
+        add(lines, "demand.requests_per_s", format(seconds <= 0.0 ? 0.0
+            : demand.requests() / seconds));
+        add(lines, "demand.satisfied_per_s", format(seconds <= 0.0 ? 0.0
+            : demand.satisfied() / seconds));
+        add(lines, "demand.blocking_requests", demand.blockingRequests());
+        add(lines, "demand.blocking_ms", ms(demand.blockingNanos()));
+        add(lines, "demand.blocking_max_ms", ms(demand.blockingMaxNanos()));
+        add(lines, "demand.long_bound_ms", ms(ChunkDemandObserver.LONG_DEMAND_NANOS));
+        add(lines, "demand.futures_taken", demand.futuresTaken());
+        add(lines, "demand.futures_completed", demand.futuresCompleted());
+        add(lines, "demand.futures_satisfied", demand.futuresSatisfied());
+        add(lines, "demand.futures_failed", demand.futuresFailed());
+        add(lines, "demand.futures_in_flight", demand.futuresInFlight());
+        add(lines, "demand.futures_peak", demand.futuresPeak());
+        add(lines, "demand.futures_gap", demand.futuresTaken() - demand.futuresCompleted());
+        add(lines, "demand.futures_ms", ms(demand.futuresNanos()));
+        add(lines, "demand.futures_max_ms", ms(demand.futuresMaxNanos()));
+        for (ChunkDemandObserver.WorldRow row : demand.worldRows()) {
+            String prefix = "demand.world." + safe(row.key()) + ".";
+            add(lines, prefix + "requests", row.requests());
+            add(lines, prefix + "satisfied", row.satisfied());
+            add(lines, prefix + "missed", row.missed());
+            add(lines, prefix + "blocking_requests", row.blockingRequests());
+            add(lines, prefix + "blocking_ms", ms(row.blockingNanos()));
+            add(lines, prefix + "futures", row.futures());
+            add(lines, prefix + "futures_completed", row.futuresCompleted());
+            add(lines, prefix + "futures_satisfied", row.futuresSatisfied());
+        }
+        for (ChunkDemandObserver.StatusRow row : demand.statusRows()) {
+            String prefix = "demand.status." + safe(row.key()) + ".";
+            add(lines, prefix + "requests", row.requests());
+            add(lines, prefix + "satisfied", row.satisfied());
+        }
+        List<ChunkDemandObserver.LongCall> calls = demand.longCalls();
+        add(lines, "demand.long_kept", calls.size());
+        for (int index = 0; index < calls.size(); index++) {
+            ChunkDemandObserver.LongCall call = calls.get(index);
+            String prefix = "demand.long." + index + ".";
+            add(lines, prefix + "ms", ms(call.wallNanos()));
+            add(lines, prefix + "cpu_ms", ms(Math.max(0L, call.cpuNanos())));
+            add(lines, prefix + "world", safe(call.worldId()));
+            add(lines, prefix + "status", safe(call.status()));
+            add(lines, prefix + "blocking", call.blocking() ? 1 : 0);
+            add(lines, prefix + "thread", safe(call.thread()));
+            add(lines, prefix + "top", safe(call.top()));
+        }
+    }
+
+    private static String joinTop(List<StallAttributionObserver.Row> rows) {
+        if (rows.isEmpty()) {
+            return "-";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (StallAttributionObserver.Row row : rows) {
+            if (builder.length() > 0) {
+                builder.append(',');
+            }
+            builder.append(row.key()).append(':').append(row.wallNanos() / 1_000_000L);
+        }
+        return builder.toString();
+    }
+
     static String ms(long nanos) {
         return format(nanos / 1_000_000.0);
     }
 
     static String safe(String value) {
+        if (value == null) {
+            return "-";
+        }
         StringBuilder builder = new StringBuilder(value.length());
         for (int index = 0; index < value.length(); index++) {
             char character = value.charAt(index);

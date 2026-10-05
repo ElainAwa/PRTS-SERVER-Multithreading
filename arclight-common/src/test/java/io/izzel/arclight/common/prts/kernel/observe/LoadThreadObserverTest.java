@@ -4,6 +4,9 @@ package io.izzel.arclight.common.prts.kernel.observe;
 import io.izzel.arclight.common.prts.support.PrtsLoadProbe;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -66,6 +69,38 @@ class LoadThreadObserverTest {
         observer.noteTick(4L);
         assertEquals(2L, observer.stallWindows());
         assertEquals(4L, observer.stallEnteredTick());
+    }
+
+    @Test
+    void aLongTickBodyWithNoParkedTimeIsABusyStallAndTheNextQuietOneClosesIt()
+        throws InterruptedException {
+        LoadThreadObserver observer = new LoadThreadObserver();
+        List<LoadThreadObserver.Boundary> boundaries = new ArrayList<>();
+        observer.boundaryListener(boundaries::add);
+        observer.tickEntered();
+        Thread.sleep(80L);
+        observer.tickLeft();
+        observer.tickEntered();
+
+        assertEquals(1, boundaries.size());
+        assertTrue(boundaries.get(0).busyStall());
+        assertFalse(boundaries.get(0).parkStall());
+        assertEquals(1L, observer.busyWindows());
+        assertEquals(1L, observer.busyTicks());
+        assertTrue(observer.busyNanos() >= LoadThreadObserver.STALL_TICK_NANOS);
+        assertTrue(observer.busyInWindow());
+
+        observer.tickLeft();
+        observer.tickEntered();
+        assertEquals(2, boundaries.size());
+        assertFalse(boundaries.get(1).busyStall());
+        assertFalse(observer.busyInWindow());
+        assertEquals(1L, observer.busyWindows());
+        assertEquals(2L, observer.tickCount());
+        assertTrue(observer.tickBodyNanos() >= LoadThreadObserver.STALL_TICK_NANOS);
+        observer.reset();
+        assertEquals(0L, observer.busyWindows());
+        assertEquals(0L, observer.tickCount());
     }
 
     @Test
