@@ -9,6 +9,8 @@ import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
 import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
 import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
 import io.izzel.arclight.common.prts.kernel.waitpoints.CoverageReport;
+import io.izzel.arclight.common.prts.kernel.waitpoints.ForcedConvergence;
+import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry;
 import io.izzel.arclight.common.prts.support.PrtsSeams;
 import io.izzel.arclight.common.prts.support.PrtsWaitSites;
 import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
@@ -132,6 +134,20 @@ public final class KernelStatusLines {
             + " convergence_candidates="
             + module.waitSites().readings().convergenceCandidateTotal()
             + " watcher=" + (PrtsWaitSites.installed() ? 1 : 0));
+        WaitPointRegistry.NineRows nine = module.waitPoints().nineRows();
+        ForcedConvergence.Rollback rollback = module.waitPoints().convergence()
+            .rollback(ForcedConvergence.ROLLBACK_WINDOW_TICKS);
+        lines.add("[PRTS] kernel: wait contract rows=" + nine.rows() + "/" + nine.contractRows()
+            + " aligned=" + (nine.aligned() ? 1 : 0)
+            + " signals_bound=" + module.waitPoints().progress().boundCount() + "/"
+            + module.waitPoints().progress().declaredCount()
+            + " bound_ms=" + module.waitPoints().boundMs()
+            + " refuse_unregistered=" + (KernelSettings.refuseUnregisteredWaits() ? 1 : 0)
+            + " refused=" + module.waitPoints().refusedUnregistered()
+            + " convergence_reached=" + module.waitPoints().convergence().reached()
+            + " convergence_effective=" + module.waitPoints().convergence().effective()
+            + " rollback_ready=" + (rollback.ready() ? 1 : 0)
+            + " observation_only=1");
         lines.add("[PRTS] kernel: observation requests, not an approved counter table;"
             + " run '/prts kernel' for the full export");
         return lines;

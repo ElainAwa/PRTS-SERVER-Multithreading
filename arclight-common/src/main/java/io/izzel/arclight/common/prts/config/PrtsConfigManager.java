@@ -178,6 +178,10 @@ public final class PrtsConfigManager {
                 + "# 'wait-bound-ms' is the upper bound of one wait, and 'retry-budget' is how many\n"
                 + "# retries one failing intent carries before its refusal is final and the channel\n"
                 + "# releases it.\n"
+                + "# 'refuse-unregistered-waits: false' leaves a wait at a call site no row covers on\n"
+                + "# its original path and only counts it. On, the registry answers that wait with a\n"
+                + "# refusal code as well; the count is kept and the call site still runs the host\n"
+                + "# path unchanged, because the refusal is an answer and not an interception.\n"
                 + "# 'dispatch-parallel: false' leaves the first parallel domain switched off: no plan,\n"
                 + "# no worker thread and no intermediate slot exists while it is off. On, one tick\n"
                 + "# freezes its entity work into tasks, runs each task on a named worker and merges\n"
@@ -237,6 +241,7 @@ public final class PrtsConfigManager {
         features.put("self-timers", true);
         features.put("share-table", true);
         features.put("wait-registry", true);
+        features.put("refuse-unregistered-waits", false);
         features.put("write-path-guard", true);
         features.put("commit-intents", false);
         features.put("route-unregistered-writes", false);

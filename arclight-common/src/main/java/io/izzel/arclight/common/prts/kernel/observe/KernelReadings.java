@@ -29,7 +29,9 @@ import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
 import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
 import io.izzel.arclight.common.prts.kernel.sites.ThreadOrigin;
 import io.izzel.arclight.common.prts.kernel.waitpoints.CoverageReport;
+import io.izzel.arclight.common.prts.kernel.waitpoints.ForcedConvergence;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry;
+import io.izzel.arclight.common.prts.kernel.waitpoints.WaitProgress;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSite;
 import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteReadings;
 import io.izzel.arclight.common.prts.support.PrtsSeams;
@@ -425,6 +427,52 @@ public final class KernelReadings {
         add(lines, "wait.overrun", registry.waitOverrunCount());
         add(lines, "wait.observed", registry.observationCount());
         waitSiteReadings(lines, module);
+        waitContract(lines, module);
+    }
+
+    /** The dependency-contract side of the registry: the nine rows the contract writes down, the four
+     * items each row carries, the signal reading each row publishes and the bound-action gate. These
+     * fields are observation requests; no verdict reads them. */
+    private static void waitContract(List<String> lines, KernelModule module) {
+        WaitPointRegistry registry = module.waitPoints();
+        WaitPointRegistry.NineRows nine = registry.nineRows();
+        add(lines, "wp.observation_only", 1);
+        add(lines, "wp.nine_rows", nine.rows());
+        add(lines, "wp.nine_rows_contract", nine.contractRows());
+        add(lines, "wp.nine_rows_aligned", nine.aligned() ? 1 : 0);
+        add(lines, "wp.nine_rows_unserved", join(nine.unserved()));
+        add(lines, "wp.nine_rows_appended", join(nine.appended()));
+        for (WaitPointRegistry.WaitPointEntry row : registry.rows()) {
+            String prefix = "wp.row." + safe(row.wpId()) + ".";
+            add(lines, prefix + "key", row.wpId());
+            add(lines, prefix + "producer", row.producer());
+            add(lines, prefix + "signal_kind", row.signal().kind().name());
+            add(lines, prefix + "signal_field", row.signal().fieldRef());
+            add(lines, prefix + "timeout_action", row.timeoutAction());
+            add(lines, prefix + "degrade_to", row.degradeTo());
+            add(lines, prefix + "overrun", registry.overrunOf(row.wpId()));
+        }
+        for (WaitProgress.Reading reading : registry.progress().readings()) {
+            String prefix = "wp.signal." + safe(reading.wpId()) + ".";
+            add(lines, prefix + "kind", reading.kind().name());
+            add(lines, prefix + "bound", reading.bound() ? 1 : 0);
+            add(lines, prefix + "source", safe(reading.source()));
+            add(lines, prefix + "value", reading.value());
+            add(lines, prefix + "delta", reading.delta());
+        }
+        add(lines, "wp.signal_rows", registry.progress().declaredCount());
+        add(lines, "wp.signal_bound", registry.progress().boundCount());
+        add(lines, "wait.refuse_unregistered", KernelSettings.refuseUnregisteredWaits() ? 1 : 0);
+        add(lines, "wait.refused_unregistered", registry.refusedUnregistered());
+        ForcedConvergence gate = registry.convergence();
+        add(lines, "wp.convergence_reached", gate.reached());
+        add(lines, "wp.convergence_effective", gate.effective());
+        ForcedConvergence.Rollback rollback =
+            gate.rollback(ForcedConvergence.ROLLBACK_WINDOW_TICKS);
+        add(lines, "wp.rollback_window_ticks", rollback.windowTicks());
+        add(lines, "wp.rollback_ticks_observed", rollback.ticksObserved());
+        add(lines, "wp.rollback_ticks_clean", rollback.ticksClean());
+        add(lines, "wp.rollback_ready", rollback.ready() ? 1 : 0);
     }
 
     private static void waitSiteReadings(List<String> lines, KernelModule module) {

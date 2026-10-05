@@ -53,6 +53,9 @@ public final class KernelSettings {
     /** Upper bound of one wait, in milliseconds. */
     public static final String WAIT_BOUND_MS = "wait-bound-ms";
 
+    /** Answers a wait no row covers with a refusal code; off, such a wait is only counted. */
+    public static final String REFUSE_UNREGISTERED_WAITS = "refuse-unregistered-waits";
+
     /** Number of retries one attempt carries before a refusal is final. */
     public static final String RETRY_BUDGET = "retry-budget";
 
@@ -130,6 +133,10 @@ public final class KernelSettings {
 
     public static boolean waitRegistry() {
         return feature(WAIT_REGISTRY);
+    }
+
+    public static boolean refuseUnregisteredWaits() {
+        return feature(REFUSE_UNREGISTERED_WAITS);
     }
 
     public static boolean writePathGuard() {

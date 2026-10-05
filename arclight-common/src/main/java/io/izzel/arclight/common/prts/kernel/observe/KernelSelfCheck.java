@@ -32,6 +32,8 @@ import io.izzel.arclight.common.prts.kernel.shares.SharePlanner;
 import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
 import io.izzel.arclight.common.prts.kernel.waitpoints.CoverageReport;
 import io.izzel.arclight.common.prts.kernel.waitpoints.Dec19Elements;
+import io.izzel.arclight.common.prts.kernel.waitpoints.ForcedConvergence;
+import io.izzel.arclight.common.prts.kernel.waitpoints.WaitProgress;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry.RegisterResult;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry.WaitObservation;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry.WaitPointDeclaration;
@@ -227,6 +229,7 @@ public final class KernelSelfCheck {
         lines.addAll(writePathMatrix(failures, tick));
         lines.addAll(siteCoverage(failures, waits));
         lines.addAll(waitSiteMatrix(failures, tick));
+        lines.addAll(waitContractMatrix(failures, tick));
         lines.addAll(domainSelfChecks(failures, tick));
 
         lines.add("selftest.failures=" + failures.size());
@@ -548,6 +551,111 @@ public final class KernelSelfCheck {
         lines.add("selftest.wait_watcher_restored=" + (PrtsWaitSites.watcher() == previous ? 1 : 0));
         if (PrtsWaitSites.watcher() != previous) {
             failures.add("the wait observation seam was not handed back after the check");
+        }
+        return lines;
+    }
+
+    /** The dependency-contract side of the wait registry: the nine rows it must serve, the four
+     * items one observation carries, the progress reading, the refusal interface and the bound gate.
+     * Every check builds its own registry, so the live counters are never touched. */
+    private static List<String> waitContractMatrix(List<String> failures, long tick) {
+        List<String> lines = new ArrayList<>();
+        WaitPointRegistry waits = new WaitPointRegistry(() -> 50);
+        WaitPointRegistry.NineRows nine = waits.nineRows();
+        WaitPointRegistry.WaitPointEntry alias = waits.lookup("chunk");
+        lines.add("selftest.wait_nine_rows=" + nine.rows());
+        lines.add("selftest.wait_nine_contract=" + nine.contractRows());
+        lines.add("selftest.wait_nine_aligned=" + (nine.aligned() ? 1 : 0));
+        lines.add("selftest.wait_nine_appended=" + nine.appended().size());
+        lines.add("selftest.wait_row_key=" + (alias == null ? "none" : alias.wpId()));
+        if (!nine.aligned() || nine.rows() != 9 || nine.contractRows() != 9) {
+            failures.add("the registry does not serve exactly the nine contract rows");
+        }
+        if (alias == null) {
+            failures.add("a contract row is not reachable by its key");
+        }
+
+        long[] depth = {0L};
+        WaitProgress progress = waits.progress();
+        progress.bind("xdomain", "intent.queue_depth", () -> depth[0]);
+        WaitProgress.Reading still = progress.read("xdomain");
+        depth[0] = 3L;
+        WaitProgress.Reading moved = progress.read("xdomain");
+        WaitProgress.Reading unbound = progress.read("xworld");
+        lines.add("selftest.wait_signal_bound=" + progress.boundCount() + "/"
+            + progress.declaredCount());
+        lines.add("selftest.wait_signal_still=" + still.value() + "/" + still.delta());
+        lines.add("selftest.wait_signal_moved=" + moved.value() + "/" + moved.delta()
+            + "/" + (moved.advancing() ? 1 : 0));
+        lines.add("selftest.wait_signal_unbound=" + unbound.value() + "/"
+            + (unbound.bound() ? 1 : 0) + "/" + unbound.source());
+        if (still.delta() != 0L || moved.delta() != 3L || !moved.advancing()) {
+            failures.add("a bound progress signal did not publish its movement");
+        }
+        if (unbound.bound() || unbound.value() != 0L) {
+            failures.add("a row whose producer is missing did not publish an unbound zero reading");
+        }
+
+        WaitPointRegistry counting = new WaitPointRegistry(() -> 50);
+        WaitObservation counted = counting.observeWait(null, new WaitSpan(null, "unknown.call",
+            "site:a", "world", tick, 10L, null));
+        WaitPointRegistry refusing = new WaitPointRegistry(() -> 50, () -> true);
+        WaitObservation refused = refusing.observeWait(null, new WaitSpan(null, "unknown.call",
+            "site:a", "world", tick, 10L, null));
+        lines.add("selftest.wait_counted_rejection="
+            + (counted.rejection() == null ? "none" : counted.rejection()));
+        lines.add("selftest.wait_counted_refusals=" + counting.refusedUnregistered());
+        lines.add("selftest.wait_refused_code="
+            + (refused.rejection() == null ? "none" : refused.rejection()));
+        lines.add("selftest.wait_refused_count=" + refusing.refusedUnregistered());
+        lines.add("selftest.wait_refused_still_counted=" + refusing.unregisteredCallSites());
+        if (counted.refused() || counting.refusedUnregistered() != 0L) {
+            failures.add("a wait was refused while the refusal switch was off");
+        }
+        if (!refused.refused() || !RejectCode.PROGRESS_UNOBSERVED.text().equals(refused.rejection())) {
+            failures.add("an unregistered wait was not answered with its refusal code");
+        }
+        if (refusing.unregisteredCallSites() != 1 || refusing.observationCount() != 1L) {
+            failures.add("the refusal replaced the count instead of joining it");
+        }
+
+        WaitPointRegistry bounded = new WaitPointRegistry(() -> 50);
+        WaitObservation crossed = bounded.observeWait("chunk", new WaitSpan("chunk",
+            "chunk.materialize", "site:a", "world", tick, 80L, null));
+        bounded.noteTick();
+        bounded.noteTick();
+        ForcedConvergence.Rollback early = bounded.convergence()
+            .rollback(ForcedConvergence.ROLLBACK_WINDOW_TICKS);
+        bounded.noteTick();
+        bounded.noteTick();
+        ForcedConvergence.Rollback ready = bounded.convergence()
+            .rollback(ForcedConvergence.ROLLBACK_WINDOW_TICKS);
+        lines.add("selftest.wait_rollback_window=" + ForcedConvergence.ROLLBACK_WINDOW_TICKS);
+        lines.add("selftest.wait_row_producer=" + crossed.producer());
+        lines.add("selftest.wait_row_signal=" + crossed.signal().kind() + ":"
+            + crossed.signal().fieldRef());
+        lines.add("selftest.wait_row_action=" + crossed.timeoutAction());
+        lines.add("selftest.wait_row_degrade=" + crossed.degradeTo());
+        lines.add("selftest.wait_reached=" + bounded.convergence().reached());
+        lines.add("selftest.wait_effective=" + bounded.convergence().effective());
+        lines.add("selftest.wait_overrun_by_row=" + bounded.overrunOf("chunk"));
+        lines.add("selftest.wait_rollback_early=" + (early.ready() ? 1 : 0));
+        lines.add("selftest.wait_rollback_ready=" + (ready.ready() ? 1 : 0));
+        if (!crossed.complete() || crossed.producer() == null || crossed.signal() == null
+            || crossed.timeoutAction() == null || crossed.degradeTo() == null) {
+            failures.add("an observation did not carry the four contract items");
+        }
+        if (!crossed.wouldConverge() || bounded.convergence().reached() != 1L) {
+            failures.add("a wait over the bound did not reach the action its row declares");
+        }
+        if (bounded.convergence().effective() != 0L || bounded.forcedConvergence() != 0L) {
+            failures.add("a forced convergence action was reported as executed");
+        }
+        if (early.ready() || !ready.ready()) {
+            failures.add("the rollback gate did not wait for its window of clean ticks");
+        }
+        if (bounded.overrunOf("chunk") != 1L || bounded.waitOverrunCount() != 1L) {
+            failures.add("a wait over the bound was not counted against its row");
         }
         return lines;
     }

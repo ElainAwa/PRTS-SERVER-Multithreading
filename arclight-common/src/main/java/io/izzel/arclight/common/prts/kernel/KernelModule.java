@@ -62,7 +62,8 @@ public final class KernelModule {
         KernelSettings::enforceUnregisteredWrites, KernelSettings::retryBudget);
     private final WorldWriteGuard guard = new WorldWriteGuard(pathCounters, authority, intents,
         payloads, ledger);
-    private final WaitPointRegistry waitPoints = new WaitPointRegistry(KernelSettings::waitBoundMs);
+    private final WaitPointRegistry waitPoints = new WaitPointRegistry(KernelSettings::waitBoundMs,
+        KernelSettings::refuseUnregisteredWaits);
     private final WaitSiteObserver waitSites = new WaitSiteObserver(waitPoints, this::tickIndex,
         KernelSettings::waitBoundMs);
     private final SharePlanner shares = new SharePlanner();
@@ -79,6 +80,12 @@ public final class KernelModule {
 
     private KernelModule() {
         intents.bindPayload(guard);
+        // The progress side of the two rows whose producer already exists: the intent channel depth
+        // and the world epoch change count are the same counters the readout publishes, so a signal
+        // reading and its control-plane value can never disagree.
+        waitPoints.progress().bind("xdomain", "intent.queue_depth", intents::depth);
+        waitPoints.progress().bind("worldlife", "write.world_epochs_changes",
+            () -> guard.worldEpochs().epochChanges());
     }
 
     public static KernelModule instance() {
@@ -120,6 +127,7 @@ public final class KernelModule {
         }
         ledger.verifyClosure();
         tickDomains();
+        waitPoints.noteTick();
         if (KernelSettings.selfTimers()) {
             SelfTimers.note(SelfClass.OBSERVE, RUNTIME_WORLD, "runtime",
                 System.nanoTime() - startedAt);
@@ -314,6 +322,7 @@ public final class KernelModule {
         SelfTimers.resetAll();
         guard.resetReadings();
         waitSites.reset();
+        waitPoints.resetReadings();
         commitSegment.reset();
         tickIndex = 0L;
         windowStartTick = 0L;

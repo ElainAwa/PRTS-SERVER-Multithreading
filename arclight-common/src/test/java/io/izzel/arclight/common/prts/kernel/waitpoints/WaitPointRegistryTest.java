@@ -8,6 +8,7 @@ import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry.WaitObs
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry.WaitSpan;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry.RegisterResult;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -98,6 +99,108 @@ class WaitPointRegistryTest {
         assertEquals(0, report.injectionWalkthrough().get("save"));
         assertNotNull(registry.lookupByCallSite("chunk.materialize"));
         assertNull(registry.lookupByCallSite("not.a.call.site"));
+    }
+
+    @Test
+    void theNineContractRowsAreServedInOrderAndLaterRowsAreAppended() {
+        WaitPointRegistry registry = new WaitPointRegistry(() -> 50);
+        WaitPointRegistry.NineRows nine = registry.nineRows();
+
+        assertEquals(9, nine.rows());
+        assertEquals(9, nine.contractRows());
+        assertTrue(nine.aligned());
+        assertTrue(nine.unserved().isEmpty());
+        assertTrue(nine.appended().isEmpty());
+
+        assertTrue(registry.registerWaitPoint(declaration("later.row", "producer",
+            "progress.later.count")) instanceof RegisterResult.Ok);
+        WaitPointRegistry.NineRows after = registry.nineRows();
+        assertEquals(10, after.rows());
+        assertFalse(after.aligned());
+        assertEquals(java.util.List.of("later.row"), after.appended());
+        assertTrue(after.unserved().isEmpty());
+    }
+
+    @Test
+    void anObservationCarriesTheFourItemsOfItsRow() {
+        WaitPointRegistry registry = new WaitPointRegistry(() -> 50);
+        WaitObservation observation = registry.observeWait("chunk",
+            new WaitSpan("chunk", "chunk.materialize", "site:a", "world", 1L, 80L, null));
+
+        assertTrue(observation.complete());
+        assertEquals("chunk", observation.wpId());
+        assertNotNull(observation.producer());
+        assertEquals(Dec19Elements.SignalKind.COUNT, observation.signal().kind());
+        assertNotNull(observation.signal().fieldRef());
+        assertNotNull(observation.timeoutAction());
+        assertNotNull(observation.degradeTo());
+        assertTrue(observation.wouldConverge());
+        assertFalse(observation.refused());
+        assertNull(observation.rejection());
+    }
+
+    @Test
+    void anUnregisteredWaitIsOnlyCountedWhileTheRefusalSwitchIsOff() {
+        WaitPointRegistry counting = new WaitPointRegistry(() -> 50);
+        WaitObservation counted = counting.observeWait(null, span("unknown.call"));
+
+        assertFalse(counted.refused());
+        assertNull(counted.rejection());
+        assertEquals(0L, counting.refusedUnregistered());
+        assertEquals(1, counting.unregisteredCallSites());
+
+        WaitPointRegistry refusing = new WaitPointRegistry(() -> 50, () -> true);
+        WaitObservation refused = refusing.observeWait(null, span("unknown.call"));
+
+        assertTrue(refused.refused());
+        assertEquals("PROGRESS_UNOBSERVED", refused.rejection());
+        assertEquals(1L, refusing.refusedUnregistered());
+        assertEquals(1, refusing.unregisteredCallSites());
+        assertEquals(1L, refusing.observationCount());
+    }
+
+    @Test
+    void aBoundProgressSignalPublishesItsValueAndItsMovement() {
+        WaitPointRegistry registry = new WaitPointRegistry(() -> 50);
+        long[] depth = {0L};
+        registry.progress().bind("xdomain", "intent.queue_depth", () -> depth[0]);
+
+        WaitProgress.Reading still = registry.progress().read("xdomain");
+        depth[0] = 5L;
+        WaitProgress.Reading moved = registry.progress().read("xdomain");
+        WaitProgress.Reading unbound = registry.progress().read("xworld");
+
+        assertTrue(still.bound());
+        assertEquals("intent.queue_depth", still.source());
+        assertEquals(0L, still.delta());
+        assertEquals(5L, moved.value());
+        assertEquals(5L, moved.delta());
+        assertTrue(moved.advancing());
+        assertFalse(unbound.bound());
+        assertEquals(0L, unbound.value());
+        assertEquals("unbound", unbound.source());
+        assertEquals(5L, registry.progressReadings().get("xdomain"));
+    }
+
+    @Test
+    void aWaitOverTheBoundIsCountedAgainstItsRowAndReachesItsAction() {
+        WaitPointRegistry registry = new WaitPointRegistry(() -> 50);
+        registry.observeWait("save", new WaitSpan("save", "save.flush", "site:a", "world", 1L, 80L,
+            null));
+        registry.observeWait("chunk", new WaitSpan("chunk", "chunk.materialize", "site:a", "world",
+            1L, 90L, null));
+
+        assertEquals(1L, registry.overrunOf("save"));
+        assertEquals(1L, registry.overrunOf("chunk"));
+        assertEquals(0L, registry.overrunOf("net"));
+        assertEquals(2L, registry.waitOverrunCount());
+        assertEquals(1L, registry.convergence().reached());
+        assertEquals(0L, registry.forcedConvergence());
+        assertEquals(0L, registry.convergence().effective());
+    }
+
+    private static WaitSpan span(String callSite) {
+        return new WaitSpan(null, callSite, "site:a", "world", 1L, 10L, null);
     }
 
     private static WaitPointDeclaration declaration(String wpId, String producer, String fieldRef) {
