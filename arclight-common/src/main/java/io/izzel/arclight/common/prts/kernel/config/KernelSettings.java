@@ -77,6 +77,10 @@ public final class KernelSettings {
     /** Freezes one plan per tick; off, no plan is built and no plan order exists. */
     public static final String TICK_PLAN = "tick-plan";
 
+    /** Grants the version of a write right domain when the plan is frozen; off, no slot exists and
+     * every write carries none. */
+    public static final String WRITE_VERSION_SLOTS = "write-version-slots";
+
     /** Drives the frozen job graph, its gates and the metering point of the job layer; off. */
     public static final String JOB_GRAPH = "job-graph";
 
@@ -322,6 +326,10 @@ public final class KernelSettings {
 
     public static boolean tickPlan() {
         return feature(TICK_PLAN);
+    }
+
+    public static boolean writeVersionSlots() {
+        return feature(WRITE_VERSION_SLOTS);
     }
 
     public static boolean jobGraph() {

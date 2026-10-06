@@ -6,6 +6,8 @@ import io.izzel.arclight.common.prts.kernel.arena.ArenaPassthrough;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
 import io.izzel.arclight.common.prts.kernel.auth.WriteAuthority;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
+import io.izzel.arclight.common.prts.kernel.auth.WriteLevel;
+import io.izzel.arclight.common.prts.kernel.auth.WriteVersionSlots;
 import io.izzel.arclight.common.prts.kernel.codes.DegradeLevel;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
@@ -19,6 +21,7 @@ import io.izzel.arclight.common.prts.kernel.degrade.DegradeLadder;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
+import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
 import io.izzel.arclight.common.prts.kernel.jobs.JobIntake;
 import io.izzel.arclight.common.prts.kernel.jobs.JobScheduler;
 import io.izzel.arclight.common.prts.kernel.jobs.ShareMeterPoint;
@@ -138,6 +141,7 @@ public final class KernelModule {
         KernelSettings::enforceUnregisteredWrites, KernelSettings::retryBudget);
     private final WorldWriteGuard guard = new WorldWriteGuard(pathCounters, authority, intents,
         payloads, ledger);
+    private final WriteVersionSlots versionSlots = new WriteVersionSlots();
     private final WaitPointRegistry waitPoints = new WaitPointRegistry(KernelSettings::waitBoundMs,
         KernelSettings::refuseUnregisteredWaits);
     private final WaitSiteObserver waitSites = new WaitSiteObserver(waitPoints, this::tickIndex,
@@ -198,6 +202,7 @@ public final class KernelModule {
 
     private KernelModule() {
         intents.bindPayload(guard);
+        guard.versionSlots(versionSlots);
         // The progress side of the two rows whose producer already exists: the intent channel depth
         // and the world epoch change count are the same counters the readout publishes, so a signal
         // reading and its control-plane value can never disagree.
@@ -235,6 +240,7 @@ public final class KernelModule {
     public void serverTick(List<String> worldIds) {
         if (!KernelSettings.enabled()) {
             guard.refresh(false, false, false, tickIndex);
+            versionSlots.refresh(false);
             syncWaitSiteTap(false);
             syncPipelineRowTap(false);
             syncLoadProbe(false);
@@ -254,6 +260,8 @@ public final class KernelModule {
             guard.bindServerThread(Thread.currentThread(), SERVER_SITE);
         }
         guard.noteLiveWorlds(worldIds);
+        versionSlots.refresh(KernelSettings.writeVersionSlots());
+        versionSlots.noteWorlds(worldIds);
         guard.refresh(KernelSettings.writePathGuard(),
             KernelSettings.enforceUnregisteredWrites(),
             KernelSettings.routeUnregisteredWrites(), tickIndex);
@@ -569,6 +577,7 @@ public final class KernelModule {
         }
         if (result.ok()) {
             plans.publish(result.plan());
+            grantVersionSlots(result.plan());
         } else {
             plans.noteFailure(result.code());
         }
@@ -577,6 +586,20 @@ public final class KernelModule {
         // Taken last, so the frame the next tick consumes carries this tick's deltas and nothing of
         // the plan that just read the previous one.
         plans.takeFeedback(tickIndex, planSequence);
+    }
+
+    /** Grants the version slot of every write domain the frozen plan declares. The value is minted
+     * once per domain and kept until an invalidation retires it, so a write frozen in this plan
+     * names the version it was planned against. */
+    private void grantVersionSlots(TickPlan plan) {
+        if (plan.graph() == null) {
+            return;
+        }
+        for (JobGraph.Node node : plan.graph().nodes()) {
+            for (JobDeclaration.DomainRef ref : node.writeSet()) {
+                versionSlots.grant(ref.worldId(), WriteLevel.REGION, ref.domainId());
+            }
+        }
     }
 
     /** The four detectors of the safety net, reading the counters the layers around it published
@@ -823,6 +846,10 @@ public final class KernelModule {
         return guard;
     }
 
+    public WriteVersionSlots versionSlots() {
+        return versionSlots;
+    }
+
     public WaitPointRegistry waitPoints() {
         return waitPoints;
     }
@@ -1028,6 +1055,7 @@ public final class KernelModule {
         scheduler.reset();
         jobMeter.reset();
         plans.reset();
+        versionSlots.reset();
         commits.reset();
         safety.reset();
         zeroEffect.reset();

@@ -4,6 +4,7 @@ package io.izzel.arclight.common.prts.kernel.observe;
 import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
+import io.izzel.arclight.common.prts.kernel.auth.WriteVersionSlots;
 import io.izzel.arclight.common.prts.kernel.codes.DegradeLevel;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.codes.RejectTrigger;
@@ -251,6 +252,15 @@ public final class KernelReadings {
         add(lines, "write.world_epochs_tracked", guard.worldEpochs().tracking() ? 1 : 0);
         add(lines, "write.world_epochs_live", guard.worldEpochs().liveWorlds());
         add(lines, "write.world_epochs_changes", guard.worldEpochs().epochChanges());
+        WriteVersionSlots versions = module.versionSlots();
+        add(lines, "write.version_slots.enabled", versions.enabled() ? 1 : 0);
+        add(lines, "write.version_slots.active", versions.activeSlots());
+        add(lines, "write.version_slots.granted", versions.grantedCount());
+        add(lines, "write.version_slots.advanced", versions.advancedCount());
+        add(lines, "write.version_slots.world_drops", versions.worldDropCount());
+        add(lines, "write.version_slots.reclaimed", versions.reclaimedCount());
+        add(lines, "write.version_slots.carried", versions.carriedCount());
+        add(lines, "write.version_slots.not_carried", versions.notCarriedCount());
         add(lines, "write.path_accounting_in_flight", counters.inFlightAttempts());
     }
 

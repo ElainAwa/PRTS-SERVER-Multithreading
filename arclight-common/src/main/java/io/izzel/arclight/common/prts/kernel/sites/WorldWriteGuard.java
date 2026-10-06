@@ -7,6 +7,7 @@ import io.izzel.arclight.common.prts.kernel.auth.WriteAuthority;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLevel;
 import io.izzel.arclight.common.prts.kernel.auth.WriteVerdict;
+import io.izzel.arclight.common.prts.kernel.auth.WriteVersionSlots;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
 import io.izzel.arclight.common.prts.kernel.intent.IntentPayload;
@@ -49,6 +50,7 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
     private volatile long tickIndex;
     private volatile WriteDecision lastDecision;
     private volatile ArrivalWriteTap arrivalTap;
+    private volatile WriteVersionSlots versions = WriteVersionSlots.NOTHING;
 
     /** Creates the guard. */
     public WorldWriteGuard(WritePathCounters counters, WriteAuthority authority, IntentQueue intents,
@@ -64,6 +66,12 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
      * It is one volatile read on the short path and nothing else while no window is declared. */
     public void arrivalWriteTap(ArrivalWriteTap tap) {
         this.arrivalTap = tap;
+    }
+
+    /** Names the version slots the judged path asks for the version a write has to name. Nothing
+     * is asked while no source is wired in, and a slot that was never granted answers the absence. */
+    public void versionSlots(WriteVersionSlots slots) {
+        this.versions = slots == null ? WriteVersionSlots.NOTHING : slots;
     }
 
     /** The per tick write face: one call per write attempt, from the thread about to write. */
@@ -296,7 +304,7 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
             .holder(holder.kind(), holder.siteId(), Thread.currentThread().getName())
             .target(WriteLevel.REGION, path.key())
             .domains(domains, domains)
-            .version(0L, tickIndex, 0L)
+            .version(versions.carried(worldId, WriteLevel.REGION, path.key()), tickIndex, 0L)
             .worldEpoch(epochs.epochOf(worldId))
             .admitted(true)
             .build();

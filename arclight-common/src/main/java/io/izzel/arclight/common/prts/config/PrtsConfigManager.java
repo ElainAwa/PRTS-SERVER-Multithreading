@@ -211,6 +211,11 @@ public final class PrtsConfigManager {
                 + "# nothing consumes an order. On, the tick freezes one plan - the job graph, its\n"
                 + "# topological order, the commit order derived from it, the share table and the mode\n"
                 + "# of every world and domain pair - and publishes it for the next tick.\n"
+                + "# 'write-version-slots: false' leaves the version of a write right domain unkept.\n"
+                + "# The planning period grants nothing when it declares a job, and a write carries no\n"
+                + "# version. On, a declared domain keeps a version when the plan is frozen, a world that\n"
+                + "# leaves the live set retires and reclaims its slots, and a write that names the wrong\n"
+                + "# version is refused with a code and the site, thread, world and tick it happened on.\n"
                 + "# 'job-graph: false' leaves the job layer switched off, so a domain dispatches in the\n"
                 + "# order it always did. On, the declared jobs are frozen into a graph, the scheduler\n"
                 + "# hands them out along that order and along their affinity, the declared bound of\n"
@@ -273,6 +278,7 @@ public final class PrtsConfigManager {
         features.put("dispatch-identical-only", false);
         features.put("dispatch-takeover", false);
         features.put("tick-plan", false);
+        features.put("write-version-slots", false);
         features.put("job-graph", false);
         features.put("commit-log", false);
         features.put("safety-net", false);
