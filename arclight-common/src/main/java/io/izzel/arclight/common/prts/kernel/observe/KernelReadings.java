@@ -94,6 +94,7 @@ public final class KernelReadings {
         exits(lines, module);
         pipelineRows(lines, module);
         tickDigest(lines, module);
+        arrivalDigest(lines, module);
         loadObservation(lines, module);
         stallAttribution(lines, module);
         chunkDemand(lines, module);
@@ -1144,6 +1145,41 @@ public final class KernelReadings {
                 + Long.toHexString(row.rowDigest()));
         }
         add(lines, "digest.dump_end", 1);
+    }
+
+
+    /** The per tick arrival face of the chunk pipeline and the write path, one row per (tick,
+     * world). It is folded for the span the tick digest is armed for and exports the shape of the
+     * face plus no row while no window is declared. Every value is a count of what arrived during
+     * that tick, so two runs can be asked which ticks they were handed the same arrival on. */
+    private static void arrivalDigest(List<String> lines, KernelModule module) {
+        ArrivalDigestObserver arrival = module.arrivalDigest();
+        add(lines, "arrival.observation_only", 1);
+        add(lines, "arrival.armed", arrival.armed() ? 1 : 0);
+        add(lines, "arrival.window_ticks", arrival.windowTicks());
+        add(lines, "arrival.probe", ArrivalDigestObserver.PROBE);
+        add(lines, "arrival.ticks", arrival.ticks());
+        add(lines, "arrival.rows", arrival.rowsFolded());
+        add(lines, "arrival.worlds", arrival.worlds().size());
+        add(lines, "arrival.worlds_list", arrival.worlds().isEmpty() ? "none"
+            : String.join(",", arrival.worlds()));
+        add(lines, "arrival.first_tick", arrival.firstTick());
+        add(lines, "arrival.last_tick", arrival.lastTick());
+        add(lines, "arrival.placed_levels", arrival.placedLevels());
+        add(lines, "arrival.writes_total", arrival.writesTotal());
+        add(lines, "arrival.unplaced_writes", arrival.unplacedWrites());
+        add(lines, "arrival.dump_begin", 1);
+        for (ArrivalDigestObserver.Row row : arrival.rows()) {
+            lines.add("arrival.row=" + row.tick() + "|" + row.world() + "|"
+                + ArrivalDigestObserver.PROBE + "|" + "arrival" + "|0|" + row.requests() + "|"
+                + bits(row.requests()) + "|" + bits(row.satisfied()) + "|" + bits(row.missed()) + "|"
+                + bits(row.blocking()) + "|" + bits(row.futuresTaken()) + "|"
+                + bits(row.futuresCompleted()) + "|" + bits(row.inFlight()) + "|"
+                + bits(row.writes()) + "|0|" + row.tick() + "|0|" + Long.toHexString(row.value())
+                + "|" + row.algorithmId() + "|" + Long.toHexString(row.headerDigest()) + "|"
+                + Long.toHexString(row.rowDigest()));
+        }
+        add(lines, "arrival.dump_end", 1);
     }
 
     /** The exact bits of one digest value, so a reader on the other side of an export can rebuild

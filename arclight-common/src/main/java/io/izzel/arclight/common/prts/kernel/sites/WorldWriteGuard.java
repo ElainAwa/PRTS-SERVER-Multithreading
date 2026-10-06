@@ -48,6 +48,7 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
     private volatile HolderIdentity serverHolder = HolderIdentity.unregistered("server-thread-unbound");
     private volatile long tickIndex;
     private volatile WriteDecision lastDecision;
+    private volatile ArrivalWriteTap arrivalTap;
 
     /** Creates the guard. */
     public WorldWriteGuard(WritePathCounters counters, WriteAuthority authority, IntentQueue intents,
@@ -57,6 +58,22 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
         this.intents = intents;
         this.payloads = payloads;
         this.ledger = ledger;
+    }
+
+    /** Remembers the arrival face the write attempts are counted into; none unless one is armed.
+     * It is one volatile read on the short path and nothing else while no window is declared. */
+    public void arrivalWriteTap(ArrivalWriteTap tap) {
+        this.arrivalTap = tap;
+    }
+
+    /** The per tick write face: one call per write attempt, from the thread about to write. */
+    public interface ArrivalWriteTap {
+
+        /** One attempt on the short path, addressed by the level it was made against. */
+        void writeAtLevel(Object levelRef);
+
+        /** One attempt on the judged path, which already carries the world id. */
+        void writeAtWorld(String worldId);
     }
 
     /** Routing is read here on its own: a routed write is frozen into the intent channel whether
@@ -120,6 +137,10 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
             counters.noteAttempt(WritePath.BLOCK_WRITE, ThreadOrigin.MAIN, serverHolder.kind());
             counters.noteVerdict(WritePath.BLOCK_WRITE, ThreadOrigin.MAIN, serverHolder.kind(),
                 WriteDisposition.GRANT);
+            ArrivalWriteTap arrival = arrivalTap;
+            if (arrival != null) {
+                arrival.writeAtLevel(levelRef);
+            }
             return PASS;
         }
         return JUDGE;
@@ -135,6 +156,10 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
         HolderIdentity holder = holderOf(thread);
         WritePath path = WritePath.BLOCK_WRITE;
         counters.noteAttempt(path, origin, holder.kind());
+        ArrivalWriteTap arrival = arrivalTap;
+        if (arrival != null) {
+            arrival.writeAtWorld(worldId);
+        }
         WriteDisposition disposition;
         RejectCode code = null;
         boolean handedOver = false;

@@ -49,6 +49,7 @@ import io.izzel.arclight.common.prts.kernel.waitpoints.WaitProgress;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSite;
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
 import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteObserver;
+import io.izzel.arclight.common.prts.kernel.observe.ArrivalDigestObserver;
 import io.izzel.arclight.common.prts.kernel.observe.ChunkDemandObserver;
 import io.izzel.arclight.common.prts.kernel.observe.ChunkFlowObserver;
 import io.izzel.arclight.common.prts.kernel.observe.LoadThreadObserver;
@@ -141,6 +142,7 @@ public final class KernelModule {
         KernelSettings::waitBoundMs);
     private final PipelineRowObserver pipelineRows = new PipelineRowObserver();
     private final TickDigestObserver tickDigest = new TickDigestObserver();
+    private final ArrivalDigestObserver arrivalDigest = new ArrivalDigestObserver();
     private final LoadThreadObserver loadThread = new LoadThreadObserver();
     private final ChunkFlowObserver chunkFlow = new ChunkFlowObserver();
     private final SaveIdentityObserver saveIdentity = new SaveIdentityObserver();
@@ -348,6 +350,8 @@ public final class KernelModule {
         tickDigest.source(server);
         tickDigest.ledger(ledger);
         tickDigest.deviation(FaultInjection::tickDigestDeviates);
+        arrivalDigest.source(server);
+        arrivalDigest.demand(chunkDemand);
     }
 
     private void syncLoadProbe(boolean wanted) {
@@ -380,7 +384,18 @@ public final class KernelModule {
         if (wanted) {
             pipelineRows.attach();
             tickDigest.attach();
+            arrivalDigest.attach();
+            // The arrival face is only handed to the tick boundary and to the write path while a
+            // window is declared: a process that declares none keeps its block writes at the one
+            // volatile read the write guard already made and folds nothing at the tick boundary.
+            if (arrivalDigest.armed()) {
+                tickDigest.arrival(arrivalDigest);
+                guard.arrivalWriteTap(arrivalDigest);
+            }
         } else {
+            guard.arrivalWriteTap(null);
+            tickDigest.arrival(null);
+            arrivalDigest.detach();
             pipelineRows.detach();
             tickDigest.detach();
         }
@@ -814,6 +829,11 @@ public final class KernelModule {
         return tickDigest;
     }
 
+    /** The per tick arrival face: observation only, folded for the span the digest is armed for. */
+    public ArrivalDigestObserver arrivalDigest() {
+        return arrivalDigest;
+    }
+
     /** The thread-state sampler of the load windows. */
     public LoadThreadObserver loadThread() {
         return loadThread;
@@ -955,6 +975,7 @@ public final class KernelModule {
         regionIdentity.reset();
         attribution.reset();
         chunkDemand.reset();
+        arrivalDigest.reset();
         planNanosLast = 0L;
         planNanosTotal = 0L;
         planNanosMax = 0L;

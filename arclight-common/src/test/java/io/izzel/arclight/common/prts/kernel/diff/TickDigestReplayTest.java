@@ -111,6 +111,16 @@ class TickDigestReplayTest {
             + "): " + left);
         assertTrue(!runB.isEmpty(), "the second dump carries no digest row in [" + from + ", " + to
             + "): " + right);
+        return compare(runA, runB, report, "[" + from + ", " + to + ")");
+    }
+
+    /** The one comparison every reader goes through: two row maps folded with the same state hash
+     * and handed to the same differential. A scope that holds no row is refused here too, so a
+     * subset that selected nothing can never be read as an equality. */
+    static Result compare(Map<String, StateHasher.Slice> runA, Map<String, StateHasher.Slice> runB,
+                          Path report, String window) throws IOException {
+        assertTrue(!runA.isEmpty(), "the first scope carries no row: " + window);
+        assertTrue(!runB.isEmpty(), "the second scope carries no row: " + window);
         Map<String, DomainHash> hashedA = hashAll(runA);
         Map<String, DomainHash> hashedB = hashAll(runB);
         List<String> unpaired = unpaired(hashedA.keySet(), hashedB.keySet());
@@ -129,7 +139,7 @@ class TickDigestReplayTest {
         Result result = new Result(diff.tickPairs(), diff.equal(), diff.unattributed(), unpaired,
             diff.forkLine(), diff.tickPairs() * FIELDS, ticks.size());
         if (report != null) {
-            Files.writeString(report, "window=[" + from + ", " + to + ") ticks=" + result.ticks()
+            Files.writeString(report, "window=" + window + " ticks=" + result.ticks()
                 + " pairs=" + result.pairs() + " equal=" + result.equal() + " unattributed="
                 + result.unattributed() + " unpaired=" + unpaired.size() + " fields=" + FIELDS
                 + " values=" + result.values() + "\n" + result.fork()
@@ -142,11 +152,18 @@ class TickDigestReplayTest {
     /** One row of one probe of one tick, folded and rendered the way a run renders it. */
     static String line(long tick, String world, String probe, int probeIndex, String regionId,
                        long entitySeq, double[] values) {
+        return line("digest.row=", tick, world, probe, probeIndex, regionId, entitySeq, values);
+    }
+
+    /** The same row under another row family: the arrival face is rendered and folded by the same
+     * rule, so one reader can hold both without a second way of reading either. */
+    static String line(String prefix, long tick, String world, String probe, int probeIndex,
+                       String regionId, long entitySeq, double[] values) {
         StateHasher.Slice slice = new StateHasher.Slice(world, regionId, probeIndex, entitySeq,
             values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7],
             0L, tick, probeIndex);
         DomainHash hash = StateHasher.hash(probe, tick, List.of(slice), HashWhitelist.bitexact());
-        StringBuilder text = new StringBuilder("digest.row=");
+        StringBuilder text = new StringBuilder(prefix);
         text.append(tick).append('|').append(world).append('|').append(probe).append('|')
             .append(regionId).append('|').append(probeIndex).append('|').append(entitySeq);
         for (double value : values) {
@@ -199,7 +216,7 @@ class TickDigestReplayTest {
         }
     }
 
-    private static Map<String, DomainHash> hashAll(Map<String, StateHasher.Slice> rows) {
+    static Map<String, DomainHash> hashAll(Map<String, StateHasher.Slice> rows) {
         Map<String, DomainHash> hashed = new LinkedHashMap<>();
         for (Map.Entry<String, StateHasher.Slice> entry : rows.entrySet()) {
             String[] parts = entry.getKey().split("\\|", -1);
@@ -211,7 +228,7 @@ class TickDigestReplayTest {
         return hashed;
     }
 
-    private static List<String> unpaired(Set<String> left, Set<String> right) {
+    static List<String> unpaired(Set<String> left, Set<String> right) {
         List<String> only = new ArrayList<>();
         for (String key : left) {
             if (!right.contains(key)) {
@@ -229,14 +246,13 @@ class TickDigestReplayTest {
 
     /** Reads one dump. The key of a row is tick, world and probe: a window that wrapped twice over
      * one tick keeps its newest row, which is the one that run folded last. */
-    private static Map<String, StateHasher.Slice> read(Path dump, long from, long to)
-        throws IOException {
+    static Map<String, StateHasher.Slice> read(Path dump, long from, long to) throws IOException {
         Map<String, StateHasher.Slice> rows = new TreeMap<>();
         for (String text : Files.readAllLines(dump, StandardCharsets.UTF_8)) {
-            if (!text.startsWith("digest.row=")) {
+            if (!text.startsWith("digest.row=") && !text.startsWith("arrival.row=")) {
                 continue;
             }
-            String[] parts = text.substring("digest.row=".length()).split("\\|", -1);
+            String[] parts = text.substring(text.indexOf('=') + 1).split("\\|", -1);
             assertEquals(21, parts.length, "a digest row is not the shape this reader folds: " + text);
             long tick = Long.parseLong(parts[0]);
             if (tick < from || tick >= to) {

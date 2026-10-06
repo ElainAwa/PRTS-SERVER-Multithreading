@@ -75,7 +75,20 @@ public final class TickDigestObserver implements PrtsPipelineRows.MailboxOwnerTa
     private static final int PLACEMENT_REFRESH_TICKS = 20;
 
     /** The upper bound of the window, so a mistyped declaration cannot grow without end. */
-    private static final int WINDOW_MAX = 4_096;
+    public static final int WINDOW_MAX = 4_096;
+
+    /** The window this process declared, read the way the digest reads it; the arrival face is
+     * folded for the same span, from the same declaration and without a key of its own. */
+    public static int windowTicksDeclared() {
+        return Math.max(0, Math.min(WINDOW_MAX, readInt(System.getProperty(WINDOW_KEY), 0)));
+    }
+
+    /** The arrival face of one closed tick: the tick the digest closed and the worlds it folded, so
+     * the two faces are keyed by the same tick and the same world set. */
+    public interface ArrivalTickTap {
+
+        void arrivalTick(long tick, List<String> worlds);
+    }
 
     /** One folded row: the tick, the identity of the probe, the eight values with their exact bits,
      * and the value the fold produced. The bits are what a comparison reads; the decimal form of a
@@ -99,6 +112,7 @@ public final class TickDigestObserver implements PrtsPipelineRows.MailboxOwnerTa
     private final List<String> declaredWorlds;
     private long lastPlacementTick = Long.MIN_VALUE;
     private volatile LongPredicate deviation = tick -> false;
+    private volatile ArrivalTickTap arrival;
     private long ticks;
     private long rowsFolded;
     private long unplaced;
@@ -160,6 +174,11 @@ public final class TickDigestObserver implements PrtsPipelineRows.MailboxOwnerTa
     /** Remembers the write ledger the write probe is sampled from. */
     public void ledger(WriteLedger writeLedger) {
         this.ledger = writeLedger;
+    }
+
+    /** Remembers the arrival face the same tick boundary is handed to; none unless one is armed. */
+    public void arrival(ArrivalTickTap tap) {
+        this.arrival = tap;
     }
 
     /** The negative fixture of the two run comparison: a predicate that answers whether the row of
@@ -247,6 +266,10 @@ public final class TickDigestObserver implements PrtsPipelineRows.MailboxOwnerTa
             tickRows.clear();
             tickRounds.clear();
             return;
+        }
+        ArrivalTickTap arrivalTap = arrival;
+        if (arrivalTap != null) {
+            arrivalTap.arrivalTick(tick, worlds);
         }
         Map<String, long[]> writes = writeDeltas();
         List<Row> folded = new ArrayList<>(worlds.size() * PROBES.length);
