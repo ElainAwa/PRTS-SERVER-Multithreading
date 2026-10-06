@@ -13,19 +13,13 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
- * The producer of the chunk row's declared progress signal.
+ * The producer of the chunk row's declared progress signal: a value reaches this ledger only from
+ * the seam on the host's own materialization swap, and it is grouped by world and by landing tick.
  *
- * <p>What it counts is fixed by where the count is taken: the only way a value reaches this ledger
- * is a call from the seam on the host's own materialization swap, so a mailbox submission, a demand
- * future, an intent and a plan build cannot move it. Every completion carries the world it belongs
- * to, the generation status it completed, the generation cycle the holder was in and the tick it
- * landed in, and the value is grouped by world and by that tick.
- *
- * <p>A completion is counted once. Reported again inside its own tick it is dropped as a duplicate;
- * reported again in a later tick it is refused as a mis-attribution rather than quietly moved;
- * reported under another world it is refused as well. Every refusal is counted and kept, and the
- * three states the signal can be read in - not executable, a readable zero, a readable signal - are
- * published apart, so a zero out of an unbound slot never passes as a measurement.
+ * <p>A completion is counted once: a repeat inside its own tick is a duplicate, a repeat in a later
+ * tick or under another world is refused rather than moved, and every refusal is counted. Not
+ * executable, a readable zero and a readable signal are published apart, so a zero out of an
+ * unbound slot never passes as a measurement.
  */
 public final class ChunkMaterializationObserver implements PrtsChunkMaterialization.MaterializationTap {
 
@@ -84,9 +78,7 @@ public final class ChunkMaterializationObserver implements PrtsChunkMaterializat
         accept(ticket, worldId, chunkPos, status, generation, tick);
     }
 
-    /** Records one reported completion against an explicit tick. The seam uses the tick the ledger
-     * was last advanced to; the self-check drives the same entry point with the events a broken
-     * producer would send.
+    /** Records one reported completion against an explicit tick - the seam's, or the self-check's.
      * @return where the completion ended up */
     public Outcome accept(long ticket, String worldId, long chunkPos, String status, int generation,
                           long reportedTick) {
@@ -98,8 +90,7 @@ public final class ChunkMaterializationObserver implements PrtsChunkMaterializat
         String key = worldId + '|' + chunkPos + '|' + status + '|' + generation;
         synchronized (this) {
             if (reportedTick != ledgerTick) {
-                // The keys of the tick that just ended are what a repeat in a later tick is caught
-                // against, so the maps are swapped rather than cleared.
+                // The ended tick's keys are kept, so a repeat in a later tick is still caught.
                 previousTickKeys = currentTickKeys;
                 currentTickKeys = new ConcurrentHashMap<>();
                 currentTickTickets = new ConcurrentHashMap<>();
@@ -145,9 +136,8 @@ public final class ChunkMaterializationObserver implements PrtsChunkMaterializat
         this.tick = tickIndex;
     }
 
-    /** Publishes one value for this producer. A value below the one already published is refused
-     * as a non-monotonic producer, and what was refused is kept so a producer that loses its place
-     * is named instead of being read as a fall.
+    /** Publishes one value for this producer; a value below the one already published is refused
+     * as non-monotonic and kept as a violation, so a producer that loses its place is named.
      * @return whether the value was accepted */
     public boolean settle(long value) {
         if (value < published) {
@@ -160,8 +150,7 @@ public final class ChunkMaterializationObserver implements PrtsChunkMaterializat
     }
 
     /** Reads the producer for one export: the value, the move since the previous export, and the
-     * state the signal is in. The reading is published through {@link #settle(long)}, so a producer
-     * that went backwards keeps the previous value instead of publishing a fall. */
+     * state; published through {@link #settle(long)}, so a fallen producer keeps the old value. */
     public Reading read() {
         long raw = counted.sum();
         long previous = published;
@@ -278,8 +267,7 @@ public final class ChunkMaterializationObserver implements PrtsChunkMaterializat
         byWorldTick.clear();
         violations.clear();
         lastEvent = null;
-        // The published high-water mark goes with the counters: a cleared ledger is a new producer,
-        // and keeping the old mark would report the next read as a fall.
+        // The published mark goes with the counters: an old mark would report the next read as a fall.
         published = 0L;
         ledgerTick = Long.MIN_VALUE;
         previousTickKeys = new ConcurrentHashMap<>();
