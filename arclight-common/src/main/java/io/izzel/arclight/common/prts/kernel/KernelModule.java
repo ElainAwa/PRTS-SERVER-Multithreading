@@ -52,6 +52,7 @@ import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteObserver;
 import io.izzel.arclight.common.prts.kernel.observe.ArrivalDigestObserver;
 import io.izzel.arclight.common.prts.kernel.observe.ChunkDemandObserver;
 import io.izzel.arclight.common.prts.kernel.observe.ChunkFlowObserver;
+import io.izzel.arclight.common.prts.kernel.observe.ChunkMaterializationObserver;
 import io.izzel.arclight.common.prts.kernel.observe.LoadThreadObserver;
 import io.izzel.arclight.common.prts.kernel.observe.PipelineRowObserver;
 import io.izzel.arclight.common.prts.kernel.observe.RegionIdentityObserver;
@@ -59,6 +60,7 @@ import io.izzel.arclight.common.prts.kernel.observe.SaveIdentityObserver;
 import io.izzel.arclight.common.prts.kernel.observe.StallAttributionObserver;
 import io.izzel.arclight.common.prts.kernel.observe.TickDigestObserver;
 import io.izzel.arclight.common.prts.kernel.meter.SelfCostTap;
+import io.izzel.arclight.common.prts.support.PrtsChunkMaterialization;
 import io.izzel.arclight.common.prts.support.PrtsSelfCosts;
 import io.izzel.arclight.common.prts.support.PrtsWaitSites;
 import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
@@ -145,6 +147,8 @@ public final class KernelModule {
     private final ArrivalDigestObserver arrivalDigest = new ArrivalDigestObserver();
     private final LoadThreadObserver loadThread = new LoadThreadObserver();
     private final ChunkFlowObserver chunkFlow = new ChunkFlowObserver();
+    private final ChunkMaterializationObserver chunkMaterialization =
+        new ChunkMaterializationObserver();
     private final SaveIdentityObserver saveIdentity = new SaveIdentityObserver();
     private final RegionIdentityObserver regionIdentity = new RegionIdentityObserver();
     private final StallAttributionObserver attribution = new StallAttributionObserver();
@@ -240,6 +244,7 @@ public final class KernelModule {
         long startedAt = System.nanoTime();
         tickIndex++;
         loadThread.noteTick(tickIndex);
+        chunkMaterialization.noteTick(tickIndex);
         if (!started) {
             started = true;
             windowStartTick = tickIndex;
@@ -363,13 +368,20 @@ public final class KernelModule {
             loadThread.boundaryListener(attribution);
             loadThread.install();
             chunkFlow.attach();
+            chunkMaterialization.attach();
             attribution.attach();
             chunkDemand.attach();
             PrtsSelfCosts.install(selfCosts);
+            // The chunk row's declared signal is bound only while its producer is installed: a row
+            // whose producer is switched off keeps reporting an unbound slot rather than a zero.
+            waitPoints.progress().bind("chunk", PrtsChunkMaterialization.SOURCE,
+                chunkMaterialization::value);
         } else {
+            waitPoints.progress().unbind("chunk");
             loadThread.boundaryListener(null);
             loadThread.uninstall();
             chunkFlow.detach();
+            chunkMaterialization.detach();
             attribution.detach();
             chunkDemand.detach();
             PrtsSelfCosts.install(null);
@@ -832,6 +844,12 @@ public final class KernelModule {
     /** The per tick arrival face: observation only, folded for the span the digest is armed for. */
     public ArrivalDigestObserver arrivalDigest() {
         return arrivalDigest;
+    }
+
+    /** The producer of the chunk row's declared progress signal: the count of materialized
+     * chunks per world and per tick. */
+    public ChunkMaterializationObserver chunkMaterialization() {
+        return chunkMaterialization;
     }
 
     /** The thread-state sampler of the load windows. */

@@ -949,6 +949,7 @@ public final class KernelReadings {
         }
         add(lines, "wp.signal_rows", registry.progress().declaredCount());
         add(lines, "wp.signal_bound", registry.progress().boundCount());
+        chunkMaterialization(lines, module);
         add(lines, "wait.refuse_unregistered", KernelSettings.refuseUnregisteredWaits() ? 1 : 0);
         add(lines, "wait.refused_unregistered", registry.refusedUnregistered());
         ForcedConvergence gate = registry.convergence();
@@ -960,6 +961,40 @@ public final class KernelReadings {
         add(lines, "wp.rollback_ticks_observed", rollback.ticksObserved());
         add(lines, "wp.rollback_ticks_clean", rollback.ticksClean());
         add(lines, "wp.rollback_ready", rollback.ready() ? 1 : 0);
+    }
+
+    /** The producer of one row's declared progress signal: the value it counted for the
+     * materialized chunks of each world, the move since the previous export, the state the signal
+     * is in, and what the producer refused to count. The markers the producer has to stamp - the
+     * world, the generation status, the generation cycle and the tick - are read from the newest
+     * completion it accepted. */
+    private static void chunkMaterialization(List<String> lines, KernelModule module) {
+        ChunkMaterializationObserver producer = module.chunkMaterialization();
+        ChunkMaterializationObserver.Reading reading = producer.read();
+        add(lines, "wp.progress.chunk.source", reading.source());
+        add(lines, "wp.progress.chunk.bound", reading.bound() ? 1 : 0);
+        add(lines, "wp.progress.chunk.value", reading.value());
+        add(lines, "wp.progress.chunk.delta", reading.delta());
+        add(lines, "wp.progress.chunk.state", reading.state().name());
+        add(lines, "wp.progress.chunk.events", reading.events());
+        add(lines, "wp.progress.chunk.duplicates", reading.duplicates());
+        add(lines, "wp.progress.chunk.cross_world", reading.crossWorld());
+        add(lines, "wp.progress.chunk.cross_tick", reading.crossTick());
+        add(lines, "wp.progress.chunk.non_monotonic", reading.nonMonotonic());
+        add(lines, "wp.progress.chunk.folded_ticks", producer.foldedTicks());
+        add(lines, "wp.progress.chunk.violations", producer.violations().size());
+        ChunkMaterializationObserver.Event last = producer.lastEvent();
+        add(lines, "wp.progress.chunk.world", last == null ? "-" : last.worldId());
+        add(lines, "wp.progress.chunk.status", last == null ? "-" : last.status());
+        add(lines, "wp.progress.chunk.generation", last == null ? "-" : last.generation());
+        add(lines, "wp.progress.chunk.tick", last == null ? "-" : last.tick());
+        for (String world : producer.worlds()) {
+            String prefix = "wp.progress.chunk.world." + safe(world) + ".";
+            add(lines, prefix + "materialized", producer.worldTotal(world));
+            for (Map.Entry<Long, Long> group : producer.tickGroups(world).entrySet()) {
+                add(lines, prefix + "tick." + group.getKey(), group.getValue());
+            }
+        }
     }
 
     private static void waitSiteReadings(List<String> lines, KernelModule module) {

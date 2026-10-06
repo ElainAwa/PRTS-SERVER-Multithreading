@@ -48,6 +48,19 @@ public final class WaitProgress {
         slot.reading = reading;
     }
 
+    /** Hands a bound reading back. A row whose producer is switched off reports an unbound slot
+     * again, so a value nobody produces is never published as this row's measurement. */
+    public synchronized void unbind(String wpId) {
+        Slot slot = slots.get(wpId);
+        if (slot == null) {
+            return;
+        }
+        slot.reading = null;
+        slot.source = null;
+        slot.value = 0L;
+        slot.observed = 0L;
+    }
+
     /** Records the value a call site handed in with its observation. */
     public void noteObserved(String wpId, long value) {
         Slot slot;

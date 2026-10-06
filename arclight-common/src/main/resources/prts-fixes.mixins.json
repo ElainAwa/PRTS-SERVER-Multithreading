@@ -55,6 +55,7 @@
     "observation.PrtsEntitySelfCostMixin",
     "observation.PrtsBlockEntitySelfCostMixin",
     "observation.PrtsBlockEntityTickCostMixin",
-    "pipeline.PrtsChunkDemandMixin"
+    "pipeline.PrtsChunkDemandMixin",
+    "pipeline.PrtsChunkMaterializationMixin"
   ]
 }
