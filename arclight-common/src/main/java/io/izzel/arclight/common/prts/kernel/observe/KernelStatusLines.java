@@ -13,6 +13,7 @@ import io.izzel.arclight.common.prts.kernel.shares.BudgetStateMachine;
 import io.izzel.arclight.common.prts.kernel.shares.SharePlanner.ConservationCheck;
 import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
+import io.izzel.arclight.common.prts.kernel.sites.WriteControlledSlots;
 import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
 import io.izzel.arclight.common.prts.kernel.waitpoints.CoverageReport;
 import io.izzel.arclight.common.prts.kernel.waitpoints.ForcedConvergence;
@@ -55,7 +56,8 @@ public final class KernelStatusLines {
             + " wait-registry=" + KernelSettings.waitRegistry()
             + " write-path-guard=" + KernelSettings.writePathGuard()
             + " commit-intents=" + KernelSettings.commitIntents()
-            + " route-unregistered-writes=" + KernelSettings.routeUnregisteredWrites());
+            + " route-unregistered-writes=" + KernelSettings.routeUnregisteredWrites()
+            + " write-controlled-slot=" + KernelSettings.writeControlledSlot());
         List<PrtsSeams.SeamState> seams = PrtsSeams.states(KernelSettings::categoryEnabled);
         int reachable = 0;
         int applied = 0;
@@ -110,6 +112,18 @@ public final class KernelStatusLines {
             + " guard_active=" + (module.guard().active() ? 1 : 0)
             + " enforce=" + (module.guard().enforcing() ? 1 : 0)
             + " routing=" + (module.guard().routing() ? 1 : 0));
+        WriteControlledSlots controlled = module.controlledSlots();
+        lines.add("[PRTS] kernel: controlled slot enabled=" + (controlled.enabled() ? 1 : 0)
+            + " slots=" + controlled.slots()
+            + " registered=" + controlled.registeredCount()
+            + " refused=" + controlled.refusedCount()
+            + " attempts=" + controlled.attemptsCount()
+            + " default_path=" + controlled.defaultPathCount()
+            + " captured=" + controlled.capturedCount()
+            + " rejected=" + controlled.rejectedCount()
+            + " not_executable=" + controlled.notExecutableCount()
+            + " conservation=" + (controlled.conservationHolds() ? "ok" : "broken")
+            + " landed=" + module.commits().sequence());
         lines.add("[PRTS] kernel: intent depth=" + module.intents().depth() + "/"
             + module.intents().capacity() + " enqueued=" + module.intents().enqueuedCount()
             + " committed=" + module.intents().committedCount()

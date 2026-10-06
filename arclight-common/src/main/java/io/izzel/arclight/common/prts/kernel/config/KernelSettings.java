@@ -85,6 +85,10 @@ public final class KernelSettings {
      * declaration is kept without being turned into a credential. */
     public static final String WRITE_OWNER_GRANTS = "write-owner-grants";
 
+    /** Lets a declared slot claim the writes of its write set; off, no write is claimed and every
+     * write keeps the default path. */
+    public static final String WRITE_CONTROLLED_SLOT = "write-controlled-slot";
+
     /** Drives the frozen job graph, its gates and the metering point of the job layer; off. */
     public static final String JOB_GRAPH = "job-graph";
 
@@ -338,6 +342,10 @@ public final class KernelSettings {
 
     public static boolean writeOwnerGrants() {
         return feature(WRITE_OWNER_GRANTS);
+    }
+
+    public static boolean writeControlledSlot() {
+        return feature(WRITE_CONTROLLED_SLOT);
     }
 
     public static boolean jobGraph() {

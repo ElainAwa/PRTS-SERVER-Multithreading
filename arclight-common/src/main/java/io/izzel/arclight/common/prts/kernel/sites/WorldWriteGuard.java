@@ -51,6 +51,7 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
     private volatile WriteDecision lastDecision;
     private volatile ArrivalWriteTap arrivalTap;
     private volatile WriteVersionSlots versions = WriteVersionSlots.NOTHING;
+    private volatile WriteControlledSlots controlled = WriteControlledSlots.NOTHING;
 
     /** Creates the guard. */
     public WorldWriteGuard(WritePathCounters counters, WriteAuthority authority, IntentQueue intents,
@@ -72,6 +73,12 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
      * is asked while no source is wired in, and a slot that was never granted answers the absence. */
     public void versionSlots(WriteVersionSlots slots) {
         this.versions = slots == null ? WriteVersionSlots.NOTHING : slots;
+    }
+
+    /** Names the claim table the short path asks which writes a declared slot covers. While no
+     * table is wired in, no write is covered and every write keeps the path it had. */
+    public void controlledSlots(WriteControlledSlots slots) {
+        this.controlled = slots == null ? WriteControlledSlots.NOTHING : slots;
     }
 
     /** The per tick write face: one call per write attempt, from the thread about to write. */
@@ -142,6 +149,13 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
             return PASS;
         }
         if (Thread.currentThread() == serverThread && serverHolder.registered()) {
+            // A write a declared slot covers does not take the short path: it is handed to the judged
+            // path below, which is where a claim is decided and where a refused claim is refused. A
+            // write no slot covers is not a domain write and keeps the short path unchanged.
+            if (controlled.judge(levelRef, WritePath.BLOCK_WRITE.key(), tickIndex).verdict()
+                != WriteControlledSlots.Verdict.DEFAULT_PATH) {
+                return JUDGE;
+            }
             counters.noteAttempt(WritePath.BLOCK_WRITE, ThreadOrigin.MAIN, serverHolder.kind());
             counters.noteVerdict(WritePath.BLOCK_WRITE, ThreadOrigin.MAIN, serverHolder.kind(),
                 WriteDisposition.GRANT);

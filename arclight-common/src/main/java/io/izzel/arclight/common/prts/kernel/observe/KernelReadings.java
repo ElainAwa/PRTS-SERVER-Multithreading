@@ -40,6 +40,7 @@ import io.izzel.arclight.common.prts.kernel.shares.SharePlanner;
 import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
 import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard.WriteDecision;
 import io.izzel.arclight.common.prts.kernel.sites.WritePath;
+import io.izzel.arclight.common.prts.kernel.sites.WriteControlledSlots;
 import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
 import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard;
 import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
@@ -263,6 +264,85 @@ public final class KernelReadings {
         add(lines, "write.version_slots.carried", versions.carriedCount());
         add(lines, "write.version_slots.not_carried", versions.notCarriedCount());
         add(lines, "write.path_accounting_in_flight", counters.inFlightAttempts());
+        controlledSlots(lines, module);
+    }
+
+    /** The claim face of the controlled write channel. The three verdicts are published next to the
+     * landing face they must not be confused with: a captured write is a claim the decision point
+     * took, not a write that landed, so captured, landed and the commit entries stay three fields. */
+    private static void controlledSlots(List<String> lines, KernelModule module) {
+        WriteControlledSlots slots = module.controlledSlots();
+        add(lines, "write.controlled.enabled", slots.enabled() ? 1 : 0);
+        add(lines, "write.controlled.slots", slots.slots());
+        add(lines, "write.controlled.registered", slots.registeredCount());
+        add(lines, "write.controlled.renewed", slots.renewedCount());
+        add(lines, "write.controlled.advanced", slots.advancedCount());
+        add(lines, "write.controlled.refused", slots.refusedCount());
+        add(lines, "write.controlled.refused.wildcard",
+            slots.refusedCount(WriteControlledSlots.Refusal.WILDCARD_KEY));
+        add(lines, "write.controlled.refused.empty_key",
+            slots.refusedCount(WriteControlledSlots.Refusal.EMPTY_KEY));
+        add(lines, "write.controlled.refused.empty_write_set",
+            slots.refusedCount(WriteControlledSlots.Refusal.EMPTY_WRITE_SET));
+        add(lines, "write.controlled.refused.plan_sequence",
+            slots.refusedCount(WriteControlledSlots.Refusal.PLAN_SEQUENCE_INVALID));
+        add(lines, "write.controlled.refused.duplicate",
+            slots.refusedCount(WriteControlledSlots.Refusal.DUPLICATE_KEY));
+        add(lines, "write.controlled.attempts", slots.attemptsCount());
+        add(lines, "write.controlled.default_path", slots.defaultPathCount());
+        add(lines, "write.controlled.captured", slots.capturedCount());
+        add(lines, "write.controlled.rejected", slots.rejectedCount());
+        add(lines, "write.controlled.not_executable", slots.notExecutableCount());
+        add(lines, "write.controlled.conservation_ok", slots.conservationHolds() ? 1 : 0);
+        add(lines, "write.controlled.landed", module.commits().sequence());
+        WriteControlledSlots.Decision decision = slots.lastDecision();
+        add(lines, "write.controlled.last.verdict", decision == null ? "none"
+            : decision.verdict().name().toLowerCase(Locale.ROOT));
+        add(lines, "write.controlled.last.reason", decision == null ? "none" : decision.reason());
+        add(lines, "write.controlled.last.world", decision == null || decision.key() == null ? "none"
+            : decision.key().worldId());
+        add(lines, "write.controlled.last.domain",
+            decision == null || decision.key() == null ? "none" : decision.key().domainId());
+        add(lines, "write.controlled.last.level", decision == null || decision.key() == null ? "none"
+            : decision.key().level().name().toLowerCase(Locale.ROOT));
+        add(lines, "write.controlled.last.segment",
+            decision == null || decision.key() == null ? "none" : decision.key().segment());
+        add(lines, "write.controlled.last.plan_sequence", decision == null ? 0L
+            : decision.planSequence());
+        add(lines, "write.controlled.last.node_key", decision == null ? "none"
+            : decision.planNodeKey());
+        add(lines, "write.controlled.last.position", decision == null ? -1 : decision.position());
+        add(lines, "write.controlled.last.write_set_digest", decision == null ? "none"
+            : decision.writeSetDigest());
+        WriteControlledSlots.WriteRefusal refusal = slots.lastRefusal();
+        add(lines, "write.controlled.last_refusal.reason", refusal == null ? "none"
+            : refusal.reason());
+        add(lines, "write.controlled.last_refusal.site", refusal == null ? "none" : refusal.siteId());
+        add(lines, "write.controlled.last_refusal.holder", refusal == null ? "none"
+            : refusal.holderKind().name().toLowerCase(Locale.ROOT));
+        add(lines, "write.controlled.last_refusal.world", refusal == null ? "none"
+            : refusal.worldId());
+        add(lines, "write.controlled.last_refusal.domain", refusal == null ? "none"
+            : refusal.domainId());
+        add(lines, "write.controlled.last_refusal.level", refusal == null ? "none"
+            : refusal.level().name().toLowerCase(Locale.ROOT));
+        add(lines, "write.controlled.last_refusal.segment", refusal == null ? "none"
+            : refusal.segment());
+        add(lines, "write.controlled.last_refusal.plan_sequence", refusal == null ? 0L
+            : refusal.planSequence());
+        add(lines, "write.controlled.last_refusal.node_key", refusal == null ? "none"
+            : refusal.planNodeKey());
+        add(lines, "write.controlled.last_refusal.tick", refusal == null ? 0L : refusal.tickIndex());
+        add(lines, "write.controlled.last_refusal.expected_version", refusal == null ? 0L
+            : refusal.expectedVersion());
+        add(lines, "write.controlled.last_refusal.carried_version", refusal == null ? 0L
+            : refusal.carriedVersion());
+        add(lines, "write.controlled.last_refusal.world_epoch", refusal == null ? 0L
+            : refusal.worldEpoch());
+        add(lines, "write.controlled.last_refusal.slot_generation", refusal == null ? 0L
+            : refusal.slotGeneration());
+        add(lines, "write.controlled.last_refusal.write_set_digest", refusal == null ? "none"
+            : refusal.writeSetDigest());
     }
 
     private static void intentQueue(List<String> lines, KernelModule module) {

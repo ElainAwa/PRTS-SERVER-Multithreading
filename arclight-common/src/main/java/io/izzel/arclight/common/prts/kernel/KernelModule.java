@@ -40,6 +40,7 @@ import io.izzel.arclight.common.prts.kernel.shares.SharePlanner;
 import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
 import io.izzel.arclight.common.prts.kernel.sites.IntentPayloadDirectory;
 import io.izzel.arclight.common.prts.kernel.sites.ThreadOrigin;
+import io.izzel.arclight.common.prts.kernel.sites.WriteControlledSlots;
 import io.izzel.arclight.common.prts.kernel.sites.WritePath;
 import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
 import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard;
@@ -143,6 +144,8 @@ public final class KernelModule {
         payloads, ledger);
     private final WriteVersionSlots versionSlots = new WriteVersionSlots();
     private final OwnerGrantPoint ownerGrants = new OwnerGrantPoint(owners, versionSlots);
+    private final WriteControlledSlots controlledSlots = new WriteControlledSlots(owners, versionSlots,
+        guard.worldEpochs(), WriteControlledSlots.Source.NONE);
     private final WaitPointRegistry waitPoints = new WaitPointRegistry(KernelSettings::waitBoundMs,
         KernelSettings::refuseUnregisteredWaits);
     private final WaitSiteObserver waitSites = new WaitSiteObserver(waitPoints, this::tickIndex,
@@ -204,6 +207,7 @@ public final class KernelModule {
     private KernelModule() {
         intents.bindPayload(guard);
         guard.versionSlots(versionSlots);
+        guard.controlledSlots(controlledSlots);
         // The progress side of the two rows whose producer already exists: the intent channel depth
         // and the world epoch change count are the same counters the readout publishes, so a signal
         // reading and its control-plane value can never disagree.
@@ -243,6 +247,7 @@ public final class KernelModule {
             guard.refresh(false, false, false, tickIndex);
             versionSlots.refresh(false);
             ownerGrants.refresh(false);
+            controlledSlots.refresh(false);
             syncWaitSiteTap(false);
             syncPipelineRowTap(false);
             syncLoadProbe(false);
@@ -265,6 +270,7 @@ public final class KernelModule {
         versionSlots.refresh(KernelSettings.writeVersionSlots());
         versionSlots.noteWorlds(worldIds);
         ownerGrants.refresh(KernelSettings.writeOwnerGrants());
+        controlledSlots.refresh(KernelSettings.writeControlledSlot());
         guard.refresh(KernelSettings.writePathGuard(),
             KernelSettings.enforceUnregisteredWrites(),
             KernelSettings.routeUnregisteredWrites(), tickIndex);
@@ -858,6 +864,10 @@ public final class KernelModule {
         return ownerGrants;
     }
 
+    public WriteControlledSlots controlledSlots() {
+        return controlledSlots;
+    }
+
     public WaitPointRegistry waitPoints() {
         return waitPoints;
     }
@@ -1065,6 +1075,7 @@ public final class KernelModule {
         plans.reset();
         versionSlots.reset();
         ownerGrants.reset();
+        controlledSlots.reset();
         commits.reset();
         safety.reset();
         zeroEffect.reset();

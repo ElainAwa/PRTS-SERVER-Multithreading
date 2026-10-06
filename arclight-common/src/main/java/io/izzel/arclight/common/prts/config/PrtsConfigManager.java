@@ -221,6 +221,13 @@ public final class PrtsConfigManager {
                 + "# may hold, for the hold window the declaration named, and releases it when the job is\n"
                 + "# gone from the plan; a demand it cannot grant is refused with a code and the site,\n"
                 + "# thread, world and tick it was refused on.\n"
+                + "# 'write-controlled-slot: false' leaves every write on the default path. On, a slot a\n"
+                + "# domain declared - one world, one domain, one level and the write set it covers - claims\n"
+                + "# the writes that fall inside that set: a claimed write whose contract (holder token,\n"
+                + "# expected version, generation, expiry, plan step) still holds is handed to the write\n"
+                + "# decision point, and a claimed write whose contract does not hold is refused with the\n"
+                + "# world, the tick, the holder, the versions and the slot it was refused against. A write\n"
+                + "# no slot covers is not a domain write and keeps the path it always had.\n"
                 + "# 'job-graph: false' leaves the job layer switched off, so a domain dispatches in the\n"
                 + "# order it always did. On, the declared jobs are frozen into a graph, the scheduler\n"
                 + "# hands them out along that order and along their affinity, the declared bound of\n"
@@ -285,6 +292,7 @@ public final class PrtsConfigManager {
         features.put("tick-plan", false);
         features.put("write-version-slots", false);
         features.put("write-owner-grants", false);
+        features.put("write-controlled-slot", false);
         features.put("job-graph", false);
         features.put("commit-log", false);
         features.put("safety-net", false);
