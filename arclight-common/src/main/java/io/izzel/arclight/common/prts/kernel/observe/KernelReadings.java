@@ -2,6 +2,7 @@
 package io.izzel.arclight.common.prts.kernel.observe;
 
 import io.izzel.arclight.common.prts.kernel.KernelModule;
+import io.izzel.arclight.common.prts.kernel.OwnerGrantPoint;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
 import io.izzel.arclight.common.prts.kernel.auth.WriteVersionSlots;
@@ -305,12 +306,37 @@ public final class KernelReadings {
 
     private static void tokens(List<String> lines, KernelModule module) {
         OwnerRegistry owners = module.owners();
+        OwnerGrantPoint grants = module.ownerGrants();
         add(lines, "token.active", owners.activeTokens());
         add(lines, "token.acquired", owners.acquiredCount());
+        add(lines, "token.reacquired", owners.reacquiredCount());
         add(lines, "token.released", owners.releasedCount());
+        add(lines, "token.release_refused", owners.releaseRefusedCount());
         add(lines, "token.expired_reclaimed", owners.expiredReclaimedCount());
         add(lines, "token.double_holder", owners.doubleHolderCount());
         add(lines, "token.reclaim_passes", owners.reclaimPasses());
+        add(lines, "token.conservation_ok", owners.conservationHolds() ? 1 : 0);
+        add(lines, "token.grants_enabled", grants.enabled() ? 1 : 0);
+        add(lines, "token.declared", grants.declaredCount());
+        add(lines, "token.granted", grants.grantedCount());
+        add(lines, "token.released_by_plan", grants.releasedByPlanCount());
+        add(lines, "token.held_by_declarations", grants.heldCount());
+        add(lines, "token.refused", grants.refusedCount());
+        add(lines, "token.refused.cross_world", grants.refusedCrossWorldCount());
+        add(lines, "token.refused.expired", grants.refusedExpiredCount());
+        add(lines, "token.refused.no_version", grants.refusedNoVersionCount());
+        add(lines, "token.refused.double_holder", grants.refusedDoubleHolderCount());
+        add(lines, "token.refused.undeclared", grants.refusedUndeclaredCount());
+        RejectTrigger.Diag5 refusal = grants.lastRefusal();
+        add(lines, "token.last_refusal.code", refusal == null ? "none" : refusal.code());
+        add(lines, "token.last_refusal.trigger", grants.lastRefusalTrigger() == null ? "none"
+            : grants.lastRefusalTrigger().name());
+        add(lines, "token.last_refusal.site", refusal == null ? "none" : refusal.siteId());
+        add(lines, "token.last_refusal.thread", refusal == null ? "none" : refusal.threadRef());
+        add(lines, "token.last_refusal.world", refusal == null ? "none" : refusal.worldId());
+        add(lines, "token.last_refusal.tick", refusal == null ? 0L : refusal.tickIndex());
+        add(lines, "token.last_refusal.domain", grants.lastRefusedDomain().isEmpty() ? "none"
+            : grants.lastRefusedDomain());
     }
 
     /** The arena face: the pin and release pairs of the slots, and the two reserved shapes that

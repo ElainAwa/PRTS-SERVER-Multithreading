@@ -216,6 +216,11 @@ public final class PrtsConfigManager {
                 + "# version. On, a declared domain keeps a version when the plan is frozen, a world that\n"
                 + "# leaves the live set retires and reclaims its slots, and a write that names the wrong\n"
                 + "# version is refused with a code and the site, thread, world and tick it happened on.\n"
+                + "# 'write-owner-grants: false' leaves the write right a job declares unheld. On, the\n"
+                + "# planning period turns the right a frozen job asks for into the one credential a writer\n"
+                + "# may hold, for the hold window the declaration named, and releases it when the job is\n"
+                + "# gone from the plan; a demand it cannot grant is refused with a code and the site,\n"
+                + "# thread, world and tick it was refused on.\n"
                 + "# 'job-graph: false' leaves the job layer switched off, so a domain dispatches in the\n"
                 + "# order it always did. On, the declared jobs are frozen into a graph, the scheduler\n"
                 + "# hands them out along that order and along their affinity, the declared bound of\n"
@@ -279,6 +284,7 @@ public final class PrtsConfigManager {
         features.put("dispatch-takeover", false);
         features.put("tick-plan", false);
         features.put("write-version-slots", false);
+        features.put("write-owner-grants", false);
         features.put("job-graph", false);
         features.put("commit-log", false);
         features.put("safety-net", false);

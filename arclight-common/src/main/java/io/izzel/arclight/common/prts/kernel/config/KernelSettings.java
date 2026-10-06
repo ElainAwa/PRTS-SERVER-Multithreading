@@ -81,6 +81,10 @@ public final class KernelSettings {
      * every write carries none. */
     public static final String WRITE_VERSION_SLOTS = "write-version-slots";
 
+    /** Grants the write right a frozen job declares; off, no token exists for any job and the
+     * declaration is kept without being turned into a credential. */
+    public static final String WRITE_OWNER_GRANTS = "write-owner-grants";
+
     /** Drives the frozen job graph, its gates and the metering point of the job layer; off. */
     public static final String JOB_GRAPH = "job-graph";
 
@@ -330,6 +334,10 @@ public final class KernelSettings {
 
     public static boolean writeVersionSlots() {
         return feature(WRITE_VERSION_SLOTS);
+    }
+
+    public static boolean writeOwnerGrants() {
+        return feature(WRITE_OWNER_GRANTS);
     }
 
     public static boolean jobGraph() {

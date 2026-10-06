@@ -27,7 +27,8 @@ public record JobGraph(long tickIndex, long planSequence, long worldSetGeneratio
     public record Node(long nodeId, String key, long handle, String worldId, String domainId,
                        int level, List<String> predecessors, List<Long> successors, int priority,
                        String affinity, String cancelScope, List<JobDeclaration.DomainRef> readSet,
-                       List<JobDeclaration.DomainRef> writeSet, ShareClass shareClass,
+                       List<JobDeclaration.DomainRef> writeSet,
+                       List<JobDeclaration.OwnerDemand> ownerDemands, ShareClass shareClass,
                        JobDeclaration.SiteClass siteClass, int batchKind, int batchBound,
                        boolean splitIntent, int position) {
 
@@ -36,6 +37,7 @@ public record JobGraph(long tickIndex, long planSequence, long worldSetGeneratio
             successors = List.copyOf(successors);
             readSet = List.copyOf(readSet);
             writeSet = List.copyOf(writeSet);
+            ownerDemands = List.copyOf(ownerDemands);
         }
 
         public boolean root() {

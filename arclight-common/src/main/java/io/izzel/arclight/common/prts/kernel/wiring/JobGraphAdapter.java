@@ -2,6 +2,8 @@
 package io.izzel.arclight.common.prts.kernel.wiring;
 
 import io.izzel.arclight.common.prts.kernel.KernelModule;
+import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
+import io.izzel.arclight.common.prts.kernel.auth.WriteLevel;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan.WorkTask;
@@ -28,6 +30,12 @@ public final class JobGraphAdapter {
 
     /** The affinity of one entity job is its region: rows of one region stay in one order. */
     private static final int BATCH_KIND_SINGLE_OWNER_TICK = 0;
+
+    /** The holder the entity jobs ask their write right for, and the ticks one grant holds; declared
+     * values. Every job of the domain asks for the same holder. The level is the one the plan keeps
+     * the version of a declared domain at, so a token always names the version of its domain. */
+    public static final String OWNER_SITE = "domain:" + DOMAIN;
+    public static final int OWNER_HOLD_TICKS = 40;
 
     private final KernelModule module;
     private long declared;
@@ -94,13 +102,19 @@ public final class JobGraphAdapter {
         module.jobMeter().note(SelfClass.ENTITY, worldId, "job-graph", nanos);
     }
 
-    /** The declaration of one frozen task. */
+    /** The declaration of one frozen task, with the write right it asks to hold; declared, and only
+     * granted if the freeze of the plan grants it. */
     public static JobDeclaration declarationOf(WorkTask task) {
         JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef(task.worldId(), DOMAIN, 0);
         return new JobDeclaration(keyOf(task), task.batchId(), task.worldId(), DOMAIN, 0, List.of(),
             task.entityCount(), task.regionId(), task.cancelScope(), List.of(ref), List.of(ref),
             ShareClass.ENTITY, JobDeclaration.SiteClass.PARALLEL, BATCH_KIND_SINGLE_OWNER_TICK,
-            Math.max(1, task.entityCount()));
+            Math.max(1, task.entityCount()), List.of(ownerDemandOf(task)));
+    }
+
+    private static JobDeclaration.OwnerDemand ownerDemandOf(WorkTask task) {
+        return new JobDeclaration.OwnerDemand(task.worldId(), WriteLevel.REGION, DOMAIN,
+            HolderKind.REGISTERED, OWNER_SITE, OWNER_HOLD_TICKS);
     }
 
     /** The key a task is declared and matched by: its world and its region. */

@@ -142,6 +142,7 @@ public final class KernelModule {
     private final WorldWriteGuard guard = new WorldWriteGuard(pathCounters, authority, intents,
         payloads, ledger);
     private final WriteVersionSlots versionSlots = new WriteVersionSlots();
+    private final OwnerGrantPoint ownerGrants = new OwnerGrantPoint(owners, versionSlots);
     private final WaitPointRegistry waitPoints = new WaitPointRegistry(KernelSettings::waitBoundMs,
         KernelSettings::refuseUnregisteredWaits);
     private final WaitSiteObserver waitSites = new WaitSiteObserver(waitPoints, this::tickIndex,
@@ -241,6 +242,7 @@ public final class KernelModule {
         if (!KernelSettings.enabled()) {
             guard.refresh(false, false, false, tickIndex);
             versionSlots.refresh(false);
+            ownerGrants.refresh(false);
             syncWaitSiteTap(false);
             syncPipelineRowTap(false);
             syncLoadProbe(false);
@@ -262,6 +264,7 @@ public final class KernelModule {
         guard.noteLiveWorlds(worldIds);
         versionSlots.refresh(KernelSettings.writeVersionSlots());
         versionSlots.noteWorlds(worldIds);
+        ownerGrants.refresh(KernelSettings.writeOwnerGrants());
         guard.refresh(KernelSettings.writePathGuard(),
             KernelSettings.enforceUnregisteredWrites(),
             KernelSettings.routeUnregisteredWrites(), tickIndex);
@@ -578,6 +581,7 @@ public final class KernelModule {
         if (result.ok()) {
             plans.publish(result.plan());
             grantVersionSlots(result.plan());
+            ownerGrants.apply(result.plan().graph(), tickIndex);
         } else {
             plans.noteFailure(result.code());
         }
@@ -850,6 +854,10 @@ public final class KernelModule {
         return versionSlots;
     }
 
+    public OwnerGrantPoint ownerGrants() {
+        return ownerGrants;
+    }
+
     public WaitPointRegistry waitPoints() {
         return waitPoints;
     }
@@ -1056,6 +1064,7 @@ public final class KernelModule {
         jobMeter.reset();
         plans.reset();
         versionSlots.reset();
+        ownerGrants.reset();
         commits.reset();
         safety.reset();
         zeroEffect.reset();

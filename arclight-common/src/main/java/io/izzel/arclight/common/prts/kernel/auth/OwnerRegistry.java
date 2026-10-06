@@ -13,19 +13,25 @@ public final class OwnerRegistry {
 
     private final Map<OwnershipDomain, OwnerToken> tokens = new ConcurrentHashMap<>();
     private final AtomicLong acquired = new AtomicLong();
+    private final AtomicLong reacquired = new AtomicLong();
+    private final AtomicLong acquireCalls = new AtomicLong();
     private final AtomicLong released = new AtomicLong();
+    private final AtomicLong releaseRefused = new AtomicLong();
+    private final AtomicLong releaseCalls = new AtomicLong();
     private final AtomicLong expiredReclaimed = new AtomicLong();
     private final AtomicLong reclaimPasses = new AtomicLong();
     private final AtomicLong doubleHolder = new AtomicLong();
 
     /** Acquires a domain for a holder. */
     public boolean acquire(OwnerToken token) {
+        acquireCalls.incrementAndGet();
         OwnerToken installed = tokens.putIfAbsent(token.domain(), token);
         if (installed == null) {
             acquired.incrementAndGet();
             return true;
         }
         if (sameHolder(installed, token)) {
+            reacquired.incrementAndGet();
             return true;
         }
         doubleHolder.incrementAndGet();
@@ -34,14 +40,17 @@ public final class OwnerRegistry {
 
     /** Releases a domain, but only for the holder that owns it. */
     public boolean release(OwnershipDomain domain, String siteId) {
+        releaseCalls.incrementAndGet();
         OwnerToken current = tokens.get(domain);
         if (current == null || !current.holderSiteId().equals(siteId)) {
+            releaseRefused.incrementAndGet();
             return false;
         }
         if (tokens.remove(domain, current)) {
             released.incrementAndGet();
             return true;
         }
+        releaseRefused.incrementAndGet();
         return false;
     }
 
@@ -98,6 +107,25 @@ public final class OwnerRegistry {
 
     public long doubleHolderCount() {
         return doubleHolder.get();
+    }
+
+    /** How often a holder that already owned the domain asked for it again. */
+    public long reacquiredCount() {
+        return reacquired.get();
+    }
+
+    /** How often a release did not name the holder the domain is registered to. */
+    public long releaseRefusedCount() {
+        return releaseRefused.get();
+    }
+
+    /** The write right balance: every acquisition leaves by exactly one of the three counts, every
+     * release by one of the two, and a token is active exactly while it was acquired and neither
+     * released nor reclaimed. A reading of the three comparisons says whether the registry closed. */
+    public boolean conservationHolds() {
+        return acquireCalls.get() == acquired.get() + reacquired.get() + doubleHolder.get()
+            && releaseCalls.get() == released.get() + releaseRefused.get()
+            && activeTokens() == acquired.get() - released.get() - expiredReclaimed.get();
     }
 
     private static boolean sameHolder(OwnerToken installed, OwnerToken candidate) {
