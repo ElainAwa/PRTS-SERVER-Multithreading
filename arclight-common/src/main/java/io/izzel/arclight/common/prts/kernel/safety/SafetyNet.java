@@ -4,9 +4,13 @@ package io.izzel.arclight.common.prts.kernel.safety;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BooleanSupplier;
 import java.util.function.IntSupplier;
@@ -32,6 +36,19 @@ public final class SafetyNet {
 
     /** The world a counter that is not world scoped is filed under. */
     public static final String NO_WORLD_SITE = NO_WORLD;
+
+    /** The cell every kind reports when no site has been seen at all: the row exists so a kind with
+     * nothing to say is still readable, and it carries zero. */
+    public static final String NO_CELL = "_none";
+
+    /** The attribution of a counter whose source is the kernel itself - a write path, the ledger,
+     * a wait bound or the ladder. It is a detector origin, not a domain, and a violation filed under
+     * it is not evidence about any domain. */
+    public static final String KERNEL_ORIGIN = "-";
+
+    /** The attribution of a counter no source named. Like {@link #KERNEL_ORIGIN} it is not a domain;
+     * nothing may read it as one. */
+    public static final String UNATTRIBUTED = "";
 
     /** The five kinds of violation the net counts. The set is closed, and every kind answers with a
      * refusal code that already exists, so reporting adds no code to the closed set. */
@@ -94,17 +111,30 @@ public final class SafetyNet {
      * counted on either dimension; a counter that has no world says so with {@link #NO_WORLD}. */
     public record ViolationReport(ViolationKind kind, String worldId, String siteId, long tickIndex,
                                   RejectCode code, String evidence, String disposition,
-                                  int cascade) {
+                                  int cascade, String domain) {
 
         public ViolationReport {
             worldId = worldId == null || worldId.isEmpty() ? NO_WORLD : worldId;
             siteId = siteId == null ? "" : siteId;
             evidence = evidence == null ? "" : evidence;
             disposition = disposition == null ? "" : disposition;
+            domain = domain == null ? UNATTRIBUTED : domain;
         }
 
         public boolean evidencePresent() {
             return !evidence.isEmpty();
+        }
+
+        /** Whether the counter behind this report was attributed to a kernel origin or to a domain;
+         * a report that is not attributed to one may not be read as evidence about one. */
+        public boolean attributed() {
+            return !domain.isEmpty();
+        }
+
+        /** The domain this report is evidence about, or {@link #KERNEL_ORIGIN} when the source was
+         * the kernel itself, or {@link #UNATTRIBUTED} when no source named one. */
+        public String domainKey() {
+            return domain;
         }
 
         public String key() {
@@ -167,6 +197,7 @@ public final class SafetyNet {
     private final Map<String, LongAdder> byKindWorld = new LinkedHashMap<>();
     private final Map<String, LongAdder> escalatedByKind = new LinkedHashMap<>();
     private final Map<String, Integer> window = new LinkedHashMap<>();
+    private final Set<String> domains = new LinkedHashSet<>();
     private final LongAdder evidenceEmpty = new LongAdder();
     private final LongAdder escalated = new LongAdder();
     private final LongAdder cascadeSteps = new LongAdder();
@@ -228,7 +259,7 @@ public final class SafetyNet {
                                                 long tickIndex, String evidence, String disposition,
                                                 long count) {
         ViolationReport report = new ViolationReport(kind, worldId, siteId, tickIndex,
-            kind == null ? null : kind.code(), evidence, disposition, 0);
+            kind == null ? null : kind.code(), evidence, disposition, 0, KERNEL_ORIGIN);
         if (kind == null || !report.evidencePresent()) {
             evidenceEmpty.increment();
             return report;
@@ -258,7 +289,7 @@ public final class SafetyNet {
             escalatedByKind.computeIfAbsent(kind.key(), key -> new LongAdder()).increment();
         }
         return new ViolationReport(kind, report.worldId(), report.siteId(), tickIndex, report.code(),
-            report.evidence(), report.disposition(), seen);
+            report.evidence(), report.disposition(), seen, report.domain());
     }
 
     private void closeWindow() {
@@ -361,6 +392,7 @@ public final class SafetyNet {
         byKindWorld.clear();
         escalatedByKind.clear();
         window.clear();
+        domains.clear();
         evidenceEmpty.reset();
         escalated.reset();
         cascadeSteps.reset();
@@ -369,5 +401,139 @@ public final class SafetyNet {
         windowDepth = 0;
         lastWindowDepth = 0L;
         previous = TickSources.empty();
+    }
+
+    /** Declares the domains installed in this run. A declaration is what makes a counter's
+     * attribution real: a key that was never declared here is a kernel origin or nothing, and no
+     * name is ever inferred from a site string. The registry is observation only - it holds no
+     * counts and no path in this class branches on it. */
+    public synchronized void declareDomains(Iterable<String> ids) {
+        if (ids == null) {
+            return;
+        }
+        for (String id : ids) {
+            if (id != null && !id.isEmpty() && !KERNEL_ORIGIN.equals(id)) {
+                domains.add(id);
+            }
+        }
+    }
+
+    /** The domains declared so far, in declaration order. */
+    public synchronized Set<String> domains() {
+        return Collections.unmodifiableSet(new LinkedHashSet<>(domains));
+    }
+
+    /** The domain a site key is filed under, {@link #KERNEL_ORIGIN} when the key names none. The
+     * token before the first separator is the detector family of the site, so every counter stays
+     * attributable to whoever built the map it arrived in. */
+    public static String domainOf(String siteId) {
+        if (siteId == null || siteId.isEmpty()) {
+            return KERNEL_ORIGIN;
+        }
+        int cut = -1;
+        for (int index = 0; index < siteId.length() && cut < 0; index++) {
+            char character = siteId.charAt(index);
+            if (character == '|' || character == ':') {
+                cut = index;
+            }
+        }
+        return cut < 0 ? siteId : siteId.substring(0, cut);
+    }
+
+    /** Whether an attribution names a domain declared in this run. The kernel origin and an
+     * un-attributed counter both answer false: neither is evidence about a domain. */
+    public synchronized boolean isDomain(String attribution) {
+        return attribution != null && !attribution.isEmpty() && domains.contains(attribution);
+    }
+
+    /** The attribution one site key carries, {@link #KERNEL_ORIGIN} when it names no domain. */
+    public synchronized String attributionOf(String siteId) {
+        String domain = domainOf(siteId);
+        return isDomain(domain) ? domain : KERNEL_ORIGIN;
+    }
+
+    /** Reads one tick's worth of counters and files them under the domain that produced them. The
+     * review itself is unchanged; the attribution rides along and is reported on the readout. */
+    public synchronized List<ViolationReport> review(TickSources sources, long tickIndex,
+                                                     String domain) {
+        List<ViolationReport> reports = new ArrayList<>(review(sources, tickIndex));
+        String attributed = isDomain(domain) ? domain : KERNEL_ORIGIN;
+        for (int index = 0; index < reports.size(); index++) {
+            ViolationReport report = reports.get(index);
+            reports.set(index, new ViolationReport(report.kind(), report.worldId(), report.siteId(),
+                report.tickIndex(), report.code(), report.evidence(), report.disposition(),
+                report.cascade(), attributed));
+        }
+        return reports;
+    }
+
+    public synchronized long siteBound(ViolationKind kind) {
+        return bound(byKindSite, kind);
+    }
+
+    public synchronized long worldBound(ViolationKind kind) {
+        return bound(byKindWorld, kind);
+    }
+
+    private long bound(Map<String, LongAdder> map, ViolationKind kind) {
+        if (kind == null) {
+            return 0L;
+        }
+        String prefix = kind.key() + "|";
+        long sum = 0L;
+        for (Map.Entry<String, LongAdder> entry : map.entrySet()) {
+            if (entry.getKey().startsWith(prefix)) {
+                sum += entry.getValue().sum();
+            }
+        }
+        return sum;
+    }
+
+    /** The sites every kind is read out on. A kind is read on the union of the sites seen in this
+     * run, zero rows included, so the five kinds always answer with the same set of columns and a
+     * kind that was never seen still has a row; a run that saw nothing reports one zero cell. */
+    public synchronized List<Cell> readSite(ViolationKind kind) {
+        return read(byKindSite, kind);
+    }
+
+    /** The worlds every kind is read out on, on the same union and with the same zero rows. */
+    public synchronized List<Cell> readWorld(ViolationKind kind) {
+        return read(byKindWorld, kind);
+    }
+
+    private List<Cell> read(Map<String, LongAdder> cells, ViolationKind kind) {
+        List<Cell> rows = new ArrayList<>();
+        if (kind == null) {
+            return rows;
+        }
+        Set<String> keys = new TreeSet<>();
+        for (String key : cells.keySet()) {
+            int cut = key.indexOf('|');
+            if (cut >= 0) {
+                keys.add(key.substring(cut + 1));
+            }
+        }
+        if (keys.isEmpty()) {
+            rows.add(new Cell(NO_CELL, 0L));
+            return rows;
+        }
+        for (String key : keys) {
+            LongAdder counter = cells.get(kind.key() + "|" + key);
+            rows.add(new Cell(key, counter == null ? 0L : counter.sum()));
+        }
+        return rows;
+    }
+
+    /** The reading couple of one kind: every site's row sums to the kind total, and every world's
+     * row sums to the same total, so the one dimensional row and the two dimensional rows can be
+     * recomputed from each other. */
+    public synchronized boolean conservationHolds() {
+        for (ViolationKind kind : ViolationKind.values()) {
+            long total = count(kind);
+            if (siteBound(kind) != total || worldBound(kind) != total) {
+                return false;
+            }
+        }
+        return true;
     }
 }

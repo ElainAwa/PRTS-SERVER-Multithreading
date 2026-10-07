@@ -1162,13 +1162,48 @@ public final class KernelReadings {
             add(lines, prefix + "detector", kind == null ? "none" : kind.detector());
             add(lines, prefix + "total", counts.total());
             add(lines, prefix + "escalated", counts.escalated());
-            for (SafetyNet.Cell cell : net.sites(kind)) {
+            // The two dimensions are read on the union of the sites and the worlds seen in this
+            // run, so a kind with nothing on a column still gets the column and reads zero there.
+            // The family of a site key is its attribution: the kernel's own, or the name of a
+            // domain, and only the second makes the row evidence about that domain.
+            List<SafetyNet.Cell> siteCells = net.readSite(kind);
+            List<SafetyNet.Cell> worldCells = net.readWorld(kind);
+            int attributed = 0;
+            int siteZeros = 0;
+            for (SafetyNet.Cell cell : siteCells) {
                 add(lines, prefix + "site." + safe(cell.key()), cell.count());
+                add(lines, prefix + "site." + safe(cell.key()) + ".domain",
+                    SafetyNet.domainOf(cell.key()));
+                attributed = attributed
+                    + (net.isDomain(SafetyNet.domainOf(cell.key())) ? 1 : 0);
+                siteZeros = siteZeros + (cell.count() == 0L ? 1 : 0);
             }
-            for (SafetyNet.Cell cell : net.worlds(kind)) {
+            int worldZeros = 0;
+            for (SafetyNet.Cell cell : worldCells) {
                 add(lines, prefix + "world." + safe(cell.key()), cell.count());
+                add(lines, prefix + "world." + safe(cell.key()) + ".domain",
+                    SafetyNet.domainOf(cell.key()));
+                worldZeros = worldZeros + (cell.count() == 0L ? 1 : 0);
             }
+            add(lines, prefix + "site_count", siteCells.size());
+            add(lines, prefix + "site_zero_rows", siteZeros);
+            add(lines, prefix + "world_count", worldCells.size());
+            add(lines, prefix + "world_zero_rows", worldZeros);
+            // The one dimensional row and the two dimensional rows have to recompute into each
+            // other; the reading publishes both halves so the identity is checkable from the file.
+            add(lines, prefix + "site_sum", net.siteBound(kind));
+            add(lines, prefix + "world_sum", net.worldBound(kind));
+            add(lines, prefix + "site_equals_total", net.siteBound(kind) == counts.total() ? 1 : 0);
+            add(lines, prefix + "world_equals_total",
+                net.worldBound(kind) == counts.total() ? 1 : 0);
+            add(lines, prefix + "domain_rows", attributed);
+            add(lines, prefix + "attribution",
+                attributed > 0 ? "real-domain" : "no-domain-attribution");
         }
+        add(lines, "safety.domains_declared", net.domains().size());
+        add(lines, "safety.dimension_conservation_ok", net.conservationHolds() ? 1 : 0);
+        add(lines, "safety.dimension_equations",
+            "site_sum(kind) = world_sum(kind) = total(kind) for every kind");
         add(lines, "safety.zero_effect.window_ticks", KernelSettings.safetyZeroEffectTicks());
         add(lines, "safety.zero_effect.detected", zeroEffect.zeroEffectTotal());
         add(lines, "safety.zero_effect.changed", zeroEffect.changedTotal());

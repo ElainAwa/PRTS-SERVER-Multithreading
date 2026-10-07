@@ -543,6 +543,24 @@ public final class KernelSelfCheck {
             || net.count(SafetyNet.ViolationKind.ESCALATE_SERIAL) != 1L) {
             failures.add("the safety net did not count the five kinds on both dimensions");
         }
+        int zeroRows = 0;
+        boolean paired = true;
+        for (SafetyNet.ViolationKind kind : SafetyNet.ViolationKind.values()) {
+            for (SafetyNet.Cell cell : net.readSite(kind)) {
+                zeroRows = zeroRows + (cell.count() == 0L ? 1 : 0);
+            }
+            for (SafetyNet.Cell cell : net.readWorld(kind)) {
+                zeroRows = zeroRows + (cell.count() == 0L ? 1 : 0);
+            }
+            paired = paired && net.siteBound(kind) == net.count(kind)
+                && net.worldBound(kind) == net.count(kind);
+        }
+        lines.add("selftest.safety_dual_rows=" + net.readSite(SafetyNet.ViolationKind.UNKNOWN_ACCESS).size()
+            + "/" + net.readWorld(SafetyNet.ViolationKind.UNKNOWN_ACCESS).size()
+            + " zero_rows=" + zeroRows + " conservation=" + (paired ? 1 : 0));
+        if (!paired || !net.conservationHolds() || zeroRows == 0) {
+            failures.add("the two dimensions of a kind did not recompute into its one dimensional row");
+        }
         for (int index = 0; index < 3; index++) {
             net.report(SafetyNet.ViolationKind.VERSION_CONFLICT, "world-a", "site:cascade", 11L + index, "one",
                 "counted");

@@ -232,6 +232,30 @@ public final class KernelStatusLines {
             + " zero_effect_unproven=" + module.zeroEffect().unprovenTotal()
             + " evidence_empty=" + net.evidenceEmpty()
             + " observation_only=1");
+        int zeroRows = 0;
+        int siteRows = 0;
+        int attributedRows = 0;
+        for (SafetyNet.ViolationKind kind : SafetyNet.ViolationKind.values()) {
+            for (SafetyNet.Cell cell : net.readSite(kind)) {
+                siteRows = siteRows + 1;
+                zeroRows = zeroRows + (cell.count() == 0L ? 1 : 0);
+            }
+            for (SafetyNet.Cell cell : net.readWorld(kind)) {
+                zeroRows = zeroRows + (cell.count() == 0L ? 1 : 0);
+            }
+            for (SafetyNet.Cell cell : net.readSite(kind)) {
+                attributedRows = attributedRows
+                    + (net.isDomain(SafetyNet.domainOf(cell.key())) ? 1 : 0);
+            }
+        }
+        lines.add("[PRTS] kernel: safety kinds=" + SafetyNet.ViolationKind.kindCount()
+            + " site_rows=" + siteRows
+            + " zero_rows=" + zeroRows
+            + " dimension_conservation=" + (net.conservationHolds() ? 1 : 0)
+            + " domains_declared=" + net.domains().size()
+            + " attributed_rows=" + attributedRows
+            + " attribution=only-a-declared-domain-makes-a-row-domain-evidence"
+            + " observation_only=1");
         lines.add("[PRTS] kernel: exits control_frames=" + exits.controlFrames()
             + " judgement_frames=" + exits.judgementFrames()
             + " window_ticks=" + exits.windowTicks()

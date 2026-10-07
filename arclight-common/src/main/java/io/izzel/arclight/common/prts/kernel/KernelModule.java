@@ -652,6 +652,13 @@ public final class KernelModule {
             waitOverruns, ledger.codeCount(RejectCode.VERSION_MISMATCH),
             waitPoints.unregisteredCallSites(), ladder.enteredTotal(),
             ladder.sign().skippedCount());
+        // The domains installed in this run are declared here, once per tick, so a counter can be
+        // read with the name of the domain it belongs to instead of an inferred one.
+        List<String> installed = new java.util.ArrayList<>(domains.size());
+        for (KernelDomain domain : domains) {
+            installed.add(domain.id());
+        }
+        safety.declareDomains(installed);
         safety.review(sources, tickIndex);
         reviewZeroEffect();
     }
