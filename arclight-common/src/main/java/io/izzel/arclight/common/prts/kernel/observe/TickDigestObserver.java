@@ -199,9 +199,7 @@ public final class TickDigestObserver implements PrtsPipelineRows.MailboxOwnerTa
     /** Removes the owner aware face, unless somebody else owns it by now. */
     public synchronized void detach() {
         attached = false;
-        if (PrtsPipelineRows.ownerTapInstalled()) {
-            PrtsPipelineRows.installOwnerTap(null);
-        }
+        PrtsPipelineRows.removeOwnerTap(this);
         PrtsPipelineRows.bindMailboxWorlds(Map.of());
         placement = Map.of();
     }

@@ -3,7 +3,9 @@
  * round that carried work. Both are no-ops while no watcher is installed. */
 package io.izzel.arclight.common.prts.support;
 
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /** The seam the chunk pipeline mailboxes open, identified by the name the pipeline gave them. */
 public final class PrtsPipelineRows {
@@ -30,7 +32,8 @@ public final class PrtsPipelineRows {
 
     private static volatile MailboxRowTap tap;
 
-    private static volatile MailboxOwnerTap ownerTap;
+    private static final CopyOnWriteArrayList<MailboxOwnerTap> ownerTaps =
+        new CopyOnWriteArrayList<>();
 
     private static volatile Map<Object, String> mailboxWorlds = Map.of();
 
@@ -50,14 +53,24 @@ public final class PrtsPipelineRows {
         return tap;
     }
 
-    /** Installs the owner aware face, or removes it when handed null. */
+    /** Adds a watcher to the owner aware face, or clears them all when handed null. The face serves
+     * every watcher that asked for it: a second reader takes nothing away from the first. */
     public static void installOwnerTap(MailboxOwnerTap watcher) {
-        ownerTap = watcher;
+        if (watcher == null) {
+            ownerTaps.clear();
+            return;
+        }
+        ownerTaps.addIfAbsent(watcher);
     }
 
-    /** @return whether the owner aware face has a watcher */
+    /** Removes one watcher from the owner aware face and leaves the others in place. */
+    public static void removeOwnerTap(MailboxOwnerTap watcher) {
+        ownerTaps.remove(watcher);
+    }
+
+    /** @return whether the owner aware face has any watcher */
     public static boolean ownerTapInstalled() {
-        return ownerTap != null;
+        return !ownerTaps.isEmpty();
     }
 
     /** Publishes the mailbox to world placement an observer read; an empty map places nothing. */
@@ -85,19 +98,19 @@ public final class PrtsPipelineRows {
         }
     }
 
-    /** Reports one executed task to the owner aware face; a no-op while none is installed. */
+    /** Reports one executed task to every watcher of the owner aware face. */
     public static void ownerTask(Object mailbox, String name) {
-        MailboxOwnerTap watcher = ownerTap;
-        if (watcher != null) {
-            watcher.ownerTask(worldOf(mailbox), name);
+        String world = worldOf(mailbox);
+        for (MailboxOwnerTap watcher : ownerTaps) {
+            watcher.ownerTask(world, name);
         }
     }
 
-    /** Reports one drain round to the owner aware face; a no-op while none is installed. */
+    /** Reports one drain round to every watcher of the owner aware face. */
     public static void ownerRound(Object mailbox, String name) {
-        MailboxOwnerTap watcher = ownerTap;
-        if (watcher != null) {
-            watcher.ownerRound(worldOf(mailbox), name);
+        String world = worldOf(mailbox);
+        for (MailboxOwnerTap watcher : ownerTaps) {
+            watcher.ownerRound(world, name);
         }
     }
 }

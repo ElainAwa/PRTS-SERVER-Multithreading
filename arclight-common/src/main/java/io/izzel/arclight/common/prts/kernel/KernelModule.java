@@ -24,6 +24,7 @@ import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
 import io.izzel.arclight.common.prts.kernel.jobs.JobIntake;
 import io.izzel.arclight.common.prts.kernel.jobs.JobScheduler;
+import io.izzel.arclight.common.prts.kernel.jobs.PipelineRoundJobs;
 import io.izzel.arclight.common.prts.kernel.jobs.ShareMeterPoint;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlanPlanner;
@@ -65,6 +66,7 @@ import io.izzel.arclight.common.prts.kernel.observe.StallAttributionObserver;
 import io.izzel.arclight.common.prts.kernel.observe.TickDigestObserver;
 import io.izzel.arclight.common.prts.kernel.meter.SelfCostTap;
 import io.izzel.arclight.common.prts.support.PrtsChunkMaterialization;
+import io.izzel.arclight.common.prts.support.PrtsPipelineRows;
 import io.izzel.arclight.common.prts.support.PrtsSelfCosts;
 import io.izzel.arclight.common.prts.support.PrtsWaitSites;
 import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
@@ -174,6 +176,7 @@ public final class KernelModule {
     private final List<KernelDomain> domains = new ArrayList<>();
     private final JobIntake jobIntake = new JobIntake(KernelSettings::jobQueueCap);
     private final JobScheduler scheduler = new JobScheduler();
+    private final PipelineRoundJobs pipelineJobs = new PipelineRoundJobs();
     private final ShareMeterPoint jobMeter = new ShareMeterPoint();
     private final TickPlanStore plans = new TickPlanStore(KernelSettings.planHistoryCap());
     private final SafetyNet safety = new SafetyNet(KernelSettings::safetyDegrade,
@@ -186,6 +189,9 @@ public final class KernelModule {
     private int waitCrossStreak;
     private boolean waitSiteTapInstalled;
     private boolean pipelineRowTapInstalled;
+    private boolean pipelineOwnerTapInstalled;
+    private long jobDeclarations;
+    private long lastDispatchHandedOut;
     private boolean loadProbeInstalled;
     private long planNanosLast;
     private long planNanosTotal;
@@ -406,6 +412,7 @@ public final class KernelModule {
     }
 
     private void syncPipelineRowTap(boolean wanted) {
+        syncPipelineOwnerTap(wanted && KernelSettings.pipelineJobs() && KernelSettings.tickPlan());
         if (pipelineRowTapInstalled == wanted) {
             return;
         }
@@ -427,6 +434,21 @@ public final class KernelModule {
             arrivalDigest.detach();
             pipelineRows.detach();
             tickDigest.detach();
+        }
+    }
+
+    /** Installs or removes the reader that turns the rounds of the chunk pipeline into jobs. It
+     * reads the same rows the digest reads and takes nothing away from it, and it is only installed
+     * while a plan exists to consume the declarations. */
+    private void syncPipelineOwnerTap(boolean wanted) {
+        if (pipelineOwnerTapInstalled == wanted) {
+            return;
+        }
+        pipelineOwnerTapInstalled = wanted;
+        if (wanted) {
+            PrtsPipelineRows.installOwnerTap(pipelineJobs);
+        } else {
+            PrtsPipelineRows.removeOwnerTap(pipelineJobs);
         }
     }
 
@@ -567,6 +589,9 @@ public final class KernelModule {
             return;
         }
         planSequence++;
+        if (KernelSettings.pipelineJobs() && KernelSettings.tickPlan()) {
+            noteJobDeclarations(pipelineJobs.declareInto(jobIntake));
+        }
         List<String> domainIds = new ArrayList<>();
         for (KernelDomain domain : domains) {
             domainIds.add(domain.id());
@@ -588,6 +613,9 @@ public final class KernelModule {
             plans.publish(result.plan());
             grantVersionSlots(result.plan());
             ownerGrants.apply(result.plan().graph(), tickIndex);
+            if (KernelSettings.pipelineJobs() && KernelSettings.tickPlan()) {
+                dispatchFrozen(result.plan());
+            }
         } else {
             plans.noteFailure(result.code());
         }
@@ -596,6 +624,48 @@ public final class KernelModule {
         // Taken last, so the frame the next tick consumes carries this tick's deltas and nothing of
         // the plan that just read the previous one.
         plans.takeFeedback(tickIndex, planSequence);
+    }
+
+    /** Hands the plan of this tick out through the job scheduler of this kernel: every node of the
+     * frozen graph is taken in the order the graph froze and settled, because the batch a node names
+     * was closed by the pipeline before the plan ordered it. The hand-out runs no work of its own and
+     * lands nothing; the bound of jobs in flight is the one the graph declares. */
+    private void dispatchFrozen(TickPlan plan) {
+        JobGraph graph = plan.graph();
+        if (graph == null || graph.empty()) {
+            lastDispatchHandedOut = 0L;
+            return;
+        }
+        long handed = 0L;
+        scheduler.begin(graph);
+        JobScheduler.Step step = scheduler.next();
+        while (step != null) {
+            scheduler.settle(step.nodeId());
+            handed++;
+            step = scheduler.next();
+        }
+        lastDispatchHandedOut = handed;
+    }
+
+    /** Counts the declarations the domains handed to the planning period, whether the intake took
+     * them or refused them: the count is what a reader of the job layer sees as declared. */
+    public void noteJobDeclarations(int count) {
+        jobDeclarations += count;
+    }
+
+    /** The declarations handed to the planning period since the counters were cleared. */
+    public long jobDeclarations() {
+        return jobDeclarations;
+    }
+
+    /** The nodes the last dispatch handed out. */
+    public long lastDispatchHandedOut() {
+        return lastDispatchHandedOut;
+    }
+
+    /** The rounds of the chunk pipeline this kernel declares as jobs. */
+    public PipelineRoundJobs pipelineJobs() {
+        return pipelineJobs;
     }
 
     /** Grants the version slot of every write domain the frozen plan declares. The value is minted
@@ -1078,6 +1148,9 @@ public final class KernelModule {
         plannedWorlds = List.of();
         jobIntake.reset();
         scheduler.reset();
+        pipelineJobs.reset();
+        jobDeclarations = 0L;
+        lastDispatchHandedOut = 0L;
         jobMeter.reset();
         plans.reset();
         versionSlots.reset();

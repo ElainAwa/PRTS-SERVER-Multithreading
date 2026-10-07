@@ -15,7 +15,10 @@ import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.support.PrtsChunkFlow;
 import io.izzel.arclight.common.prts.support.PrtsLoadProbe;
 import io.izzel.arclight.common.prts.support.PrtsPipelineRows;
+import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
+import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
 import io.izzel.arclight.common.prts.kernel.jobs.JobScheduler;
+import io.izzel.arclight.common.prts.kernel.jobs.PipelineRoundJobs;
 import io.izzel.arclight.common.prts.kernel.jobs.ShareMeterPoint;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlanStore;
@@ -96,6 +99,7 @@ public final class KernelReadings {
         safety(lines, module);
         exits(lines, module);
         pipelineRows(lines, module);
+        pipelineJobs(lines, module);
         tickDigest(lines, module);
         arrivalDigest(lines, module);
         loadObservation(lines, module);
@@ -727,6 +731,7 @@ public final class KernelReadings {
         }
         JobScheduler scheduler = module.scheduler();
         add(lines, "jobs.observation_only", 1);
+        add(lines, "jobs.declared", module.jobDeclarations());
         add(lines, "jobs.intake_depth", module.jobIntake().depth());
         add(lines, "jobs.intake_cap", module.jobIntake().capacity());
         add(lines, "jobs.intake_submitted", module.jobIntake().submitted());
@@ -1265,6 +1270,77 @@ public final class KernelReadings {
         add(lines, "exit.control_window_feeds", exits.controlWindowFeeds());
         add(lines, "exit.judgement_write_dependencies", exits.judgementWriteDependencies());
         add(lines, "exit.missing_total", exits.missingTotal());
+    }
+
+    /** The jobs the chunk pipeline's own rounds were declared as: how many rounds were read, how
+     * many declared nothing because no world was read for their mailbox, and which declaration each
+     * node of the newest plan came from. A node of that domain the drain has no declaration for is
+     * counted apart instead of being read as traced. */
+    private static void pipelineJobs(List<String> lines, KernelModule module) {
+        PipelineRoundJobs jobs = module.pipelineJobs();
+        add(lines, "r02.enabled", KernelSettings.pipelineJobs() && KernelSettings.tickPlan() ? 1 : 0);
+        add(lines, "r02.windows", jobs.windows());
+        add(lines, "r02.rounds_seen", jobs.roundsSeen());
+        add(lines, "r02.rounds_unplaced", jobs.roundsUnplaced());
+        add(lines, "r02.tasks_seen", jobs.tasksSeen());
+        add(lines, "r02.jobs_declared", jobs.declared());
+        add(lines, "r02.jobs_refused", jobs.refused());
+        add(lines, "r02.rounds_covered", jobs.coveredRounds());
+        add(lines, "r02.last_declared", jobs.lastDeclared());
+        add(lines, "r02.last_rounds", jobs.lastRounds());
+        add(lines, "r02.dispatch_handed_out", module.lastDispatchHandedOut());
+        TickPlan plan = module.plans().latest();
+        List<String> traced = new ArrayList<>();
+        int nodes = 0;
+        if (plan != null && plan.graph() != null) {
+            for (JobGraph.Node node : plan.graph().nodes()) {
+                if (!PipelineRoundJobs.DOMAIN.equals(node.domainId())) {
+                    continue;
+                }
+                nodes++;
+                PipelineRoundJobs.Trace trace = jobs.traceOf(node.key());
+                if (trace == null) {
+                    continue;
+                }
+                traced.add("key=" + node.key() + "|world=" + trace.worldId() + "|mailbox="
+                    + trace.mailbox() + "|rounds=" + trace.rounds() + "|handle=" + trace.handle()
+                    + "|position=" + node.position() + "|batch_bound=" + node.batchBound()
+                    + "|write_set=" + domainRefs(node.writeSet()) + "|owner_demand="
+                    + ownerDemands(node.ownerDemands()));
+            }
+        }
+        add(lines, "r02.plan_nodes", nodes);
+        add(lines, "r02.nodes_traced", traced.size());
+        add(lines, "r02.nodes_without_declaration", nodes - traced.size());
+        for (int index = 0; index < traced.size(); index++) {
+            add(lines, "r02.node." + (index + 1), traced.get(index));
+        }
+    }
+
+    /** The write domains one node carries, each as its world, domain and level. */
+    private static String domainRefs(List<JobDeclaration.DomainRef> refs) {
+        StringBuilder text = new StringBuilder();
+        for (JobDeclaration.DomainRef ref : refs) {
+            if (text.length() > 0) {
+                text.append(',');
+            }
+            text.append(ref.worldId()).append('/').append(ref.domainId()).append('@').append(ref.level());
+        }
+        return text.length() == 0 ? "-" : text.toString();
+    }
+
+    /** The write rights one node asks to hold, each as its level, holder and hold window. */
+    private static String ownerDemands(List<JobDeclaration.OwnerDemand> demands) {
+        StringBuilder text = new StringBuilder();
+        for (JobDeclaration.OwnerDemand demand : demands) {
+            if (text.length() > 0) {
+                text.append(',');
+            }
+            text.append(demand.worldId()).append('/').append(demand.level()).append('/')
+                .append(demand.domainId()).append('/').append(demand.holderKind()).append('/')
+                .append(demand.holderSiteId()).append('@').append(demand.holdTicks());
+        }
+        return text.length() == 0 ? "-" : text.toString();
     }
 
     /** The chunk pipeline's own rows, counted where the pipeline runs them. Observation only: the

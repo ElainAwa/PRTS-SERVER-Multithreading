@@ -233,6 +233,11 @@ public final class PrtsConfigManager {
                 + "# hands them out along that order and along their affinity, the declared bound of\n"
                 + "# jobs in flight is enforced instead of growing a queue, and the cost of the layer is\n"
                 + "# metered into the same per-class timers the share table is planned from.\n"
+                + "# 'pipeline-jobs: false' declares nothing of the chunk pipeline's own work as a job of\n"
+                + "# the planning period. On, every drain round a mailbox of a world carried becomes one\n"
+                + "# batch job of that world and domain, so the plan orders the rounds the pipeline ran; a\n"
+                + "# round whose mailbox no world was read for is counted apart and no job is declared for\n"
+                + "# it. It needs 'tick-plan: true' as well: without a plan nothing consumes a declaration.\n"
                 + "# 'commit-log: false' leaves every commit producer on its own path. On, the producers\n"
                 + "# report what they committed to one log, which accepts a report only while the order\n"
                 + "# of each world and domain pair keeps rising, keeps it in a ring per pair and folds\n"
@@ -294,6 +299,7 @@ public final class PrtsConfigManager {
         features.put("write-owner-grants", false);
         features.put("write-controlled-slot", false);
         features.put("job-graph", false);
+        features.put("pipeline-jobs", false);
         features.put("commit-log", false);
         features.put("safety-net", false);
         features.put("safety-degrade", false);

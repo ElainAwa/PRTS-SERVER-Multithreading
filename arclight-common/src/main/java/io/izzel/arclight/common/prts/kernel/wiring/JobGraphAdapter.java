@@ -24,8 +24,7 @@ import java.util.Map;
  * switch is on; with it off the domain dispatches exactly the way it always did. */
 public final class JobGraphAdapter {
 
-    /** The domain the entity jobs are declared under. It is also the domain the batch ledger of the
-     * domain knows its rows by. */
+    /** The domain the entity jobs are declared under, and the name its batch ledger knows. */
     public static final String DOMAIN = "entity";
 
     /** The affinity of one entity job is its region: rows of one region stay in one order. */
@@ -38,7 +37,6 @@ public final class JobGraphAdapter {
     public static final int OWNER_HOLD_TICKS = 40;
 
     private final KernelModule module;
-    private long declared;
     private long ordered;
     private long unplanned;
 
@@ -53,7 +51,7 @@ public final class JobGraphAdapter {
         }
         for (WorkTask task : plan.tasks()) {
             module.jobIntake().submit(declarationOf(task));
-            declared++;
+            module.noteJobDeclarations(1);
         }
     }
 
@@ -122,10 +120,6 @@ public final class JobGraphAdapter {
         return DOMAIN + "/" + task.worldId() + "/" + task.regionId();
     }
 
-    public long declared() {
-        return declared;
-    }
-
     public long orderedPlanned() {
         return ordered;
     }
@@ -135,7 +129,6 @@ public final class JobGraphAdapter {
     }
 
     public void reset() {
-        declared = 0L;
         ordered = 0L;
         unplanned = 0L;
     }

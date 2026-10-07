@@ -57,7 +57,8 @@ public final class KernelStatusLines {
             + " write-path-guard=" + KernelSettings.writePathGuard()
             + " commit-intents=" + KernelSettings.commitIntents()
             + " route-unregistered-writes=" + KernelSettings.routeUnregisteredWrites()
-            + " write-controlled-slot=" + KernelSettings.writeControlledSlot());
+            + " write-controlled-slot=" + KernelSettings.writeControlledSlot()
+            + " pipeline-jobs=" + KernelSettings.pipelineJobs());
         List<PrtsSeams.SeamState> seams = PrtsSeams.states(KernelSettings::categoryEnabled);
         int reachable = 0;
         int applied = 0;
@@ -206,7 +207,8 @@ public final class KernelStatusLines {
             + " steps=" + (plan == null ? 0 : plan.commitOrder().size())
             + " sequence=" + (plan == null ? 0L : plan.planSequence())
             + " observation_only=1");
-        lines.add("[PRTS] kernel: jobs dispatched=" + module.scheduler().dispatched()
+        lines.add("[PRTS] kernel: jobs declared=" + module.jobDeclarations()
+            + " dispatched=" + module.scheduler().dispatched()
             + " settled=" + module.scheduler().settledTotal()
             + " backpressure=" + module.scheduler().backpressureHits()
             + " cancelled=" + module.scheduler().cancelledTotal()
@@ -217,6 +219,8 @@ public final class KernelStatusLines {
             + " dropped=" + module.commits().dropped()
             + " order_violations=" + module.commits().orderViolations()
             + " rings=" + module.commits().ringCount()
+            + " pipeline_rounds=" + module.pipelineJobs().roundsSeen()
+            + " pipeline_unplaced=" + module.pipelineJobs().roundsUnplaced()
             + " observation_only=1");
         SafetyNet net = module.safety();
         DualExits exits = module.exits();

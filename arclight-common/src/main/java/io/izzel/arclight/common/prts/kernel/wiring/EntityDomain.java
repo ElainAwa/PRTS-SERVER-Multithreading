@@ -282,7 +282,6 @@ public final class EntityDomain implements KernelDomain {
         sink.add("self.dispatch_redo_ms", readings.redoNanos() / 1_000_000.0);
         sink.add("self.dispatch_rows", readings.rowsTotal());
         sink.add("self.dispatch_commit_channel_ms", readings.commitChannelNanos() / 1_000_000.0);
-        sink.add("jobs.declared", jobAdapter.declared());
         sink.add("jobs.ordered_planned", jobAdapter.orderedPlanned());
         sink.add("jobs.ordered_unplanned", jobAdapter.orderedUnplanned());
         sink.add("self.entity_tick_open", PrtsEntityCapability.tickOpens());

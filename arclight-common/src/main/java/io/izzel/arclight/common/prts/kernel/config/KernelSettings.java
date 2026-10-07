@@ -92,6 +92,9 @@ public final class KernelSettings {
     /** Drives the frozen job graph, its gates and the metering point of the job layer; off. */
     public static final String JOB_GRAPH = "job-graph";
 
+    /** Declares the rounds the chunk pipeline ran as jobs of the planning period; off. */
+    public static final String PIPELINE_JOBS = "pipeline-jobs";
+
     /** Converges every commit producer on the commit log; off, each producer keeps its own path. */
     public static final String COMMIT_LOG = "commit-log";
 
@@ -350,6 +353,10 @@ public final class KernelSettings {
 
     public static boolean jobGraph() {
         return feature(JOB_GRAPH);
+    }
+
+    public static boolean pipelineJobs() {
+        return feature(PIPELINE_JOBS);
     }
 
     public static boolean commitLog() {
