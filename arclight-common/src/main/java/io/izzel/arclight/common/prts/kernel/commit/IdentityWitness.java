@@ -59,11 +59,77 @@ public final class IdentityWitness {
 
         long liveWorldEpoch(String worldId);
 
-        long liveAuthorization(String worldId, String domainId, String nodeKey);
+        /** The generation this plan's own grant answered for one domain, read for the pair
+         * {@code (planController.lifecycleKey(), planSequence)} and for no other plan identity. The
+         * answer carries the two criteria a judgement applies as two faces - this plan's own record
+         * and the live slot read in the same question - and says of each whether it carries a value,
+         * a declared absence or nothing that could be read. */
+        Authorization liveAuthorization(long planSequence, CommitNamespaces.Namespace planController,
+                                        String worldId, String domainId, String nodeKey);
 
         /** The lifecycle the holder judges lines under right now, or null when the holder is not a
          * controller and only the declared presence of the line's own namespace can be read. */
         CommitNamespaces.Namespace currentController();
+    }
+
+    /** What the declared-side read face answered for one plan identity: the pair of the record it
+     * answered from, the two faces a judgement reads, and why the source face carries no value. */
+    public record Authorization(String lifecycleKey, long planSequence, Face source, Face validity,
+                                String refusal) {
+
+        /** No lawful generation is negative: this is what a face carries instead of a number. */
+        public static final long NOT_ANSWERED = -1L;
+
+        public Authorization {
+            lifecycleKey = lifecycleKey == null ? "" : lifecycleKey;
+            refusal = refusal == null ? "" : refusal;
+            source = source == null ? Face.notRead() : source;
+            validity = validity == null ? Face.notRead() : validity;
+        }
+
+        /** An answer whose source face carries this plan's own number. */
+        public static Authorization answered(String lifecycleKey, long planSequence, long generation,
+                                             Face validity) {
+            return new Authorization(lifecycleKey, planSequence, Face.present(generation), validity,
+                "");
+        }
+
+        /** An answer that refuses the source judgement, with the validity face left unread. */
+        public static Authorization refused(String lifecycleKey, long planSequence, Face source,
+                                            String reason) {
+            return new Authorization(lifecycleKey, planSequence, source, Face.notRead(), reason);
+        }
+
+        /** Whether the source judgement passes this answer. */
+        public boolean admitted() {
+            return refusal.isEmpty() && source.presence == Presence.PRESENT;
+        }
+
+        /** One face of an answer: a value, a declared absence, or nothing that could be read. */
+        public record Face(Presence presence, long generation) {
+
+            public static Face present(long generation) {
+                return new Face(Presence.PRESENT, generation);
+            }
+
+            public static Face absent() {
+                return new Face(Presence.ABSENT, NOT_ANSWERED);
+            }
+
+            public static Face notRead() {
+                return new Face(Presence.NOT_READABLE, NOT_ANSWERED);
+            }
+
+            public boolean carries() {
+                return presence == Presence.PRESENT;
+            }
+        }
+
+        /** Whether a face carries a value, is a declared absence, or was not read. */
+        public enum Presence {
+            PRESENT, ABSENT, NOT_READABLE
+        }
+
     }
 
     /** The source of a chain no holder wired: no typed line is admitted through it. */
@@ -80,8 +146,10 @@ public final class IdentityWitness {
         }
 
         @Override
-        public long liveAuthorization(String worldId, String domainId, String nodeKey) {
-            return CommitLog.NO_AUTHORIZATION_GENERATION;
+        public Authorization liveAuthorization(long planSequence,
+                                               CommitNamespaces.Namespace planController,
+                                               String worldId, String domainId, String nodeKey) {
+            return Authorization.refused("", 0L, Authorization.Face.notRead(), "no-record");
         }
 
         @Override
@@ -90,8 +158,7 @@ public final class IdentityWitness {
         }
     };
 
-    /** A source that answers fixed generations, for a reader that holds a seal and the live values
-     * it was taken under. */
+    /** A source that answers the fixed generations a reader holds a seal under. */
     public static Source fixed(FrozenDeclarations declarations, long worldEpoch, long authorization) {
         return new Source() {
 
@@ -110,8 +177,19 @@ public final class IdentityWitness {
             }
 
             @Override
-            public long liveAuthorization(String worldId, String domainId, String nodeKey) {
-                return authorization;
+            public Authorization liveAuthorization(long planSequence,
+                                                   CommitNamespaces.Namespace planController,
+                                                   String worldId, String domainId, String nodeKey) {
+                if (declarations == null || planController == null
+                    || declarations.planSequence() != planSequence
+                    || (!declarations.freeze().lifecycleKey().isEmpty()
+                        && !declarations.freeze().lifecycleKey()
+                            .equals(planController.lifecycleKey()))) {
+                    return Authorization.refused("", 0L, Authorization.Face.notRead(),
+                        "not-this-declaration");
+                }
+                return Authorization.answered(planController.lifecycleKey(), planSequence,
+                    authorization, Authorization.Face.present(authorization));
             }
 
             @Override

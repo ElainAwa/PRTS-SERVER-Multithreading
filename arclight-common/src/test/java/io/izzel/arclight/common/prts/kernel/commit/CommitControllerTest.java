@@ -289,9 +289,10 @@ class CommitControllerTest {
         assertEquals(1, f.log.ringDepth(), "the refused line took no slot");
         assertEquals(sequence + 1L, f.log.sequence(), "a plain refusal still takes its number");
 
-        assertNull(f.reservations.reserve(f.request("a/2", 8L, 0, 2, 14L, 14L)).ticket(),
+        f.plans.position = 2;
+        assertNull(f.reservations.reserve(f.request("a/0", 7L, 2, 2, EFFECT, 11L)).ticket(),
             "both slots are taken: the ring has no room left");
-        assertEquals("ring-room", f.reservations.reserve(f.request("a/2", 8L, 0, 2, 14L, 14L))
+        assertEquals("ring-room", f.reservations.reserve(f.request("a/0", 7L, 2, 2, EFFECT, 11L))
             .diagnostic());
 
         Fixture full = new Fixture(1, 4096, 4);

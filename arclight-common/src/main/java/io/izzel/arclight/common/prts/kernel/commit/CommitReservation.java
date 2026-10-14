@@ -246,10 +246,6 @@ public final class CommitReservation {
         if (!CommitLog.liveWorldEpoch(identity.worldEpoch())) {
             return Judged.refused(new Refusal(RejectCode.VERSION_MISMATCH, "world-epoch-not-live"));
         }
-        if (identity.authorizationGeneration() != request.expectedVersion()
-            || identity.authorizationGeneration() == CommitLog.NO_AUTHORIZATION_GENERATION) {
-            return Judged.refused(new Refusal(RejectCode.VERSION_MISMATCH, "authorization-mismatch"));
-        }
         if (request.controller() == null
             || !request.controller().lifecycleKey().equals(controller().lifecycleKey())) {
             // The request names the lifecycle it is taken under. Whether the producer and the world
@@ -262,6 +258,10 @@ public final class CommitReservation {
         if (resolved == null || resolved.planSequence() != request.planSequence()
             || resolved.position() != request.position()) {
             return Judged.refused(new Refusal(RejectCode.COMMIT_ORDER_VIOLATION, "plan-ref-mismatch"));
+        }
+        if (identity.authorizationGeneration() != request.expectedVersion()
+            || identity.authorizationGeneration() == CommitLog.NO_AUTHORIZATION_GENERATION) {
+            return Judged.refused(new Refusal(RejectCode.VERSION_MISMATCH, "authorization-mismatch"));
         }
         // The seat the plan resolved is what the sealed declarations are looked up by, so this runs
         // after the plan reference was checked and before a ring slot or a room is taken. The
@@ -287,6 +287,20 @@ public final class CommitReservation {
                 || EffectStore.normalizedRows(variant.rows()).size() != request.rows()) {
                 return Judged.refused(new Refusal(RejectCode.VERSION_MISMATCH, "terminal-payload-mismatch"));
             }
+        }
+        // The source judgement: the record this plan's own grant published, read once for the pair
+        // the request names. A record of another plan or of another lifecycle answers no value, and
+        // the number the request wears has to be the number that record answered - the live slot
+        // agreeing with the request proves nothing about which record the number came from. It
+        // stands last among the judgements so that no refusal that used to be reported earlier is
+        // now reported as a source refusal instead, and it still runs before any slot or room is
+        // taken, which happens after this method returns.
+        IdentityWitness.Authorization authorization = log.identitySource().liveAuthorization(
+            request.planSequence(), request.controller(), request.worldId(), request.domainId(),
+            request.nodeKey());
+        if (!authorization.admitted()
+            || authorization.source().generation() != identity.authorizationGeneration()) {
+            return Judged.refused(new Refusal(RejectCode.VERSION_MISMATCH, "authorization-mismatch"));
         }
         return new Judged(null, sealed);
     }
@@ -361,7 +375,11 @@ public final class CommitReservation {
     }
 
     /** Whether the world generation or the grant the line was frozen under has moved since. A plain
-     * line declares neither, so nothing of it can drift. */
+     * line declares neither, so nothing of it can drift. The current validity of the grant is its
+     * own criterion: it is the live slot read here, against the number the line ORIGINALLY froze,
+     * and it is never answered from this plan's own record - a record whose slot moved on without a
+     * new grant still carries the old number, so a record read here could not see the drift at all.
+     * The answer taken at the reservation is never reused as this check either. */
     private boolean frozenValuesMoved(CommitTicket ticket) {
         CommitLog.Identity identity = ticket.identity();
         if (identity.schemaVersion() != CommitLog.SCHEMA_TYPED) {
@@ -371,9 +389,16 @@ public final class CommitReservation {
         if (source == null) {
             return true;
         }
-        return source.liveWorldEpoch(ticket.batch().worldId()) != identity.worldEpoch()
-            || source.liveAuthorization(ticket.batch().worldId(), ticket.batch().domainId(),
-                ticket.batch().nodeKey()) != identity.authorizationGeneration();
+        if (source.liveWorldEpoch(ticket.batch().worldId()) != identity.worldEpoch()) {
+            return true;
+        }
+        IdentityWitness.Authorization authorization = source.liveAuthorization(
+            ticket.planSequence(), ticket.controller(), ticket.batch().worldId(),
+            ticket.batch().domainId(), ticket.batch().nodeKey());
+        // A record that is no longer this plan's own refuses the start as well: the number the line
+        // holds cannot be confirmed against a source that answers nothing.
+        return !authorization.refusal().isEmpty() || !authorization.validity().carries()
+            || authorization.validity().generation() != identity.authorizationGeneration();
     }
 
     /** Writes the terminal line of a publishing ticket from the reservations it holds. */

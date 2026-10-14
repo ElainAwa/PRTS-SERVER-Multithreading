@@ -245,8 +245,46 @@ public final class KernelModule {
         }
 
         @Override
-        public long liveAuthorization(String worldId, String domainId, String nodeKey) {
-            return versionSlots.peek(worldId, WriteLevel.REGION, domainId);
+        public IdentityWitness.Authorization liveAuthorization(long planSequence,
+                CommitNamespaces.Namespace planController, String worldId, String domainId,
+                String nodeKey) {
+            String lifecycleKey = declarationLifecycleKey();
+            long held = versionSlots.grantedPlan();
+            if (planController == null || !planController.lifecycleKey().equals(lifecycleKey)) {
+                // The record is published under this module's own lifecycle and the reset path clears
+                // it in the same move, so a plan controller of any other lifecycle is answered with a
+                // refusal and never with the number the record happens to carry.
+                return IdentityWitness.Authorization.refused(lifecycleKey, held,
+                    IdentityWitness.Authorization.Face.notRead(), "record-of-another-lifecycle");
+            }
+            if (held == 0L) {
+                // Nothing was published for any plan: this is not the same state as a record that
+                // belongs to another plan, so it names the record's own sentinel and no lifecycle.
+                return IdentityWitness.Authorization.refused("", 0L,
+                    IdentityWitness.Authorization.Face.notRead(), "no-record");
+            }
+            if (held != planSequence) {
+                return IdentityWitness.Authorization.refused(lifecycleKey, held,
+                    IdentityWitness.Authorization.Face.notRead(), "record-of-another-plan");
+            }
+            Long granted = versionSlots.grantedFor(planSequence, worldId, WriteLevel.REGION, domainId);
+            if (granted == null) {
+                return IdentityWitness.Authorization.refused(lifecycleKey, planSequence,
+                    IdentityWitness.Authorization.Face.absent(), "domain-not-granted");
+            }
+            if (granted == WriteVersionSlots.NOT_CARRIED) {
+                return IdentityWitness.Authorization.refused(lifecycleKey, planSequence,
+                    IdentityWitness.Authorization.Face.present(WriteVersionSlots.NOT_CARRIED),
+                    "grant-not-carried");
+            }
+            // The validity face is the live slot read here and now, uncounted and never written back
+            // over the frozen number; a slot that was retired is a declared absence, and a slot never
+            // carries the declared zero because every value is minted from one.
+            long live = versionSlots.peek(worldId, WriteLevel.REGION, domainId);
+            return IdentityWitness.Authorization.answered(lifecycleKey, planSequence, granted,
+                live == WriteVersionSlots.NOT_CARRIED
+                    ? IdentityWitness.Authorization.Face.absent()
+                    : IdentityWitness.Authorization.Face.present(live));
         }
 
         @Override

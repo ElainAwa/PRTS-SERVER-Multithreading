@@ -117,8 +117,20 @@ public final class WitnessSource implements IdentityWitness.Source {
     }
 
     @Override
-    public long liveAuthorization(String worldId, String domainId, String nodeKey) {
-        return authorization.getAsLong();
+    public IdentityWitness.Authorization liveAuthorization(long planSequence,
+            CommitNamespaces.Namespace planController, String worldId, String domainId,
+            String nodeKey) {
+        // This double declares one number for both faces - the record it stands in for and the slot
+        // it reports are the same value - and it answers for the lifecycle it was frozen under when
+        // it names one. The states of a real record are driven against the module's own read face.
+        if (planController == null || (!freeze.lifecycleKey().isEmpty()
+            && !freeze.lifecycleKey().equals(planController.lifecycleKey()))) {
+            return IdentityWitness.Authorization.refused("", 0L,
+                IdentityWitness.Authorization.Face.notRead(), "not-this-double");
+        }
+        long value = authorization.getAsLong();
+        return IdentityWitness.Authorization.answered(planController.lifecycleKey(), planSequence,
+            value, IdentityWitness.Authorization.Face.present(value));
     }
 
     @Override

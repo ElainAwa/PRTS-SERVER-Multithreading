@@ -57,8 +57,16 @@ class IdentityWitnessTest {
         }
 
         @Override
-        public long liveAuthorization(String worldId, String domainId, String nodeKey) {
-            return authorization;
+        public IdentityWitness.Authorization liveAuthorization(long planSequence,
+                CommitNamespaces.Namespace planController, String worldId, String domainId,
+                String nodeKey) {
+            if (planController == null || (current != null
+                && !planController.lifecycleKey().equals(current.lifecycleKey()))) {
+                return IdentityWitness.Authorization.refused("", 0L,
+                    IdentityWitness.Authorization.Face.notRead(), "not-this-double");
+            }
+            return IdentityWitness.Authorization.answered(planController.lifecycleKey(), planSequence,
+                authorization, IdentityWitness.Authorization.Face.present(authorization));
         }
 
         @Override
@@ -1121,8 +1129,16 @@ class IdentityWitnessTest {
         }
 
         @Override
-        public long liveAuthorization(String worldId, String domainId, String nodeKey) {
-            return authorization;
+        public IdentityWitness.Authorization liveAuthorization(long planSequence,
+                CommitNamespaces.Namespace planController, String worldId, String domainId,
+                String nodeKey) {
+            if (planController == null || (!lifecycleKey.isEmpty()
+                && !lifecycleKey.equals(planController.lifecycleKey()))) {
+                return IdentityWitness.Authorization.refused("", 0L,
+                    IdentityWitness.Authorization.Face.notRead(), "not-this-double");
+            }
+            return IdentityWitness.Authorization.answered(planController.lifecycleKey(), planSequence,
+                authorization, IdentityWitness.Authorization.Face.present(authorization));
         }
 
         @Override
