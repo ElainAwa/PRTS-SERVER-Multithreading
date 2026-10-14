@@ -433,26 +433,9 @@ class DemandShadowCandidatesTest {
         PrtsChunkDemand.install(null);
         KernelModule.instance().removeLoadProbe();
         System.clearProperty("arclight.prts.kernel");
-        restoreTheDeclarationHistory();
         deleteTree(CONFIG_DIR);
         PrtsConfigManager.ensureAndLoad();
         deleteTree(CONFIG_DIR);
-    }
-
-    /** Gives the module the declaration history a process that never sealed a table has. A freeze
-     * that seals a table moves the retired-snapshot counter of the shared instance for the rest of
-     * the process, and the chain fixture reads that counter as zero; the fixture that moved it is the
-     * one that puts it back, so the reading holds whichever order the classes run in. The production
-     * path is not touched: the counters are read before this runs. */
-    private static void restoreTheDeclarationHistory() {
-        try {
-            Field history = KernelModule.class.getDeclaredField("declarationHistory");
-            history.setAccessible(true);
-            history.set(KernelModule.instance(),
-                new FrozenDeclarations.History(KernelSettings.planHistoryCap()));
-        } catch (ReflectiveOperationException failure) {
-            throw new IllegalStateException("the declaration history was not put back", failure);
-        }
     }
 
     private static void deleteTree(Path root) throws IOException {
