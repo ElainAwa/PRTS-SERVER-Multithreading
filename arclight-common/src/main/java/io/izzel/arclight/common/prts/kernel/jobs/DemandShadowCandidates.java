@@ -3,6 +3,7 @@ package io.izzel.arclight.common.prts.kernel.jobs;
 
 import io.izzel.arclight.common.prts.kernel.commit.CommitLog;
 import io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations;
+import io.izzel.arclight.common.prts.kernel.shares.ShareClass;
 import io.izzel.arclight.common.prts.support.PrtsChunkDemand;
 import net.minecraft.world.level.ChunkPos;
 
@@ -11,8 +12,9 @@ import java.util.List;
 
 /**
  * Reads the chunk demands one freeze saw as shadow candidates: every column is a parameter of the one
- * call that asked for the chunk, the freeze that read it, or a pure function of those two, and no
- * candidate is ever handed to the declaration table. This type seals nothing and mints nothing.
+ * call that asked for the chunk, the freeze that read it, or a pure function of those two. What one
+ * window becomes is handed over through the two entry points of this type and only from the very list
+ * the one read returned; this type seals nothing, mints nothing and derives no key a second time.
  */
 public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
 
@@ -238,6 +240,85 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         size = 0;
         last = List.copyOf(shadows);
         return last;
+    }
+
+    /** The declarations one freeze hands to its intake: one per capture of the window that carries
+     * every column a declaration carries, in the order the window gave them, and none at all when the
+     * window holds a capture a completion marked - that refusal is the window's, so the captures it
+     * did not mark are not handed over either. The key it declares is the capture's own node key,
+     * which is the string the plan matches the candidate on.
+     *
+     * @param window the list the one read of that freeze returned
+     * @return the declarations of that window, in its order
+     * @throws IllegalStateException when the list is not the window the one read returned */
+    public List<JobDeclaration> declarationsOf(List<Shadow> window) {
+        requireTheWindowItRead(window);
+        if (late(window)) {
+            return List.of();
+        }
+        List<JobDeclaration> declarations = new ArrayList<>(window.size());
+        for (Shadow shadow : window) {
+            if (shadow != null && shadow.declared()) {
+                declarations.add(declarationOf(shadow));
+            }
+        }
+        return declarations;
+    }
+
+    /** The candidates of the window one read returned, for the merged list of the freeze that read
+     * it: the same list the declarations above are derived from, and the same whole-window refusal.
+     *
+     * @param window the list the one read of that freeze returned
+     * @return one candidate per handed capture of that window, in its order
+     * @throws IllegalStateException when the list is not the window the one read returned */
+    public List<FrozenDeclarations.Candidate> candidatesOf(List<Shadow> window) {
+        requireTheWindowItRead(window);
+        if (late(window)) {
+            return List.of();
+        }
+        List<FrozenDeclarations.Candidate> candidates = new ArrayList<>(window.size());
+        for (Shadow shadow : window) {
+            if (shadow != null && shadow.declared()) {
+                candidates.add(candidateOf(shadow));
+            }
+        }
+        return candidates;
+    }
+
+    /** Whether a completion the freeze saw marked a capture of the window: the refusal is the
+     * window's and is never a fact about one ask. */
+    private static boolean late(List<Shadow> window) {
+        for (Shadow shadow : window) {
+            if (shadow != null && shadow.late()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** One declaration per handed capture. It asks for no write right and names no site of its own:
+     * what it adds to the plan is the node the candidate of that same capture is matched at. */
+    private static JobDeclaration declarationOf(Shadow shadow) {
+        return new JobDeclaration(shadow.nodeKey(), 0L, shadow.worldId(), shadow.domainId(), 0,
+            List.of(), 0, shadow.nodeKey(), "world:" + shadow.worldId(), List.of(), List.of(),
+            ShareClass.OTHER, JobDeclaration.SiteClass.PARALLEL, 0, 1, List.of());
+    }
+
+    /** One candidate per handed capture: the three names the declaration carries, the chunk and the
+     * target state the call named, and no instance number - the freeze point mints that one and this
+     * side never fills the column in. */
+    private static FrozenDeclarations.Candidate candidateOf(Shadow shadow) {
+        return new FrozenDeclarations.Candidate(shadow.worldId(), shadow.domainId(), shadow.nodeKey(),
+            shadow.chunk(), shadow.targetStatus(), 0L, shadow.worldEpoch());
+    }
+
+    private void requireTheWindowItRead(List<Shadow> window) {
+        if (window != last) {
+            // An equal copy is not this freeze's window: two hand-offs that read two lists of one
+            // freeze would declare the same node twice, and the seal would refuse the whole table.
+            throw new IllegalStateException(
+                "a hand-off derives from the window the one read returned");
+        }
     }
 
     private void count(Shadow shadow) {

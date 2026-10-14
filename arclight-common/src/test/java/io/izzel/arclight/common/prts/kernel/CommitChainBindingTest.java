@@ -10,12 +10,15 @@ import io.izzel.arclight.common.prts.kernel.commit.EffectStore;
 import io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations;
 import io.izzel.arclight.common.prts.kernel.config.ExecutableProductFace;
 import io.izzel.arclight.common.prts.kernel.observe.KernelReadings;
+import net.minecraft.world.level.ChunkPos;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -305,5 +308,41 @@ class CommitChainBindingTest {
         assertEquals("already-bound", again.refusal());
         assertSame(first.log, module.commits(), "the chain that was taken stays the one it took");
         assertSame(first.controller, module.commitController());
+    }
+
+    private static FrozenDeclarations.Candidate declared(String worldId, String domainId,
+                                                         String nodeKey,
+                                                         FrozenDeclarations.DeclaredChunk chunk) {
+        return new FrozenDeclarations.Candidate(worldId, domainId, nodeKey, chunk, "published", 1L, 7L);
+    }
+
+    /** Two nodes whose three names concatenate to one text stay two nodes: the names are compared as
+     * themselves, so one domain is never read out of another's namespace and the seal is not refused
+     * as a duplicate of a node it never carried. */
+    @Test
+    void twoNodesOfOneSplicedTextStayTwoNodes() {
+        FrozenDeclarations.FreezeKey freeze = new FrozenDeclarations.FreezeKey("lifecycle-a", 3L);
+        FrozenDeclarations.DeclaredChunk chunk =
+            new FrozenDeclarations.DeclaredChunk(ChunkPos.asLong(3, -7));
+        List<FrozenDeclarations.Candidate> candidates = List.of(
+            declared("a/b", "c", "k", chunk),
+            declared("a", "b/c", "k", chunk),
+            declared("w", "d1", "k", chunk),
+            declared("w", "d2", "k", chunk));
+        List<FrozenDeclarations.Assignment> places = List.of(
+            new FrozenDeclarations.Assignment("a/b", "c", "k", 0),
+            new FrozenDeclarations.Assignment("a", "b/c", "k", 1),
+            new FrozenDeclarations.Assignment("w", "d1", "k", 2),
+            new FrozenDeclarations.Assignment("w", "d2", "k", 3));
+
+        FrozenDeclarations.Sealed sealed = FrozenDeclarations.seal(freeze, 7L, candidates, places);
+
+        assertTrue(sealed.sealed(), "the seal holds: " + sealed.refusal());
+        assertEquals(4, sealed.declarations().size(), "four nodes and no collision between them");
+        Set<String> nodes = new TreeSet<>();
+        for (FrozenDeclarations.Entry entry : sealed.declarations().entries()) {
+            nodes.add(entry.seat().worldId() + "|" + entry.seat().domainId() + "|" + entry.nodeKey());
+        }
+        assertEquals(4, nodes.size(), "each of the four is its own node: " + nodes);
     }
 }

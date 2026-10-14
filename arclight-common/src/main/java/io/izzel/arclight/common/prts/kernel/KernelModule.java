@@ -746,11 +746,16 @@ public final class KernelModule {
         if (KernelSettings.pipelineJobs() && KernelSettings.tickPlan()) {
             noteJobDeclarations(pipelineJobs.declareInto(jobIntake));
         }
-        // The demands of this freeze are read before the plan is built and never handed to it:
-        // what they become is a shadow candidate, and the freeze that read it is all it gets.
-        demandShadows.readFor(new DemandShadowCandidates.Freeze(planSequence, worldGeneration,
-            new FrozenDeclarations.FreezeKey(declarationLifecycleKey(), declarationGeneration)
-                .next()), worldId -> guard.worldEpochs().epochOf(worldId));
+        // The demands of this freeze are read once, before the plan is built, and the declarations of
+        // that one window are handed to the same intake the plan takes from below: a capture the
+        // window handed over declares the node its candidate is matched at, and no other key is made.
+        List<DemandShadowCandidates.Shadow> window = demandShadows.readFor(
+            new DemandShadowCandidates.Freeze(planSequence, worldGeneration,
+                new FrozenDeclarations.FreezeKey(declarationLifecycleKey(), declarationGeneration)
+                    .next()), worldId -> guard.worldEpochs().epochOf(worldId));
+        for (JobDeclaration declaration : demandShadows.declarationsOf(window)) {
+            jobIntake.submit(declaration);
+        }
         List<String> domainIds = new ArrayList<>();
         for (KernelDomain domain : domains) {
             domainIds.add(domain.id());
@@ -816,7 +821,9 @@ public final class KernelModule {
             places.add(new FrozenDeclarations.Assignment(step.worldId(), step.domainId(),
                 step.nodeKey(), step.position()));
         }
-        List<FrozenDeclarations.Candidate> handed = pipelineJobs.candidateDeclarations();
+        List<FrozenDeclarations.Candidate> handed =
+            new ArrayList<>(pipelineJobs.candidateDeclarations());
+        handed.addAll(demandShadows.candidatesOf(demandShadows.lastCandidates()));
         String epochRefusal = declarationEpochRefusal(handed);
         if (!epochRefusal.isEmpty()) {
             declarationRefusals++;
