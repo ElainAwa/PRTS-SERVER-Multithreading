@@ -143,16 +143,19 @@ class CommitChainBindingTest {
         KernelModule module = KernelModule.instance();
         Chain c = new Chain(module.commitOrderSource());
 
-        assertEquals(FrozenDeclarations.NOT_WIRED, module.declarations().state(),
-            "the plan of this tick declared no artefact, so no entry was sealed");
-        assertEquals(0, module.declarations().size(), "and an empty plan is not read as a table");
-        assertEquals(0L, module.declarationSnapshotsRetired(), "there was nothing to keep");
-        assertEquals(0L, module.declarationSnapshotsWithheld(), "and nothing was owed");
+        // The holder is one for the whole process, so the first boundary of this case ends whatever
+        // freeze a case before it left standing: what is read below is this case's own state.
         long generation = module.declarationGeneration();
-
         module.resetReadings();
         assertEquals(generation + 1L, module.declarationGeneration(),
             "reading a reset takes the holder one generation on");
+        assertEquals(FrozenDeclarations.NOT_WIRED, module.declarations().state(),
+            "the plan of this tick declared no artefact, so no entry was sealed");
+        assertEquals(0, module.declarations().size(), "and an empty plan is not read as a table");
+        int retained = module.declarationSnapshotsRetained();
+        long retired = module.declarationSnapshotsRetired();
+        long withheld = module.declarationSnapshotsWithheld();
+
         assertTrue(module.installCommitChain(c.log, c.controller).bound());
         assertEquals(generation + 2L, module.declarationGeneration(), "so does an install");
         assertTrue(module.rollbackCommitChain());
@@ -161,8 +164,13 @@ class CommitChainBindingTest {
             "no boundary makes a table out of a plan that carried no artefact");
         assertEquals(generation + 3L, module.declarationGeneration(),
             "and none of them hands a number back");
-        assertEquals("0", reading("product.commit.declaration_snapshots_withheld"),
-            "the retention owed nothing, so nothing was withheld");
+        // Neither of the two boundaries replaced a freeze that carried an entry, so the retention had
+        // no table to keep: the counters are read across the boundaries, never taken for zero.
+        assertEquals(retained, module.declarationSnapshotsRetained(), "no snapshot was kept");
+        assertEquals(retired, module.declarationSnapshotsRetired(), "none was retired");
+        assertEquals(withheld, module.declarationSnapshotsWithheld(), "and nothing was owed");
+        assertEquals(String.valueOf(withheld), reading("product.commit.declaration_snapshots_withheld"),
+            "the reading is the counter this case did not move");
     }
 
     @Test
