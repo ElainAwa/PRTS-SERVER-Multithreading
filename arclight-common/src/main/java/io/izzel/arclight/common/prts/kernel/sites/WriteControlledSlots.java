@@ -491,6 +491,8 @@ public final class WriteControlledSlots {
                                  int covering) {
         SlotKey key = slot.key();
         long carried = versions.carried(key.worldId(), key.level(), key.domainId());
+        Long granted = versions.grantedFor(key.planSequence(), key.worldId(), key.level(),
+            key.domainId());
         if (world.isEmpty() || !world.equals(key.worldId())) {
             return refusal(slot, "world", carried, tickIndex, covering);
         }
@@ -502,7 +504,11 @@ public final class WriteControlledSlots {
         if (token.expiredAt(tickIndex) || slot.expireTick() <= 0L || tickIndex >= slot.expireTick()) {
             return refusal(slot, "expiry", carried, tickIndex, covering);
         }
-        if (carried <= WriteVersionSlots.NOT_CARRIED || carried != slot.expectedVersion()
+        // The generation the row wears has to be the one its own plan's grant answered: a plan
+        // that granted nothing here, and a row that names a generation of its own, are both a
+        // version this row does not carry, and the drift of the live slot is read the same way.
+        if (granted == null || granted != slot.expectedVersion()
+            || carried <= WriteVersionSlots.NOT_CARRIED || carried != slot.expectedVersion()
             || token.expectedVersion() != slot.expectedVersion()) {
             return refusal(slot, "version", carried, tickIndex, covering);
         }

@@ -4,6 +4,7 @@ package io.izzel.arclight.common.prts.kernel.sites;
 import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
+import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry.OwnershipDomain;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerToken;
 import io.izzel.arclight.common.prts.kernel.auth.WriteAuthority;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
@@ -27,6 +28,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -546,12 +548,17 @@ class WriteControlledSlotsTest {
             slots.refresh(false);
         }
 
+        /** The generation the plan this fixture stands for granted, published the way the plan
+         * point publishes it: the value the grant answered is the one a row may wear. */
         private long version() {
-            return versions.grant(WORLD, WriteLevel.REGION, DOMAIN);
+            long granted = versions.grant(WORLD, WriteLevel.REGION, DOMAIN);
+            versions.noteGranted(PLAN_SEQUENCE,
+                Map.of(new OwnershipDomain(WORLD, WriteLevel.REGION, DOMAIN), granted));
+            return granted;
         }
 
         private void seat(Slot slot) {
-            seat(slot, versions.grant(WORLD, WriteLevel.REGION, DOMAIN), GENERATION);
+            seat(slot, version(), GENERATION);
         }
 
         private void seat(Slot slot, long version, long epoch) {

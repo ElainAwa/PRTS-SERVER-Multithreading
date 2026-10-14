@@ -26,6 +26,7 @@ public final class WriteVersionSlots {
     public static final WriteVersionSlots NOTHING = new WriteVersionSlots();
 
     private final Map<OwnershipDomain, Long> slots = new ConcurrentHashMap<>();
+    private final GrantedWriteGenerations planGrants = new GrantedWriteGenerations();
     private final Set<String> worlds = ConcurrentHashMap.newKeySet();
     private final AtomicLong nextVersion = new AtomicLong(1L);
     private final AtomicLong granted = new AtomicLong();
@@ -91,6 +92,20 @@ public final class WriteVersionSlots {
         return minted;
     }
 
+    /** Publishes the generations one plan's own grants returned, in one move. */
+    public void noteGranted(long planSequence, Map<OwnershipDomain, Long> grantedByPlan) {
+        planGrants.note(planSequence, grantedByPlan);
+    }
+
+    /** What one plan's own grant returned for one domain, or null when it granted nothing here. */
+    public Long grantedFor(long planSequence, String worldId, WriteLevel level, String domainId) {
+        return planGrants.grantedFor(planSequence, worldId, level, domainId);
+    }
+
+    public long grantedPlan() {
+        return planGrants.planSequence();
+    }
+
     /** Retires the version one slot carries and hands out a fresh one in its place, so a write that
      * was frozen against the old value is left behind. */
     public long advance(String worldId, WriteLevel level, String domainId) {
@@ -138,6 +153,7 @@ public final class WriteVersionSlots {
         reclaimed.addAndGet(slots.size());
         slots.clear();
         worlds.clear();
+        planGrants.reset();
     }
 
     public int activeSlots() {

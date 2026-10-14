@@ -517,11 +517,16 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
             noDemand++;
             return null;
         }
-        long version = versions.carried(node.worldId(), WriteLevel.REGION, node.domainId());
-        if (version == WriteVersionSlots.NOT_CARRIED) {
+        Long granted = versions.grantedFor(planSequence, node.worldId(), WriteLevel.REGION,
+            node.domainId());
+        if (granted == null || granted == WriteVersionSlots.NOT_CARRIED) {
+            // This plan authorized no generation for the node, so the write set stays unclaimed:
+            // a row numbered with a value no grant of this plan answered would be a row whose
+            // authorization cannot be traced back to the plan that put it there.
             noVersion++;
             return null;
         }
+        long version = granted;
         long epoch = epochs.epochOf(node.worldId());
         if (epoch <= 0L) {
             noEpoch++;

@@ -3,6 +3,7 @@ package io.izzel.arclight.common.prts.kernel;
 
 import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
+import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry.OwnershipDomain;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerToken;
 import io.izzel.arclight.common.prts.kernel.auth.WriteAuthority;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
@@ -33,7 +34,9 @@ import net.minecraft.core.SectionPos;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -626,15 +629,21 @@ class PipelineWriteClaimsTest {
             return publish(frozen.graph());
         }
 
-        /** Grants the version of every declared write domain, hands the graph to the grant point and
-         * turns the declared write sets into the claims of the next span. */
+        /** Grants the version of every declared write domain and publishes what those grants
+         * answered as this plan's record, then hands the graph to the grant point and turns the
+         * declared write sets into the claims of the next span. */
         private JobGraph publish(JobGraph frozen) {
             graph = frozen;
+            Map<OwnershipDomain, Long> granted = new HashMap<>();
             for (JobGraph.Node node : graph.nodes()) {
                 for (JobDeclaration.DomainRef ref : node.writeSet()) {
-                    versions.grant(ref.worldId(), WriteLevel.REGION, ref.domainId());
+                    OwnershipDomain domain =
+                        new OwnershipDomain(ref.worldId(), WriteLevel.REGION, ref.domainId());
+                    granted.put(domain,
+                        versions.grant(ref.worldId(), WriteLevel.REGION, ref.domainId()));
                 }
             }
+            versions.noteGranted(PLAN_SEQUENCE, granted);
             grants.apply(graph, TICK);
             claims.declare(graph, PLAN_SEQUENCE, TICK);
             if (!graph.nodes().isEmpty()) {

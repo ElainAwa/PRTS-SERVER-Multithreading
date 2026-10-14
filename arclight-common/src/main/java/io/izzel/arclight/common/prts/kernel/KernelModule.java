@@ -4,6 +4,7 @@ package io.izzel.arclight.common.prts.kernel;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaPassthrough;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
+import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry.OwnershipDomain;
 import io.izzel.arclight.common.prts.kernel.auth.WriteAuthority;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLevel;
@@ -988,16 +989,23 @@ public final class KernelModule {
         return claims;
     }
 
-    /** The value is minted once per domain and kept until an invalidation retires it. */
+    /** The value is minted once per domain and kept until an invalidation retires it. The answer of
+     * each grant is taken here and published as this plan's own record before the plan is handed
+     * out, so a row that comes later wears the number this loop read back. */
     private void grantVersionSlots(TickPlan plan) {
         if (plan.graph() == null) {
             return;
         }
+        Map<OwnershipDomain, Long> granted = new HashMap<>();
         for (JobGraph.Node node : plan.graph().nodes()) {
             for (JobDeclaration.DomainRef ref : node.writeSet()) {
-                versionSlots.grant(ref.worldId(), WriteLevel.REGION, ref.domainId());
+                OwnershipDomain domain =
+                    new OwnershipDomain(ref.worldId(), WriteLevel.REGION, ref.domainId());
+                granted.put(domain,
+                    versionSlots.grant(ref.worldId(), WriteLevel.REGION, ref.domainId()));
             }
         }
+        versionSlots.noteGranted(plan.planSequence(), granted);
     }
 
     /** The four detectors of the safety net, reading the counters the layers around it published
