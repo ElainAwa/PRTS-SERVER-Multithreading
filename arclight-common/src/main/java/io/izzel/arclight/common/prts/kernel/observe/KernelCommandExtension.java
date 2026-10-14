@@ -65,7 +65,7 @@ public final class KernelCommandExtension implements PrtsCommandExtension {
     private static List<String> export() {
         List<String> lines = new ArrayList<>();
         lines.add("[PRTS] kernel export (observation requests; zero values are published too)");
-        for (String line : KernelReadings.export(KernelModule.instance())) {
+        for (String line : KernelReadings.forensicReadings(KernelModule.instance())) {
             lines.add(PREFIX + line);
         }
         return lines;

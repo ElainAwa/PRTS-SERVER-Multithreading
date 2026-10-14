@@ -10,6 +10,7 @@ import io.izzel.arclight.common.prts.kernel.auth.WriteVerdict;
 import io.izzel.arclight.common.prts.kernel.auth.WriteVersionSlots;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
+import io.izzel.arclight.common.prts.kernel.commit.CommitNamespaces;
 import io.izzel.arclight.common.prts.kernel.intent.IntentPayload;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import io.izzel.arclight.common.prts.kernel.intent.WriteIntent;
@@ -160,6 +161,14 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
      * here by the identity it was bound with, never by the name of a thread. */
     public String serverSiteId() {
         return serverThread == null ? "" : serverHolder.siteId();
+    }
+
+    /** The thread id of the bound server thread, derived on every read from the same reference the
+     * judged path compares against, so no stored number can drift from it. While nothing is bound
+     * the sentinel of an unbound thread is answered, and it is never read as a thread id. */
+    public long serverThreadId() {
+        Thread bound = serverThread;
+        return bound == null ? CommitNamespaces.NO_THREAD : bound.threadId();
     }
 
     /** Declares a thread as a registered site. */

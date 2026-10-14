@@ -465,6 +465,41 @@ class CloseSealWriterTest {
     }
 
     @Test
+    void theSealRecordsStayAsTheyWereWhileTheForensicGroupExists() throws IOException {
+        Path diag = Files.createDirectories(tmp.resolve("diag"));
+        CloseSealWriter writer = new CloseSealWriter(RUN,
+            limits(tmp.resolve("fb"), null, 1000L, List.of(1L, 1L, 1L)), diag.toString());
+        KernelModule module = KernelModule.instance();
+        writer.entry(WORLDS, module);
+        writer.flushing();
+        writer.closed(module.closeCommitChain());
+        writer.terminal(WORLDS, module);
+        String text = Files.readString(diag.resolve(RUN).resolve("close-seal.tsv"),
+            StandardCharsets.UTF_8);
+        // The two captures read the shared rendering, and the group is rendered for the command
+        // face alone: no key of it reaches a cell of the record and no cell is overwritten.
+        Map<String, String> captured = CloseSealWriter.Snapshot.capture("C1", WORLDS, module)
+            .readings();
+        for (String key : new String[] {"product.commit.owner_thread_bound_id",
+            "product.commit.declaration_seats", "product.commit.run_identity"}) {
+            assertFalse(captured.containsKey(key), key + " reached the seal snapshot");
+            assertFalse(text.contains(key), key + " reached the seal record");
+        }
+        assertEquals(List.of("C1", "C4"), CloseSealChecks.stages(text));
+        assertEquals(List.of(), CloseSealChecks.columnsAndHashes(text));
+        assertEquals(CloseSealWriter.COLUMNS.length,
+            CloseSealChecks.header(text).split("\t", -1).length);
+        assertEquals(2, writer.writeSeq());
+        // The command face is where the group is published, beside the rendering it shares.
+        List<String> shared = KernelReadings.export(module);
+        List<String> forensic = KernelReadings.forensicReadings(module);
+        assertEquals(keys(shared), keys(forensic.subList(0, shared.size())),
+            "the shared rendering keeps its keys inside the command rendering");
+        assertTrue(forensic.size() > shared.size());
+        assertTrue(String.join("\n", forensic).contains("product.commit.declaration_seats"));
+    }
+
+    @Test
     void theHappyPathCostsWellUnderTheBudget() throws IOException {
         Path diag = Files.createDirectories(tmp.resolve("diag"));
         CloseSealWriter writer = new CloseSealWriter(RUN,
@@ -809,6 +844,15 @@ class CloseSealWriterTest {
         assertNotEquals("", whole.problem());
         assertFalse(CloseSealFiles.Whole.of(dir.resolve("missing.tsv")).read());
         assertNotEquals("", CloseSealFiles.Whole.of(dir.resolve("missing.tsv")).problem());
+    }
+
+    private static List<String> keys(List<String> lines) {
+        List<String> found = new ArrayList<>();
+        for (String line : lines) {
+            int at = line.indexOf('=');
+            found.add(at > 0 ? line.substring(0, at) : line);
+        }
+        return found;
     }
 
     private String[] c1WriteFailed() throws IOException {

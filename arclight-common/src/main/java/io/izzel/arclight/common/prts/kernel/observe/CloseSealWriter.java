@@ -105,6 +105,14 @@ public final class CloseSealWriter {
         .withZone(ZoneId.systemDefault()).format(STARTED_AT)
         + '-' + ProcessHandle.current().pid();
 
+    /** The identity of the run this process records, as one space separated text: the run id the
+     * seal rows carry, the process id it was made with and the instant the class was initialized.
+     * That instant is a lower bound on the process lifetime and never the process start, and all
+     * three belong to the run that reads them rather than to the class. */
+    static String runIdentity() {
+        return RUN_ID + " " + ProcessHandle.current().pid() + " " + STARTED_AT.toEpochMilli();
+    }
+
     /** One frozen reading set and the world list read beside it. */
     record Snapshot(String stage, List<String> worlds, Map<String, String> readings) {
 

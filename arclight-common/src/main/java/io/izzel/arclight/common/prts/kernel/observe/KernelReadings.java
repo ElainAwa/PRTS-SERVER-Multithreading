@@ -52,6 +52,7 @@ import io.izzel.arclight.common.prts.kernel.sites.WriteClaimTable;
 import io.izzel.arclight.common.prts.kernel.sites.WritePath;
 import io.izzel.arclight.common.prts.kernel.sites.WriteControlledSlots;
 import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
+import io.izzel.arclight.common.prts.kernel.sites.WorldEpochs;
 import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard;
 import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
 import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
@@ -69,6 +70,8 @@ import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSite;
 import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteReadings;
 import io.izzel.arclight.common.prts.support.PrtsSeams;
 
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -117,6 +120,265 @@ public final class KernelReadings {
         regions(lines, module);
         control(lines, module);
         return lines;
+    }
+
+    /** The three keys this group adds, and the whole of what it adds: no other product key is
+     * written here, and a state that needs a refusal is a named state of the payload instead of a
+     * new refusal code. */
+    private static final String OWNER_THREAD_BOUND_ID = "product.commit.owner_thread_bound_id";
+    private static final String DECLARATION_SEATS = "product.commit.declaration_seats";
+    private static final String RUN_IDENTITY = "product.commit.run_identity";
+
+    /** The copy threshold the size gate is read against and the three limits of the seat dump. The
+     * numbers are the plan's own and changing one of them is a reviewed change. */
+    static final int SEAT_ROW_LIMIT = 64;
+    static final int SEAT_COPY_THRESHOLD = 64;
+    static final int SEAT_DUMP_BYTES = 8192;
+    static final int SEAT_FIELD_BYTES = 512;
+
+    private static final String REQUESTED_CURRENT = "CURRENT";
+    private static final long REQUESTED_PLAN = -1L;
+    private static final String COLLECTED = "PROVEN";
+    private static final String UNPROVEN = "UNPROVEN";
+    private static final String INCONSISTENT = "INCONSISTENT";
+    private static final String SEAL_REFUSED = "REFUSED";
+    private static final String NO_DECLARATIONS = "NO_DECLARATIONS";
+    private static final String PAIRED = "PAIRED";
+    private static final String EPOCH_DRIFT = "EPOCH_DRIFT";
+    private static final String UNTRACKED = "UNTRACKED";
+    private static final String UNLIVE = "UNLIVE";
+    private static final String NOT_SEALED = "NOT_SEALED";
+    private static final String NOT_COMPARABLE = "NOT_COMPARABLE";
+    private static final String STAMP_NOT_WRITTEN = "NOT_WRITTEN";
+    private static final String END_MARKER = "end";
+
+    /** The whole readout the command face publishes: the shared export plus the forensic group. The
+     * seal path keeps calling {@link #export(KernelModule)} alone, so no line of the group reaches a
+     * seal record. */
+    public static List<String> forensicReadings(KernelModule module) {
+        List<String> lines = export(module);
+        lines.addAll(minEvidence(module));
+        return lines;
+    }
+
+    /** The forensic group: the thread identity the guard derives, the bounded declaration-seat dump
+     * and the identity of the run that answers. The group is diagnosis only - it never writes a
+     * frozen value back, never creates a candidate and never runs a seal. */
+    private static List<String> minEvidence(KernelModule module) {
+        List<String> lines = new ArrayList<>();
+        WorldWriteGuard guard = module.guard();
+        add(lines, OWNER_THREAD_BOUND_ID, guard.serverThreadId());
+        // One table per answer: the freeze, the plan, the state, the size and every seat row below
+        // are derived from this one immutable reference, and no second table is picked.
+        FrozenDeclarations declarations = module.declarations();
+        seatDump(lines, declarations, guard.worldEpochs(), declarationState(module, declarations),
+            collectionContext(guard, module));
+        runIdentity(lines);
+        return lines;
+    }
+
+    /** The state the dump names: the state of the table, or the named state of a run whose
+     * declaring side handed nothing in or whose seal was refused. A retained table is never reached
+     * here, so the states a retained query could answer are reserved and unreachable. */
+    private static String declarationState(KernelModule module, FrozenDeclarations declarations) {
+        String state = declarations.state();
+        if (!FrozenDeclarations.NOT_WIRED.equals(state)) {
+            return state;
+        }
+        if (!module.declarationRefusal().isEmpty()) {
+            return SEAL_REFUSED;
+        }
+        return module.declarationsSealed() == 0L ? NO_DECLARATIONS : state;
+    }
+
+    /** Whether this answer was collected in a provable serial context: the guard test says the
+     * calling thread is the bound server thread and nothing more, so the owner identity the host
+     * reports is compared with it instead of being assumed equal. An unprovable context answers no
+     * positive, which the seat dump writes by taking no equality verdict at all. */
+    private static String collectionContext(WorldWriteGuard guard, KernelModule module) {
+        if (!guard.onServerThread()) {
+            return UNPROVEN;
+        }
+        long bound = guard.serverThreadId();
+        long named = module.commitOwnerThreadId();
+        return bound > 0L && named > 0L && bound != named ? INCONSISTENT : COLLECTED;
+    }
+
+    /** The identity of the run that answers, with the instants of the sample. The class
+     * initialization stamp is a lower bound on the process lifetime and never the process start,
+     * the ordering and any interval come from the monotonic reading, and the wall stamps belong to
+     * the run that takes them. */
+    private static void runIdentity(List<String> lines) {
+        String[] identity = CloseSealWriter.runIdentity().split(" ");
+        Instant startedAt = ProcessHandle.current().info().startInstant().orElse(null);
+        add(lines, RUN_IDENTITY, "payloadVersion=1 runId=" + identity[0] + " pid=" + identity[1]
+            + " processStartedAtMillis="
+            + (startedAt == null ? STAMP_NOT_WRITTEN : Long.toString(startedAt.toEpochMilli()))
+            + " classInitAtMillis=" + identity[2] + " sampledAtMillis=" + Instant.now().toEpochMilli()
+            + " sampledAtNanos=" + System.nanoTime() + " clockSource=nanoTime");
+    }
+
+    /** The bounded seat dump. The size gate is read first: above the copy threshold nothing is
+     * copied and no row is walked, and the answer is the metadata of the table alone. Within the
+     * threshold the one copy is walked until the first of the three limits stops it, and the
+     * metadata and the complete end marker are reserved before the first row is written, so a dump
+     * that ran out of budget still says it is partial instead of looking malformed. */
+    static void seatDump(List<String> lines, FrozenDeclarations declarations, WorldEpochs epochs,
+                         String state, String context) {
+        int available = declarations.size();
+        // The gate: entries() is called in this branch and in no other place, so an over-threshold
+        // table is never copied and scanned=0 below is what the render really did.
+        List<FrozenDeclarations.Entry> copied = null;
+        if (available <= SEAT_COPY_THRESHOLD) {
+            copied = declarations.entries();
+        }
+        int reserved = wireBytes(seatHeader(declarations, state, context, available, available,
+            available, 1)) + wireBytes(END_MARKER);
+        List<String> rows = new ArrayList<>();
+        int scanned = 0;
+        int emitted = 0;
+        int spent = reserved;
+        boolean truncated = copied == null;
+        if (copied != null) {
+            for (FrozenDeclarations.Entry entry : copied) {
+                scanned++;
+                if (rows.size() >= SEAT_ROW_LIMIT) {
+                    truncated = true;
+                    break;
+                }
+                boolean[] cut = new boolean[1];
+                String row = seatRow(entry, epochs, context, cut);
+                int rowBytes = wireBytes(row);
+                if (spent + rowBytes > SEAT_DUMP_BYTES) {
+                    truncated = true;
+                    break;
+                }
+                spent += rowBytes;
+                rows.add(row);
+                if (cut[0]) {
+                    truncated = true;
+                } else {
+                    emitted++;
+                }
+            }
+            if (emitted < available) {
+                truncated = true;
+            }
+        }
+        lines.add(seatHeader(declarations, state, context, available, scanned, emitted,
+            truncated ? 1 : 0));
+        lines.addAll(rows);
+        lines.add(END_MARKER);
+    }
+
+    /** The header of the dump: the begin marker and then the declared fields in their declared
+     * order, each in the len:payload form. The request side is the sentinel of a current-only
+     * export, and the answer side is read from the same table the rows come from. */
+    private static String seatHeader(FrozenDeclarations declarations, String state, String context,
+                                     int available, int scanned, int emitted, int truncated) {
+        FrozenDeclarations.FreezeKey freeze = declarations.freeze();
+        return DECLARATION_SEATS + "=begin " + prefix("1") + " " + prefix(REQUESTED_CURRENT) + " "
+            + prefix(Long.toString(REQUESTED_PLAN)) + " "
+            + prefix(freeze.lifecycleKey() + "#" + freeze.generation()) + " "
+            + prefix(Long.toString(declarations.planSequence())) + " " + prefix(state) + " "
+            + prefix(context) + " " + prefix(Integer.toString(available)) + " "
+            + prefix(Integer.toString(scanned)) + " " + prefix(Integer.toString(emitted)) + " "
+            + prefix(Integer.toString(truncated));
+    }
+
+    /** One seat row: the eleven components in the declared order, each in the len:payload form. The
+     * marker is E when a component had to be escaped, and every component of the row is escaped the
+     * same way so the row decodes as one text. A component that cannot be sent as its own text is
+     * written as NOT_COMPARABLE instead, and its row then takes no equality verdict. */
+    private static String seatRow(FrozenDeclarations.Entry entry, WorldEpochs epochs, String context,
+                                  boolean[] cut) {
+        String world = entry.seat().worldId();
+        long liveEpoch = epochs.epochOf(world);
+        long frozenEpoch = entry.worldEpoch();
+        String[] values = {world, entry.seat().domainId(),
+            Long.toString(entry.seat().planSequence()), Integer.toString(entry.seat().position()),
+            entry.nodeKey(), Integer.toString(entry.role()), Long.toString(entry.packedChunkPos()),
+            entry.targetStatus(), Long.toString(frozenEpoch), Long.toString(liveEpoch),
+            verdict(frozenEpoch, liveEpoch, context)};
+        StringBuilder body = new StringBuilder();
+        boolean[] escaped = new boolean[1];
+        for (int index = 0; index < values.length - 1; index++) {
+            String field = wireField(values[index], escaped);
+            body.append(field == null ? prefix(NOT_COMPARABLE) : field);
+            cut[0] = cut[0] || field == null;
+        }
+        body.append(cut[0] ? prefix(NOT_COMPARABLE) : wireField(values[values.length - 1], escaped));
+        return "row=" + (escaped[0] ? 'E' : 'P') + body;
+    }
+
+    /** The verdict of one seat: a positive only where the frozen generation is positive and the
+     * live generation of the same named world is the same number. Both zero and the lost sentinel
+     * are refusals rather than small positive numbers, and a context that could not be proven
+     * answers no verdict at all. */
+    private static String verdict(long frozenEpoch, long liveEpoch, String context) {
+        if (!COLLECTED.equals(context)) {
+            return NOT_COMPARABLE;
+        }
+        if (frozenEpoch <= 0L) {
+            return NOT_SEALED;
+        }
+        if (liveEpoch == WorldEpochs.UNTRACKED) {
+            return UNTRACKED;
+        }
+        if (liveEpoch == WorldEpochs.UNLIVE) {
+            return UNLIVE;
+        }
+        return liveEpoch == frozenEpoch ? PAIRED : EPOCH_DRIFT;
+    }
+
+    /** One component as it goes on the wire. The value is escaped first and the length prefix then
+     * counts the UTF-8 bytes of that text, never the length of the value before it was escaped: a
+     * prefix taken from the unescaped text would name a length the reader cannot split. A component
+     * that would pass the field limit, or that carries a lone surrogate, is refused here instead of
+     * being guessed, and the caller claims no length for it. */
+    private static String wireField(String value, boolean[] escaped) {
+        String text = value == null ? "" : value;
+        StringBuilder out = new StringBuilder(Math.min(text.length(), SEAT_FIELD_BYTES));
+        int index = 0;
+        while (index < text.length() && out.length() <= SEAT_FIELD_BYTES) {
+            char character = text.charAt(index++);
+            if (character == '\\') {
+                out.append("\\\\");
+                escaped[0] = true;
+            } else if (character == '\n') {
+                out.append("\\n");
+                escaped[0] = true;
+            } else if (character == '\r') {
+                out.append("\\r");
+                escaped[0] = true;
+            } else if (Character.isHighSurrogate(character)) {
+                if (index >= text.length() || !Character.isLowSurrogate(text.charAt(index))) {
+                    return null;
+                }
+                out.append(character).append(text.charAt(index++));
+            } else if (Character.isLowSurrogate(character)) {
+                return null;
+            } else {
+                out.append(character);
+            }
+        }
+        String wire = out.toString();
+        byte[] bytes = wire.getBytes(StandardCharsets.UTF_8);
+        if (index < text.length() || bytes.length > SEAT_FIELD_BYTES) {
+            return null;
+        }
+        return bytes.length + ":" + wire;
+    }
+
+    /** One field in the same len:payload grammar the components use. */
+    private static String prefix(String value) {
+        return value.getBytes(StandardCharsets.UTF_8).length + ":" + value;
+    }
+
+    /** The bytes one line of the dump spends, counting the line feed the wire separates lines with:
+     * the budget is read over what is sent, markers, prefixes and the end line included. */
+    private static int wireBytes(String line) {
+        return line.getBytes(StandardCharsets.UTF_8).length + 1;
     }
 
     private static void settings(List<String> lines, KernelModule module) {
