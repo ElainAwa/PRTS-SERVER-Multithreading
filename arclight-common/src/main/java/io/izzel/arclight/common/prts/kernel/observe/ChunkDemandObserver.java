@@ -144,6 +144,16 @@ public final class ChunkDemandObserver implements PrtsChunkDemand.DemandTap {
         stack.depth++;
     }
 
+    /** A synchronous ask that named the chunk it wants: the chunk is read here and kept nowhere. */
+    @Override
+    public void demandStarted(String worldId, int chunkX, int chunkZ, String status,
+                              boolean requireChunk) {
+        // Answered by this face rather than by the seam's default, which drops the chunk before the
+        // ask reaches anyone: the count is the one the ask without a chunk keeps, and no row of this
+        // face is per chunk.
+        demandStarted(worldId, status, requireChunk);
+    }
+
     @Override
     public void demandFinished(String worldId, String status, boolean blocking, boolean answered) {
         if (answered) {
@@ -182,6 +192,14 @@ public final class ChunkDemandObserver implements PrtsChunkDemand.DemandTap {
         }
         stack.futureStamp[stack.futureDepth] = System.nanoTime();
         stack.futureDepth++;
+    }
+
+    /** A future-returning ask that named the chunk it wants: the chunk is read here and the stamp
+     * is taken once. */
+    @Override
+    public void demandDescriptor(String worldId, int chunkX, int chunkZ, String status,
+                                 boolean requireChunk) {
+        futureOpened(worldId, status);
     }
 
     @Override

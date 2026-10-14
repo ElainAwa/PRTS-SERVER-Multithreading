@@ -89,4 +89,59 @@ class ChunkDemandObserverTest {
         assertTrue(calls.get(0).top() == null || calls.get(0).top().contains("."),
             "the caller stack is kept when the ask ran on the installing thread");
     }
+
+    @Test
+    void theTapItselfAnswersTheDescriptorEntriesOfAnAsk() {
+        assertEquals(ChunkDemandObserver.class, answeringClass("demandStarted"),
+            "the synchronous ask that names a chunk is answered by this face");
+        assertEquals(ChunkDemandObserver.class, answeringClass("demandDescriptor"),
+            "the future-returning ask that names a chunk is answered by this face");
+    }
+
+    @Test
+    void aFutureAskThatNamesAChunkIsStampedOnceAndCountedOnce() {
+        assertEquals(ChunkDemandObserver.class, answeringClass("demandDescriptor"),
+            "the ask reaches this face with the chunk it named");
+        observer = new ChunkDemandObserver();
+        observer.attach();
+        PrtsChunkDemand.demandDescriptor("minecraft:overworld", 3, -7, "full", true);
+        long stamp = PrtsChunkDemand.futureOpenedAt();
+        assertTrue(stamp > 0L, "the open is stamped once, as the seam's own default stamped it");
+        PrtsChunkDemand.futureTaken("minecraft:overworld", "full");
+        PrtsChunkDemand.futureCompleted("minecraft:overworld", "full", stamp, true);
+
+        assertEquals(1L, observer.futuresTaken());
+        assertEquals(1L, observer.futuresCompleted());
+        assertEquals(1L, observer.futuresSatisfied());
+        assertEquals(0L, observer.futuresInFlight());
+        assertEquals(0L, observer.requests(), "the chunk of an ask is read here and counted nowhere");
+    }
+
+    @Test
+    void aBlockingAskThatNamesAChunkIsCountedOnceAndKeepsItsAsker() {
+        assertEquals(ChunkDemandObserver.class, answeringClass("demandStarted"),
+            "the ask reaches this face with the chunk it named");
+        observer = new ChunkDemandObserver();
+        observer.attach();
+        PrtsChunkDemand.demandStarted("minecraft:overworld", 0, -1, "features", true);
+        PrtsChunkDemand.demandFinished("minecraft:overworld", "features", true, true);
+
+        assertEquals(1L, observer.requests());
+        assertEquals(1L, observer.satisfied());
+        assertEquals(1L, observer.blockingRequests());
+        assertEquals("minecraft:overworld", observer.worldRows().get(0).key());
+        assertEquals(1L, observer.statusRows().get(0).requests());
+        assertEquals(1L, observer.statusRows().get(0).satisfied());
+    }
+
+    /** The class that answers one of the two entries that carry a chunk, or nothing when the seam's
+     * default answers it and this face never reads the coordinates. */
+    private static Class<?> answeringClass(String entry) {
+        try {
+            return ChunkDemandObserver.class.getDeclaredMethod(entry, String.class, int.class, int.class,
+                String.class, boolean.class).getDeclaringClass();
+        } catch (NoSuchMethodException notAnswered) {
+            return null;
+        }
+    }
 }
