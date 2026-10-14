@@ -63,8 +63,12 @@ public final class PrtsChunkDemand {
 
     public static void demandStarted(String worldId, String status, boolean blocking) {
         DemandTap watcher = tap;
-        if (watcher != null) {
+        if (watcher == null) {
+            return;
+        }
+        try {
             watcher.demandStarted(worldId, status, blocking);
+        } catch (Throwable ignored) {
         }
     }
 
