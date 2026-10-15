@@ -589,6 +589,7 @@ public final class KernelModule {
             chunkMaterialization.attach();
             attribution.attach();
             chunkDemand.attach();
+            chunkDemand.attachSecondPath(demandShadows);
             PrtsSelfCosts.install(selfCosts);
             // The chunk row's declared signal is bound only while its producer is installed: a row
             // whose producer is switched off keeps reporting an unbound slot rather than a zero.

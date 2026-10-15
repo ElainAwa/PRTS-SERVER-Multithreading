@@ -4,6 +4,8 @@
  * delayed or reordered; every count is read only while the demand tap is installed. */
 package io.izzel.arclight.common.prts.fixes.pipeline;
 
+import com.llamalad7.mixinextras.sugar.Share;
+import com.llamalad7.mixinextras.sugar.ref.LocalLongRef;
 import io.izzel.arclight.api.ArclightPlatform;
 import io.izzel.arclight.common.mod.mixins.annotation.OnlyInPlatform;
 import io.izzel.arclight.common.prts.support.PrtsChunkDemand;
@@ -56,29 +58,45 @@ public abstract class PrtsChunkDemandMixin {
         PrtsChunkDemand.demandFinished(prts$worldId(), status.getName(), blocking, satisfied);
     }
 
+    // The call's own name travels in a share: MixinExtras hands both handlers of one invocation the
+    // same carrier, so two asks of one world and status keep their own name.
     @Inject(method = "getChunkFuture", at = @At("HEAD"))
     private void prts$futureOpened(int x, int z, ChunkStatus status, boolean load,
-                                   CallbackInfoReturnable<CompletableFuture<ChunkResult<ChunkAccess>>> cir) {
+                                   CallbackInfoReturnable<CompletableFuture<ChunkResult<ChunkAccess>>> cir,
+                                   @Share("prts$callToken") LocalLongRef callToken) {
         if (PrtsChunkDemand.installed()) {
-            PrtsChunkDemand.demandDescriptor(prts$worldId(), x, z, status.getName(), load);
+            // A frame that never reaches this line reads the carrier's own start: no name.
+            callToken.set(PrtsChunkDemand.demandDescriptorToken(prts$worldId(), x, z,
+                status.getName(), load));
         }
     }
 
     @Inject(method = "getChunkFuture", at = @At("RETURN"))
     private void prts$futureTaken(int x, int z, ChunkStatus status, boolean load,
-                                  CallbackInfoReturnable<CompletableFuture<ChunkResult<ChunkAccess>>> cir) {
+                                  CallbackInfoReturnable<CompletableFuture<ChunkResult<ChunkAccess>>> cir,
+                                  @Share("prts$callToken") LocalLongRef callToken) {
         if (!PrtsChunkDemand.installed()) {
             return;
         }
+        long token = callToken.get();
         long startedAt = PrtsChunkDemand.futureOpenedAt();
+        // The early exit that was always here; a call with a stamp but no name still walks the chain.
         if (startedAt < 0L) {
             return;
         }
         CompletableFuture<ChunkResult<ChunkAccess>> future = cir.getReturnValue();
         String worldId = prts$worldId();
         String statusName = status.getName();
-        PrtsChunkDemand.futureTaken(worldId, statusName);
-        future.whenComplete((result, failure) -> PrtsChunkDemand.futureCompleted(worldId, statusName,
-            startedAt, failure == null && result != null && result.isSuccess()));
+        PrtsChunkDemand.futureTaken(worldId, statusName, token);
+        try {
+            future.whenComplete((result, failure) -> PrtsChunkDemand.futureCompleted(worldId, statusName,
+                startedAt, failure == null && result != null && result.isSuccess(), token));
+        } catch (Throwable thrown) {
+            // Told that the registration failed: nothing is promoted, and the error the host call
+            // would have seen keeps travelling exactly as before this stage existed.
+            PrtsChunkDemand.registrationConfirmed(worldId, statusName, token, false);
+            throw thrown;
+        }
+        PrtsChunkDemand.registrationConfirmed(worldId, statusName, token, true);
     }
 }

@@ -1,13 +1,15 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.support;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 /** The seam the chunk cache reports its demand side through: what was asked of it, what the ask was
- * answered with, and the futures it handed out. The calls are not changed and nothing is cancelled,
- * delayed or reordered; every call is a no-op while no tap is installed. A tap that has no use for
- * the chunk implements the entries that do not name it, and is told about each ask once. A tap
- * that throws is not the ask failing: its count is dropped, and a stamp it cannot answer reads -1,
- * which is no observation time to report -- not a refusal code, not a failure of the host and not a
- * new reading key. */
+ * answered with, and the futures it handed out, each named for the call it belongs to. The calls are
+ * not changed and nothing is cancelled, delayed or reordered; every call is a no-op while no tap is
+ * installed. A tap that has no use for the chunk implements the entries that do not name it, and is
+ * told about each ask once. A tap that throws is not the ask failing: its count is dropped, and a
+ * stamp it cannot answer reads -1, which is no observation time to report -- not a refusal code, not
+ * a failure of the host and not a new reading key. */
 public final class PrtsChunkDemand {
 
     public interface DemandTap {
@@ -42,6 +44,46 @@ public final class PrtsChunkDemand {
 
         /** The future completed, satisfied or not. */
         void futureCompleted(String worldId, String status, long startedNanos, boolean satisfied);
+
+        /** A named future-returning ask; the default keeps the old count. */
+        default void demandDescriptor(String worldId, int chunkX, int chunkZ, String status,
+                                      boolean requireChunk, long token) {
+            demandDescriptor(worldId, chunkX, chunkZ, status, requireChunk);
+        }
+
+        /** A named future was handed to the caller; the default keeps the old count. */
+        default void futureTaken(String worldId, String status, long token) {
+            futureTaken(worldId, status);
+        }
+
+        /** One future completed, named by the call it belongs to; the default keeps the old count. */
+        default void futureCompleted(String worldId, String status, long startedNanos, boolean satisfied,
+                                     long token) {
+            futureCompleted(worldId, status, startedNanos, satisfied);
+        }
+
+        /** The call that named this token registered its completion watch, or failed to; a tap
+         * written before this stage has nothing to do, so the default is empty. */
+        default void registrationConfirmed(String worldId, String status, long token, boolean ok) {
+        }
+    }
+
+    /** The value that names no call: never issued, and nothing else may stand in for it. */
+    public static final long NO_TOKEN = 0L;
+
+    private static final AtomicLong callTokens = new AtomicLong();
+    private static volatile boolean tokensExhausted;
+
+    private static long nextToken() {
+        if (tokensExhausted) {
+            return NO_TOKEN;
+        }
+        long token = callTokens.incrementAndGet();
+        if (token <= 0L) {
+            tokensExhausted = true;
+            return NO_TOKEN;
+        }
+        return token;
     }
 
     private static volatile DemandTap tap;
@@ -153,6 +195,62 @@ public final class PrtsChunkDemand {
         }
         try {
             watcher.futureCompleted(worldId, status, startedNanos, satisfied);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** The entry a future-returning ask arrives through: it names the call before any tap code and
+     * hands the name back for that call's return.
+     * @return the name of this call, or {@link #NO_TOKEN} when nothing is installed */
+    public static long demandDescriptorToken(String worldId, int chunkX, int chunkZ, String status,
+                                             boolean requireChunk) {
+        DemandTap watcher = tap;
+        if (watcher == null) {
+            return NO_TOKEN;
+        }
+        long token = nextToken();
+        try {
+            watcher.demandDescriptor(worldId, chunkX, chunkZ, status, requireChunk, token);
+        } catch (Throwable ignored) {
+            // A watcher that throws is not the ask failing: the name is this call's either way.
+        }
+        return token;
+    }
+
+    /** The future of the call that carried this name was handed to its caller. */
+    public static void futureTaken(String worldId, String status, long token) {
+        DemandTap watcher = tap;
+        if (watcher == null) {
+            return;
+        }
+        try {
+            watcher.futureTaken(worldId, status, token);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** The future of the call that carried this name completed, satisfied or not. */
+    public static void futureCompleted(String worldId, String status, long startedNanos,
+                                       boolean satisfied, long token) {
+        DemandTap watcher = tap;
+        if (watcher == null) {
+            return;
+        }
+        try {
+            watcher.futureCompleted(worldId, status, startedNanos, satisfied, token);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** The call that carried this name reached the end of its completion watch registration; only
+     * then may what it captured be handed on. */
+    public static void registrationConfirmed(String worldId, String status, long token, boolean ok) {
+        DemandTap watcher = tap;
+        if (watcher == null) {
+            return;
+        }
+        try {
+            watcher.registrationConfirmed(worldId, status, token, ok);
         } catch (Throwable ignored) {
         }
     }

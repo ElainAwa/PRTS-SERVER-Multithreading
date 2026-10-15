@@ -124,11 +124,22 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
 
         private DemandDescriptor descriptor;
         private boolean completionSeen;
+        /** The call this capture belongs to, or no name at all for a capture that arrived through
+         * the entries written before the stage existed. It matches a completion and is read into no
+         * column. */
+        private long token = PrtsChunkDemand.NO_TOKEN;
     }
 
     private final Slot[] ring = new Slot[CAP];
     private int head;
     private int size;
+    /** Captures that arrived named but not yet confirmed: they are held here, never in the ring,
+     * and a window cannot read them. Bounded by the same capacity as the ring, oldest first. */
+    private final Slot[] staged = new Slot[CAP];
+    private int stagedHead;
+    private int stagedSize;
+    private long stagedTotal;
+    private long promoted;
     private long windows;
     private long captured;
     private long dropped;
@@ -143,6 +154,7 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
     public DemandShadowCandidates() {
         for (int index = 0; index < CAP; index++) {
             ring[index] = new Slot();
+            staged[index] = new Slot();
         }
     }
 
@@ -175,12 +187,39 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
     }
 
     @Override
+    public void futureCompleted(String worldId, String status, long startedNanos, boolean satisfied,
+                                long token) {
+        markCompleted(token);
+    }
+
+    /** A named call reached the end of its registration. Only here does what it captured leave the
+     * staging area, and it leaves it once: a second confirmation of the same name finds nothing to
+     * promote, and neither does a confirmation of a name that was never seen. */
+    @Override
+    public void registrationConfirmed(String worldId, String status, long token, boolean ok) {
+        if (!ok || token == PrtsChunkDemand.NO_TOKEN) {
+            return;
+        }
+        promote(token);
+    }
+
+    @Override
     public void demandDescriptor(String worldId, int chunkX, int chunkZ, String status,
                                  boolean requireChunk) {
         capture(DemandDescriptor.at(worldId, chunkX, chunkZ, status, requireChunk));
     }
 
+    @Override
+    public void demandDescriptor(String worldId, int chunkX, int chunkZ, String status,
+                                 boolean requireChunk, long token) {
+        stage(DemandDescriptor.at(worldId, chunkX, chunkZ, status, requireChunk), token);
+    }
+
     private synchronized void capture(DemandDescriptor descriptor) {
+        captureIntoRing(descriptor, PrtsChunkDemand.NO_TOKEN);
+    }
+
+    private void captureIntoRing(DemandDescriptor descriptor, long token) {
         captured++;
         Slot slot;
         if (size < CAP) {
@@ -193,10 +232,65 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         }
         slot.descriptor = descriptor;
         slot.completionSeen = false;
+        slot.token = token;
     }
 
-    /** Marks the captures this completion answers: only the capture in a slot at this moment, so a
-     * capture that arrives later did not wait on it and one the freeze took is not marked. */
+    /** Holds one named capture until its call confirms its registration. The area is bounded and
+     * evicts its oldest entry, which is a discarded diagnosis and not a ring overwrite. */
+    private synchronized void stage(DemandDescriptor descriptor, long token) {
+        stagedTotal++;
+        Slot slot;
+        if (stagedSize < CAP) {
+            slot = staged[(stagedHead + stagedSize) % CAP];
+            stagedSize++;
+        } else {
+            slot = staged[stagedHead];
+            stagedHead = (stagedHead + 1) % CAP;
+        }
+        slot.descriptor = descriptor;
+        slot.completionSeen = false;
+        slot.token = token;
+    }
+
+    /** Moves the one capture of this call into the ring and only that one. A call whose completion
+     * was already seen enters marked, so the window it lands in is refused as a whole rather than
+     * the call being revived; a call with no entry left -- evicted, already promoted, or never
+     * staged -- is dropped here and no entry is made for it. */
+    private synchronized void promote(long token) {
+        for (int index = 0; index < stagedSize; index++) {
+            Slot slot = staged[(stagedHead + index) % CAP];
+            if (slot.descriptor == null || slot.token != token) {
+                continue;
+            }
+            DemandDescriptor descriptor = slot.descriptor;
+            boolean completed = slot.completionSeen;
+            removeStaged(index);
+            captureIntoRing(descriptor, token);
+            ring[(head + size - 1 + CAP) % CAP].completionSeen = completed;
+            promoted++;
+            return;
+        }
+    }
+
+    private void removeStaged(int index) {
+        for (int at = index; at < stagedSize - 1; at++) {
+            Slot from = staged[(stagedHead + at + 1) % CAP];
+            Slot to = staged[(stagedHead + at) % CAP];
+            to.descriptor = from.descriptor;
+            to.completionSeen = from.completionSeen;
+            to.token = from.token;
+        }
+        Slot last = staged[(stagedHead + stagedSize - 1) % CAP];
+        last.descriptor = null;
+        last.completionSeen = false;
+        last.token = PrtsChunkDemand.NO_TOKEN;
+        stagedSize--;
+    }
+
+    /** Marks the captures a completion answers, by the name of the call for a named one and by the
+     * world and the status for a capture that arrived through the entries written before the stage
+     * existed. Either answer reaches only its own kind: a completion never crosses to a capture of
+     * the other shape, and a name that matches nothing is dropped. */
     private synchronized void markCompleted(String worldId, String status) {
         completions++;
         String world = worldId == null ? "" : worldId;
@@ -204,9 +298,31 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         for (int index = 0; index < size; index++) {
             Slot slot = ring[(head + index) % CAP];
             DemandDescriptor descriptor = slot.descriptor;
-            if (descriptor != null && descriptor.worldId().equals(world)
+            if (descriptor != null && slot.token == PrtsChunkDemand.NO_TOKEN
+                && descriptor.worldId().equals(world)
                 && descriptor.targetStatus().equals(state)) {
                 slot.completionSeen = true;
+            }
+        }
+    }
+
+    private synchronized void markCompleted(long token) {
+        completions++;
+        if (token == PrtsChunkDemand.NO_TOKEN) {
+            return;
+        }
+        for (int index = 0; index < stagedSize; index++) {
+            Slot slot = staged[(stagedHead + index) % CAP];
+            if (slot.descriptor != null && slot.token == token) {
+                slot.completionSeen = true;
+                return;
+            }
+        }
+        for (int index = 0; index < size; index++) {
+            Slot slot = ring[(head + index) % CAP];
+            if (slot.descriptor != null && slot.token == token) {
+                slot.completionSeen = true;
+                return;
             }
         }
     }
@@ -233,6 +349,7 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
                 descriptor.chunk(), descriptor.targetStatus(), descriptor.requireChunk(), epoch,
                 planSequence, planGeneration, key, lateBeforeFreeze(slot.completionSeen));
             slot.completionSeen = false;
+            slot.token = PrtsChunkDemand.NO_TOKEN;
             count(shadow);
             shadows.add(shadow);
         }
@@ -349,6 +466,22 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         return dropped;
     }
 
+    /** @return how many named captures were held for confirmation; with {@link #promoted()} and
+     *     {@link #stagedHeld()} this is the fixture's own account of what the staging area cost,
+     *     which is deliberately not {@link #dropped()} */
+    public long staged() {
+        return stagedTotal;
+    }
+
+    /** @return how many named captures reached the ring through their own confirmation */
+    public long promoted() {
+        return promoted;
+    }
+
+    public synchronized int stagedHeld() {
+        return stagedSize;
+    }
+
     public long completions() {
         return completions;
     }
@@ -391,6 +524,15 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
             slot.descriptor = null;
             slot.completionSeen = false;
         }
+        for (Slot slot : staged) {
+            slot.descriptor = null;
+            slot.completionSeen = false;
+            slot.token = PrtsChunkDemand.NO_TOKEN;
+        }
+        stagedHead = 0;
+        stagedSize = 0;
+        stagedTotal = 0L;
+        promoted = 0L;
         head = 0;
         size = 0;
         windows = 0L;

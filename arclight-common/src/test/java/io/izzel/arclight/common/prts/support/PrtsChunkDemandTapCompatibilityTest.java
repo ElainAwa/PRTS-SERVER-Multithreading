@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.LongAdder;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** What a tap is told when the chunk cache reports an ask: the chunk the ask named on the entries
@@ -197,6 +198,69 @@ class PrtsChunkDemandTapCompatibilityTest {
         public void futureCompleted(String worldId, String status, long startedNanos,
                                     boolean satisfied) {
         }
+    }
+
+    /** A tap that knows only the entries the seam had before this stage: it is told through the
+     * defaults of the named ones, once each. */
+    private static final class OldOnlyTap implements PrtsChunkDemand.DemandTap {
+
+        final LongAdder descriptor = new LongAdder();
+        final LongAdder taken = new LongAdder();
+        final LongAdder completed = new LongAdder();
+        final List<String> descriptorChunks = Collections.synchronizedList(new ArrayList<>());
+
+        @Override
+        public void demandStarted(String worldId, String status, boolean blocking) {
+        }
+
+        @Override
+        public void demandFinished(String worldId, String status, boolean blocking, boolean satisfied) {
+        }
+
+        @Override
+        public void futureOpened(String worldId, String status) {
+        }
+
+        @Override
+        public long futureOpenedAt() {
+            return -1L;
+        }
+
+        @Override
+        public void futureTaken(String worldId, String status) {
+            taken.increment();
+        }
+
+        @Override
+        public void futureCompleted(String worldId, String status, long startedNanos,
+                                    boolean satisfied) {
+            completed.increment();
+        }
+
+        @Override
+        public void demandDescriptor(String worldId, int chunkX, int chunkZ, String status,
+                                     boolean requireChunk) {
+            descriptor.increment();
+            descriptorChunks.add(chunkX + ":" + chunkZ);
+        }
+    }
+
+    @Test
+    void aTapThatKnowsOnlyTheOldEntriesIsStillToldTheNamedOnesOnce() {
+        OldOnlyTap tap = new OldOnlyTap();
+        PrtsChunkDemand.install(tap);
+
+        long token = PrtsChunkDemand.demandDescriptorToken("minecraft:overworld", 3, -7, "full", true);
+        PrtsChunkDemand.futureTaken("minecraft:overworld", "full", token);
+        PrtsChunkDemand.futureCompleted("minecraft:overworld", "full", 1L, true, token);
+        PrtsChunkDemand.registrationConfirmed("minecraft:overworld", "full", token, true);
+
+        assertNotEquals(PrtsChunkDemand.NO_TOKEN, token, "the ask is named");
+        assertEquals(1L, tap.descriptor.sum(), "the named entry bridges to the old one exactly once");
+        assertEquals(1L, tap.taken.sum());
+        assertEquals(1L, tap.completed.sum());
+        assertEquals(List.of("3:-7"), tap.descriptorChunks,
+            "and the chunk of the call reaches the old entry unchanged");
     }
 
     @Test
