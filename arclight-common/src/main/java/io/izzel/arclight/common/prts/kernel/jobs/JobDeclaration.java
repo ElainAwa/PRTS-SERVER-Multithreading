@@ -16,7 +16,7 @@ public record JobDeclaration(String key, long handle, String worldId, String dom
                              List<String> predecessors, int priority, String affinityKey,
                              String cancelScope, List<DomainRef> readSet, List<DomainRef> writeSet,
                              ShareClass shareClass, SiteClass siteClass, int batchKind,
-                             int batchBound, List<OwnerDemand> ownerDemands) {
+                             int batchBound, List<OwnerDemand> ownerDemands, WriteRange range) {
 
     /** One write right a job asks for: which world and level of it, which holder should hold it, and
      * for how many ticks from the moment it is granted. The demand is what a job declares, not what it
@@ -48,6 +48,17 @@ public record JobDeclaration(String key, long handle, String worldId, String dom
         }
     }
 
+    /** A declaration that declares no spatial range: the shape every job had before a range could be
+     * declared, kept so a job that has none does not have to say so. */
+    public JobDeclaration(String key, long handle, String worldId, String domainId, int level,
+                          List<String> predecessors, int priority, String affinityKey,
+                          String cancelScope, List<DomainRef> readSet, List<DomainRef> writeSet,
+                          ShareClass shareClass, SiteClass siteClass, int batchKind, int batchBound,
+                          List<OwnerDemand> ownerDemands) {
+        this(key, handle, worldId, domainId, level, predecessors, priority, affinityKey, cancelScope,
+            readSet, writeSet, shareClass, siteClass, batchKind, batchBound, ownerDemands, null);
+    }
+
     /** A declaration that asks for no write right: the shape every job had before rights were
      * declared, kept so a job that needs none does not have to say so. */
     public JobDeclaration(String key, long handle, String worldId, String domainId, int level,
@@ -55,7 +66,7 @@ public record JobDeclaration(String key, long handle, String worldId, String dom
                           String cancelScope, List<DomainRef> readSet, List<DomainRef> writeSet,
                           ShareClass shareClass, SiteClass siteClass, int batchKind, int batchBound) {
         this(key, handle, worldId, domainId, level, predecessors, priority, affinityKey, cancelScope,
-            readSet, writeSet, shareClass, siteClass, batchKind, batchBound, List.of());
+            readSet, writeSet, shareClass, siteClass, batchKind, batchBound, List.of(), null);
     }
 
     /** One read or write domain: the world, the domain inside it and the ownership level. The world is
@@ -86,6 +97,44 @@ public record JobDeclaration(String key, long handle, String worldId, String dom
         PARALLEL,
         SERIAL,
         UNKNOWN
+    }
+
+    /** The cell size a declared range counts in, named here so a declaration reaches outside no package. */
+    public enum RangeGranularity {
+        CHUNK,
+        SECTION,
+        BLOCK
+    }
+
+    /** The spatial range a job declares, if it declares one: at which granularity and which cells, in
+     * the order given. The array is copied in and out, so a range is deeply immutable and the frozen
+     * node shares the one instance; it says what the job would write, and nothing here grants it. */
+    public record WriteRange(RangeGranularity granularity, long[] cells) {
+
+        public WriteRange {
+            cells = cells == null ? new long[0] : cells.clone();
+        }
+
+        @Override
+        public long[] cells() {
+            return cells.clone();
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof WriteRange range && granularity == range.granularity
+                && java.util.Arrays.equals(cells, range.cells);
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * java.util.Objects.hashCode(granularity) + java.util.Arrays.hashCode(cells);
+        }
+
+        @Override
+        public String toString() {
+            return "WriteRange[" + granularity + ", cells=" + java.util.Arrays.toString(cells) + "]";
+        }
     }
 
     public JobDeclaration {

@@ -176,13 +176,18 @@ public final class PipelineRoundJobs implements PrtsPipelineRows.MailboxOwnerTap
      * domains it declares, the affinity that keeps the rounds of one mailbox in one order, the bound
      * of the group and the write right it asks to hold while it runs. */
     private static JobDeclaration declarationOf(String worldId, String mailbox, long handle, long rounds) {
+        return declarationOf(worldId, mailbox, handle, rounds, null);
+    }
+
+    private static JobDeclaration declarationOf(String worldId, String mailbox, long handle, long rounds,
+                                                JobDeclaration.WriteRange range) {
         JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef(worldId, DOMAIN, 0);
         JobDeclaration.OwnerDemand demand = new JobDeclaration.OwnerDemand(worldId, WriteLevel.REGION,
             DOMAIN, HolderKind.REGISTERED, OWNER_SITE, OWNER_HOLD_TICKS);
         int bound = (int) Math.min(Integer.MAX_VALUE, rounds);
         return new JobDeclaration(keyOf(worldId, mailbox), handle, worldId, DOMAIN, 0, List.of(), 0,
             mailbox, "world:" + worldId, List.of(ref), List.of(ref), ShareClass.OTHER,
-            JobDeclaration.SiteClass.PARALLEL, 0, bound, List.of(demand));
+            JobDeclaration.SiteClass.PARALLEL, 0, bound, List.of(demand), range);
     }
 
     /** The key a batch job is declared and matched by: its domain, its world and its mailbox. */

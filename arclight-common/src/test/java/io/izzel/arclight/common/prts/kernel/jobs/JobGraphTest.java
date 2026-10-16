@@ -13,10 +13,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** The frozen order of a job graph, the refusals of the freeze, the scheduler that follows the order
@@ -33,6 +35,16 @@ class JobGraphTest {
             key, "region", List.of(ref), List.of(ref), shareClass, siteClass, 0, bound);
     }
 
+    private static JobDeclaration declaration(String key, int priority, ShareClass shareClass,
+                                              JobDeclaration.SiteClass siteClass,
+                                              List<String> predecessors, int bound,
+                                              JobDeclaration.WriteRange range) {
+        JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef(WORLD, "entity", 0);
+        return new JobDeclaration(key, key.hashCode(), WORLD, "entity", 0, predecessors, priority,
+            key, "region", List.of(ref), List.of(ref), shareClass, siteClass, 0, bound, List.of(),
+            range);
+    }
+
     private static List<JobDeclaration> chain() {
         List<JobDeclaration> declarations = new ArrayList<>();
         declarations.add(declaration("a/0", 0, ShareClass.ENTITY, JobDeclaration.SiteClass.PARALLEL,
@@ -41,6 +53,17 @@ class JobGraphTest {
             List.of("a/0"), 1));
         declarations.add(declaration("a/2", 2, ShareClass.ENTITY, JobDeclaration.SiteClass.UNKNOWN,
             List.of("a/1"), 1));
+        return declarations;
+    }
+
+    private static List<JobDeclaration> chainWithExplicitNullRange() {
+        List<JobDeclaration> declarations = new ArrayList<>();
+        declarations.add(declaration("a/0", 0, ShareClass.ENTITY, JobDeclaration.SiteClass.PARALLEL,
+            List.of(), 1, null));
+        declarations.add(declaration("a/1", 1, ShareClass.ENTITY, JobDeclaration.SiteClass.PARALLEL,
+            List.of("a/0"), 1, null));
+        declarations.add(declaration("a/2", 2, ShareClass.ENTITY, JobDeclaration.SiteClass.UNKNOWN,
+            List.of("a/1"), 1, null));
         return declarations;
     }
 
@@ -227,5 +250,33 @@ class JobGraphTest {
         assertEquals(1, point.classes());
         assertEquals(ShareClass.ENTITY, ShareMeterPoint.shareClassOf(SelfClass.ENTITY));
         assertEquals(2.0, reading.row(ShareClass.ENTITY).usedMs(), 1.0e-9);
+    }
+
+    @Test
+    void theDeclaredRangeCrossesTheFreezeVerbatimAndIsAbsentWhenUndeclared() {
+        JobDeclaration.WriteRange range = new JobDeclaration.WriteRange(
+            JobDeclaration.RangeGranularity.SECTION, new long[] { 7L, 3L });
+        JobDeclaration declared = declaration("a/0", 1, ShareClass.ENTITY,
+            JobDeclaration.SiteClass.PARALLEL, List.of(), 1, range);
+        JobGraph.Node node = JobGraphBuilder.freeze(List.of(declared), 10L, 1L, 1L, 64).graph()
+            .nodeByKey("a/0");
+
+        assertNotNull(node.range());
+        assertSame(declared.range(), node.range());
+        assertEquals(declared.range(), node.range());
+        assertEquals(JobDeclaration.RangeGranularity.SECTION, node.range().granularity());
+        assertArrayEquals(new long[] { 7L, 3L }, node.range().cells());
+
+        JobGraph fromCompat = JobGraphBuilder.freeze(chain(), 10L, 1L, 1L, 64).graph();
+        for (JobGraph.Node each : fromCompat.nodes()) {
+            assertNull(each.range());
+        }
+        JobGraph fromExplicitNull = JobGraphBuilder.freeze(chainWithExplicitNullRange(), 10L, 1L, 1L, 64)
+            .graph();
+        assertEquals(fromCompat, fromExplicitNull);
+        assertEquals(List.of(1L), fromCompat.ready());
+        assertEquals(3, fromCompat.nodeCount());
+        assertEquals(2, fromCompat.edgeCount());
+        assertEquals(3, fromCompat.affinity().size());
     }
 }

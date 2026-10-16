@@ -23,14 +23,29 @@ public record JobGraph(long tickIndex, long planSequence, long worldSetGeneratio
     }
 
     /** One job of the graph. The node is the frozen form of a declaration: the handle is what the
-     * declaring domain knows the job by, and the key is what a later tick can match it on. */
+     * declaring domain knows the job by, the key is what a later tick can match it on, and the range
+     * is whatever the declaration carried - the freeze neither recomputes nor derives it. */
     public record Node(long nodeId, String key, long handle, String worldId, String domainId,
                        int level, List<String> predecessors, List<Long> successors, int priority,
                        String affinity, String cancelScope, List<JobDeclaration.DomainRef> readSet,
                        List<JobDeclaration.DomainRef> writeSet,
                        List<JobDeclaration.OwnerDemand> ownerDemands, ShareClass shareClass,
                        JobDeclaration.SiteClass siteClass, int batchKind, int batchBound,
-                       boolean splitIntent, int position) {
+                       boolean splitIntent, int position, JobDeclaration.WriteRange range) {
+
+        /** A node frozen from a declaration that declared no range: the shape every node had before a
+         * range could be declared. */
+        public Node(long nodeId, String key, long handle, String worldId, String domainId, int level,
+                    List<String> predecessors, List<Long> successors, int priority, String affinity,
+                    String cancelScope, List<JobDeclaration.DomainRef> readSet,
+                    List<JobDeclaration.DomainRef> writeSet,
+                    List<JobDeclaration.OwnerDemand> ownerDemands, ShareClass shareClass,
+                    JobDeclaration.SiteClass siteClass, int batchKind, int batchBound,
+                    boolean splitIntent, int position) {
+            this(nodeId, key, handle, worldId, domainId, level, predecessors, successors, priority,
+                affinity, cancelScope, readSet, writeSet, ownerDemands, shareClass, siteClass,
+                batchKind, batchBound, splitIntent, position, null);
+        }
 
         public Node {
             predecessors = List.copyOf(predecessors);
