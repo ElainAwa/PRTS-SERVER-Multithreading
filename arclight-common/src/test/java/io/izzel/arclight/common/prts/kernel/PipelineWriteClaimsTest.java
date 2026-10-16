@@ -503,6 +503,34 @@ class PipelineWriteClaimsTest {
         return reason;
     }
 
+    /** A declaration that carries a range: the read the plan froze out of it places the write set, so
+     * the claim is seated and the register point is reached, and the range the slot names is the one
+     * the declaration carried. */
+    @Test
+    void theRangeAFrozenDeclarationCarriesPlacesTheWriteSetAndReachesTheRegisterPoint() {
+        Scratch scratch = new Scratch();
+        scratch.claims.writeSpaces(KernelWriteRanges.reader());
+        scratch.declareCarryingRange();
+
+        List<PipelineWriteClaims.Claim> rows = scratch.claims.claims();
+        assertEquals(1, rows.size(), () -> "claims=" + rows);
+        assertEquals(SPACE, rows.get(0).space(), "the claim carries the range the declaration named");
+        assertEquals(0L, scratch.claims.emptyWriteSetCount(),
+            "a placeable range is not an unplaceable write set");
+
+        scratch.claims.ownerTaskBegin(WORLD, MAILBOX);
+        assertEquals(1, scratch.slots.slots(), "the window of the job seats its claim");
+        assertEquals(1L, scratch.slots.registeredCount(), "the claim reaches the register point");
+        WriteControlledSlots.Slot seated = scratch.capture();
+        assertEquals(WriteControlledSlots.SlotKey.segmentOf(SPACE), seated.key().segment(),
+            "the slot declares the range it was claimed for");
+
+        scratch.claims.ownerTaskEnd(WORLD, MAILBOX);
+        assertEquals(0, scratch.slots.slots());
+        assertEquals(1L, scratch.slots.capturedCount());
+        assertTrue(scratch.slots.conservationHolds());
+    }
+
     /** The write paths, the registries and the claim table of one process, wired the way the kernel
      * wires them; only the level of a world and the step of the plan are fixtures. */
     private static final class Scratch {
@@ -568,6 +596,21 @@ class PipelineWriteClaimsTest {
             }
             jobs.declareInto(intake);
             return freeze(intake.take());
+        }
+
+        /** The round job of the pipeline declared with the range a producer that read one would hand
+         * in: the mailbox face names a world and a mailbox and no cell, so this declaration stands for
+         * the shape a range source has to produce, and the fixture freezes it verbatim. */
+        private JobGraph declareCarryingRange() {
+            JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef(WORLD, DOMAIN, 0);
+            JobDeclaration declaration = new JobDeclaration(NODE_KEY, 1L, WORLD, DOMAIN, 0, List.of(),
+                0, MAILBOX, "world:" + WORLD, List.of(ref), List.of(ref), ShareClass.OTHER,
+                JobDeclaration.SiteClass.PARALLEL, 0, (int) ROUNDS,
+                List.of(new JobDeclaration.OwnerDemand(WORLD, WriteLevel.REGION, DOMAIN,
+                    HolderKind.REGISTERED, HOLDER, 40)),
+                new JobDeclaration.WriteRange(JobDeclaration.RangeGranularity.SECTION,
+                    new long[] {SectionPos.asLong(0, 4, 0)}));
+            return freeze(List.of(declaration));
         }
 
         private JobGraph declareForeignDomain() {

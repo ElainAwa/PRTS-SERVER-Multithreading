@@ -405,6 +405,7 @@ public final class KernelModule {
         // The claim point seats the slot a declared job covers and reports the batches that landed;
         // the guard hands a captured write over to it and the judged path decides the write.
         claims.table(controlledSlots);
+        claims.writeSpaces(KernelWriteRanges.reader());
         guard.claimLandedTap((slot, worldId, tick) -> claims.noteLanded(slot, worldId));
         // The progress side of the two rows whose producer already exists: the intent channel depth
         // and the world epoch change count are the same counters the readout publishes, so a signal

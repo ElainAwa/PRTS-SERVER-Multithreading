@@ -128,9 +128,9 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         this.table = slots == null ? WriteControlledSlots.NOTHING : slots;
     }
 
-    /** Names where the spatial range a declared job writes in is read from. The plan a deployment
-     * freezes today declares a world, a domain and a level and no range, so no claim is made until
-     * a reader is wired in: a write set that cannot be placed is never turned into a claim. */
+    /** Names where the spatial range a declared job writes in is read from. The reader is pointed at
+     * the range each frozen declaration carries: a declared range places the write set, and a
+     * declaration that names none leaves it unplaceable, so no slot is registered for it. */
     public void writeSpaces(Function<JobGraph.Node, WriteControlledSlots.WriteSpace> reader) {
         this.writeSpaces = reader == null
             ? node -> WriteControlledSlots.WriteSpace.NONE : reader;

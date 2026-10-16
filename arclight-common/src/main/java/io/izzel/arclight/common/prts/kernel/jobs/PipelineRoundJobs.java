@@ -118,7 +118,9 @@ public final class PipelineRoundJobs implements PrtsPipelineRows.MailboxOwnerTap
                 continue;
             }
             long handle = ++handles;
-            JobDeclaration declaration = declarationOf(counter.worldId, counter.mailbox, handle, rounds);
+            // The group carries no range: the mailbox face names a world and a mailbox and no cell.
+            JobDeclaration declaration = declarationOf(counter.worldId, counter.mailbox, handle, rounds,
+                null);
             if (intake.submit(declaration).accepted()) {
                 declared++;
                 declaredNow++;
