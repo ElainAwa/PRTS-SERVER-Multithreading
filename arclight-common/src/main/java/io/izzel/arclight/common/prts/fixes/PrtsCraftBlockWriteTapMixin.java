@@ -29,7 +29,10 @@ public abstract class PrtsCraftBlockWriteTapMixin {
         cancellable = true)
     private void prts$admitPlatformBlockWrite(BlockData data, boolean applyPhysics, CallbackInfo ci) {
         ServerLevel level = getCraftWorld().getHandle();
-        PrtsWorldWriteTaps.Decision decision = PrtsWorldWriteTaps.beginBlockWrite(level);
+        CraftBlock self = (CraftBlock) (Object) this;
+        net.minecraft.core.BlockPos position = self.getPosition();
+        PrtsWorldWriteTaps.Decision decision = PrtsWorldWriteTaps.beginBlockWrite(level,
+            position.getX(), position.getY(), position.getZ());
         if (!decision.judge()) {
             return;
         }

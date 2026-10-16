@@ -18,6 +18,9 @@ public final class PrtsWorldWriteTaps {
         /** @return {@link #PASS} or {@link #JUDGE} */
         int classifyBlockWrite(Object levelRef);
 
+        /** @return {@link #PASS} or {@link #JUDGE} for a write whose block position the caller can name */
+        int classifyBlockWrite(Object levelRef, int x, int y, int z);
+
         /** @return true when the write may proceed now; false means it is applied later through the deferred write */
         boolean admitBlockWrite(Object levelRef, String worldId, DeferredWrite deferred);
     }
@@ -40,6 +43,13 @@ public final class PrtsWorldWriteTaps {
     public static Decision beginBlockWrite(Object levelRef) {
         BlockWriteTap tap = blockWriteTap;
         return new Decision(tap, tap == null ? BlockWriteTap.PASS : tap.classifyBlockWrite(levelRef));
+    }
+
+    /** Opens one decision for a write made at a known block position: a watcher that cannot use the
+     * three coordinates answers as it does for a write that has none. */
+    public static Decision beginBlockWrite(Object levelRef, int x, int y, int z) {
+        BlockWriteTap tap = blockWriteTap;
+        return new Decision(tap, tap == null ? BlockWriteTap.PASS : tap.classifyBlockWrite(levelRef, x, y, z));
     }
 
     public static final class Decision {

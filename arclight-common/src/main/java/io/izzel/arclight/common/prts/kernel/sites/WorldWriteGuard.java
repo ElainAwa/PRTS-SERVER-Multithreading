@@ -183,6 +183,15 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
 
     @Override
     public int classifyBlockWrite(Object levelRef) {
+        return classifyBlockWrite(levelRef, WriteControlledSlots.WritePosition.NONE);
+    }
+
+    @Override
+    public int classifyBlockWrite(Object levelRef, int x, int y, int z) {
+        return classifyBlockWrite(levelRef, WriteControlledSlots.WritePosition.at(x, y, z));
+    }
+
+    private int classifyBlockWrite(Object levelRef, WriteControlledSlots.WritePosition position) {
         if (!active) {
             return PASS;
         }
@@ -190,8 +199,12 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
             // A write a declared slot covers does not take the short path: it is handed to the judged
             // path below, which is where a claim is decided and where a refused claim is refused. A
             // write no slot covers is not a domain write and keeps the short path unchanged.
-            WriteControlledSlots.Decision decision =
-                controlled.judge(levelRef, WritePath.BLOCK_WRITE.key(), tickIndex);
+            //
+            // The judged path takes the position when a write can name one; a write that cannot keeps
+            // the three argument call it had, so its answer is the one it already was.
+            WriteControlledSlots.Decision decision = position.readable()
+                ? controlled.judge(levelRef, WritePath.BLOCK_WRITE.key(), position, tickIndex)
+                : controlled.judge(levelRef, WritePath.BLOCK_WRITE.key(), tickIndex);
             if (decision.verdict() != WriteControlledSlots.Verdict.DEFAULT_PATH) {
                 // A captured claim is handed to the judged path on this thread, so the attempt that
                 // follows is built from the claim and not from the write path it arrived on. A claim
