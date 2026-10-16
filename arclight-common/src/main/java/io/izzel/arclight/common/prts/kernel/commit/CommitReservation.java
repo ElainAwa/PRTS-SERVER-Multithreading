@@ -241,7 +241,11 @@ public final class CommitReservation {
         }
         CommitLog.Identity identity = request.identity();
         if (!identity.declaredTyped() || !CommitLog.supportedSchema(identity.schemaVersion())) {
-            return Judged.refused(new Refusal(RejectCode.VERSION_MISMATCH, "identity-undeclared"));
+            // A generation that is not live is not a missing column, and the two non-positive
+            // generations are two names: the refusal says which, where it always was.
+            String generation = CommitLog.worldEpochRefusal(identity.worldEpoch());
+            return Judged.refused(new Refusal(RejectCode.VERSION_MISMATCH,
+                generation.isEmpty() ? "identity-undeclared" : generation));
         }
         if (!CommitLog.liveWorldEpoch(identity.worldEpoch())) {
             return Judged.refused(new Refusal(RejectCode.VERSION_MISMATCH, "world-epoch-not-live"));

@@ -253,14 +253,12 @@ public final class IdentityWitness {
         if (identity.worldEpoch() != entry.worldEpoch()) {
             return refuse("declaration-epoch-mismatch");
         }
-        LogicalKey declared = new LogicalKey(entry.seat().worldId(), entry.seat().domainId(),
-            entry.nodeKey(), entry.role(), entry.packedChunkPos(), entry.targetStatus());
-        LogicalKey carried = new LogicalKey(worldId, domainId, nodeKey, entry.role(),
-            identity.chunkPos(), identity.targetStatus());
-        if (!declared.equals(carried)) {
-            // The declaration is the source: the key is rebuilt from it and from the line, and the
-            // two are compared as wholes instead of the table's number being read back as its own
-            // proof.
+        // Both halves come from the log's one reconstruction point, so the three sites cannot drift
+        // into three formulations of the same key. The declaration is the source.
+        LogicalKey declared = CommitLog.logicalKeyOf(entry);
+        LogicalKey carried = CommitLog.logicalKeyOf(worldId, domainId, nodeKey, entry.role(),
+            identity);
+        if (declared == null || carried == null || !declared.equals(carried)) {
             return refuse("identity-recompute-mismatch");
         }
         return new Verdict(true, "", declared.canonical());

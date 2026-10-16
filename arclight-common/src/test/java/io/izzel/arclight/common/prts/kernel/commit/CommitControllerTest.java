@@ -91,6 +91,23 @@ class CommitControllerTest {
         CommitTicket.ReserveRequest request(int rows) {
             return request(NODE, plans.plan, plans.position, rows, EFFECT, 11L);
         }
+
+        /** The same line with the world generation and the controller namespace the case names, so
+         * the named refusals of the reservation are driven without a second fixture. The artefact,
+         * the plan identity and the effect stay exactly what the other requests carry. */
+        CommitTicket.ReserveRequest requestWith(String node, long worldEpoch,
+                                                CommitNamespaces.Namespace controller) {
+            witness.bindNode(node, 11L);
+            CommitNamespaces.Namespace producer = new CommitNamespaces.Namespace("producer",
+                OTHER_LIFETIME, 0L, 77L);
+            CommitLog.Identity identity = new CommitLog.Identity(CommitLog.SCHEMA_TYPED, 11L,
+                worldEpoch, 3L, "published", plans.plan, EFFECT, producer, controller);
+            return new CommitTicket.ReserveRequest(WORLD, DOMAIN, node, CommitLog.Batch.Kind.APPLY,
+                plans.plan, plans.position, plans.plan, 4242L, 2, identity, controller,
+                effect(EFFECT, "publish", new String[] {"a=1", "b=2"}, 2),
+                effect(EFFECT, "publish", new String[] {"p=1", "p=2"}, 2),
+                effect(EFFECT, "publish", new String[] {"e=1", "e=2"}, 2));
+        }
     }
 
     private static EffectStore.Effect effect(long ref, String operation, String[] rows, int count) {
@@ -404,6 +421,107 @@ class CommitControllerTest {
             "the ledger is bounded and the newest entries are the ones it keeps");
         assertTrue(f.reservations.ledgerEvicted() > 0L, "a ledger past its bound says how much it dropped");
         assertEquals(70L, f.log.sequence(), "one line per terminal");
+    }
+
+    /** X-03: the two non-positive world generations are named apart and are not the answer a
+     * missing column gets, and neither of them reaches a ring slot, a room or the publish action. */
+    @Test
+    void anOldWorldGenerationIsNamedApartAndRefusedBeforeAnythingIsTaken() {
+        Fixture f = new Fixture(4, 4096, 4);
+        CommitController controller = new CommitController(f.reservations,
+            ticket -> outcome(CommitTicket.Terminal.PUBLISHED, 1));
+        CommitNamespaces.Namespace own = new CommitNamespaces.Namespace("owner-a",
+            f.reservations.controller().lifetime(), f.epochs.current(), 91L);
+
+        CommitReservation.ReserveResult untracked = f.reservations.reserve(
+            f.requestWith(NODE, CommitLog.NO_WORLD_EPOCH, own));
+        CommitReservation.ReserveResult lost = f.reservations.reserve(
+            f.requestWith(NODE, -1L, own));
+
+        assertFalse(untracked.admitted());
+        assertEquals(RejectCode.VERSION_MISMATCH, untracked.code());
+        assertEquals("world-untracked", untracked.diagnostic(),
+            "the zero generation is the untracked state and not a missing column");
+        assertFalse(lost.admitted());
+        assertEquals(RejectCode.VERSION_MISMATCH, lost.code());
+        assertEquals("world-not-live", lost.diagnostic(),
+            "the lost generation is a second state and not the same answer as the zero");
+        assertEquals(0, f.log.reservedSlots(), "the refusal is before any ring slot");
+        assertEquals(0, f.store.capacitySlots(), "and before any room");
+        assertEquals(0, f.log.heldPlans());
+        assertEquals(0L, controller.supplierCalls(), "and no side effect was reached");
+        assertEquals(0L, f.reservations.reserveSuccess());
+        assertEquals(0, f.reservations.outstanding());
+        assertEquals(0L, f.log.sequence(), "no line was written for either of them");
+    }
+
+    /** X-03 / B1: a controller of another lifecycle is refused by name, in the same position and
+     * still before anything is taken. */
+    @Test
+    void anotherLifecycleNamespaceIsRefusedByItsOwnNameBeforeAnythingIsTaken() {
+        Fixture f = new Fixture(4, 4096, 4);
+        CommitController controller = new CommitController(f.reservations,
+            ticket -> outcome(CommitTicket.Terminal.PUBLISHED, 1));
+        CommitNamespaces.Namespace otherLifecycle = new CommitNamespaces.Namespace("owner-a",
+            f.reservations.controller().lifetime(), f.epochs.current() + 1L, 91L);
+
+        CommitReservation.ReserveResult refused = f.reservations.reserve(
+            f.requestWith(NODE, 5L, otherLifecycle));
+
+        assertFalse(refused.admitted());
+        assertEquals(RejectCode.VERSION_MISMATCH, refused.code());
+        assertEquals("controller-namespace-mismatch", refused.diagnostic());
+        assertEquals(0, f.log.reservedSlots());
+        assertEquals(0, f.store.capacitySlots());
+        assertEquals(0L, controller.supplierCalls());
+        assertEquals(0L, f.reservations.reserveSuccess());
+    }
+
+    /** X-01: a controller that declares nothing is refused by name, before the seat is even looked
+     * up, and the write side holds nothing afterwards. */
+    @Test
+    void aLineWhoseControllerDeclaresNothingIsRefusedBeforeAnythingIsTaken() {
+        Fixture f = new Fixture(4, 4096, 4);
+        CommitController controller = new CommitController(f.reservations,
+            ticket -> outcome(CommitTicket.Terminal.PUBLISHED, 1));
+
+        CommitReservation.ReserveResult refused = f.reservations.reserve(
+            f.requestWith(NODE, 5L, CommitNamespaces.Namespace.NONE));
+
+        assertFalse(refused.admitted());
+        assertEquals(RejectCode.VERSION_MISMATCH, refused.code());
+        assertEquals("identity-undeclared", refused.diagnostic());
+        assertFalse(CommitNamespaces.Namespace.NONE.declared(),
+            "the undeclared namespace is a named constant and not a number that reads as one");
+        assertEquals(CommitNamespaces.NO_LIFETIME, CommitNamespaces.Namespace.NONE.lifetime());
+        assertEquals("", CommitNamespaces.Namespace.NONE.ownerId());
+        assertEquals(0, f.log.reservedSlots());
+        assertEquals(0, f.store.capacitySlots());
+        assertEquals(0L, controller.supplierCalls());
+        assertEquals(0L, f.log.sequence());
+    }
+
+    /** P-05 禁止面的库内负例：a line with no node is refused instead of being read as a seat of
+     * the pair, and the reservation that would have carried it takes nothing. */
+    @Test
+    void aLineWithNoNodeAtAllIsRefusedInsteadOfReadingAsASeat() {
+        Fixture f = new Fixture(4, 4096, 4);
+        CommitController controller = new CommitController(f.reservations,
+            ticket -> outcome(CommitTicket.Terminal.PUBLISHED, 1));
+        CommitNamespaces.Namespace own = new CommitNamespaces.Namespace("owner-a",
+            f.reservations.controller().lifetime(), f.epochs.current(), 91L);
+
+        CommitReservation.ReserveResult empty = f.reservations.reserve(f.requestWith("", 5L, own));
+
+        assertFalse(empty.admitted());
+        assertEquals(RejectCode.COUNTER_MISSING, empty.code());
+        assertEquals("request-incomplete", empty.diagnostic());
+        assertNull(f.log.orderSource().resolve(WORLD, DOMAIN, ""),
+            "an empty node resolves to no place, so it can never be seated");
+        assertEquals(0, f.log.reservedSlots());
+        assertEquals(0, f.store.capacitySlots());
+        assertEquals(0L, controller.supplierCalls());
+        assertEquals(0L, f.reservations.reserveSuccess());
     }
 
     @Test

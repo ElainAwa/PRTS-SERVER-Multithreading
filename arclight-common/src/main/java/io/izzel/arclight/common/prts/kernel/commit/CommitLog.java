@@ -932,6 +932,27 @@ public final class CommitLog {
         return new Verdict(false, Entry.Disposition.DROPPED, code, sequence, position);
     }
 
+    /** The one place the cross-run logical key of a verified seat is rebuilt, read by all three
+     * sites; a seat the table wrote nothing for is answered with null and never with an empty key. */
+    public static IdentityWitness.LogicalKey logicalKeyOf(FrozenDeclarations.Entry entry) {
+        if (entry == null || entry.seat() == null) {
+            return null;
+        }
+        return new IdentityWitness.LogicalKey(entry.seat().worldId(), entry.seat().domainId(),
+            entry.nodeKey(), entry.role(), entry.packedChunkPos(), entry.targetStatus());
+    }
+
+    /** The same key read from the line: its artefact columns and the rank the frozen order gave it. */
+    public static IdentityWitness.LogicalKey logicalKeyOf(String worldId, String domainId,
+                                                          String nodeKey, int role,
+                                                          Identity identity) {
+        if (identity == null) {
+            return null;
+        }
+        return new IdentityWitness.LogicalKey(worldId, domainId, nodeKey, role, identity.chunkPos(),
+            identity.targetStatus());
+    }
+
     /** The lifecycle of a versioned line: the owner, the lifetime and the reset generation of both
      * namespaces. The thread column is a diagnostic and is not part of it. */
     private static String lifecycleKeyOf(Identity identity) {

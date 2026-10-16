@@ -149,6 +149,73 @@ class IdentityWitnessTest {
             DOMAIN, node, identity, current);
     }
 
+    /** The cross-run key is rebuilt at the one point both sides read, and the text the witness core
+     * answers is that rebuild's canonical form and not a second formulation that renders alike. */
+    @Test
+    void theLogicalKeyIsRebuiltAtOnePointAndBothSidesReadThatOnePoint() {
+        FrozenDeclarations table = sealed(9L, NODE, 0, 64L, "full");
+        CommitLog.Identity line = identity(INSTANCE, 64L, "full", controller());
+        IdentityWitness.Verdict witness = verify(table, 9L, 0, NODE, line, controller());
+
+        assertTrue(witness.accepted(), witness.reason());
+        FrozenDeclarations.Entry entry = table.entryAt(seat(9L, 0));
+        assertNotNull(entry);
+        IdentityWitness.LogicalKey declared = CommitLog.logicalKeyOf(entry);
+        IdentityWitness.LogicalKey carried = CommitLog.logicalKeyOf(WORLD, DOMAIN, NODE, entry.role(),
+            line);
+        assertNotNull(declared);
+        assertNotNull(carried);
+        assertEquals(declared, carried);
+        assertEquals(declared.canonical(), witness.instance());
+        assertEquals(declared, IdentityWitness.parse(witness.instance()));
+    }
+
+    /** A seat the table wrote nothing for is answered with no key at all: an empty key would compare
+     * equal to another empty one and read as an identity nothing declared. */
+    @Test
+    void aSeatTheTableWroteNothingForIsAnsweredWithNoKeyInsteadOfAnEmptyOne() {
+        FrozenDeclarations table = sealed(9L, NODE, 0, 64L, "full");
+
+        assertNull(CommitLog.logicalKeyOf((FrozenDeclarations.Entry) null));
+        assertNull(CommitLog.logicalKeyOf(table.entryAt(seat(9L, 3))));
+        assertNull(CommitLog.logicalKeyOf(WORLD, DOMAIN, NODE, 1, null));
+    }
+
+    /** The number a run assigned is not in the key: two freezes of the same declaration that minted
+     * different instance numbers rebuild one key, and the write side still reads both. */
+    @Test
+    void twoRunsThatAssignedOtherInstanceNumbersRebuildTheSameLogicalKey() {
+        FrozenDeclarations first = sealed(9L, NODE, 0, 64L, "full", 11L, EPOCH);
+        FrozenDeclarations second = sealed(9L, NODE, 0, 64L, "full", 12L, EPOCH);
+        IdentityWitness.LogicalKey a = CommitLog.logicalKeyOf(first.entryAt(seat(9L, 0)));
+        IdentityWitness.LogicalKey b = CommitLog.logicalKeyOf(second.entryAt(seat(9L, 0)));
+
+        assertNotNull(a);
+        assertNotNull(b);
+        assertEquals(a, b);
+        assertEquals(a.canonical(), b.canonical());
+        assertEquals(11L, first.entryAt(seat(9L, 0)).instanceId());
+        assertEquals(12L, second.entryAt(seat(9L, 0)).instanceId());
+    }
+
+    /** Another logical declaration never rebuilds to the same key, however alike the run's numbers
+     * were: the chunk and the state are part of what was declared. */
+    @Test
+    void anotherLogicalDeclarationNeverRebuildsToTheSameKey() {
+        IdentityWitness.LogicalKey base = CommitLog.logicalKeyOf(
+            sealed(9L, NODE, 0, 64L, "full").entryAt(seat(9L, 0)));
+        IdentityWitness.LogicalKey otherChunk = CommitLog.logicalKeyOf(
+            sealed(9L, NODE, 0, 65L, "full").entryAt(seat(9L, 0)));
+        IdentityWitness.LogicalKey otherStatus = CommitLog.logicalKeyOf(
+            sealed(9L, NODE, 0, 64L, "empty").entryAt(seat(9L, 0)));
+
+        assertNotNull(base);
+        assertNotEquals(base, otherChunk);
+        assertNotEquals(base, otherStatus);
+        assertNotEquals(base.canonical(), otherChunk.canonical());
+        assertNotEquals(base.canonical(), otherStatus.canonical());
+    }
+
     @Test
     void theFinalSeatOfTheGraphIsWhatBindsNotTheOrderOfTheDeclarations() {
         List<FrozenDeclarations.Candidate> declared = List.of(candidate(NODE, 64L, "full"),

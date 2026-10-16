@@ -302,9 +302,10 @@ public final class ReplayComparator {
         return decide(differences, fields, strict == null ? UNVERIFIED_NOTE : "");
     }
 
-    /** The instance column of one side, in step order. A strict side reads the canonical form the
-     * sealed declarations back and answers null when any step is not backed by them; the historical
-     * side keeps the first-appearance ordinal and gives up the claim the note denies it. */
+    /** The instance column of one side, in step order. A strict side emits the canonical form the
+     * witness core answers, which is the one reconstruction point's own rendering (see
+     * {@link CommitLog#logicalKeyOf(FrozenDeclarations.Entry)}); a step the verdict refuses answers
+     * no column. The historical side keeps the first-appearance ordinal. */
     private static List<String> instanceColumn(List<CommitLog.TypedStep> steps,
                                                FrozenDeclarations declarations, Canonical ordinals) {
         List<String> column = new ArrayList<>(steps.size());
