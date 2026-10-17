@@ -34,6 +34,17 @@ public final class PrtsPipelineRows {
 
         default void ownerTaskEnd(String world, String mailbox) {
         }
+
+        /** The same span, with the token of the task it covers. A watcher that names no token is
+         * still called, through the two-argument entry it already implements. */
+        default void ownerTaskBegin(String world, String mailbox, Object token) {
+            ownerTaskBegin(world, mailbox);
+        }
+
+        /** @param token the token the matching begin carried; ignored by a two-argument watcher */
+        default void ownerTaskEnd(String world, String mailbox, Object token) {
+            ownerTaskEnd(world, mailbox);
+        }
     }
 
     private static volatile MailboxRowTap tap;
@@ -131,6 +142,22 @@ public final class PrtsPipelineRows {
         String world = worldOf(mailbox);
         for (MailboxOwnerTap watcher : ownerTaps) {
             watcher.ownerTaskEnd(world, name);
+        }
+    }
+
+    /** Reports one work item beginning, with the token of the task it covers. */
+    public static void ownerTaskBegin(Object mailbox, String name, Object token) {
+        String world = worldOf(mailbox);
+        for (MailboxOwnerTap watcher : ownerTaps) {
+            watcher.ownerTaskBegin(world, name, token);
+        }
+    }
+
+    /** Reports one work item ending, with the token its begin carried. */
+    public static void ownerTaskEnd(Object mailbox, String name, Object token) {
+        String world = worldOf(mailbox);
+        for (MailboxOwnerTap watcher : ownerTaps) {
+            watcher.ownerTaskEnd(world, name, token);
         }
     }
 }
