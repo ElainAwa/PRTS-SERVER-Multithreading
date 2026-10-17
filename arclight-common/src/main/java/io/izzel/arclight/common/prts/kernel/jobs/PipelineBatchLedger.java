@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
+import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -19,7 +20,9 @@ import java.util.concurrent.atomic.LongAdder;
  *
  * <p>A task is minted where the pipeline submits it; a freeze turns the tasks of at most
  * {@value #MAX_CELLS} distinct cells into one batch. The batch travels inside the state the claim
- * transition publishes, so no reader can observe a claimed task that names no batch, and the
+ * transition publishes, so no reader can observe a claimed task that names no batch; the range and
+ * the members of a batch are read from those claimed states until the freeze publishes its complete
+ * binding, so a task that opens a window always has its cell in the range. The
  * pre-run states keep where the task is: a release that clears the sorter queue cancels a task only
  * while it is still resident there, never one the sorter already applied and handed to its mailbox.
  *
@@ -104,6 +107,11 @@ public final class PipelineBatchLedger {
                               long closedTick) {
     }
 
+    // What one freeze publishes: the identity, the tasks it claimed and the cells those tasks name,
+    // prepared complete and installed by the one map write a reader sees.
+    private record BatchBinding(BatchId batch, List<TrackedTask> tasks, long[] cells) {
+    }
+
     /** One task the ledger tracks. The state reference is the only mutable part; a detached task
      * (reset, expiry or a bound that stopped observation) accepts no transition any more. */
     public static final class TrackedTask {
@@ -156,8 +164,14 @@ public final class PipelineBatchLedger {
     private final AtomicLong epoch = new AtomicLong();
     private final AtomicLong trackedCount = new AtomicLong();
     private final ConcurrentSkipListMap<Long, TrackedTask> pending = new ConcurrentSkipListMap<>();
-    private final ConcurrentSkipListMap<Long, List<TrackedTask>> batches =
-        new ConcurrentSkipListMap<>();
+    private final ConcurrentSkipListMap<Long, BatchBinding> batches = new ConcurrentSkipListMap<>();
+    // Freezes whose binding is not published yet; their members and range are read from the claims
+    // that already carry the batch, so a window never opens over a range that is still empty.
+    private final Set<Long> forming = ConcurrentHashMap.newKeySet();
+    // A mint's epoch read, bound claim and index insert against a reset's detach, clear and epoch
+    // bump: one critical section, so a registration a reset overtakes is detached and counted out
+    // instead of landing in the next generation's index and count.
+    private final Object registration = new Object();
     private final Queue<BatchReport> reports = new ConcurrentLinkedQueue<>();
     private final Map<String, BatchId> current = new ConcurrentHashMap<>();
     private final ThreadLocal<TrackedTask> running = new ThreadLocal<>();
@@ -202,15 +216,17 @@ public final class PipelineBatchLedger {
         TaskId id = new TaskId(ordinals.incrementAndGet(), worldId == null ? "" : worldId,
             mailbox == null ? "" : mailbox, cell, tick);
         minted.increment();
-        long generation = epoch.get();
-        if (trackedCount.incrementAndGet() > pendingLimit) {
-            trackedCount.decrementAndGet();
-            overflowed.increment();
-            return new TrackedTask(id, processor, false, generation);
+        synchronized (registration) {
+            long generation = epoch.get();
+            if (trackedCount.incrementAndGet() > pendingLimit) {
+                trackedCount.decrementAndGet();
+                overflowed.increment();
+                return new TrackedTask(id, processor, false, generation);
+            }
+            TrackedTask task = new TrackedTask(id, processor, true, generation);
+            pending.put(id.ordinal(), task);
+            return task;
         }
-        TrackedTask task = new TrackedTask(id, processor, true, generation);
-        pending.put(id.ordinal(), task);
-        return task;
     }
 
     /** The sorter enqueued the task's function: from here a release that clears the queue reaches
@@ -385,35 +401,42 @@ public final class PipelineBatchLedger {
         }
         BatchId batch = new BatchId(worldId, mailbox, freezeOrdinals.incrementAndGet(),
             planSequence);
-        List<TrackedTask> claimed = new ArrayList<>(selected.size());
-        for (TrackedTask task : selected) {
-            TaskState now = task.state();
-            Place place = placeOf(now);
-            if (place == null || !accepts(task) || !claimable(now)) {
-                claimLost.increment();
-                continue;
+        forming.add(batch.freezeOrdinal());
+        try {
+            List<TrackedTask> claimed = new ArrayList<>(selected.size());
+            for (TrackedTask task : selected) {
+                TaskState now = task.state();
+                Place place = placeOf(now);
+                if (place == null || !accepts(task) || !claimable(now)) {
+                    claimLost.increment();
+                    continue;
+                }
+                if (task.state.compareAndSet(now, new Claimed(batch, place))) {
+                    claimed.add(task);
+                } else {
+                    claimLost.increment();
+                }
             }
-            if (task.state.compareAndSet(now, new Claimed(batch, place))) {
-                claimed.add(task);
-            } else {
-                claimLost.increment();
+            if (claimed.isEmpty()) {
+                emptyFreezes.increment();
+                return null;
             }
+            batches.put(batch.freezeOrdinal(), binding(batch, claimed));
+            current.put(key(worldId, mailbox), batch);
+            claimedTasks.add(claimed.size());
+            while (batches.size() > BATCH_LIMIT) {
+                batches.pollFirstEntry();
+            }
+            return batch;
+        } finally {
+            forming.remove(batch.freezeOrdinal());
         }
-        if (claimed.isEmpty()) {
-            emptyFreezes.increment();
-            return null;
-        }
-        batches.put(batch.freezeOrdinal(), List.copyOf(claimed));
-        current.put(key(worldId, mailbox), batch);
-        claimedTasks.add(claimed.size());
-        while (batches.size() > BATCH_LIMIT) {
-            batches.pollFirstEntry();
-        }
-        return batch;
     }
 
     /** The release of a sorter queue. Only a task still resident there is cancelled; one minted but
-     * not yet enqueued, or one already handed to its mailbox, keeps its execution. */
+     * not yet enqueued, or one already handed to its mailbox, keeps its execution. A claim a freeze
+     * installs between the read and the cancellation is re-read, so the cancellation still lands
+     * while the task is resident. */
     public void released(Object processor, long cell, boolean clearQueue) {
         if (!clearQueue) {
             return;
@@ -422,34 +445,48 @@ public final class PipelineBatchLedger {
             if (!accepts(task) || task.processor() != processor || task.id().cell() != cell) {
                 continue;
             }
-            TaskState now = task.state();
-            Place place = placeOf(now);
-            if (place == null) {
-                releaseAfterHandoff.increment();
-                continue;
-            }
-            if (place == Place.MINTED) {
-                releaseBeforeEnqueue.increment();
-            } else if (place == Place.HANDED_OFF) {
-                releaseAfterHandoff.increment();
-            } else {
+            for (;;) {
+                TaskState now = task.state();
+                Place place = placeOf(now);
+                if (place == null) {
+                    releaseAfterHandoff.increment();
+                    break;
+                }
+                if (place == Place.MINTED) {
+                    releaseBeforeEnqueue.increment();
+                    break;
+                }
+                if (place == Place.HANDED_OFF) {
+                    releaseAfterHandoff.increment();
+                    break;
+                }
                 TaskState next = now instanceof Claimed claimed
                     ? new Cancelled(claimed.batch(), CancelPoint.QUEUED_CLEARED)
                     : new CancelledUnclaimed(CancelPoint.QUEUED_CLEARED);
                 if (task.state.compareAndSet(now, next)) {
                     queuedCleared.increment();
                     dechain(task);
+                    break;
+                }
+                // A freeze claimed the task between the read and the set: it is still resident, so
+                // the cancellation is completed against the re-read state.
+                if (!accepts(task)) {
+                    break;
                 }
             }
         }
     }
 
-    /** Drops minted tasks that no sorter enqueue reached within the mint lifetime; a task that runs
-     * after this sweep still runs, only its index entry is gone. */
+    /** Drops tasks that no sorter enqueue reached within the mint lifetime, a task a freeze claimed
+     * while it was still minted included, so such a claim cannot hold its slot for good; a task that
+     * runs after this sweep still runs, only its index entry is gone. */
     public void noteTick(long tick) {
         lastTick = tick;
         for (TrackedTask task : pending.values()) {
-            if (task.state() instanceof Minted && tick - task.id().mintTick() > mintTtlTicks) {
+            if (!unenqueued(task.state()) || tick - task.id().mintTick() <= mintTtlTicks) {
+                continue;
+            }
+            synchronized (registration) {
                 if (pending.remove(task.id().ordinal(), task)) {
                     task.detach();
                     trackedCount.decrementAndGet();
@@ -462,19 +499,22 @@ public final class PipelineBatchLedger {
     /** Drops every index entry and reading. A task already handed to its mailbox still runs, and
      * its transitions are no-ops against this ledger. */
     public void reset() {
-        for (TrackedTask task : pending.values()) {
-            task.detach();
+        synchronized (registration) {
+            for (TrackedTask task : pending.values()) {
+                task.detach();
+            }
+            pending.clear();
+            batches.clear();
+            forming.clear();
+            reports.clear();
+            current.clear();
+            running.remove();
+            trackedCount.set(0L);
+            currentPlan = 0L;
+            planKnown = false;
+            lastTick = 0L;
+            epoch.incrementAndGet();
         }
-        pending.clear();
-        batches.clear();
-        reports.clear();
-        current.clear();
-        running.remove();
-        trackedCount.set(0L);
-        currentPlan = 0L;
-        planKnown = false;
-        lastTick = 0L;
-        epoch.incrementAndGet();
         resets.increment();
         minted.reset();
         overflowed.reset();
@@ -589,25 +629,33 @@ public final class PipelineBatchLedger {
         return running.get();
     }
 
-    /** The tasks one batch claimed, in mint order; empty once the batch fell out of the bounded
+    /** The tasks one batch claimed, in mint order; while its binding is still being formed they are
+     * read from the claims that already carry it, and empty once the batch fell out of the bounded
      * history. */
     public List<TrackedTask> tasksOf(BatchId batch) {
-        List<TrackedTask> tasks = batch == null ? null : batches.get(batch.freezeOrdinal());
-        return tasks == null ? List.of() : tasks;
+        if (batch == null) {
+            return List.of();
+        }
+        BatchBinding published = batches.get(batch.freezeOrdinal());
+        if (published != null) {
+            return published.tasks();
+        }
+        if (!forming.contains(batch.freezeOrdinal())) {
+            return List.of();
+        }
+        List<TrackedTask> claimed = new ArrayList<>();
+        for (TrackedTask task : pending.values()) {
+            if (batch.equals(task.batch())) {
+                claimed.add(task);
+            }
+        }
+        return List.copyOf(claimed);
     }
 
     /** The cells one batch names, ascending and distinct. */
     public long[] cellsOf(BatchId batch) {
-        TreeSet<Long> cells = new TreeSet<>();
-        for (TrackedTask task : tasksOf(batch)) {
-            cells.add(task.id().cell());
-        }
-        long[] out = new long[cells.size()];
-        int index = 0;
-        for (long cell : cells) {
-            out[index++] = cell;
-        }
-        return out;
+        BatchBinding published = batch == null ? null : batches.get(batch.freezeOrdinal());
+        return published != null ? published.cells().clone() : cellsOfTasks(tasksOf(batch));
     }
 
     /** The closed batches, oldest first. */
@@ -642,9 +690,29 @@ public final class PipelineBatchLedger {
     }
 
     private void dechain(TrackedTask task) {
-        if (pending.remove(task.id().ordinal(), task)) {
-            trackedCount.decrementAndGet();
+        synchronized (registration) {
+            if (pending.remove(task.id().ordinal(), task)) {
+                trackedCount.decrementAndGet();
+            }
         }
+    }
+
+    private static BatchBinding binding(BatchId batch, List<TrackedTask> claimed) {
+        List<TrackedTask> members = List.copyOf(claimed);
+        return new BatchBinding(batch, members, cellsOfTasks(members));
+    }
+
+    private static long[] cellsOfTasks(List<TrackedTask> tasks) {
+        TreeSet<Long> cells = new TreeSet<>();
+        for (TrackedTask task : tasks) {
+            cells.add(task.id().cell());
+        }
+        long[] out = new long[cells.size()];
+        int index = 0;
+        for (long cell : cells) {
+            out[index++] = cell;
+        }
+        return out;
     }
 
     private boolean accepts(TrackedTask task) {
@@ -686,6 +754,11 @@ public final class PipelineBatchLedger {
     private static boolean claimable(TaskState state) {
         return state instanceof Minted || state instanceof Queued
             || state instanceof HandedOff;
+    }
+
+    private static boolean unenqueued(TaskState state) {
+        return state instanceof Minted
+            || state instanceof Claimed claimed && claimed.place() == Place.MINTED;
     }
 
     private static boolean terminal(TaskState state) {

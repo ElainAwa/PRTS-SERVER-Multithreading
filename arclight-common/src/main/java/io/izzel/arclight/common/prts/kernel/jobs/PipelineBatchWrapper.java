@@ -10,6 +10,11 @@ import java.util.function.Function;
 /**
  * Wraps the function a chunk pipeline submit enqueues and the body it produces, so the task the
  * ledger minted is the one that runs; an untracked task is handed back as the function submitted.
+ *
+ * <p>Neither face may leave an index entry behind: a delegate that throws ends the task that never
+ * produced a body, and the body closes the ledger in the outermost finally. A watcher failure neither
+ * skips the submitted body nor stands in for the exception the body raised; it rides on that
+ * exception as a suppressed one.
  */
 public final class PipelineBatchWrapper {
 
@@ -37,7 +42,14 @@ public final class PipelineBatchWrapper {
             // The sorter popped the function before it applied it, so from here a queue-clearing
             // release can no longer reach this task.
             ledger.handedOff(task);
-            T produced = delegate.apply(reply);
+            T produced;
+            try {
+                produced = delegate.apply(reply);
+            } catch (RuntimeException | Error failure) {
+                // No body will run for this task: it leaves the index with the failure it raised.
+                ledger.notRunnable(task);
+                throw failure;
+            }
             if (produced instanceof Runnable body) {
                 return cast(new WrappedBody(ledger, task, body));
             }
@@ -59,19 +71,55 @@ public final class PipelineBatchWrapper {
         public void run() {
             boolean window = ledger.runStart(task);
             boolean begun = false;
+            Throwable failure = null;
             try {
                 if (window) {
-                    // Pairing is kept even if a watcher refuses the begin: the end of a span that
-                    // never opened a slot retires nothing.
                     begun = true;
-                    PrtsPipelineRows.ownerTaskBegin(task.processor(), task.id().mailbox(), task);
+                    failure = tapped(() -> PrtsPipelineRows.ownerTaskBegin(task.processor(),
+                        task.id().mailbox(), task));
                 }
-                delegate.run();
+                try {
+                    delegate.run();
+                } catch (RuntimeException | Error thrown) {
+                    failure = merge(thrown, failure);
+                }
             } finally {
-                if (begun) {
-                    PrtsPipelineRows.ownerTaskEnd(task.processor(), task.id().mailbox(), task);
-                }
-                ledger.runEnd(task);
+                failure = merge(failure, begun ? tapped(() -> PrtsPipelineRows.ownerTaskEnd(
+                    task.processor(), task.id().mailbox(), task)) : null);
+                failure = merge(failure, tapped(() -> ledger.runEnd(task)));
+            }
+            rethrow(failure);
+        }
+
+        // A watcher that refuses a span opens nothing, but it must not skip the submitted body or
+        // stand in for the body's exception: the body runs, the end pairs with the attempted begin,
+        // and the body's own exception stays the primary one.
+        private static Throwable tapped(Runnable span) {
+            try {
+                span.run();
+                return null;
+            } catch (RuntimeException | Error failure) {
+                return failure;
+            }
+        }
+
+        private static Throwable merge(Throwable primary, Throwable late) {
+            if (late == null || late == primary) {
+                return primary;
+            }
+            if (primary == null) {
+                return late;
+            }
+            primary.addSuppressed(late);
+            return primary;
+        }
+
+        private static void rethrow(Throwable failure) {
+            if (failure instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            if (failure instanceof Error error) {
+                throw error;
             }
         }
     }
