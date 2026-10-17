@@ -154,6 +154,25 @@ class ChunkDemandSecondPathTest {
     }
 
     @Test
+    void aRefusedStampDoesNotSpendAnOlderAsksObservationTime() {
+        installBoth();
+        for (int index = 0; index < 32; index++) {
+            head(index, 0);
+        }
+        long refused = head(99, 0);
+
+        assertEquals(-1L, PrtsChunkDemand.futureOpenedAt(),
+            "the ask whose stamp was refused has no observation time of its own");
+        long older = PrtsChunkDemand.futureOpenedAt();
+        assertTrue(older > 0L, "an older ask keeps the stamp it was given");
+        PrtsChunkDemand.registrationConfirmed(WORLD, STATUS, refused, true);
+        assertEquals(0L, shadows.promoted(), "the refused ask is still not a capture");
+        while (PrtsChunkDemand.futureOpenedAt() > 0L) {
+            // The remaining stamps belong to this case's own asks.
+        }
+    }
+
+    @Test
     void aFullStampStackTellsNobodyAndCostsNoCapture() {
         installBoth();
         for (int index = 0; index < 32; index++) {

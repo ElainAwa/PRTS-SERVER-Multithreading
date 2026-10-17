@@ -55,6 +55,9 @@ public final class ChunkDemandObserver implements PrtsChunkDemand.DemandTap {
         final long[] futureStamp = new long[PENDING_CAP];
         int depth;
         int futureDepth;
+        // Pushes this thread refused because the stamp stack was already full. Each one is paid by
+        // the matching read at that ask's return, and never by popping an older ask's stamp.
+        int futureRefusals;
         long overflow;
     }
 
@@ -250,6 +253,9 @@ public final class ChunkDemandObserver implements PrtsChunkDemand.DemandTap {
     private boolean openFutureStamp() {
         Pending stack = pending.get();
         if (stack.futureDepth >= PENDING_CAP) {
+            // The ask still returns through futureOpenedAt. Counting the refusal here is what keeps
+            // that read from spending a stamp that belongs to an ask already on the stack.
+            stack.futureRefusals++;
             return false;
         }
         stack.futureStamp[stack.futureDepth] = System.nanoTime();
@@ -292,6 +298,10 @@ public final class ChunkDemandObserver implements PrtsChunkDemand.DemandTap {
     @Override
     public long futureOpenedAt() {
         Pending stack = pending.get();
+        if (stack.futureRefusals > 0) {
+            stack.futureRefusals--;
+            return -1L;
+        }
         if (stack.futureDepth <= 0) {
             return -1L;
         }
