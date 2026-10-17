@@ -521,11 +521,20 @@ class PipelineBatchRunsTest {
             return batch;
         }
 
-        /** Publishes the plan that follows without declaring it to the claim point: the order the
-         * production freeze uses, where the closed span is settled before the new declarations. */
+        /** Publishes the plan that follows, with a node of its own, without declaring it to the
+         * claim point: the order the production freeze uses, where the closed span is settled
+         * before the new declarations. */
         private JobGraph publishPlan(long planSequence, long tick) {
-            JobGraphBuilder.Freeze frozen = JobGraphBuilder.freeze(List.of(), tick, planSequence,
-                1L, 16);
+            JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef(WORLD, DOMAIN, 0);
+            JobDeclaration.OwnerDemand demand = new JobDeclaration.OwnerDemand(WORLD,
+                WriteLevel.REGION, DOMAIN, HolderKind.REGISTERED, HOLDER, 40);
+            JobDeclaration declaration = new JobDeclaration(NODE_KEY + "#next", 1L, WORLD,
+                DOMAIN, 0, List.of(), 0, MAILBOX, "world:" + WORLD, List.of(ref), List.of(ref),
+                ShareClass.OTHER, JobDeclaration.SiteClass.PARALLEL, 0, 1, List.of(demand),
+                new JobDeclaration.WriteRange(JobDeclaration.RangeGranularity.CHUNK,
+                    new long[] {CELL1}));
+            JobGraphBuilder.Freeze frozen = JobGraphBuilder.freeze(List.of(declaration), tick,
+                planSequence, 1L, 16);
             assertTrue(frozen.ok(), () -> "freeze refused: " + frozen.code());
             publish(frozen.graph(), tick);
             return frozen.graph();
