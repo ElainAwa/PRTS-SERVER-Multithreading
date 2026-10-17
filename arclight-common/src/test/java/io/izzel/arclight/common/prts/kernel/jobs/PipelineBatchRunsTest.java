@@ -294,6 +294,13 @@ class PipelineBatchRunsTest {
         assertEquals(0L, run.claims.landedWithoutNodeCount());
         assertSame(batch, run.ledger.tasksOf(batch).get(0).batch());
         assertEquals(PLAN, batch.planSequence());
+        assertEquals(1L, run.commitLog.accepted(),
+            "the write of the batch is accepted by the real commit log");
+        CommitLog.Replay replay = run.commitLog.closeTick();
+        assertEquals(1, replay.loggedSteps());
+        assertEquals(PLAN, replay.steps().get(0).planSequence(),
+            "the accepted line belongs to the plan that ordered the batch");
+        assertTrue(replay.orderMatches());
     }
 
     @Test
