@@ -205,7 +205,7 @@ public final class KernelModule {
     private final JobIntake jobIntake = new JobIntake(KernelSettings::jobQueueCap);
     private final JobScheduler scheduler = new JobScheduler();
     private final PipelineRoundJobs pipelineJobs = new PipelineRoundJobs();
-    /** The demands a freeze reads as shadow candidates; nothing read here is sealed. */
+    /** The demands a freeze reads as shadow candidates. This reader seals nothing; the freeze does. */
     private final DemandShadowCandidates demandShadows = new DemandShadowCandidates();
     private final PipelineWriteClaims claims = new PipelineWriteClaims(versionSlots,
         guard.worldEpochs(), guard::onServerThread, LiveEntityAccess::level);
@@ -1026,7 +1026,8 @@ public final class KernelModule {
         return pipelineJobs;
     }
 
-    /** The chunk demands the freeze reads as shadow candidates; no column of them is sealed. */
+    /** The chunk demands the freeze reads as shadow candidates. The reader seals nothing; the freeze
+     * seals a capture that carries every column. */
     public DemandShadowCandidates demandShadowCandidates() {
         return demandShadows;
     }

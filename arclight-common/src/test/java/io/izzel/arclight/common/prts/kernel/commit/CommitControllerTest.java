@@ -501,8 +501,8 @@ class CommitControllerTest {
         assertEquals(0L, f.log.sequence());
     }
 
-    /** P-05 禁止面的库内负例：a line with no node is refused instead of being read as a seat of
-     * the pair, and the reservation that would have carried it takes nothing. */
+    /** A line with no node is refused instead of being read as a seat of the pair, and the
+     * reservation that would have carried it takes nothing. */
     @Test
     void aLineWithNoNodeAtAllIsRefusedInsteadOfReadingAsASeat() {
         Fixture f = new Fixture(4, 4096, 4);
