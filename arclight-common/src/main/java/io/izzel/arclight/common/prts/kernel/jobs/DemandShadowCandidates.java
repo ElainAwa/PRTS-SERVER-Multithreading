@@ -212,6 +212,11 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
     @Override
     public void demandDescriptor(String worldId, int chunkX, int chunkZ, String status,
                                  boolean requireChunk, long token) {
+        if (token == PrtsChunkDemand.NO_TOKEN) {
+            // A call the issuer could not name cannot be confirmed, so staging it would hold a row
+            // no window is allowed to read. The untokened entry remains the one that captures.
+            return;
+        }
         stage(DemandDescriptor.at(worldId, chunkX, chunkZ, status, requireChunk), token);
     }
 

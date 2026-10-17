@@ -283,6 +283,8 @@ class ChunkDemandSecondPathTest {
                 "once stopped, it keeps answering no name");
             assertEquals(Long.MIN_VALUE, counter.get(), "without touching the counter again");
             assertTrue(latch(), "the latch is visible to the next caller");
+            assertEquals(0L, shadows.staged(), "a call with no name is not a capture");
+            assertEquals(0, shadows.stagedHeld());
         } finally {
             counter.set(saved.get());
             latch(false);
