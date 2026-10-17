@@ -217,7 +217,19 @@ public final class KernelModule {
     private final DualExits exits = new DualExits(KernelSettings.exitWindowTicks());
     /** The one plan authority of this module. A chain is adopted only when the log it carries asks
      * this very instance, so the identity of an order source is a reference and not a shape. */
-    private final CommitLog.OrderSource commitOrderSource = this::resolveCommitOrder;
+    private final CommitLog.OrderSource commitOrderSource = new CommitLog.OrderSource() {
+
+        @Override
+        public CommitLog.Resolved resolve(String worldId, String domainId, String nodeKey) {
+            return resolveCommitOrder(worldId, domainId, nodeKey);
+        }
+
+        @Override
+        public CommitLog.Resolved resolveAt(long planSequence, long lifecycle, String worldId,
+                                            String domainId, String nodeKey) {
+            return resolveCommitOrderAt(planSequence, lifecycle, worldId, domainId, nodeKey);
+        }
+    };
     /** Where a typed line's freeze is read from: the declarations this module sealed and the
      * generations live right now. The table is written by the freeze alone. */
     private final IdentityWitness.Source commitIdentitySource = new IdentityWitness.Source() {
@@ -825,7 +837,8 @@ public final class KernelModule {
                 // which the claim point saved when it was declared; the plan that just froze is
                 // taken for the span that follows, after the settlement.
                 claims.reportLanded(this::noteLandedBatch);
-                claims.declare(result.plan().graph(), result.plan().planSequence(), tickIndex);
+                claims.declare(result.plan().graph(), result.plan().planSequence(), tickIndex,
+                    plans.lifecycle());
             }
             if (KernelSettings.pipelineJobs() && KernelSettings.tickPlan()) {
                 dispatchFrozen(result.plan());
@@ -995,14 +1008,16 @@ public final class KernelModule {
             && KernelSettings.tickPlan();
     }
 
-    /** A batch no plan ordered is counted as unplanned rather than reordered. */
+    /** A batch no plan ordered is counted as unplanned rather than reordered. The plan, seat and
+     * lifecycle the claim point saved are carried to the log; the log checks them against the order
+     * source instead of resolving the node key to the newest plan again. */
     private void noteLandedBatch(PipelineWriteClaims.Report report) {
         if (!KernelSettings.commitLog()) {
             return;
         }
         commits.reach(new CommitLog.Batch(report.worldId(), report.domainId(), report.nodeKey(),
             CommitLog.Batch.Kind.APPLY, report.expectedVersion(), report.writeSetDigest(),
-            report.rows()));
+            report.rows()), report.planSequence(), report.position(), report.lifecycle());
     }
 
     /** Counts the declarations the domains handed to the planning period, whether the intake took
@@ -1170,6 +1185,19 @@ public final class KernelModule {
     /** Resolves the order of one commit against the plans of the recent ticks. */
     private CommitLog.Resolved resolveCommitOrder(String worldId, String domainId, String nodeKey) {
         TickPlanStore.StepRef ref = plans.resolve(worldId, domainId, nodeKey);
+        if (ref == null) {
+            return null;
+        }
+        return new CommitLog.Resolved(ref.planSequence(), ref.position(), ref.intent());
+    }
+
+    /** Resolves one commit against the exact plan and lifecycle a landing report names; the newest
+     * plan that reused the key is never consulted here. */
+    private CommitLog.Resolved resolveCommitOrderAt(long planSequence, long lifecycle,
+                                                    String worldId, String domainId,
+                                                    String nodeKey) {
+        TickPlanStore.StepRef ref = plans.resolveIn(planSequence, lifecycle, worldId, domainId,
+            nodeKey);
         if (ref == null) {
             return null;
         }

@@ -7,6 +7,7 @@ import net.minecraft.util.thread.ProcessorHandle;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -17,6 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -264,6 +266,40 @@ class PipelineBatchLedgerTest {
         PipelineBatchLedger.BatchReport report = ledger.reports().get(0);
         assertSame(first, report.batch());
         assertEquals(1, report.unfinished());
+    }
+
+    @Test
+    void aBatchALiveTaskStillNeedsOutlivesTheHistoryBound() {
+        PipelineBatchLedger ledger = new PipelineBatchLedger();
+        List<PipelineBatchLedger.TrackedTask> tasks = new ArrayList<>();
+        List<PipelineBatchLedger.BatchId> batches = new ArrayList<>();
+        for (int index = 0; index < 65; index++) {
+            String mailbox = "box-" + index;
+            PipelineBatchLedger.TrackedTask task =
+                ledger.mint(PROCESSOR, WORLD, mailbox, index, TICK);
+            ledger.enqueued(task);
+            PipelineBatchLedger.BatchId batch = ledger.freeze(WORLD, mailbox, PLAN, TICK);
+            assertNotNull(batch);
+            tasks.add(task);
+            batches.add(batch);
+        }
+        PipelineBatchLedger.BatchId first = batches.get(0);
+        long[] range = ledger.cellsOf(first);
+        assertArrayEquals(new long[] {0L}, range,
+            "the range of a batch a still pending task will open is not dropped by the bound");
+        assertTrue(ledger.runStart(tasks.get(0)), "the claimed task still opens its own batch");
+        assertArrayEquals(range, ledger.cellsOf(first),
+            "the open window keeps the range it opened over");
+        ledger.runEnd(tasks.get(0));
+
+        PipelineBatchLedger.TrackedTask extra =
+            ledger.mint(PROCESSOR, WORLD, "box-extra", 99L, TICK);
+        ledger.enqueued(extra);
+        assertNotNull(ledger.freeze(WORLD, "box-extra", PLAN, TICK));
+        assertEquals(0, ledger.cellsOf(first).length,
+            "a binding no pending task still names is dropped by the bound");
+        assertEquals(1, ledger.cellsOf(batches.get(1)).length,
+            "the bindings the other pending tasks still need are kept");
     }
 
     @Test

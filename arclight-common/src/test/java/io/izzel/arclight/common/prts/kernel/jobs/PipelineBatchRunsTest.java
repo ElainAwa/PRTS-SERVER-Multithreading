@@ -13,6 +13,8 @@ import io.izzel.arclight.common.prts.kernel.auth.WriteLevel;
 import io.izzel.arclight.common.prts.kernel.auth.WriteVersionSlots;
 import io.izzel.arclight.common.prts.kernel.commit.CommitLog;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
+import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
+import io.izzel.arclight.common.prts.kernel.plan.TickPlanStore;
 import io.izzel.arclight.common.prts.kernel.shares.ShareClass;
 import io.izzel.arclight.common.prts.kernel.sites.IntentPayloadDirectory;
 import io.izzel.arclight.common.prts.kernel.sites.WriteClaimTable;
@@ -340,6 +342,61 @@ class PipelineBatchRunsTest {
         assertEquals(0L, run.claims.landedWithoutNodeCount());
     }
 
+    @Test
+    void aLandedBatchIsAttributedToItsPlanWhenTheNextPlanReusesItsKey() {
+        Run run = new Run();
+        run.deferCommit = true;
+        Pending task = run.submit(CELL1, CELL1);
+        run.enqueue(task);
+        assertNotNull(run.declarePlan(PLAN, TICK));
+        run.handOff();
+        run.runBody();
+        assertEquals(List.of(Verdict.CAPTURED), run.verdicts());
+        assertEquals(0L, run.commitLog.accepted(), "the write alone reaches no commit log");
+
+        JobGraph next = run.publishReusingPlan(PLAN + 1, TICK + 1);
+        assertEquals(2, next.nodes().size());
+        assertEquals(PLAN + 1, run.plans.resolve(WORLD, DOMAIN, NODE_KEY).planSequence(),
+            "the newest plan still answers the node key for its old callers");
+        assertEquals(1, positionIn(next, NODE_KEY),
+            "the next plan moved the same key to another seat");
+
+        List<PipelineWriteClaims.Report> reported = new ArrayList<>();
+        assertEquals(1, settle(run.claims, next, reported::add));
+        PipelineWriteClaims.Report report = reported.get(0);
+        assertEquals(PLAN, report.planSequence());
+        assertEquals(0, report.position(), "the report carries the seat of the plan that declared it");
+        assertEquals(0L, report.lifecycle());
+
+        CommitLog latest = run.anotherLog();
+        latest.beginTick(TICK);
+        assertTrue(latest.reach(run.batchOf(report)).logged());
+        CommitLog.Replay misattributed = latest.closeTick();
+        assertEquals(PLAN + 1, misattributed.steps().get(0).planSequence(),
+            "the latest lookup would attribute the same report to the plan that reused the key");
+        assertEquals(1, misattributed.steps().get(0).position());
+
+        run.reach(report);
+
+        assertEquals(1L, run.commitLog.accepted());
+        CommitLog.Replay replay = run.commitLog.closeTick();
+        assertEquals(1, replay.loggedSteps());
+        assertEquals(PLAN, replay.steps().get(0).planSequence(),
+            "the accepted line is attributed to the plan that declared the span");
+        assertEquals(0, replay.steps().get(0).position(),
+            "the line carries the original seat, not the seat the next plan moved the key to");
+        assertTrue(replay.orderMatches());
+    }
+
+    private static int positionIn(JobGraph graph, String nodeKey) {
+        for (JobGraph.Node node : graph.nodes()) {
+            if (node.key().equals(nodeKey)) {
+                return node.position();
+            }
+        }
+        return -1;
+    }
+
     /** Reports the closed span through the shape the tree carries: the one-argument settlement when
      * the claim point keeps the authorizing plan, and the graph-bearing shape otherwise. The
      * evidence run against the previous blob takes the second path with the plan that just froze,
@@ -386,8 +443,8 @@ class PipelineBatchRunsTest {
         private final ProcessorHandle<ChunkTaskPriorityQueueSorter.Message<Runnable>> queue;
         private final ProcessorHandle<ChunkTaskPriorityQueueSorter.Release> releases;
         private final CommitLog commitLog;
-        private final Map<Long, JobGraph> plans = new HashMap<>();
-        private final Map<String, long[]> orders = new HashMap<>();
+        private final TickPlanStore plans = new TickPlanStore(2);
+        private final Map<Long, JobGraph> graphs = new HashMap<>();
         private final AtomicReference<PipelineBatchLedger.TrackedTask> runningInBody =
             new AtomicReference<>();
         private final List<Verdict> decisions = new ArrayList<>();
@@ -405,11 +462,7 @@ class PipelineBatchRunsTest {
             releases = sorter.getReleaseProcessor(main);
             sorterExecutor.defer();
             PrtsPipelineRows.bindMailboxWorlds(Map.of(main, WORLD));
-            commitLog = new CommitLog(() -> 64, (worldId, domainId, nodeKey) -> {
-                long[] order = orders.get(nodeKey);
-                return order == null || !WORLD.equals(worldId) || !DOMAIN.equals(domainId) ? null
-                    : new CommitLog.Resolved(order[0], (int) order[1], false);
-            });
+            commitLog = new CommitLog(() -> 64, orderSource());
             commitLog.beginTick(TICK);
             intents.bindPayload(guard);
             guard.bindServerThread(Thread.currentThread(), SITE);
@@ -484,13 +537,45 @@ class PipelineBatchRunsTest {
         }
 
         private void reach(PipelineWriteClaims.Report report) {
-            reached(report.nodeKey(), report.expectedVersion(), report.writeSetDigest(),
-                report.rows());
+            commitLog.reach(new CommitLog.Batch(WORLD, DOMAIN, report.nodeKey(),
+                CommitLog.Batch.Kind.APPLY, report.expectedVersion(), report.writeSetDigest(),
+                report.rows()), report.planSequence(), report.position(), report.lifecycle());
         }
 
         private void reached(String nodeKey, long expectedVersion, long writeSetDigest, int rows) {
             commitLog.reach(new CommitLog.Batch(WORLD, DOMAIN, nodeKey,
                 CommitLog.Batch.Kind.APPLY, expectedVersion, writeSetDigest, rows));
+        }
+
+        private CommitLog.Batch batchOf(PipelineWriteClaims.Report report) {
+            return new CommitLog.Batch(WORLD, DOMAIN, report.nodeKey(), CommitLog.Batch.Kind.APPLY,
+                report.expectedVersion(), report.writeSetDigest(), report.rows());
+        }
+
+        /** A second log over the same plan store, for the old lookup shape. */
+        private CommitLog anotherLog() {
+            return new CommitLog(() -> 64, orderSource());
+        }
+
+        private CommitLog.OrderSource orderSource() {
+            return new CommitLog.OrderSource() {
+
+                @Override
+                public CommitLog.Resolved resolve(String worldId, String domainId, String nodeKey) {
+                    TickPlanStore.StepRef step = plans.resolve(worldId, domainId, nodeKey);
+                    return step == null ? null
+                        : new CommitLog.Resolved(step.planSequence(), step.position(), step.intent());
+                }
+
+                @Override
+                public CommitLog.Resolved resolveAt(long planSequence, long lifecycle,
+                                                    String worldId, String domainId, String nodeKey) {
+                    TickPlanStore.StepRef step =
+                        plans.resolveIn(planSequence, lifecycle, worldId, domainId, nodeKey);
+                    return step == null ? null
+                        : new CommitLog.Resolved(step.planSequence(), step.position(), step.intent());
+                }
+            };
         }
 
         private void release(long cell) {
@@ -525,14 +610,23 @@ class PipelineBatchRunsTest {
          * claim point: the order the production freeze uses, where the closed span is settled
          * before the new declarations. */
         private JobGraph publishPlan(long planSequence, long tick) {
-            JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef(WORLD, DOMAIN, 0);
-            JobDeclaration.OwnerDemand demand = new JobDeclaration.OwnerDemand(WORLD,
-                WriteLevel.REGION, DOMAIN, HolderKind.REGISTERED, HOLDER, 40);
-            JobDeclaration declaration = new JobDeclaration(NODE_KEY + "#next", 1L, WORLD,
-                DOMAIN, 0, List.of(), 0, MAILBOX, "world:" + WORLD, List.of(ref), List.of(ref),
-                ShareClass.OTHER, JobDeclaration.SiteClass.PARALLEL, 0, 1, List.of(demand),
-                new JobDeclaration.WriteRange(JobDeclaration.RangeGranularity.CHUNK,
-                    new long[] {CELL1}));
+            return publishSinglePlan(planSequence, tick, NODE_KEY + "#next");
+        }
+
+        /** Publishes one plan whose commit order carries KEY at another position than the plan
+         * before it, without declaring it to the claim point. */
+        private JobGraph publishReusingPlan(long planSequence, long tick) {
+            JobDeclaration filler = declaration("chunk-pipeline/" + WORLD + "/filler", 1L);
+            JobDeclaration same = declaration(NODE_KEY, 1L);
+            JobGraphBuilder.Freeze frozen = JobGraphBuilder.freeze(List.of(filler, same), tick,
+                planSequence, 1L, 16);
+            assertTrue(frozen.ok(), () -> "freeze refused: " + frozen.code());
+            publish(frozen.graph(), tick);
+            return frozen.graph();
+        }
+
+        private JobGraph publishSinglePlan(long planSequence, long tick, String nodeKey) {
+            JobDeclaration declaration = declaration(nodeKey, 1L);
             JobGraphBuilder.Freeze frozen = JobGraphBuilder.freeze(List.of(declaration), tick,
                 planSequence, 1L, 16);
             assertTrue(frozen.ok(), () -> "freeze refused: " + frozen.code());
@@ -540,8 +634,19 @@ class PipelineBatchRunsTest {
             return frozen.graph();
         }
 
+        private static JobDeclaration declaration(String nodeKey, long handle) {
+            JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef(WORLD, DOMAIN, 0);
+            JobDeclaration.OwnerDemand demand = new JobDeclaration.OwnerDemand(WORLD,
+                WriteLevel.REGION, DOMAIN, HolderKind.REGISTERED, HOLDER, 40);
+            return new JobDeclaration(nodeKey, handle, WORLD, DOMAIN, 0, List.of(), 0, MAILBOX,
+                "world:" + WORLD, List.of(ref), List.of(ref), ShareClass.OTHER,
+                JobDeclaration.SiteClass.PARALLEL, 0, 1, List.of(demand),
+                new JobDeclaration.WriteRange(JobDeclaration.RangeGranularity.CHUNK,
+                    new long[] {CELL1}));
+        }
+
         private void declareToClaims(JobGraph graph, long tick) {
-            claims.declare(graph, graph.planSequence(), tick);
+            claims.declare(graph, graph.planSequence(), tick, plans.lifecycle());
         }
 
         private JobGraph graphOf(PipelineBatchLedger.BatchId batch, long planSequence, long tick) {
@@ -563,7 +668,8 @@ class PipelineBatchRunsTest {
         }
 
         private void publish(JobGraph graph, long tick) {
-            plans.put(graph.planSequence(), graph);
+            graphs.put(graph.planSequence(), graph);
+            plans.publish(planOf(graph));
             Map<OwnershipDomain, Long> granted = new HashMap<>();
             for (JobGraph.Node node : graph.nodes()) {
                 for (JobDeclaration.DomainRef ref : node.writeSet()) {
@@ -579,12 +685,25 @@ class PipelineBatchRunsTest {
             for (JobGraph.Node node : graph.nodes()) {
                 source.steps.put(node.key(), new WriteControlledSlots.Source.Step(
                     graph.planSequence(), node.position()));
-                orders.put(node.key(), new long[] {graph.planSequence(), node.position()});
             }
         }
 
+        /** The real plan store entry of a frozen graph: the commit order is the nodes' order, which
+         * is the order the freeze gave them. */
+        private static TickPlan planOf(JobGraph graph) {
+            List<TickPlan.CommitStep> order = new ArrayList<>();
+            int position = 0;
+            for (JobGraph.Node node : graph.nodes()) {
+                order.add(new TickPlan.CommitStep(position++, node.worldId(), node.domainId(),
+                    node.key(), node.nodeId(), node.batchKind(), node.batchBound(), false));
+            }
+            return new TickPlan(graph.tickIndex(), graph.planSequence(), graph.worldSetGeneration(),
+                List.of(WORLD), graph, graph.order(), order, null, List.of(), 0,
+                graph.splitIntents(), 0L, TickPlanStore.Feedback.none());
+        }
+
         private JobGraph graphOf(long planSequence) {
-            return plans.get(planSequence);
+            return graphs.get(planSequence);
         }
 
         private List<Verdict> verdicts() {

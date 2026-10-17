@@ -249,6 +249,12 @@ public final class CommitLog {
     public interface OrderSource {
 
         Resolved resolve(String worldId, String domainId, String nodeKey);
+
+        /** Resolves one step in the exact plan and lifecycle a reporter names; no newest-key fallback. */
+        default Resolved resolveAt(long planSequence, long lifecycle, String worldId, String domainId,
+                                   String nodeKey) {
+            return null;
+        }
     }
 
     /** The order one commit was given by the planning period. A {@code null} answer means no plan
@@ -404,13 +410,39 @@ public final class CommitLog {
         firstDivergencePosition = -1L;
     }
 
+    private record Attribution(long planSequence, int position, long lifecycle) {
+    }
+
     /** The one entry. */
     public Verdict reach(Batch batch) {
+        return reach(batch, null);
+    }
+
+    /** One report that names the plan, seat and lifecycle that authorized it: the log resolves that
+     * exact plan and refuses a missing, retired or differently seated one as an unplanned line, never
+     * by the newest plan that reused the key. */
+    public Verdict reach(Batch batch, long planSequence, int position, long lifecycle) {
+        return reach(batch, new Attribution(planSequence, position, lifecycle));
+    }
+
+    private Verdict reach(Batch batch, Attribution attribution) {
         if (batch == null) {
             return new Verdict(false, Entry.Disposition.DROPPED, RejectCode.COUNTER_MISSING, 0L, -1);
         }
-        Resolved resolved = source == null ? null
-            : source.resolve(batch.worldId(), batch.domainId(), batch.nodeKey());
+        Resolved resolved;
+        if (attribution == null) {
+            resolved = source == null ? null
+                : source.resolve(batch.worldId(), batch.domainId(), batch.nodeKey());
+        } else {
+            resolved = source == null ? null
+                : source.resolveAt(attribution.planSequence(), attribution.lifecycle(),
+                    batch.worldId(), batch.domainId(), batch.nodeKey());
+            if (resolved != null && (resolved.planSequence() != attribution.planSequence()
+                || resolved.position() != attribution.position())) {
+                // The plan holds another seat, so this report did not come from it.
+                resolved = null;
+            }
+        }
         long position = resolved == null ? -1 : resolved.position();
         long planSequence = resolved == null ? 0L : resolved.planSequence();
         boolean intent = resolved != null ? resolved.intent()

@@ -359,6 +359,12 @@ class PipelineWriteClaimsTest {
         assertEquals(DOMAIN, report.domainId());
         assertEquals(NODE_KEY, report.nodeKey());
         assertEquals(1, report.rows());
+        assertEquals(PLAN_SEQUENCE, report.planSequence(),
+            "the report names the plan that declared the span");
+        assertEquals(scratch.graph.nodes().get(0).position(), report.position(),
+            "and the seat that plan gave the node");
+        assertEquals(0L, report.lifecycle(),
+            "and the lifecycle that plan was published in");
         assertTrue(report.expectedVersion() > 0L);
         assertFalse(Long.toHexString(report.writeSetDigest()).isEmpty());
         assertEquals(0, scratch.claims.reportLanded(reports::add), "a batch is reported once");

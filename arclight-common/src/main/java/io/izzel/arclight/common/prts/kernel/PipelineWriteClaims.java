@@ -53,10 +53,12 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
                         WriteControlledSlots.WriteSpace space) {
     }
 
-    /** One batch a claim landed, named the way the commit log identifies a batch. It is reported for
-     * a span that actually landed writes and for a node the plan still carries. */
-    public record Report(String worldId, String domainId, String nodeKey, long expectedVersion,
-                         long writeSetDigest, int rows) {
+    /** One batch a claim landed, named the way the commit log identifies a batch, with the plan, seat
+     * and lifecycle that authorized it. It is reported for a span that actually landed writes and for a
+     * node the plan still carries. */
+    public record Report(String worldId, String domainId, String nodeKey, long planSequence,
+                         int position, long lifecycle, long expectedVersion, long writeSetDigest,
+                         int rows) {
     }
 
     /** One open window: the slots it seated and the tick it was seated on. A window whose mailbox
@@ -75,10 +77,10 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         }
     }
 
-    /** The plan a span was declared under: its sequence and the seat every node of it holds. It is
-     * built when the plan is declared, so a landing is settled against the plan that authorized it
-     * and not against the plan that froze after it. */
-    private record Authorization(long planSequence, List<Seat> seats) {
+    /** The plan a span was declared under: its sequence, the lifecycle that published it and the seat
+     * every node of it holds. It is built when the plan is declared, so a landing is settled against
+     * the plan that authorized it and not against the plan that froze after it. */
+    private record Authorization(long planSequence, long lifecycle, List<Seat> seats) {
     }
 
     /** The attribution one node of the authorizing plan gave a write: its world and domain and the
@@ -170,6 +172,12 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
      * span writes against, and saves the plan itself as the authorization of that span. A job the
      * plan carries no claim for declares nothing here. */
     public int declare(JobGraph graph, long planSequence, long tick) {
+        return declare(graph, planSequence, tick, 0L);
+    }
+
+    /** The same, with the lifecycle the plan store published the graph in. A span declared before a
+     * reset keeps the lifecycle it was declared under, so the next lifecycle cannot adopt it. */
+    public int declare(JobGraph graph, long planSequence, long tick, long lifecycle) {
         Map<String, Claim> next = new LinkedHashMap<>();
         List<Seat> seats = new ArrayList<>();
         if (graph != null) {
@@ -187,7 +195,8 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         }
         declarations = Map.copyOf(next);
         byMailbox = byMailboxNext;
-        authorizing = graph == null ? null : new Authorization(planSequence, List.copyOf(seats));
+        authorizing = graph == null ? null
+            : new Authorization(planSequence, lifecycle, List.copyOf(seats));
         declared += next.size();
         return next.size();
     }
@@ -210,7 +219,8 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
             }
             WriteControlledSlots.Slot slot = landed.slot;
             sink.accept(new Report(seat.worldId(), seat.domainId(), seat.nodeKey(),
-                slot.expectedVersion(), WriteControlledSlots.foldValue(slot.writeSet()),
+                held.planSequence(), seat.position(), held.lifecycle(), slot.expectedVersion(),
+                WriteControlledSlots.foldValue(slot.writeSet()),
                 (int) Math.min(Integer.MAX_VALUE, rows)));
             reported++;
         }

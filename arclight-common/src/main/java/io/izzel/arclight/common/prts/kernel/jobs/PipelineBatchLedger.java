@@ -28,7 +28,8 @@ import java.util.concurrent.atomic.LongAdder;
  *
  * <p>Tracking is bounded: at most the pending limit tasks are indexed, a terminal transition removes
  * its task again, and a task minted above the bound is not wrapped at all, so the pipeline runs it
- * exactly as it would without this ledger.
+ * exactly as it would without this ledger. The closed-batch history is bounded too, but a binding a
+ * pending task still runs under is never dropped: its range has to outlive the task that may open it.
  */
 public final class PipelineBatchLedger {
 
@@ -41,6 +42,8 @@ public final class PipelineBatchLedger {
     /** Ticks a minted task may stay unenqueued before the sweep drops its index entry. */
     public static final int DEFAULT_MINT_TTL_TICKS = 400;
 
+    // The closed-batch history is bounded by this many batches, except for the bindings a pending
+    // task still needs: dropping one of those would leave a window without the range it opened over.
     private static final int BATCH_LIMIT = 64;
     private static final int REPORT_LIMIT = 256;
 
@@ -424,9 +427,7 @@ public final class PipelineBatchLedger {
             batches.put(batch.freezeOrdinal(), binding(batch, claimed));
             current.put(key(worldId, mailbox), batch);
             claimedTasks.add(claimed.size());
-            while (batches.size() > BATCH_LIMIT) {
-                batches.pollFirstEntry();
-            }
+            trimBatches();
             return batch;
         } finally {
             forming.remove(batch.freezeOrdinal());
@@ -699,6 +700,36 @@ public final class PipelineBatchLedger {
                 trackedCount.decrementAndGet();
             }
         }
+    }
+
+    /** Drops the oldest binding no live, non-terminal task still names. A binding a task may still run
+     * under is kept past the bound, so the set of retained bindings stays bounded by the pending index
+     * instead of the mailbox count. */
+    private void trimBatches() {
+        while (batches.size() > BATCH_LIMIT) {
+            boolean dropped = false;
+            for (Map.Entry<Long, BatchBinding> entry : batches.entrySet()) {
+                if (needed(entry.getValue())) {
+                    continue;
+                }
+                if (batches.remove(entry.getKey(), entry.getValue())) {
+                    dropped = true;
+                    break;
+                }
+            }
+            if (!dropped) {
+                return;
+            }
+        }
+    }
+
+    private static boolean needed(BatchBinding binding) {
+        for (TrackedTask task : binding.tasks()) {
+            if (task.live() && !terminal(task.state())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static BatchBinding binding(BatchId batch, List<TrackedTask> claimed) {

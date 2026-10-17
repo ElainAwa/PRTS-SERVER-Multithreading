@@ -51,6 +51,8 @@ public final class TickPlanStore {
     private Feedback feedback = Feedback.none();
     private long feedbackFailures;
     private long feedbackUnknownSites;
+    /** The lifecycle a plan was published in; a reset starts another one and retires the plans before it. */
+    private long lifecycle;
 
     public TickPlanStore(int historyCap) {
         this.historyCap = Math.max(1, historyCap);
@@ -108,6 +110,30 @@ public final class TickPlanStore {
     /** The frame the next tick plans with. */
     public Control control() {
         return control;
+    }
+
+    /** The lifecycle the history belongs to. A report that names an earlier one is refused instead of
+     * being matched to a plan of this lifecycle that reused its sequence. */
+    public long lifecycle() {
+        return lifecycle;
+    }
+
+    /** Resolves the order of one commit in the exact plan and lifecycle a reporter names. A plan that
+     * fell out of the bounded history, a lifecycle the store has left and a key the plan does not carry
+     * all answer nothing: this path never falls back to the newest plan that reused the key. */
+    public StepRef resolveIn(long planSequence, long lifecycle, String worldId, String domainId,
+                             String nodeKey) {
+        TickPlan plan = lifecycle == this.lifecycle ? history.get(planSequence) : null;
+        if (plan != null) {
+            for (TickPlan.CommitStep step : plan.commitOrder()) {
+                if (step.worldId().equals(worldId) && step.domainId().equals(domainId)
+                    && step.nodeKey().equals(nodeKey)) {
+                    return new StepRef(plan.planSequence(), step.position(), step.intent(),
+                        step.nodeKey());
+                }
+            }
+        }
+        return null;
     }
 
     /** Resolves the order of one commit by the key its job declared, newest plan first. */
@@ -242,5 +268,6 @@ public final class TickPlanStore {
         feedback = Feedback.none();
         feedbackFailures = 0L;
         feedbackUnknownSites = 0L;
+        lifecycle++;
     }
 }
