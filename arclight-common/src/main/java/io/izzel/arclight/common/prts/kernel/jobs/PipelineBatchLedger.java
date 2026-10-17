@@ -1,11 +1,16 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.jobs;
 
+import io.izzel.arclight.common.prts.support.PrtsPipelineBatches;
+import net.minecraft.util.Unit;
+import net.minecraft.util.thread.ProcessorHandle;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -13,6 +18,7 @@ import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Function;
 
 /**
  * The batch a chunk pipeline task belongs to, published in the one state object each transition
@@ -31,7 +37,7 @@ import java.util.concurrent.atomic.LongAdder;
  * exactly as it would without this ledger. The closed-batch history is bounded too, but a binding a
  * pending task still runs under is never dropped: its range has to outlive the task that may open it.
  */
-public final class PipelineBatchLedger {
+public final class PipelineBatchLedger implements PrtsPipelineBatches.TaskSink {
 
     /** The declared bound of the cells one batch may name; the same bound the write-range table
      * declares, and a task count is not bounded by it. */
@@ -229,6 +235,14 @@ public final class PipelineBatchLedger {
             TrackedTask task = new TrackedTask(id, processor, true, generation);
             pending.put(id.ordinal(), task);
             return task;
+        }
+    }
+
+    /** The sink face of {@link #enqueued(TrackedTask)}: an opaque handle names the task. */
+    @Override
+    public void enqueued(Object task) {
+        if (task instanceof TrackedTask tracked) {
+            enqueued(tracked);
         }
     }
 
@@ -432,6 +446,40 @@ public final class PipelineBatchLedger {
         } finally {
             forming.remove(batch.freezeOrdinal());
         }
+    }
+
+    /** Cuts one batch per world and mailbox pair that has claimable tasks, the pairs in a fixed
+     * order so one freeze declares the same set whatever order the submits arrived in. A pair whose
+     * tasks a competing freeze already moved on is left for the next freeze. */
+    public List<BatchId> freezeAll(long planSequence, long tick) {
+        TreeMap<String, String[]> pairs = new TreeMap<>();
+        for (TrackedTask task : pending.values()) {
+            if (!accepts(task) || !claimable(task.state())) {
+                continue;
+            }
+            String world = task.id().worldId();
+            String mailbox = task.id().mailbox();
+            if (world.isEmpty() || mailbox.isEmpty()) {
+                continue;
+            }
+            pairs.putIfAbsent(world + "@@@" + mailbox, new String[] {world, mailbox});
+        }
+        List<BatchId> batches = new ArrayList<>(pairs.size());
+        for (String[] pair : pairs.values()) {
+            BatchId batch = freeze(pair[0], pair[1], planSequence, tick);
+            if (batch != null) {
+                batches.add(batch);
+            }
+        }
+        return List.copyOf(batches);
+    }
+
+    /** The function the sorter enqueues, wrapped around the task this mint produced. */
+    @Override
+    public <T> Function<ProcessorHandle<Unit>, T> wrap(Object task,
+                                                       Function<ProcessorHandle<Unit>, T> delegate) {
+        return task instanceof TrackedTask tracked
+            ? PipelineBatchWrapper.function(this, tracked, delegate) : delegate;
     }
 
     /** The release of a sorter queue. Only a task still resident there is cancelled; one minted but

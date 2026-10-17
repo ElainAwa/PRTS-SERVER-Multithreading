@@ -34,6 +34,7 @@ import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
 import io.izzel.arclight.common.prts.kernel.jobs.JobIntake;
 import io.izzel.arclight.common.prts.kernel.jobs.JobScheduler;
+import io.izzel.arclight.common.prts.kernel.jobs.PipelineBatchLedger;
 import io.izzel.arclight.common.prts.kernel.jobs.PipelineRoundJobs;
 import io.izzel.arclight.common.prts.kernel.jobs.ShareMeterPoint;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
@@ -79,6 +80,7 @@ import io.izzel.arclight.common.prts.kernel.observe.TickDigestObserver;
 import io.izzel.arclight.common.prts.kernel.domain.entity.LiveEntityAccess;
 import io.izzel.arclight.common.prts.kernel.meter.SelfCostTap;
 import io.izzel.arclight.common.prts.support.PrtsChunkMaterialization;
+import io.izzel.arclight.common.prts.support.PrtsPipelineBatches;
 import io.izzel.arclight.common.prts.support.PrtsPipelineRows;
 import io.izzel.arclight.common.prts.support.PrtsSelfCosts;
 import io.izzel.arclight.common.prts.support.PrtsWaitSites;
@@ -204,6 +206,7 @@ public final class KernelModule {
     private final List<KernelDomain> domains = new ArrayList<>();
     private final JobIntake jobIntake = new JobIntake(KernelSettings::jobQueueCap);
     private final JobScheduler scheduler = new JobScheduler();
+    private final PipelineBatchLedger pipelineBatches = new PipelineBatchLedger();
     private final PipelineRoundJobs pipelineJobs = new PipelineRoundJobs();
     /** The demands a freeze reads as shadow candidates. This reader seals nothing; the freeze does. */
     private final DemandShadowCandidates demandShadows = new DemandShadowCandidates();
@@ -414,11 +417,11 @@ public final class KernelModule {
         intents.bindPayload(guard);
         guard.versionSlots(versionSlots);
         guard.controlledSlots(controlledSlots);
-        // The claim point seats the slot a declared job covers and reports the batches that landed;
-        // the guard hands a captured write over to it and the judged path decides the write.
+        // The claim point seats a declared job's slot and reports the batches that landed.
         claims.table(controlledSlots);
         claims.writeSpaces(KernelWriteRanges.reader());
         guard.claimLandedTap((slot, worldId, tick) -> claims.noteLanded(slot, worldId));
+        pipelineJobs.bind(pipelineBatches);
         // The progress side of the two rows whose producer already exists: the intent channel depth
         // and the world epoch change count are the same counters the readout publishes, so a signal
         // reading and its control-plane value can never disagree.
@@ -485,6 +488,7 @@ public final class KernelModule {
         claims.refresh(KernelSettings.writeControlledSlot() && KernelSettings.pipelineJobs()
             && KernelSettings.tickPlan());
         claims.noteTick(tickIndex);
+        pipelineBatches.noteTick(tickIndex);
         guard.refresh(KernelSettings.writePathGuard(),
             KernelSettings.enforceUnregisteredWrites(),
             KernelSettings.routeUnregisteredWrites(), tickIndex);
@@ -646,9 +650,8 @@ public final class KernelModule {
         }
     }
 
-    /** Installs or removes the reader that turns the rounds of the chunk pipeline into jobs. It
-     * reads the same rows the digest reads and takes nothing away from it, and it is only installed
-     * while a plan exists to consume the declarations. */
+    /** Installs or removes the reader that turns the rounds of the chunk pipeline into jobs; it is
+     * only installed while a plan exists to consume the declarations. */
     private void syncPipelineOwnerTap(boolean wanted) {
         boolean claimTap = wanted && KernelSettings.writeControlledSlot();
         if (pipelineOwnerTapInstalled == wanted && claimsTapInstalled == claimTap) {
@@ -664,6 +667,9 @@ public final class KernelModule {
         claimsTapInstalled = claimTap;
         if (wanted) {
             PrtsPipelineRows.installOwnerTap(pipelineJobs);
+            PrtsPipelineBatches.install(pipelineBatches, () -> tickIndex);
+        } else {
+            PrtsPipelineBatches.uninstall();
         }
         if (claimTap) {
             PrtsPipelineRows.installOwnerTap(claims);
@@ -796,7 +802,7 @@ public final class KernelModule {
         }
         planSequence++;
         if (KernelSettings.pipelineJobs() && KernelSettings.tickPlan()) {
-            noteJobDeclarations(pipelineJobs.declareInto(jobIntake));
+            noteJobDeclarations(pipelineJobs.declareInto(jobIntake, planSequence, tickIndex));
         }
         // The demands of this freeze are read once, before the plan is built, and the declarations of
         // that one window are handed to the same intake the plan takes from below: a capture the
@@ -833,9 +839,8 @@ public final class KernelModule {
             grantVersionSlots(result.plan());
             ownerGrants.apply(result.plan().graph(), tickIndex);
             if (claimsEnabled()) {
-                // The span the pipeline just closed is settled against the plan that authorized it,
-                // which the claim point saved when it was declared; the plan that just froze is
-                // taken for the span that follows, after the settlement.
+                // The span that closed is settled against the plan that authorized it; the plan
+                // that just froze is taken for the span that follows, after the settlement.
                 claims.reportLanded(this::noteLandedBatch);
                 claims.declare(result.plan().graph(), result.plan().planSequence(), tickIndex,
                     plans.lifecycle());
@@ -1039,6 +1044,11 @@ public final class KernelModule {
     /** The rounds of the chunk pipeline this kernel declares as jobs. */
     public PipelineRoundJobs pipelineJobs() {
         return pipelineJobs;
+    }
+
+    /** The batches the chunk pipeline submitted, as the ledger that tracks them reads them. */
+    public PipelineBatchLedger pipelineBatches() {
+        return pipelineBatches;
     }
 
     /** The chunk demands the freeze reads as shadow candidates. The reader seals nothing; the freeze
@@ -2867,6 +2877,7 @@ public final class KernelModule {
         jobIntake.reset();
         scheduler.reset();
         pipelineJobs.reset();
+        pipelineBatches.reset();
         claims.reset();
         jobDeclarations = 0L;
         lastDispatchHandedOut = 0L;

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.jobs;
 
+import io.izzel.arclight.common.prts.support.PrtsPipelineBatches;
 import io.izzel.arclight.common.prts.support.PrtsPipelineRows;
 import net.minecraft.util.Unit;
 import net.minecraft.util.thread.ProcessorHandle;
@@ -35,7 +36,7 @@ public final class PipelineBatchWrapper {
     private record WrappedFunction<T>(PipelineBatchLedger ledger,
                                       PipelineBatchLedger.TrackedTask task,
                                       Function<ProcessorHandle<Unit>, T> delegate)
-        implements Function<ProcessorHandle<Unit>, T> {
+        implements Function<ProcessorHandle<Unit>, T>, PrtsPipelineBatches.Tracked {
 
         @Override
         public T apply(ProcessorHandle<Unit> reply) {

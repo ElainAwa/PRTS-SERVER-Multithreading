@@ -8,6 +8,7 @@ import io.izzel.arclight.common.prts.kernel.diff.StateHasher;
 import io.izzel.arclight.common.prts.support.PrtsPipelineRows;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.util.thread.ProcessorHandle;
 import net.minecraft.util.thread.ProcessorMailbox;
 
 import java.lang.reflect.Field;
@@ -442,8 +443,10 @@ public final class TickDigestObserver implements PrtsPipelineRows.MailboxOwnerTa
         PrtsPipelineRows.bindMailboxWorlds(placement);
     }
 
-    /** The mailboxes one chunk map owns: the two named ones the sorter holds, plus its own sorter
-     * mailbox. Reached reflectively so this observer needs no accessor and no hook of its own. */
+    /** The processors one chunk map owns: every queue the sorter holds, named mailbox or plain
+     * handle, plus its own sorter mailbox. The main thread handle is not a mailbox but is the one
+     * pipeline processor that runs on the server thread, so it must be placed on its world too.
+     * Reached reflectively so this observer needs no accessor and no hook of its own. */
     private static List<Object> mailboxesOf(Object chunkMap) {
         List<Object> found = new ArrayList<>(3);
         Object sorter = field(chunkMap, "queueSorter");
@@ -453,7 +456,7 @@ public final class TickDigestObserver implements PrtsPipelineRows.MailboxOwnerTa
         Object queues = field(sorter, "queues");
         if (queues instanceof Map<?, ?> map) {
             for (Object handle : map.keySet()) {
-                if (handle instanceof ProcessorMailbox<?>) {
+                if (handle instanceof ProcessorHandle<?>) {
                     found.add(handle);
                 }
             }

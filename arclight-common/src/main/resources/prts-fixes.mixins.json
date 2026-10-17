@@ -52,6 +52,8 @@
     "waitpoints.PrtsChunkMapWaitSiteMixin",
     "pipeline.PrtsPipelineMailboxMixin",
     "pipeline.PrtsChunkFlowMailboxMixin",
+    "pipeline.PrtsChunkSorterSubmitMixin",
+    "pipeline.PrtsChunkSorterMessageAccessor",
     "observation.PrtsEntitySelfCostMixin",
     "observation.PrtsBlockEntitySelfCostMixin",
     "observation.PrtsBlockEntityTickCostMixin",

@@ -6,7 +6,6 @@ import io.izzel.arclight.common.prts.kernel.auth.WriteLevel;
 import io.izzel.arclight.common.prts.kernel.auth.WriteVersionSlots;
 import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
-import io.izzel.arclight.common.prts.kernel.jobs.PipelineRoundJobs;
 import io.izzel.arclight.common.prts.kernel.sites.WriteClaimTable;
 import io.izzel.arclight.common.prts.kernel.sites.WriteControlledSlots;
 import io.izzel.arclight.common.prts.kernel.sites.WorldEpochs;
@@ -61,10 +60,9 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
                          int rows) {
     }
 
-    /** One open window: the slots it seated and the tick it was seated on. A window whose mailbox
-     * the placement table did not know seats the claim of every declared job of that mailbox, and the
-     * level the write arrives on decides which of them covers it. */
-    private record Window(List<WriteControlledSlots.SlotKey> keys, long tickIndex) {
+    /** One open window: the slots it seated, the tick it was seated on and the token of the task it
+     * covers. An unplaced mailbox seats every declared job of that mailbox, and the level decides. */
+    private record Window(List<WriteControlledSlots.SlotKey> keys, long tickIndex, Object token) {
     }
 
     private static final class Landed {
@@ -121,6 +119,8 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
     private long unclaimedWindows;
     private long unplacedWindows;
     private long offThreadWindows;
+    private long overlappingWindows;
+    private long mismatchedEnds;
     private long landedWrites;
     private long reportedBatches;
     private long landedWithoutNode;
@@ -247,10 +247,18 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
     public void ownerRound(String world, String mailbox) {
     }
 
-    /** One work item of a mailbox begins: while it runs, the job that mailbox carried is the writer
-     * of its world, and the claim of that job is seated for exactly that span. */
+    /** One work item of a mailbox begins without a token: the legacy face of the span. */
     @Override
     public void ownerTaskBegin(String world, String mailbox) {
+        ownerTaskBegin(world, mailbox, null);
+    }
+
+    /** One work item of a mailbox begins: while it runs, the job that mailbox carried is the writer
+     * of its world, and the claim of that job is seated for exactly that span. A thread that already
+     * holds a window is refused rather than overwritten, so a nested body cannot inherit the outer
+     * claim. */
+    @Override
+    public void ownerTaskBegin(String world, String mailbox, Object token) {
         if (!enabled) {
             return;
         }
@@ -262,6 +270,10 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         if (candidates.isEmpty()) {
             unclaimedWindows++;
             lastWindow = (world == null ? "" : world) + "|" + (mailbox == null ? "" : mailbox);
+            return;
+        }
+        if (windows.containsKey(Thread.currentThread())) {
+            overlappingWindows++;
             return;
         }
         List<WriteControlledSlots.SlotKey> keys = new ArrayList<>(candidates.size());
@@ -284,7 +296,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         if (keys.isEmpty()) {
             return;
         }
-        windows.put(Thread.currentThread(), new Window(List.copyOf(keys), tickIndex));
+        windows.put(Thread.currentThread(), new Window(List.copyOf(keys), tickIndex, token));
     }
 
     /** The claims one window seats. A mailbox the placement table placed on a world seats the claim
@@ -296,8 +308,16 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
             return List.of();
         }
         if (world != null && !world.isEmpty() && !PrtsPipelineRows.UNPLACED_WORLD.equals(world)) {
-            Claim claim = declarations.get(keyOf(world, mailbox));
-            return claim == null ? List.of() : List.of(claim);
+            List<Claim> claimOfWorld = byMailbox.get(mailbox);
+            if (claimOfWorld == null) {
+                return List.of();
+            }
+            for (Claim claim : claimOfWorld) {
+                if (world.equals(claim.worldId())) {
+                    return List.of(claim);
+                }
+            }
+            return List.of();
         }
         List<Claim> candidates = byMailbox.get(mailbox);
         if (candidates == null || candidates.isEmpty()) {
@@ -307,12 +327,26 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         return candidates;
     }
 
-    /** One work item ends: the claim of the span is retired, and the writes it covered fall back to
-     * the default path. A window that was never opened closes nothing. */
+    /** One work item ends without a token: the legacy face of the span. */
     @Override
     public void ownerTaskEnd(String world, String mailbox) {
-        Window open = windows.remove(Thread.currentThread());
+        ownerTaskEnd(world, mailbox, null);
+    }
+
+    /** One work item ends: the claim is retired and its writes fall back to the default path. An end
+     * whose token is not the open window's closes nothing, so the outer body keeps its claim. */
+    @Override
+    public void ownerTaskEnd(String world, String mailbox, Object token) {
+        Thread thread = Thread.currentThread();
+        Window open = windows.get(thread);
         if (open == null) {
+            return;
+        }
+        if (token != null && open.token() != null && !token.equals(open.token())) {
+            mismatchedEnds++;
+            return;
+        }
+        if (!windows.remove(thread, open)) {
             return;
         }
         for (WriteControlledSlots.SlotKey key : open.keys()) {
@@ -431,6 +465,16 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         return offThreadWindows;
     }
 
+    /** The spans a thread tried to nest inside its own window; a nested begin opens nothing. */
+    public long overlappingWindowCount() {
+        return overlappingWindows;
+    }
+
+    /** The ends whose token did not match the open window's; such an end closes nothing. */
+    public long mismatchedEndCount() {
+        return mismatchedEnds;
+    }
+
     public long landedWriteCount() {
         return landedWrites;
     }
@@ -494,6 +538,8 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         unclaimedWindows = 0L;
         unplacedWindows = 0L;
         offThreadWindows = 0L;
+        overlappingWindows = 0L;
+        mismatchedEnds = 0L;
         lastWindow = "";
         landedWrites = 0L;
         reportedBatches = 0L;
@@ -524,7 +570,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
             unclaimedDomain++;
             return null;
         }
-        String mailbox = mailboxOf(node.domainId(), node.worldId(), node.key());
+        String mailbox = mailboxOf(node);
         if (mailbox == null) {
             noMailbox++;
             return null;
@@ -591,19 +637,19 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         return null;
     }
 
-    /** The mailbox a node names, or null when its key does not carry one. */
-    private static String mailboxOf(String domainId, String worldId, String nodeKey) {
-        if (nodeKey == null || worldId == null || domainId == null) {
+    /** The mailbox a node names: the last segment of its key, without the freeze suffix a batch
+     * key carries. A node whose key does not name a mailbox cannot be seated by a mailbox window. */
+    private static String mailboxOf(JobGraph.Node node) {
+        if (node.key() == null || node.worldId() == null || node.domainId() == null) {
             return null;
         }
-        String prefix = domainId + "/" + worldId + "/";
-        if (!nodeKey.startsWith(prefix) || nodeKey.length() == prefix.length()) {
+        String prefix = node.domainId() + "/" + node.worldId() + "/";
+        if (!node.key().startsWith(prefix) || node.key().length() == prefix.length()) {
             return null;
         }
-        return nodeKey.substring(prefix.length());
+        String mailbox = node.key().substring(prefix.length());
+        int freeze = mailbox.lastIndexOf('#');
+        return freeze <= 0 ? mailbox : mailbox.substring(0, freeze);
     }
 
-    private static String keyOf(String worldId, String mailbox) {
-        return PipelineRoundJobs.keyOf(worldId, mailbox);
-    }
 }

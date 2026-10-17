@@ -58,9 +58,9 @@ class KernelSeamStatusTest {
             assertTrue(export.contains("kernel.seam.write_path_level.applied=0"));
             assertTrue(export.contains("kernel.seam.write_path_level.reachable=0"));
             assertTrue(export.contains("kernel.seam_reachable=0"));
-            assertEquals(22, PrtsSeams.kernelSeams().size(),
-                "two write path seams, the twelve wait site mixins, the two mailbox seams, the two"
-                    + " self cost seams, the three attribution seams and the one materialization"
+            assertEquals(23, PrtsSeams.kernelSeams().size(),
+                "two write path seams, the twelve wait site mixins, the three pipeline seams, the"
+                    + " two self cost seams, the three attribution seams and the one materialization"
                     + " seam");
             assertTrue(export.contains("kernel.seam_gap=" + PrtsSeams.kernelSeams().size()));
             assertTrue(export.contains("kernel.judgeable=0"));

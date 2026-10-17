@@ -8,25 +8,16 @@ import io.izzel.arclight.common.prts.kernel.shares.ShareClass;
 import io.izzel.arclight.common.prts.support.PrtsPipelineRows;
 
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeMap;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAdder;
 
-/**
- * Declares what the chunk pipeline itself ran as jobs of the planning period.
+/** Declares what the chunk pipeline itself submitted as jobs of the planning period.
  *
- * <p>A job is one drain round that carried work - the unit the batch interface of the chunk pipeline
- * merges. The rounds of one mailbox of one world are read from the owner aware face of the mailbox
- * seam, which names the world the mailbox belongs to. A round whose mailbox no world was read for
- * declares nothing and is counted apart: a batch job without a world is not a job.
- *
- * <p>The declarations are handed to the intake when the next plan is frozen, so the plan orders the
- * rounds the pipeline already ran. A window in which no mailbox carried a round hands in nothing, so
- * no node is ever created for work that did not happen.
+ * <p>A job is one batch the ledger cut out of the tasks submitted before a freeze: its cells, its
+ * tasks and the mailbox of one world. The batch key carries the freeze, so a later batch of the same
+ * mailbox is its own node and can never overwrite an earlier one.
  */
 public final class PipelineRoundJobs implements PrtsPipelineRows.MailboxOwnerTap {
 
@@ -40,24 +31,12 @@ public final class PipelineRoundJobs implements PrtsPipelineRows.MailboxOwnerTap
      * grants it while the grant switch is off. */
     public static final int OWNER_HOLD_TICKS = 40;
 
-    /** One batch job: the rounds one mailbox of one world carried, and the handle they were
+    /** One batch job: the tasks one mailbox of one world carried, and the handle they were
      * declared under. */
     public record Trace(String key, String worldId, String mailbox, long rounds, long handle) {
     }
 
-    private static final class Counter {
-
-        private final String worldId;
-        private final String mailbox;
-        private final LongAdder rounds = new LongAdder();
-
-        private Counter(String worldId, String mailbox) {
-            this.worldId = worldId;
-            this.mailbox = mailbox;
-        }
-    }
-
-    private final Map<String, Counter> open = new ConcurrentHashMap<>();
+    private volatile PipelineBatchLedger ledger;
     private final LongAdder roundsSeen = new LongAdder();
     private final LongAdder roundsUnplaced = new LongAdder();
     private final LongAdder tasksSeen = new LongAdder();
@@ -73,6 +52,12 @@ public final class PipelineRoundJobs implements PrtsPipelineRows.MailboxOwnerTap
     private long lastRounds;
     private long handles;
 
+    /** Binds the ledger whose cut this producer declares. A producer with no ledger declares
+     * nothing; the kernel binds the one ledger it installs as the submit sink. */
+    public void bind(PipelineBatchLedger ledger) {
+        this.ledger = ledger;
+    }
+
     @Override
     public void ownerTask(String world, String mailbox) {
         tasksSeen.increment();
@@ -86,47 +71,35 @@ public final class PipelineRoundJobs implements PrtsPipelineRows.MailboxOwnerTap
             return;
         }
         roundsSeen.increment();
-        open.computeIfAbsent(world + "|" + mailbox, key -> new Counter(world, mailbox)).rounds.increment();
     }
 
-    /** Takes the rounds read since the last plan and hands one declaration per mailbox and world
-     * pair to the intake. A pair whose rounds the drain did not read declares nothing.
+    /** Takes the batches the ledger cut at this freeze and hands one declaration per batch to the
+     * intake. A batch whose tasks a competing freeze already claimed declares nothing; the intake's
+     * capacity decides the rest.
      *
      * @return how many declarations were handed to the intake, taken or refused */
-    public int declareInto(JobIntake intake) {
+    public int declareInto(JobIntake intake, long planSequence, long tick) {
         windows++;
-        List<Counter> drained = new ArrayList<>();
-        for (String key : new TreeMap<>(open).keySet()) {
-            Counter counter = open.remove(key);
-            if (counter != null) {
-                drained.add(counter);
-            }
-        }
-        drained.sort(Comparator.comparing((Counter counter) -> counter.worldId)
-            .thenComparing(counter -> counter.mailbox));
-        // The candidate declarations are handed over before the first submission of this freeze and
-        // carry no position: what this producer counts is a round, and which place the round takes
-        // is the frozen plan's to give. A round count is not an artefact of a write, so no chunk and
-        // no target state are invented for it.
-        candidates = candidatesOf(drained);
+        PipelineBatchLedger source = ledger;
+        List<PipelineBatchLedger.BatchId> batches = source == null
+            ? List.of() : source.freezeAll(planSequence, tick);
+        candidates = candidatesOf(batches);
         Map<String, Trace> traces = new LinkedHashMap<>();
         long covered = 0L;
         long declaredNow = 0L;
-        for (Counter counter : drained) {
-            long rounds = counter.rounds.sum();
-            if (rounds <= 0L) {
+        for (PipelineBatchLedger.BatchId batch : batches) {
+            long tasks = source.tasksOf(batch).size();
+            if (tasks <= 0L) {
                 continue;
             }
             long handle = ++handles;
-            // The group carries no range: the mailbox face names a world and a mailbox and no cell.
-            JobDeclaration declaration = declarationOf(counter.worldId, counter.mailbox, handle, rounds,
-                null);
+            JobDeclaration declaration = declarationOf(batch, handle, tasks, source.cellsOf(batch));
             if (intake.submit(declaration).accepted()) {
                 declared++;
                 declaredNow++;
-                covered += rounds;
-                traces.put(declaration.key(), new Trace(declaration.key(), counter.worldId,
-                    counter.mailbox, rounds, handle));
+                covered += tasks;
+                traces.put(declaration.key(), new Trace(declaration.key(), batch.worldId(),
+                    batch.mailbox(), tasks, handle));
             } else {
                 refused++;
             }
@@ -135,21 +108,17 @@ public final class PipelineRoundJobs implements PrtsPipelineRows.MailboxOwnerTap
         lastRounds = covered;
         lastDeclared = declaredNow;
         last = Map.copyOf(traces);
-        return drained.size();
+        return batches.size();
     }
 
-    /** One candidate per round group that declared anything, in the order the drain read them. The
-     * artefact of the write is left out rather than filled in: this producer holds a count of rounds
-     * and nothing that says which chunk or which state the write reached. */
-    private List<FrozenDeclarations.Candidate> candidatesOf(List<Counter> drained) {
+    /** One candidate per batch. The artefact is left out: a batch names up to sixteen cells and the
+     * submit carries no target state, so neither a single chunk nor a status can stand for it. */
+    private List<FrozenDeclarations.Candidate> candidatesOf(List<PipelineBatchLedger.BatchId> batches) {
         List<FrozenDeclarations.Candidate> declared = new ArrayList<>();
         long missing = 0L;
-        for (Counter counter : drained) {
-            if (counter.rounds.sum() <= 0L) {
-                continue;
-            }
-            FrozenDeclarations.Candidate candidate = new FrozenDeclarations.Candidate(counter.worldId,
-                DOMAIN, keyOf(counter.worldId, counter.mailbox), null, "");
+        for (PipelineBatchLedger.BatchId batch : batches) {
+            FrozenDeclarations.Candidate candidate = new FrozenDeclarations.Candidate(batch.worldId(),
+                DOMAIN, batchKeyOf(batch), null, "");
             if (!candidate.artefactDeclared()) {
                 missing++;
             }
@@ -174,30 +143,31 @@ public final class PipelineRoundJobs implements PrtsPipelineRows.MailboxOwnerTap
         return candidatesWithoutArtefact;
     }
 
-    /** The declaration of one round group: the world and the domain of the batch, the read and write
-     * domains it declares, the affinity that keeps the rounds of one mailbox in one order, the bound
-     * of the group and the write right it asks to hold while it runs. */
-    private static JobDeclaration declarationOf(String worldId, String mailbox, long handle, long rounds) {
-        return declarationOf(worldId, mailbox, handle, rounds, null);
+    /** One batch's declaration: its world, its domains, the mailbox that keeps its tasks in order,
+     * the cell range it was cut over, its task count and the write right it asks to hold. */
+    private static JobDeclaration declarationOf(PipelineBatchLedger.BatchId batch, long handle,
+                                                long tasks, long[] cells) {
+        JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef(batch.worldId(), DOMAIN, 0);
+        JobDeclaration.OwnerDemand demand = new JobDeclaration.OwnerDemand(batch.worldId(),
+            WriteLevel.REGION, DOMAIN, HolderKind.REGISTERED, OWNER_SITE, OWNER_HOLD_TICKS);
+        int bound = (int) Math.min(Integer.MAX_VALUE, tasks);
+        return new JobDeclaration(batchKeyOf(batch), handle, batch.worldId(), DOMAIN, 0, List.of(), 0,
+            batch.mailbox(), "world:" + batch.worldId(), List.of(ref), List.of(ref), ShareClass.OTHER,
+            JobDeclaration.SiteClass.PARALLEL, 0, bound, List.of(demand),
+            new JobDeclaration.WriteRange(JobDeclaration.RangeGranularity.CHUNK, cells));
     }
 
-    private static JobDeclaration declarationOf(String worldId, String mailbox, long handle, long rounds,
-                                                JobDeclaration.WriteRange range) {
-        JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef(worldId, DOMAIN, 0);
-        JobDeclaration.OwnerDemand demand = new JobDeclaration.OwnerDemand(worldId, WriteLevel.REGION,
-            DOMAIN, HolderKind.REGISTERED, OWNER_SITE, OWNER_HOLD_TICKS);
-        int bound = (int) Math.min(Integer.MAX_VALUE, rounds);
-        return new JobDeclaration(keyOf(worldId, mailbox), handle, worldId, DOMAIN, 0, List.of(), 0,
-            mailbox, "world:" + worldId, List.of(ref), List.of(ref), ShareClass.OTHER,
-            JobDeclaration.SiteClass.PARALLEL, 0, bound, List.of(demand), range);
-    }
-
-    /** The key a batch job is declared and matched by: its domain, its world and its mailbox. */
+    /** The key a batch job is declared and matched by: its domain, its world, its mailbox and the
+     * freeze that cut it. */
     public static String keyOf(String worldId, String mailbox) {
         return DOMAIN + "/" + worldId + "/" + mailbox;
     }
 
-    /** The declaration one plan node came from, or null when the drain did not read that key. */
+    public static String batchKeyOf(PipelineBatchLedger.BatchId batch) {
+        return keyOf(batch.worldId(), batch.mailbox()) + "#" + batch.freezeOrdinal();
+    }
+
+    /** The declaration one plan node came from, or null when the drain did not declare that key. */
     public Trace traceOf(String key) {
         return last.get(key);
     }
@@ -239,7 +209,6 @@ public final class PipelineRoundJobs implements PrtsPipelineRows.MailboxOwnerTap
     }
 
     public void reset() {
-        open.clear();
         last = Map.of();
         candidates = List.of();
         candidateDeclarations = 0L;

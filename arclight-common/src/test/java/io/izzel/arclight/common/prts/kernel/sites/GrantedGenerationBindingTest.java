@@ -13,6 +13,7 @@ import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraphBuilder;
 import io.izzel.arclight.common.prts.kernel.jobs.JobIntake;
+import io.izzel.arclight.common.prts.kernel.jobs.PipelineBatchLedger;
 import io.izzel.arclight.common.prts.kernel.jobs.PipelineRoundJobs;
 import io.izzel.arclight.common.prts.kernel.sites.WriteControlledSlots.CellKind;
 import io.izzel.arclight.common.prts.kernel.sites.WriteControlledSlots.Slot;
@@ -50,6 +51,7 @@ class GrantedGenerationBindingTest {
     private static final long PLAN = 7L;
     private static final long LATER_PLAN = 8L;
     private static final long TICK = 100L;
+    private static final long CELL = net.minecraft.world.level.ChunkPos.asLong(0, 0);
     private static final long GENERATION = 1L;
     private static final Object LEVEL = new Object();
     private static final WriteSpace SPACE =
@@ -207,6 +209,7 @@ class GrantedGenerationBindingTest {
         private final PipelineWriteClaims claims =
             new PipelineWriteClaims(versions, epochs, () -> true, world -> LEVEL);
         private final JobIntake intake = new JobIntake(() -> 16);
+        private final PipelineBatchLedger batches = new PipelineBatchLedger();
         private final PipelineRoundJobs jobs = new PipelineRoundJobs();
 
         private Scratch() {
@@ -220,10 +223,11 @@ class GrantedGenerationBindingTest {
         }
 
         private JobGraph declare() {
-            for (long round = 0; round < 5L; round++) {
-                jobs.ownerRound(WORLD, MAILBOX);
+            jobs.bind(batches);
+            for (long task = 0; task < 5L; task++) {
+                batches.mint(MAILBOX, WORLD, MAILBOX, CELL, TICK);
             }
-            jobs.declareInto(intake);
+            jobs.declareInto(intake, PLAN, TICK);
             JobGraphBuilder.Freeze frozen = JobGraphBuilder.freeze(intake.take(), TICK, PLAN, 1L, 16);
             assertEquals("", frozen.ok() ? "" : frozen.code(), "the fixture plan froze");
             return frozen.graph();
@@ -277,7 +281,7 @@ class GrantedGenerationBindingTest {
 
         @Override
         public Step stepOf(String worldId, String domainId, String nodeKey) {
-            return nodeKey.equals(NODE_KEY) ? new Step(PLAN, 0) : null;
+            return nodeKey.startsWith(NODE_KEY) ? new Step(PLAN, 0) : null;
         }
     }
 }

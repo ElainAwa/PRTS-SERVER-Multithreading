@@ -16,6 +16,7 @@ import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraphBuilder;
 import io.izzel.arclight.common.prts.kernel.jobs.JobIntake;
+import io.izzel.arclight.common.prts.kernel.jobs.PipelineBatchLedger;
 import io.izzel.arclight.common.prts.kernel.jobs.PipelineRoundJobs;
 import io.izzel.arclight.common.prts.kernel.observe.KernelReadings;
 import io.izzel.arclight.common.prts.kernel.shares.ShareClass;
@@ -31,6 +32,7 @@ import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
 import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard;
 import io.izzel.arclight.common.prts.support.PrtsPipelineRows;
 import net.minecraft.core.SectionPos;
+import net.minecraft.world.level.ChunkPos;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -63,6 +65,7 @@ class PipelineWriteClaimsTest {
     private static final long TICK = 100L;
     private static final long PLAN_SEQUENCE = 7L;
     private static final long ROUNDS = 5L;
+    private static final long CELL = ChunkPos.asLong(0, 0);
     private static final Object LEVEL = new Object();
     private static final Object OTHER_LEVEL = new Object();
 
@@ -81,7 +84,7 @@ class PipelineWriteClaimsTest {
         List<PipelineWriteClaims.Claim> rows = scratch.claims.claims();
         assertEquals(1, rows.size(), () -> "claims=" + rows);
         PipelineWriteClaims.Claim claim = rows.get(0);
-        assertEquals(NODE_KEY, claim.nodeKey());
+        assertTrue(claim.nodeKey().startsWith(NODE_KEY + "#"), claim.nodeKey());
         assertEquals(WORLD, claim.worldId());
         assertEquals(MAILBOX, claim.mailbox());
         assertEquals(DOMAIN, claim.domainId());
@@ -119,7 +122,7 @@ class PipelineWriteClaimsTest {
         assertEquals(1L, scratch.claims.seatedCount());
 
         WriteControlledSlots.Slot claim = scratch.capture();
-        assertEquals(NODE_KEY, scratch.slots.lastDecision().planNodeKey());
+        assertTrue(scratch.slots.lastDecision().planNodeKey().startsWith(NODE_KEY + "#"));
         assertEquals(PLAN_SEQUENCE, scratch.slots.lastDecision().planSequence());
         assertEquals(scratch.graph.nodes().get(0).position(), scratch.slots.lastDecision().position());
         assertFalse(claim.pathDigest().isEmpty());
@@ -357,7 +360,7 @@ class PipelineWriteClaimsTest {
         PipelineWriteClaims.Report report = reports.get(0);
         assertEquals(WORLD, report.worldId());
         assertEquals(DOMAIN, report.domainId());
-        assertEquals(NODE_KEY, report.nodeKey());
+        assertTrue(report.nodeKey().startsWith(NODE_KEY + "#"), report.nodeKey());
         assertEquals(1, report.rows());
         assertEquals(PLAN_SEQUENCE, report.planSequence(),
             "the report names the plan that declared the span");
@@ -399,7 +402,7 @@ class PipelineWriteClaimsTest {
         List<PipelineWriteClaims.Report> reports = new ArrayList<>();
 
         assertEquals(1, scratch.claims.reportLanded(reports::add));
-        assertEquals(NODE_KEY, reports.get(0).nodeKey());
+        assertTrue(reports.get(0).nodeKey().startsWith(NODE_KEY + "#"));
         assertEquals(1, reports.get(0).rows());
         assertEquals(0L, scratch.claims.landedWithoutNodeCount());
         assertEquals(1L, scratch.claims.reportedBatchCount());
@@ -622,6 +625,7 @@ class PipelineWriteClaimsTest {
         private final PipelineWriteClaims claims = new PipelineWriteClaims(versions,
             guard.worldEpochs(), () -> judge, world -> levelPresent ? LEVEL : null);
         private final JobIntake intake = new JobIntake(() -> 16);
+        private final PipelineBatchLedger batches = new PipelineBatchLedger();
         private final PipelineRoundJobs jobs = new PipelineRoundJobs();
 
         private Scratch() {
@@ -655,11 +659,12 @@ class PipelineWriteClaimsTest {
             return slots.judge(LEVEL, domainKey, WITNESS, tick).verdict();
         }
 
-        private JobGraph declare(long rounds) {
-            for (long round = 0; round < rounds; round++) {
-                jobs.ownerRound(WORLD, MAILBOX);
+        private JobGraph declare(long tasks) {
+            jobs.bind(batches);
+            for (long task = 0; task < tasks; task++) {
+                batches.mint(MAILBOX, WORLD, MAILBOX, CELL, TICK);
             }
-            jobs.declareInto(intake);
+            jobs.declareInto(intake, PLAN_SEQUENCE, TICK);
             return freeze(intake.take());
         }
 
@@ -714,7 +719,7 @@ class PipelineWriteClaimsTest {
             JobDeclaration.DomainRef mine = new JobDeclaration.DomainRef(WORLD, DOMAIN, 0);
             JobDeclaration.DomainRef other = new JobDeclaration.DomainRef(OTHER_WORLD, DOMAIN, 0);
             return new JobDeclaration(NODE_KEY, 1L, WORLD, DOMAIN, 0, List.of(), 0,
-                "world:" + WORLD, "world:" + WORLD, List.of(mine), List.of(mine, other),
+                MAILBOX, "world:" + WORLD, List.of(mine), List.of(mine, other),
                 ShareClass.OTHER, JobDeclaration.SiteClass.PARALLEL, 0, 4,
                 List.of(new JobDeclaration.OwnerDemand(WORLD, WriteLevel.REGION, DOMAIN,
                     HolderKind.REGISTERED, HOLDER, 40)));
@@ -776,7 +781,7 @@ class PipelineWriteClaimsTest {
 
             @Override
             public Step stepOf(String worldId, String domainId, String nodeKey) {
-                return planHolds && nodeKey.equals(NODE_KEY) ? step : null;
+                return planHolds && nodeKey.startsWith(NODE_KEY) ? step : null;
             }
         }
     }

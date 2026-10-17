@@ -18,6 +18,7 @@ import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraphBuilder;
 import io.izzel.arclight.common.prts.kernel.jobs.JobIntake;
+import io.izzel.arclight.common.prts.kernel.jobs.PipelineBatchLedger;
 import io.izzel.arclight.common.prts.kernel.jobs.PipelineRoundJobs;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlanStore;
@@ -323,15 +324,18 @@ class PipelineRightReviewTest {
             guard.refresh(true, false, false, TICK);
         }
 
-        /** The rounds of one mailbox become the declaration the plan of this tick freezes, exactly as
-         * the chunk pipeline declares them. */
-        private JobGraph declareOfThePipeline(String mailbox, long rounds) {
+        /** The tasks submitted on one mailbox become the batch the plan of this tick freezes,
+         * exactly as the chunk pipeline declares them. */
+        private JobGraph declareOfThePipeline(String mailbox, long tasks) {
+            PipelineBatchLedger ledger = new PipelineBatchLedger();
             PipelineRoundJobs jobs = new PipelineRoundJobs();
+            jobs.bind(ledger);
             JobIntake intake = new JobIntake(() -> 64);
-            for (long round = 0L; round < rounds; round++) {
-                jobs.ownerRound(WORLD, mailbox);
+            long cell = net.minecraft.world.level.ChunkPos.asLong(0, 0);
+            for (long task = 0L; task < tasks; task++) {
+                ledger.mint(mailbox, WORLD, mailbox, cell, TICK);
             }
-            jobs.declareInto(intake);
+            jobs.declareInto(intake, 1L, TICK);
             JobDeclaration[] declared = intake.take().toArray(new JobDeclaration[0]);
             freeze(declared);
             return plan.graph();

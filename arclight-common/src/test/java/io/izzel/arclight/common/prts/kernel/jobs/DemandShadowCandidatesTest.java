@@ -570,7 +570,8 @@ class DemandShadowCandidatesTest {
         try {
             KernelModule module = openTheDrivenFreezeWith("  pipeline-jobs: false",
                 "  pipeline-jobs: true");
-            module.pipelineJobs().ownerRound(NODE_WORLD, "fixture-mailbox");
+            module.pipelineBatches().mint("fixture-mailbox", NODE_WORLD, "fixture-mailbox",
+                ChunkPos.asLong(0, 0), 0L);
             PrtsChunkDemand.demandDescriptor(NODE_WORLD, 3, -7, STATUS, true);
 
             module.serverTick(List.of(NODE_WORLD));
