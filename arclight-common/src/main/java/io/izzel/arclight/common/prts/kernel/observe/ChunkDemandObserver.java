@@ -150,6 +150,9 @@ public final class ChunkDemandObserver implements PrtsChunkDemand.DemandTap {
         requests.increment();
         world(worldId).requests.increment();
         status(statusRequests, status).increment();
+        // Told once per ask, before the timing stack: a non-blocking ask and an ask whose stack is
+        // already full are still asks, and neither one is this face's timing record.
+        tellSecondPath(worldId, status, blocking);
         if (!blocking) {
             return;
         }
@@ -163,7 +166,6 @@ public final class ChunkDemandObserver implements PrtsChunkDemand.DemandTap {
         stack.startedAt[stack.depth] = System.nanoTime();
         stack.cpuStartedAt[stack.depth] = PrtsCpuClock.now();
         stack.depth++;
-        tellSecondPath(worldId, status, blocking);
     }
 
     /** The second path is told once per ask and after the count above, in its own catch: a reader

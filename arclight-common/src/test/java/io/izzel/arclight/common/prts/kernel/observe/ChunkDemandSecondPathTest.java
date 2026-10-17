@@ -336,6 +336,50 @@ class ChunkDemandSecondPathTest {
     }
 
     @Test
+    void aNonBlockingAskIsStillToldToTheSecondPath() {
+        int[] told = {0};
+        observer.attach();
+        observer.attachSecondPath(new PrtsChunkDemand.DemandTap() {
+
+            @Override
+            public void demandStarted(String worldId, String status, boolean blocking) {
+                if (!blocking) {
+                    told[0]++;
+                }
+            }
+
+            @Override
+            public void demandFinished(String worldId, String status, boolean blocking,
+                                       boolean satisfied) {
+            }
+
+            @Override
+            public void futureOpened(String worldId, String status) {
+            }
+
+            @Override
+            public long futureOpenedAt() {
+                return -1L;
+            }
+
+            @Override
+            public void futureTaken(String worldId, String status) {
+            }
+
+            @Override
+            public void futureCompleted(String worldId, String status, long startedNanos,
+                                        boolean satisfied) {
+            }
+        });
+
+        PrtsChunkDemand.demandStarted(WORLD, STATUS, false);
+
+        assertEquals(1, told[0], "a non-blocking ask is still one ask");
+        assertEquals(1L, observer.requests(), "and the face still counts it");
+        assertEquals(0L, observer.blockingRequests());
+    }
+
+    @Test
     void aThrowingSecondPathLeavesTheAskAndTheOldCountsAlone() {
         observer.attach();
         observer.attachSecondPath(new PrtsChunkDemand.DemandTap() {
