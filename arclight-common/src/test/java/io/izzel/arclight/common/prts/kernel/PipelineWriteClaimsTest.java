@@ -344,16 +344,16 @@ class PipelineWriteClaimsTest {
     @Test
     void aClaimThatLandedNothingIsNotReportedAndOneThatLandedIsReportedOnce() {
         Scratch scratch = new Scratch();
-        JobGraph graph = scratch.declare(ROUNDS);
+        scratch.declare(ROUNDS);
         List<PipelineWriteClaims.Report> reports = new ArrayList<>();
 
-        assertEquals(0, scratch.claims.reportLanded(graph, reports::add));
+        assertEquals(0, scratch.claims.reportLanded(reports::add));
         assertTrue(reports.isEmpty());
 
         scratch.claims.ownerTaskBegin(WORLD, MAILBOX);
         scratch.claims.noteLanded(scratch.capture(), WORLD);
         scratch.claims.ownerTaskEnd(WORLD, MAILBOX);
-        assertEquals(1, scratch.claims.reportLanded(graph, reports::add));
+        assertEquals(1, scratch.claims.reportLanded(reports::add));
         PipelineWriteClaims.Report report = reports.get(0);
         assertEquals(WORLD, report.worldId());
         assertEquals(DOMAIN, report.domainId());
@@ -361,7 +361,7 @@ class PipelineWriteClaimsTest {
         assertEquals(1, report.rows());
         assertTrue(report.expectedVersion() > 0L);
         assertFalse(Long.toHexString(report.writeSetDigest()).isEmpty());
-        assertEquals(0, scratch.claims.reportLanded(graph, reports::add), "a batch is reported once");
+        assertEquals(0, scratch.claims.reportLanded(reports::add), "a batch is reported once");
         assertEquals(1L, scratch.claims.reportedBatchCount());
     }
 
@@ -372,13 +372,72 @@ class PipelineWriteClaimsTest {
         scratch.claims.ownerTaskBegin(WORLD, MAILBOX);
         scratch.claims.noteLanded(scratch.capture(), WORLD);
         scratch.claims.ownerTaskEnd(WORLD, MAILBOX);
+        JobGraph next = JobGraphBuilder.freeze(List.of(), TICK, PLAN_SEQUENCE + 1L, 1L, 16).graph();
+        scratch.claims.declare(next, PLAN_SEQUENCE + 1L, TICK);
         List<PipelineWriteClaims.Report> reports = new ArrayList<>();
 
-        assertEquals(0, scratch.claims.reportLanded(JobGraphBuilder.freeze(List.of(), TICK,
-            PLAN_SEQUENCE + 1L, 1L, 16).graph(), reports::add));
+        assertEquals(0, scratch.claims.reportLanded(reports::add));
         assertTrue(reports.isEmpty());
         assertEquals(1L, scratch.claims.landedWithoutNodeCount());
         assertEquals(1L, scratch.claims.landedWriteCount());
+    }
+
+    @Test
+    void aLandingIsSettledByThePlanThatAuthorizedItAcrossTheTick() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        scratch.claims.ownerTaskBegin(WORLD, MAILBOX);
+        scratch.claims.noteLanded(scratch.capture(), WORLD);
+        scratch.claims.ownerTaskEnd(WORLD, MAILBOX);
+        scratch.claims.noteTick(TICK + 1);
+        List<PipelineWriteClaims.Report> reports = new ArrayList<>();
+
+        assertEquals(1, scratch.claims.reportLanded(reports::add));
+        assertEquals(NODE_KEY, reports.get(0).nodeKey());
+        assertEquals(1, reports.get(0).rows());
+        assertEquals(0L, scratch.claims.landedWithoutNodeCount());
+        assertEquals(1L, scratch.claims.reportedBatchCount());
+    }
+
+    @Test
+    void aLandingIsNotAdoptedByTheNextPlanThatReusesItsKey() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        scratch.claims.ownerTaskBegin(WORLD, MAILBOX);
+        scratch.claims.noteLanded(scratch.capture(), WORLD);
+        scratch.claims.ownerTaskEnd(WORLD, MAILBOX);
+        scratch.claims.declare(scratch.graph, PLAN_SEQUENCE + 1L, TICK + 1);
+        List<PipelineWriteClaims.Report> reports = new ArrayList<>();
+
+        assertEquals(0, scratch.claims.reportLanded(reports::add),
+            "the next plan carries the same node key but did not authorize the landing");
+        assertTrue(reports.isEmpty());
+        assertEquals(1L, scratch.claims.landedWithoutNodeCount(),
+            "the landing stays uncarried instead of being put on the newer plan");
+    }
+
+    @Test
+    void aResetDropsTheSavedPlanAndTheLandingItHeld() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        scratch.claims.ownerTaskBegin(WORLD, MAILBOX);
+        scratch.claims.noteLanded(scratch.capture(), WORLD);
+        scratch.claims.ownerTaskEnd(WORLD, MAILBOX);
+        assertEquals(1L, scratch.claims.landedWriteCount());
+
+        scratch.claims.reset();
+        assertEquals(0, scratch.claims.active());
+        List<PipelineWriteClaims.Report> reports = new ArrayList<>();
+        assertEquals(0, scratch.claims.reportLanded(reports::add));
+        assertTrue(reports.isEmpty());
+        assertEquals(0L, scratch.claims.landedWithoutNodeCount(),
+            "a landing reset went with its plan instead of becoming a landing without a node");
+        assertEquals(0L, scratch.claims.landedWriteCount());
+
+        scratch.claims.declare(scratch.graph, PLAN_SEQUENCE, TICK);
+        assertEquals(0, scratch.claims.reportLanded(reports::add),
+            "a plan declared after the reset does not inherit the landing of the old generation");
+        assertEquals(0L, scratch.claims.landedWithoutNodeCount());
     }
 
     @Test

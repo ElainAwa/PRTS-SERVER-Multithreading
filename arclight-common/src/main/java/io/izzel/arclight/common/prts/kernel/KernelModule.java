@@ -821,10 +821,10 @@ public final class KernelModule {
             grantVersionSlots(result.plan());
             ownerGrants.apply(result.plan().graph(), tickIndex);
             if (claimsEnabled()) {
-                // The span the pipeline just closed is reported to the commit log first, so the
-                // batches of a landed write are ordered by the plan that carries their node, and the
-                // declarations of the plan that just froze are taken for the span that follows.
-                claims.reportLanded(result.plan().graph(), this::noteLandedBatch);
+                // The span the pipeline just closed is settled against the plan that authorized it,
+                // which the claim point saved when it was declared; the plan that just froze is
+                // taken for the span that follows, after the settlement.
+                claims.reportLanded(this::noteLandedBatch);
                 claims.declare(result.plan().graph(), result.plan().planSequence(), tickIndex);
             }
             if (KernelSettings.pipelineJobs() && KernelSettings.tickPlan()) {

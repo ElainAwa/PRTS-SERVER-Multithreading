@@ -38,6 +38,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.IntSupplier;
 
@@ -280,14 +281,8 @@ class PipelineBatchRunsTest {
         run.runBody();
         assertNotNull(batch);
 
-        assertNull(run.declarePlan(PLAN + 1, TICK + 1));
-        List<PipelineBatchLedger.BatchReport> reports = run.ledger.reports();
-        assertEquals(1, reports.size());
-        assertSame(batch, reports.get(0).batch());
-        assertEquals(1, reports.get(0).done());
-
         List<PipelineWriteClaims.Report> reported = new ArrayList<>();
-        assertEquals(1, run.claims.reportLanded(run.graphOf(PLAN), reported::add));
+        assertEquals(1, settle(run.claims, run.graphOf(PLAN), reported::add));
         assertEquals(1L, run.claims.reportedBatchCount());
         assertEquals(NODE_KEY, reported.get(0).nodeKey());
         assertEquals(1, reported.get(0).rows());
@@ -301,27 +296,66 @@ class PipelineBatchRunsTest {
         assertEquals(PLAN, replay.steps().get(0).planSequence(),
             "the accepted line belongs to the plan that ordered the batch");
         assertTrue(replay.orderMatches());
+
+        assertNull(run.declarePlan(PLAN + 1, TICK + 1));
+        List<PipelineBatchLedger.BatchReport> reports = run.ledger.reports();
+        assertEquals(1, reports.size());
+        assertSame(batch, reports.get(0).batch());
+        assertEquals(1, reports.get(0).done());
     }
 
     @Test
-    void reportingWithTheNewPlanWouldLoseTheLandedBatch() {
+    void theLandedBatchIsAcceptedByTheRealCommitLogUnderItsOwnPlan() {
         Run run = new Run();
+        run.deferCommit = true;
         Pending task = run.submit(CELL1, CELL1);
         run.enqueue(task);
-        PipelineBatchLedger.BatchId batch = run.declarePlan(PLAN, TICK);
+        assertNotNull(run.declarePlan(PLAN, TICK));
         run.handOff();
         run.runBody();
-        assertNotNull(batch);
-        assertEquals(1L, run.commitLog.accepted());
+        assertEquals(List.of(Verdict.CAPTURED), run.verdicts());
+        assertEquals(0L, run.commitLog.accepted(), "the write alone reaches no commit log");
 
-        assertNull(run.declarePlan(PLAN + 1, TICK + 1));
+        JobGraph next = run.publishPlan(PLAN + 1, TICK + 1);
         List<PipelineWriteClaims.Report> reported = new ArrayList<>();
-        assertEquals(0, run.claims.reportLanded(run.graphOf(PLAN + 1), reported::add),
-            "the next plan carries no node for the landed batch");
-        assertEquals(0L, run.claims.reportedBatchCount());
-        assertEquals(1L, run.claims.landedWithoutNodeCount(),
-            "the landing is degraded to a landing without a node, the defect the authorizing-graph "
-                + "settlement of a later change closes");
+        assertEquals(1, settle(run.claims, next, reported::add));
+        assertEquals(1L, run.claims.reportedBatchCount());
+        assertEquals(NODE_KEY, reported.get(0).nodeKey());
+        assertEquals(1, reported.get(0).rows());
+        assertEquals(0L, run.claims.landedWithoutNodeCount(),
+            "the landing is not degraded to a landing without a node");
+        for (PipelineWriteClaims.Report report : reported) {
+            run.reach(report);
+        }
+        assertEquals(1L, run.commitLog.accepted(),
+            "the reported batch is accepted by the real commit log");
+        CommitLog.Replay replay = run.commitLog.closeTick();
+        assertEquals(1, replay.loggedSteps());
+        assertEquals(PLAN, replay.steps().get(0).planSequence(),
+            "the accepted line is attributed to the plan that ordered the batch");
+        assertTrue(replay.orderMatches());
+
+        run.declareToClaims(next, TICK + 1);
+        assertEquals(0, settle(run.claims, next, reported::add), "a batch is reported once");
+        assertEquals(0L, run.claims.landedWithoutNodeCount());
+    }
+
+    /** Reports the closed span through the shape the tree carries: the one-argument settlement when
+     * the claim point keeps the authorizing plan, and the graph-bearing shape otherwise. The
+     * evidence run against the previous blob takes the second path with the plan that just froze,
+     * which is the defect this batch closes. */
+    private static int settle(PipelineWriteClaims claims, JobGraph latest, Consumer<PipelineWriteClaims.Report> sink) {
+        try {
+            try {
+                return (int) PipelineWriteClaims.class.getMethod("reportLanded", Consumer.class)
+                    .invoke(claims, sink);
+            } catch (NoSuchMethodException oldShape) {
+                return (int) PipelineWriteClaims.class.getMethod("reportLanded", JobGraph.class,
+                    Consumer.class).invoke(claims, latest, sink);
+            }
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError("the claim point carries neither settlement shape", failure);
+        }
     }
 
     /** The real sorter, the real claim point and the real commit log of one test; only the level a
@@ -353,11 +387,11 @@ class PipelineBatchRunsTest {
         private final ProcessorHandle<ChunkTaskPriorityQueueSorter.Release> releases;
         private final CommitLog commitLog;
         private final Map<Long, JobGraph> plans = new HashMap<>();
+        private final Map<String, long[]> orders = new HashMap<>();
         private final AtomicReference<PipelineBatchLedger.TrackedTask> runningInBody =
             new AtomicReference<>();
         private final List<Verdict> decisions = new ArrayList<>();
-        private long orderPlan;
-        private int orderPosition;
+        private boolean deferCommit;
         private int bodyRuns;
         private int captured;
         private int releaseCallbacks;
@@ -371,10 +405,11 @@ class PipelineBatchRunsTest {
             releases = sorter.getReleaseProcessor(main);
             sorterExecutor.defer();
             PrtsPipelineRows.bindMailboxWorlds(Map.of(main, WORLD));
-            commitLog = new CommitLog(() -> 64, (worldId, domainId, nodeKey) ->
-                orderPlan > 0L && NODE_KEY.equals(nodeKey) && WORLD.equals(worldId)
-                    && DOMAIN.equals(domainId)
-                    ? new CommitLog.Resolved(orderPlan, orderPosition, false) : null);
+            commitLog = new CommitLog(() -> 64, (worldId, domainId, nodeKey) -> {
+                long[] order = orders.get(nodeKey);
+                return order == null || !WORLD.equals(worldId) || !DOMAIN.equals(domainId) ? null
+                    : new CommitLog.Resolved(order[0], (int) order[1], false);
+            });
             commitLog.beginTick(TICK);
             intents.bindPayload(guard);
             guard.bindServerThread(Thread.currentThread(), SITE);
@@ -440,11 +475,22 @@ class PipelineBatchRunsTest {
                     captured++;
                     WriteControlledSlots.Slot slot = slots.lastCoveredSlot();
                     claims.noteLanded(slot, WORLD);
-                    commitLog.reach(new CommitLog.Batch(WORLD, DOMAIN, slot.planNodeKey(),
-                        CommitLog.Batch.Kind.APPLY, slot.expectedVersion(),
-                        WriteControlledSlots.foldValue(slot.writeSet()), 1));
+                    if (!deferCommit) {
+                        reached(slot.planNodeKey(), slot.expectedVersion(),
+                            WriteControlledSlots.foldValue(slot.writeSet()), 1);
+                    }
                 }
             }
+        }
+
+        private void reach(PipelineWriteClaims.Report report) {
+            reached(report.nodeKey(), report.expectedVersion(), report.writeSetDigest(),
+                report.rows());
+        }
+
+        private void reached(String nodeKey, long expectedVersion, long writeSetDigest, int rows) {
+            commitLog.reach(new CommitLog.Batch(WORLD, DOMAIN, nodeKey,
+                CommitLog.Batch.Kind.APPLY, expectedVersion, writeSetDigest, rows));
         }
 
         private void release(long cell) {
@@ -469,6 +515,27 @@ class PipelineBatchRunsTest {
 
         private PipelineBatchLedger.BatchId declarePlan(long planSequence, long tick) {
             PipelineBatchLedger.BatchId batch = ledger.freeze(WORLD, MAILBOX, planSequence, tick);
+            JobGraph graph = graphOf(batch, planSequence, tick);
+            publish(graph, tick);
+            declareToClaims(graph, tick);
+            return batch;
+        }
+
+        /** Publishes the plan that follows without declaring it to the claim point: the order the
+         * production freeze uses, where the closed span is settled before the new declarations. */
+        private JobGraph publishPlan(long planSequence, long tick) {
+            JobGraphBuilder.Freeze frozen = JobGraphBuilder.freeze(List.of(), tick, planSequence,
+                1L, 16);
+            assertTrue(frozen.ok(), () -> "freeze refused: " + frozen.code());
+            publish(frozen.graph(), tick);
+            return frozen.graph();
+        }
+
+        private void declareToClaims(JobGraph graph, long tick) {
+            claims.declare(graph, graph.planSequence(), tick);
+        }
+
+        private JobGraph graphOf(PipelineBatchLedger.BatchId batch, long planSequence, long tick) {
             List<JobDeclaration> declarations = new ArrayList<>();
             if (batch != null) {
                 JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef(WORLD, DOMAIN, 0);
@@ -483,8 +550,7 @@ class PipelineBatchRunsTest {
             JobGraphBuilder.Freeze frozen = JobGraphBuilder.freeze(declarations, tick,
                 planSequence, 1L, 16);
             assertTrue(frozen.ok(), () -> "freeze refused: " + frozen.code());
-            publish(frozen.graph(), tick);
-            return batch;
+            return frozen.graph();
         }
 
         private void publish(JobGraph graph, long tick) {
@@ -500,15 +566,11 @@ class PipelineBatchRunsTest {
             }
             versions.noteGranted(graph.planSequence(), granted);
             grants.apply(graph, tick);
-            claims.declare(graph, graph.planSequence(), tick);
-            if (graph.nodes().isEmpty()) {
-                source.step = null;
-                orderPlan = 0L;
-            } else {
-                source.step = new WriteControlledSlots.Source.Step(graph.planSequence(),
-                    graph.nodes().get(0).position());
-                orderPlan = graph.planSequence();
-                orderPosition = graph.nodes().get(0).position();
+            source.steps.clear();
+            for (JobGraph.Node node : graph.nodes()) {
+                source.steps.put(node.key(), new WriteControlledSlots.Source.Step(
+                    graph.planSequence(), node.position()));
+                orders.put(node.key(), new long[] {graph.planSequence(), node.position()});
             }
         }
 
@@ -537,7 +599,7 @@ class PipelineBatchRunsTest {
     /** The plan step a write is read against; a plan that declared nothing answers none. */
     private static final class Source implements WriteControlledSlots.Source {
 
-        private volatile Step step;
+        private final Map<String, Step> steps = new HashMap<>();
 
         @Override
         public String worldOf(Object levelRef) {
@@ -546,7 +608,7 @@ class PipelineBatchRunsTest {
 
         @Override
         public Step stepOf(String worldId, String domainId, String nodeKey) {
-            return NODE_KEY.equals(nodeKey) ? step : null;
+            return steps.get(nodeKey);
         }
     }
 

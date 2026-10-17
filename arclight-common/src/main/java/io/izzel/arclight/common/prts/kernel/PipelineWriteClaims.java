@@ -75,14 +75,31 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         }
     }
 
+    /** The plan a span was declared under: its sequence and the seat every node of it holds. It is
+     * built when the plan is declared, so a landing is settled against the plan that authorized it
+     * and not against the plan that froze after it. */
+    private record Authorization(long planSequence, List<Seat> seats) {
+    }
+
+    /** The attribution one node of the authorizing plan gave a write: its world and domain and the
+     * position it holds in that plan's order. */
+    private record Seat(String worldId, String domainId, String nodeKey, int position) {
+    }
+
+    /** The seat a landing belongs to: the plan, position and node key the slot was seated with. A
+     * landing is never the landing of another plan that happens to reuse the key. */
+    private record Landing(long planSequence, int position, String nodeKey) {
+    }
+
     private final WriteVersionSlots versions;
     private final WorldEpochs epochs;
     private final BooleanSupplier judgeThread;
     private final Function<String, Object> levelOf;
     private final Map<Object, String> levelWorlds = new ConcurrentHashMap<>();
     private final Map<Thread, Window> windows = new ConcurrentHashMap<>();
-    private final Map<String, Landed> landings = new ConcurrentHashMap<>();
+    private final Map<Landing, Landed> landings = new ConcurrentHashMap<>();
     private volatile Map<String, List<Claim>> byMailbox = new ConcurrentHashMap<>();
+    private volatile Authorization authorizing;
     private final Map<String, LongAdder> landedByNode = new ConcurrentHashMap<>();
 
     private volatile WriteControlledSlots table = WriteControlledSlots.NOTHING;
@@ -150,15 +167,18 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
     }
 
     /** Takes the write sets the plan just froze and turns the claimed ones into the claims the next
-     * span writes against. A job the plan carries no claim for declares nothing here. */
+     * span writes against, and saves the plan itself as the authorization of that span. A job the
+     * plan carries no claim for declares nothing here. */
     public int declare(JobGraph graph, long planSequence, long tick) {
         Map<String, Claim> next = new LinkedHashMap<>();
+        List<Seat> seats = new ArrayList<>();
         if (graph != null) {
             for (JobGraph.Node node : graph.nodes()) {
                 Claim claim = claimOf(node, planSequence, tick);
                 if (claim != null) {
                     next.put(node.key(), claim);
                 }
+                seats.add(new Seat(node.worldId(), node.domainId(), node.key(), node.position()));
             }
         }
         Map<String, List<Claim>> byMailboxNext = new ConcurrentHashMap<>();
@@ -167,29 +187,34 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         }
         declarations = Map.copyOf(next);
         byMailbox = byMailboxNext;
+        authorizing = graph == null ? null : new Authorization(planSequence, List.copyOf(seats));
         declared += next.size();
         return next.size();
     }
 
-    /** Reports the batches the closed span landed, one per node the plan carries, and keeps what
-     * landed for a node the plan no longer carries as a reading of its own. */
-    public int reportLanded(JobGraph graph, Consumer<Report> sink) {
-        int reported = 0;
-        if (graph != null && sink != null) {
-            for (JobGraph.Node node : graph.nodes()) {
-                Landed landed = landings.remove(node.key());
-                long rows = landed == null ? 0L : landed.rows.sum();
-                if (rows <= 0L) {
-                    continue;
-                }
-                WriteControlledSlots.Slot slot = landed.slot;
-                sink.accept(new Report(node.worldId(), node.domainId(), node.key(),
-                    slot.expectedVersion(), WriteControlledSlots.foldValue(slot.writeSet()),
-                    (int) Math.min(Integer.MAX_VALUE, rows)));
-                reported++;
-            }
+    /** Reports the batches the span that closed landed, each against the seat the saved plan gave
+     * its node. The plan read here is the one {@link #declare} saved, never the plan that just
+     * froze; a landing the saved plan did not seat is counted as a landing without a node. */
+    public int reportLanded(Consumer<Report> sink) {
+        Authorization held = authorizing;
+        if (held == null || sink == null) {
+            return 0;
         }
-        for (String key : new ArrayList<>(landings.keySet())) {
+        int reported = 0;
+        for (Seat seat : held.seats()) {
+            Landed landed = landings.remove(new Landing(held.planSequence(), seat.position(),
+                seat.nodeKey()));
+            long rows = landed == null ? 0L : landed.rows.sum();
+            if (rows <= 0L) {
+                continue;
+            }
+            WriteControlledSlots.Slot slot = landed.slot;
+            sink.accept(new Report(seat.worldId(), seat.domainId(), seat.nodeKey(),
+                slot.expectedVersion(), WriteControlledSlots.foldValue(slot.writeSet()),
+                (int) Math.min(Integer.MAX_VALUE, rows)));
+            reported++;
+        }
+        for (Landing key : new ArrayList<>(landings.keySet())) {
             if (landings.remove(key) != null) {
                 landedWithoutNode++;
             }
@@ -311,7 +336,8 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         if (slot == null) {
             return;
         }
-        landings.computeIfAbsent(slot.planNodeKey(), key -> new Landed(slot)).rows.increment();
+        Landing seat = new Landing(slot.key().planSequence(), slot.position(), slot.planNodeKey());
+        landings.computeIfAbsent(seat, key -> new Landed(slot)).rows.increment();
         landedByNode.computeIfAbsent(slot.planNodeKey(), key -> new LongAdder()).increment();
         landedWrites++;
     }
@@ -445,6 +471,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         levelWorlds.clear();
         landings.clear();
         landedByNode.clear();
+        authorizing = null;
         declarations = Map.of();
         byMailbox = new ConcurrentHashMap<>();
         declared = 0L;
