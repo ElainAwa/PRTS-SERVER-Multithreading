@@ -636,13 +636,17 @@ public final class PipelineBatchLedger {
         if (batch == null) {
             return List.of();
         }
+        // The forming mark is read first: its removal happens after the binding write, so observing
+        // it gone also observes the binding, and no reader can take the empty branch beside a claim.
+        if (forming.contains(batch.freezeOrdinal())) {
+            BatchBinding published = batches.get(batch.freezeOrdinal());
+            return published != null ? published.tasks() : formingMembers(batch);
+        }
         BatchBinding published = batches.get(batch.freezeOrdinal());
-        if (published != null) {
-            return published.tasks();
-        }
-        if (!forming.contains(batch.freezeOrdinal())) {
-            return List.of();
-        }
+        return published != null ? published.tasks() : List.of();
+    }
+
+    private List<TrackedTask> formingMembers(BatchId batch) {
         List<TrackedTask> claimed = new ArrayList<>();
         for (TrackedTask task : pending.values()) {
             if (batch.equals(task.batch())) {
