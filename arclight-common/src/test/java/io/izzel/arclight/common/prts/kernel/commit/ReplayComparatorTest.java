@@ -577,7 +577,7 @@ class ReplayComparatorTest {
         RangeSealFixture fixture = new RangeSealFixture();
         fixture.world = WORLD;
         fixture.domain = DOMAIN;
-        fixture.nodeKey = "a/0";
+        fixture.nodeKey = "a/" + position;
         fixture.freeze(REPLAY_FREEZE);
         fixture.cells(cell).cell(cell).status(status).role(role).instance(instanceId)
             .epoch(5L).at(plan, position);
@@ -586,7 +586,11 @@ class ReplayComparatorTest {
 
     private static CommitLog.OrderSource rangeOrder(int position, long plan) {
         return (worldId, domainId, nodeKey) -> WORLD.equals(worldId) && DOMAIN.equals(domainId)
-            && nodeKey.startsWith("a/") ? new CommitLog.Resolved(plan, position, false) : null;
+            ? switch (nodeKey) {
+                case "a/0" -> new CommitLog.Resolved(plan, position, false);
+                case "a/1" -> new CommitLog.Resolved(plan, position + 1, false);
+                default -> null;
+            } : null;
     }
 
     private static CommitLog.TypedBatch rangeReport(FrozenDeclarations.RangeSeal seal, long effectRef) {
@@ -595,7 +599,7 @@ class ReplayComparatorTest {
             seal.statuses().values().iterator().next().targetStatus(), 3L, effectRef,
             new CommitNamespaces.Namespace("producer", 4242L, 0L, 11L),
             new CommitNamespaces.Namespace("controller", 4242L, 0L, 11L));
-        return new CommitLog.TypedBatch(new CommitLog.Batch(WORLD, DOMAIN, "a/0",
+        return new CommitLog.TypedBatch(new CommitLog.Batch(WORLD, DOMAIN, seal.nodeKey(),
             CommitLog.Batch.Kind.APPLY, 3L, 11L, 1), identity,
             new EffectStore.Effect(effectRef, "chunk-materialize",
                 identity.targetStatus(), List.of("range")));
@@ -685,7 +689,7 @@ class ReplayComparatorTest {
     @Test
     void aRangeOnlyRunIsReadableWhenEveryStepCarriesItsSeal() {
         FrozenDeclarations.RangeSeal first = rangeSeal(64L, "full", 1, 41L, 9L, 0);
-        FrozenDeclarations.RangeSeal second = rangeSeal(65L, "features", 2, 42L, 9L, 0);
+        FrozenDeclarations.RangeSeal second = rangeSeal(65L, "features", 2, 42L, 9L, 1);
         RangeSealTable table = tableOf(first, second);
 
         ReplayComparator.Evidence left = rangeRun(table, 9L, 0, first, second);
@@ -698,7 +702,7 @@ class ReplayComparatorTest {
     @Test
     void aRangeOnlySideWithOneStepLackingASealIsRefused() {
         FrozenDeclarations.RangeSeal first = rangeSeal(64L, "full", 1, 41L, 9L, 0);
-        FrozenDeclarations.RangeSeal second = rangeSeal(65L, "features", 2, 42L, 9L, 0);
+        FrozenDeclarations.RangeSeal second = rangeSeal(65L, "features", 2, 42L, 9L, 1);
         ReplayComparator.Evidence full = rangeRun(tableOf(first, second), 9L, 0, first, second);
         ReplayComparator.Evidence broken = new ReplayComparator.Evidence(full.sourceCommit(),
             full.recordDigest(), full.declarations(), full.replay(), tableOf(first).snapshot());
@@ -708,6 +712,20 @@ class ReplayComparatorTest {
         assertTrue(verdict.refused());
         assertEquals(ReplayComparator.REFUSED_ILLEGAL_IDENTITY, verdict.reason());
         assertFalse(verdict.equal());
+    }
+
+    @Test
+    void aSideWhoseStepsMixRangeAndEntryProtocolsIsRefused() {
+        FrozenDeclarations.RangeSeal first = rangeSeal(64L, "full", 1, 41L, 9L, 0);
+        FrozenDeclarations.RangeSeal second = rangeSeal(65L, "features", 2, 42L, 9L, 1);
+        ReplayComparator.Evidence full = rangeRun(tableOf(first, second), 9L, 0, first, second);
+        ReplayComparator.Evidence mixed = new ReplayComparator.Evidence(full.sourceCommit(),
+            full.recordDigest(), declarationsOf(full.replay()), full.replay(),
+            tableOf(first).snapshot());
+        ReplayComparator.Verdict verdict = new ReplayComparator().compare(mixed, mixed);
+
+        assertTrue(verdict.refused());
+        assertEquals(ReplayComparator.REFUSED_MIXED_WITHIN_SIDE, verdict.reason());
     }
 
     @Test
