@@ -573,7 +573,13 @@ class CommitLogTypedSchemaTest {
 
     private static CommitLog.TypedBatch rangeTyped(FrozenDeclarations.RangeSeal seal, long cell,
                                                    String status, long instance, long effectRef) {
-        return new CommitLog.TypedBatch(new CommitLog.Batch(RANGE_WORLD, RANGE_DOMAIN, RANGE_NODE,
+        return rangeTypedAt(seal, RANGE_NODE, cell, status, instance, effectRef);
+    }
+
+    private static CommitLog.TypedBatch rangeTypedAt(FrozenDeclarations.RangeSeal seal, String node,
+                                                     long cell, String status, long instance,
+                                                     long effectRef) {
+        return new CommitLog.TypedBatch(new CommitLog.Batch(RANGE_WORLD, RANGE_DOMAIN, node,
             CommitLog.Batch.Kind.APPLY, RANGE_AUTHORIZATION, 11L, 1), rangeIdentity(seal, cell,
             status, instance, effectRef), new EffectStore.Effect(effectRef, "chunk-materialize", status,
             List.of("chunk=" + cell)));
@@ -700,23 +706,43 @@ class CommitLogTypedSchemaTest {
     }
 
     @Test
-    void oneInstanceNumberUnderTwoRangesIsRefusedInsteadOfMerged() {
-        FrozenDeclarations.RangeSeal first = new RangeSealFixture().build();
-        RangeSealFixture other = new RangeSealFixture();
-        other.cells(RangeSealFixture.CELL2).cell(RangeSealFixture.CELL2)
-            .status("features").instance(first.instanceId());
-        FrozenDeclarations.RangeSeal second = other.build();
+    void oneInstanceNumberUnderTwoRangesOfOneCellIsRefusedInsteadOfMerged() {
+        // Two ranges cover the same cell and prove the same status there; only their folds differ.
+        // An attribution that read the chunk and the status would merge the two instances.
+        RangeSealFixture firstFixture = new RangeSealFixture();
+        firstFixture.nodeKey = "a/0";
+        firstFixture.cells(RangeSealFixture.CELL, RangeSealFixture.CELL2)
+            .cell(RangeSealFixture.CELL).status(RangeSealFixture.STATUS)
+            .instance(RangeSealFixture.INSTANCE).at(RangeSealFixture.PLAN, 0);
+        RangeSealFixture secondFixture = new RangeSealFixture();
+        secondFixture.nodeKey = "a/1";
+        secondFixture.cells(RangeSealFixture.CELL, RangeSealFixture.CELL2 + 2L)
+            .cell(RangeSealFixture.CELL).status(RangeSealFixture.STATUS)
+            .instance(RangeSealFixture.INSTANCE).at(RangeSealFixture.PLAN, 1);
+        FrozenDeclarations.RangeSeal first = firstFixture.build();
+        FrozenDeclarations.RangeSeal second = secondFixture.build();
         RangeSealTable table = new RangeSealTable(8);
-        table.publish(first);
-        table.publish(second);
-        CommitLog log = rangeLog(table, first.seat().position(), FrozenDeclarations.none());
+        assertEquals(RangeSealTable.Publish.PUBLISHED, table.publish(first));
+        assertEquals(RangeSealTable.Publish.PUBLISHED, table.publish(second));
+        CommitLog.OrderSource plans = (worldId, domainId, nodeKey) -> RANGE_WORLD.equals(worldId)
+            && RANGE_DOMAIN.equals(domainId)
+            ? switch (nodeKey) {
+                case "a/0" -> new CommitLog.Resolved(RangeSealFixture.PLAN, 0, false);
+                case "a/1" -> new CommitLog.Resolved(RangeSealFixture.PLAN, 1, false);
+                default -> null;
+            } : null;
+        CommitLog log = new CommitLog(() -> 8, plans, new EffectStore(4096, 16),
+            new RangeSource(table, FrozenDeclarations.none(), RANGE_FREEZE, RangeSealFixture.EPOCH,
+                RANGE_AUTHORIZATION));
         log.beginTick(10L);
-        assertTrue(log.reachTyped(rangeTyped(first, RangeSealFixture.CELL,
+        assertEquals(RangeSealFixture.CELL, first.statuses().keySet().iterator().next());
+        assertTrue(log.reachTyped(rangeTypedAt(first, "a/0", RangeSealFixture.CELL,
             RangeSealFixture.STATUS, first.instanceId(), 100L)).logged());
 
-        CommitLog.Verdict verdict = log.reachTyped(rangeTyped(second, RangeSealFixture.CELL2,
-            "features", first.instanceId(), 101L));
-        assertFalse(verdict.logged());
+        CommitLog.Verdict verdict = log.reachTyped(rangeTypedAt(second, "a/1", RangeSealFixture.CELL,
+            RangeSealFixture.STATUS, first.instanceId(), 101L));
+
+        assertFalse(verdict.logged(), "the same number under two ranges is two instances");
         assertEquals(RejectCode.VERSION_MISMATCH, verdict.code());
         assertEquals(1L, log.identityCollisions());
         assertEquals(1L, log.typedStored());
