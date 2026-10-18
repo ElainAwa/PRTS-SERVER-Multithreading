@@ -322,6 +322,52 @@ class EffectRowContractTest {
      * the way the kernel wires them; only the level a world is read as and the step of the plan are
      * fixtures. A stage either writes its lines through the claim point's own settlement sink or
      * keeps the payload for a case that drives the settlement itself. */
+    @Test
+    void anAbsentDeclaredSealWritesNoTypedLineAndKeepsThePlainReport() {
+        Stage stage = new Stage();
+        stage.declare(ROUNDS);
+        PipelineBatchLedger.TrackedTask token = stage.token(CELL);
+        stage.open(token);
+        stage.write(8, 64, 8);
+        stage.close(token);
+
+        stage.report();
+
+        assertFalse(stage.payloads.isEmpty());
+        PipelineWriteClaims.Attributed payload = stage.payloads.get(0);
+        assertTrue(payload.attributed());
+        assertTrue(payload.report().rows() > 0, "the plain report carries its rows");
+        assertEquals(0L, stage.log.typedStored(),
+            "an absent declared seal leaves the typed path at zero");
+        assertEquals(0L, stage.settlement.stats().written());
+        assertTrue(stage.settlement.stats().refused() >= 1L, "the settlement refuses the batch");
+    }
+
+    @Test
+    void aDeclaredSealWithoutThePayloadCellWritesNoTypedLine() {
+        Stage stage = new Stage();
+        stage.declare(ROUNDS);
+        stage.publishSeal(CELL);
+        PipelineBatchLedger.TrackedTask token = stage.token(CELL);
+        stage.open(token);
+        stage.write(8, 64, 8);
+        stage.close(token);
+        PipelineWriteClaims.Attributed payload = stage.drain();
+
+        PipelineWriteClaims.CellRows only = payload.cells().get(0);
+        PipelineWriteClaims.CellRows elsewhere = new PipelineWriteClaims.CellRows(CELL2,
+            only.taskOrdinal(), only.rows(), only.rowContent());
+        PipelineWriteClaims.Attributed crafted = new PipelineWriteClaims.Attributed(
+            payload.report(), List.of(elsewhere), true, true);
+        stage.settlement.settle(crafted);
+
+        assertEquals(0L, stage.log.typedStored(),
+            "a seal without the cell of the payload writes no typed line");
+        assertEquals(0L, stage.settlement.stats().written());
+        assertEquals(payload.report().rows(), crafted.report().rows(),
+            "the plain report is carried unchanged");
+    }
+
     private static final class Stage {
 
         private final WritePathCounters counters = new WritePathCounters();

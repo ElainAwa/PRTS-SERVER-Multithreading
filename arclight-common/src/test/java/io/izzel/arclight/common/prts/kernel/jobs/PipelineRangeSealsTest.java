@@ -662,6 +662,84 @@ class PipelineRangeSealsTest {
     }
 
     @Test
+    void theDefaultSettlementPublishesNothingAndMintsOncePerPublishedSeal() {
+        assertEquals(0, factory.publishDeclaredDeclared(declarations, List.of(),
+            factory.generation()), "no retained status publishes nothing");
+        assertEquals(0, table.size());
+        assertEquals(0L, factory.seals());
+
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        publishPlan(batch);
+        assertTrue(ledger.runStart(task), "the ledger starts the task");
+        demand(task, "full");
+        ledger.runEnd(task);
+        List<DemandShadowCandidates.TaskStatus> retained = candidates.retainedStatuses();
+        assertEquals(1, factory.publishDeclaredDeclared(declarations, retained,
+            factory.generation()));
+        assertEquals(1, table.size());
+        assertEquals(1L, factory.seals());
+        assertEquals(2L, instances.mintOne(),
+            "one published seal spends exactly one instance number");
+    }
+
+    @Test
+    void aStaleGenerationPublishesNothing() {
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        publishPlan(batch);
+        assertTrue(ledger.runStart(task), "the ledger starts the task");
+        demand(task, "full");
+        ledger.runEnd(task);
+        List<DemandShadowCandidates.TaskStatus> retained = candidates.retainedStatuses();
+        long generation = factory.generation();
+        assertEquals(1, factory.publishDeclaredDeclared(declarations, retained, generation));
+        long before = table.size();
+        table.reset();
+        assertEquals(0, factory.publishDeclaredDeclared(declarations, retained, generation),
+            "a stale generation publishes nothing");
+        assertEquals(before - 1, table.size(), "the reset cleared the old lifecycle's seal");
+        assertEquals(1L, factory.rejected(), "the stale-generation attempt is counted as rejected");
+    }
+
+    @Test
+    void onlyTheOwnerCellPublishesWhenTwoTasksShareIt() {
+        PipelineBatchLedger.TrackedTask owner = submit(CELL);
+        PipelineBatchLedger.TrackedTask other = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        publishPlan(batch);
+        assertTrue(ledger.runStart(owner));
+        demand(owner, "full");
+        ledger.runEnd(owner);
+        assertTrue(ledger.runStart(other));
+        demand(other, "full");
+        ledger.runEnd(other);
+        List<DemandShadowCandidates.TaskStatus> retained = candidates.retainedStatuses();
+        assertEquals(2, retained.size(), "both tasks named a status");
+
+        assertEquals(1, factory.publishDeclaredDeclared(declarations, retained,
+            factory.generation()), "one cell has one owner seal");
+        assertEquals(1, table.size());
+    }
+
+    @Test
+    void aMissingInstanceMintsNoSeal() {
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        publishPlan(batch);
+        assertTrue(ledger.runStart(task));
+        demand(task, "full");
+        ledger.runEnd(task);
+        List<DemandShadowCandidates.TaskStatus> retained = candidates.retainedStatuses();
+
+        PipelineRangeSeals noInstance = new PipelineRangeSeals(ledger, table, plans,
+            () -> 0L, world -> EPOCH, () -> declarations);
+        assertEquals(0, noInstance.publishDeclaredDeclared(declarations, retained,
+            noInstance.generation()), "a live instance is required before a seal is built");
+        assertEquals(0, table.size());
+    }
+
+    @Test
     void aBindingThatFellOutOfTheHistorySealsNothing() {
         PipelineBatchLedger.BatchId first = null;
         for (int round = 0; round < 65; round++) {
