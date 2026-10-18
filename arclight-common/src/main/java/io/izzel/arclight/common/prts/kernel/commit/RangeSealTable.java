@@ -319,34 +319,42 @@ public final class RangeSealTable {
         releasals = 0L;
     }
 
+    /** The seals this table currently holds. */
     public synchronized int size() {
         return seals.size();
     }
 
+    /** The seal keys an unread line still pins. */
     public synchronized int pinnedCount() {
         return pins.size();
     }
 
+    /** The seals this lifecycle published. */
     public synchronized long published() {
         return published;
     }
 
+    /** The publishes that repeated a seal the table already held. */
     public synchronized long idempotent() {
         return idempotent;
     }
 
+    /** The publishes refused because the key already carried another seal. */
     public synchronized long conflicts() {
         return conflicts;
     }
 
+    /** The publishes refused because the table was full. */
     public synchronized long fulls() {
         return fulls;
     }
 
+    /** The publishes refused before anything was written. */
     public synchronized long rejected() {
         return rejected;
     }
 
+    /** The window releases this lifecycle recorded. */
     public synchronized long releasals() {
         return releasals;
     }

@@ -28,7 +28,9 @@ public final class FrozenDeclarations {
     /** A seal that refused: the table it would have written is not there. */
     public static final String REFUSED = "REFUSED";
 
-    /** What a declaration and an assignment are joined by: the three names as themselves. */
+    /** What a declaration and an assignment are joined by: the three names as themselves. Splicing
+     * them into one text would read ("a/b", "c") and ("a", "b/c") as the same node and connect a
+     * declaration to a seat it never declared. */
     public record NodeKey(String worldId, String domainId, String nodeKey) {
 
         public NodeKey {
@@ -47,7 +49,9 @@ public final class FrozenDeclarations {
     public record DeclaredChunk(long packedPos) {
     }
 
-    /** The lifecycle one freeze belongs to: its own generation beside the key it was taken under. */
+    /** The lifecycle one freeze belongs to: its own generation beside the key it was taken under. The
+     * plan counter is not one of these, because a reset hands it back and it therefore cannot tell
+     * the freeze of one lifecycle from the freeze of the next. */
     public record FreezeKey(String lifecycleKey, long generation) {
 
         public static final FreezeKey NONE = new FreezeKey("", 0L);

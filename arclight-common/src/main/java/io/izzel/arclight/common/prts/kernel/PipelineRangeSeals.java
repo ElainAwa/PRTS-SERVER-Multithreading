@@ -249,22 +249,27 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
         return false;
     }
 
+    /** The seals this factory published. */
     public long seals() {
         return seals;
     }
 
+    /** The attempts refused before the table was asked, so no instance number was spent. */
     public long refused() {
         return refused;
     }
 
+    /** The publishes the table refused because the key already carried another seal. */
     public long conflicts() {
         return conflicts;
     }
 
+    /** The publishes refused because the table was full. */
     public long overflows() {
         return overflows;
     }
 
+    /** The attempts refused because the lifecycle generation they captured is no longer current. */
     public long rejected() {
         return rejected;
     }
