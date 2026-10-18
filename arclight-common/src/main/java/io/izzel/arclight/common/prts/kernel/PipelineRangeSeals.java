@@ -93,8 +93,8 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
                 return refuse();
             }
             if (ownerOrdinal(batch, id.cell()) != id.ordinal()) {
-                // One cell has one owner: the smallest task ordinal the published binding carries
-                // for it. A later task of the same cell never publishes a second seal.
+                // One cell has one owner: the task with the smallest ordinal the published binding
+                // carries. A later task of the same cell never publishes a second seal.
                 return refuse();
             }
             if (plans == null) {
