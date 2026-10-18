@@ -238,6 +238,8 @@ class PipelineRangeSealProductionWiringTest {
         setState(second, new PipelineBatchLedger.Claimed(forming, PipelineBatchLedger.Place.QUEUED));
         setForming(forming.freezeOrdinal(), true);
         plans.publish(plan(PLAN, PipelineRoundJobs.batchKeyOf(forming)));
+        assertNull(ledger.freeze(WORLD, MAILBOX, PLAN, TICK),
+            "no pending task is claimable, so the freeze names the plan and publishes nothing");
         setState(first, new PipelineBatchLedger.Running(forming));
         long before = instances.mintOne();
 
