@@ -1309,4 +1309,86 @@ class IdentityWitnessTest {
         return new CommitLog.SchemaReplay(side.schemaVersion(), side.plainSteps(), steps,
             side.effectMissing());
     }
+
+    @Test
+    void anEntryCanonicalRoundTripsByteForByte() {
+        String golden = "I17:world-a14:chunk-pipeline3:a/0#2;#64;4:full";
+        IdentityWitness.LogicalKey key = new IdentityWitness.LogicalKey(WORLD, DOMAIN, "a/0", 2, 64L,
+            "full");
+
+        assertEquals(golden, key.canonical());
+        assertFalse(key.ranged());
+        IdentityWitness.LogicalKey parsed = IdentityWitness.parse(golden);
+        assertNotNull(parsed);
+        assertEquals(key, parsed);
+        assertEquals(golden, parsed.canonical());
+        assertFalse(parsed.ranged(), "an entry form is never read as a range form");
+        assertNull(IdentityWitness.parse(golden + "x"), "trailing text after the last segment is refused");
+    }
+
+    @Test
+    void aRangeCanonicalRoundTripsAndKeepsBothFolds() {
+        IdentityWitness.LogicalKey key = IdentityWitness.LogicalKey.ranged(WORLD, DOMAIN, "a/0", 2,
+            "abc", "def");
+        String golden = "I27:world-a14:chunk-pipeline3:a/0#2;#3:abc;3:def";
+
+        assertEquals(golden, key.canonical());
+        assertTrue(key.ranged());
+        IdentityWitness.LogicalKey parsed = IdentityWitness.parse(golden);
+        assertNotNull(parsed);
+        assertEquals(key, parsed);
+        assertEquals("abc", parsed.spaceDigest());
+        assertEquals("def", parsed.statusMapDigest());
+        assertEquals(golden, parsed.canonical());
+    }
+
+    @Test
+    void anUnknownTruncatedOrNegativeLengthFormIsRefused() {
+        assertNull(IdentityWitness.parse(null));
+        assertNull(IdentityWitness.parse(""));
+        assertNull(IdentityWitness.parse("X1whatever"));
+        assertNull(IdentityWitness.parse("I1"));
+        assertNull(IdentityWitness.parse("I1-1:world-a"));
+        assertNull(IdentityWitness.parse("I17:world-a14:chunk-pipeline3:a/0#2;#64;"));
+        assertNull(IdentityWitness.parse("I27:world-a14:chunk-pipeline3:a/0#2;#3:abc"));
+        assertNull(IdentityWitness.parse("I27:world-a14:chunk-pipeline3:a/0#2;#:abc;3:def"),
+            "an empty fold is not a range key");
+        assertNull(IdentityWitness.parse("I2"));
+    }
+
+    @Test
+    void anEntryKeyAndARangeKeyAreNeverEqual() {
+        IdentityWitness.LogicalKey entry = new IdentityWitness.LogicalKey(WORLD, DOMAIN, "a/0", 2, 64L,
+            "full");
+        IdentityWitness.LogicalKey range = IdentityWitness.LogicalKey.ranged(WORLD, DOMAIN, "a/0", 2,
+            "abc", "def");
+
+        assertNotEquals(entry, range);
+        assertNotEquals(entry.canonical(), range.canonical());
+        assertFalse(entry.canonical().startsWith("I2"));
+        assertFalse(range.canonical().startsWith("I1"));
+        assertEquals(entry, IdentityWitness.parse("I17:world-a14:chunk-pipeline3:a/0#2;#64;4:full"));
+        assertEquals(range, IdentityWitness.parse("I27:world-a14:chunk-pipeline3:a/0#2;#3:abc;3:def"));
+    }
+
+    @Test
+    void aSourceThatKeepsNoHistoryAnswersNoRangeAndHoldsNoObligation() {
+        IdentityWitness.Source none = IdentityWitness.NONE;
+        FrozenDeclarations.Seat seat = new FrozenDeclarations.Seat(WORLD, DOMAIN, 9L, 0);
+
+        assertNull(none.range(seat, 64L));
+        assertFalse(none.hasRange(seat));
+        FrozenDeclarations.RangeSeal seal = new RangeSealFixture().build();
+        assertSame(IdentityWitness.Obligation.NONE, none.oblige(seal));
+        assertSame(IdentityWitness.Obligation.NONE,
+            IdentityWitness.combine(IdentityWitness.Obligation.NONE,
+                IdentityWitness.Obligation.NONE));
+        AtomicLong settled = new AtomicLong();
+        IdentityWitness.Obligation second = () -> settled.incrementAndGet();
+        IdentityWitness.Obligation combined = IdentityWitness.combine(second, second);
+        combined.settle();
+        combined.settle();
+        assertEquals(2L, settled.get(), "one combined obligation settles each part exactly once");
+    }
 }
+

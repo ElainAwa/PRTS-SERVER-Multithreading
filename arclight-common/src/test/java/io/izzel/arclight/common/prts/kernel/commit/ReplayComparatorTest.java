@@ -3,6 +3,7 @@ package io.izzel.arclight.common.prts.kernel.commit;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -564,4 +565,214 @@ class ReplayComparatorTest {
         log.reset();
         return log;
     }
+
+    // ---- range closures: the six-case matrix driven on real runs and real snapshots ----
+
+    private static final FrozenDeclarations.FreezeKey REPLAY_FREEZE =
+        new FrozenDeclarations.FreezeKey("replay/1/0", 1L);
+
+    private static FrozenDeclarations.RangeSeal rangeSeal(long cell, String status, int role,
+                                                          long instanceId, long plan,
+                                                          int position) {
+        RangeSealFixture fixture = new RangeSealFixture();
+        fixture.world = WORLD;
+        fixture.domain = DOMAIN;
+        fixture.nodeKey = "a/0";
+        fixture.freeze(REPLAY_FREEZE);
+        fixture.cells(cell).cell(cell).status(status).role(role).instance(instanceId)
+            .epoch(5L).at(plan, position);
+        return fixture.build();
+    }
+
+    private static CommitLog.OrderSource rangeOrder(int position, long plan) {
+        return (worldId, domainId, nodeKey) -> WORLD.equals(worldId) && DOMAIN.equals(domainId)
+            && nodeKey.startsWith("a/") ? new CommitLog.Resolved(plan, position, false) : null;
+    }
+
+    private static CommitLog.TypedBatch rangeReport(FrozenDeclarations.RangeSeal seal, long effectRef) {
+        CommitLog.Identity identity = new CommitLog.Identity(CommitLog.SCHEMA_TYPED,
+            seal.instanceId(), seal.worldEpoch(), seal.statuses().keySet().iterator().next(),
+            seal.statuses().values().iterator().next().targetStatus(), 3L, effectRef,
+            new CommitNamespaces.Namespace("producer", 4242L, 0L, 11L),
+            new CommitNamespaces.Namespace("controller", 4242L, 0L, 11L));
+        return new CommitLog.TypedBatch(new CommitLog.Batch(WORLD, DOMAIN, "a/0",
+            CommitLog.Batch.Kind.APPLY, 3L, 11L, 1), identity,
+            new EffectStore.Effect(effectRef, "chunk-materialize",
+                identity.targetStatus(), List.of("range")));
+    }
+
+    /** One range run: every report is stored against its own seal and the snapshot of the table is
+     * read before anything is released. */
+    private static ReplayComparator.Evidence rangeRun(RangeSealTable table, long plan, int position,
+                                                      FrozenDeclarations.RangeSeal... seals) {
+        CommitLog log = new CommitLog(() -> 16, rangeOrder(position, plan),
+            new EffectStore(1 << 20, 64),
+            new RangeSource(table, FrozenDeclarations.none(), REPLAY_FREEZE, 5L, 3L));
+        log.beginTick(1L);
+        long effectRef = 100L;
+        for (FrozenDeclarations.RangeSeal seal : seals) {
+            assertTrue(log.reachTyped(rangeReport(seal, effectRef++)).logged(),
+                "the driver stores every range report");
+        }
+        log.closeTick();
+        CommitLog.SchemaReplay replay = log.lastTyped();
+        assertEquals(0, replay.effectMissing());
+        return new ReplayComparator.Evidence("commit-range", ReplayComparator.recordsDigest(replay),
+            FrozenDeclarations.none(), replay, table.snapshot());
+    }
+
+    private static RangeSealTable tableOf(FrozenDeclarations.RangeSeal... seals) {
+        RangeSealTable table = new RangeSealTable(16);
+        for (FrozenDeclarations.RangeSeal seal : seals) {
+            assertEquals(RangeSealTable.Publish.PUBLISHED, table.publish(seal));
+        }
+        return table;
+    }
+
+    @Test
+    void twoRangeRunsWithTheSameSealsCompareEqualOnTheirI2Instances() {
+        FrozenDeclarations.RangeSeal seal = rangeSeal(64L, "full", 1, 41L, 9L, 0);
+        ReplayComparator.Evidence first = rangeRun(tableOf(seal), 9L, 0, seal);
+        ReplayComparator.Evidence second = rangeRun(tableOf(seal), 9L, 0, seal);
+        ReplayComparator comparator = new ReplayComparator();
+
+        ReplayComparator.Verdict verdict = comparator.compare(first, second);
+
+        assertTrue(verdict.equal());
+        assertEquals(0, verdict.differences());
+        assertEquals("", verdict.note(), "a strict range comparison explains no weaker reading");
+        assertTrue(IdentityWitness.verifyRange(seal, new CommitLog.Resolved(9L, 0, false), WORLD,
+            DOMAIN, "a/0", rangeReport(seal, 100L).identity(), null).instance().startsWith("I2"));
+    }
+
+    @Test
+    void twoEntryRunsCompareEqualThroughTheirFourPartEvidence() {
+        CommitLog.TypedBatch only = report("a/0", 1L, 5L, 64L, "full", 3L, 100L, 4242L,
+            "chunk=64");
+        CommitLog.SchemaReplay first = run(order(1L), only);
+        CommitLog.SchemaReplay second = run(order(1L), only);
+        FrozenDeclarations table = declarationsOf(first);
+        ReplayComparator.Evidence left = new ReplayComparator.Evidence("commit-1",
+            ReplayComparator.recordsDigest(first), table, first);
+        ReplayComparator.Evidence right = new ReplayComparator.Evidence("commit-2",
+            ReplayComparator.recordsDigest(second), declarationsOf(second), second);
+        ReplayComparator comparator = new ReplayComparator();
+
+        ReplayComparator.Verdict verdict = comparator.compare(left, right);
+
+        assertTrue(verdict.equal(), "the four-part evidence still reads an entry run");
+        assertNull(left.ranges());
+        IdentityWitness.LogicalKey key = CommitLog.logicalKeyOf(table.entries().get(0));
+        assertNotNull(key);
+        assertTrue(key.canonical().startsWith("I1"));
+    }
+
+    private static FrozenDeclarations declarationsOf(CommitLog.SchemaReplay replay) {
+        List<FrozenDeclarations.Entry> entries = new ArrayList<>();
+        int role = 0;
+        for (CommitLog.TypedStep step : replay.typedSteps()) {
+            entries.add(new FrozenDeclarations.Entry(new FrozenDeclarations.Seat(step.worldId(),
+                step.domainId(), step.planSequence(), step.position()), step.nodeKey(), ++role,
+                step.identity().chunkPos(), step.identity().targetStatus(),
+                step.identity().instanceId(), step.identity().worldEpoch()));
+        }
+        FrozenDeclarations.Sealed sealed = FrozenDeclarations.of(REPLAY_FREEZE,
+            replay.typedSteps().get(0).planSequence(), entries);
+        assertTrue(sealed.sealed());
+        return sealed.declarations();
+    }
+
+    @Test
+    void aRangeOnlyRunIsReadableWhenEveryStepCarriesItsSeal() {
+        FrozenDeclarations.RangeSeal first = rangeSeal(64L, "full", 1, 41L, 9L, 0);
+        FrozenDeclarations.RangeSeal second = rangeSeal(65L, "features", 2, 42L, 9L, 0);
+        RangeSealTable table = tableOf(first, second);
+
+        ReplayComparator.Evidence left = rangeRun(table, 9L, 0, first, second);
+        ReplayComparator.Evidence right = rangeRun(tableOf(first, second), 9L, 0, first, second);
+
+        assertTrue(left.declarations().size() == 0, "the range-only side carries no entry table");
+        assertTrue(new ReplayComparator().compare(left, right).equal());
+    }
+
+    @Test
+    void aRangeOnlySideWithOneStepLackingASealIsRefused() {
+        FrozenDeclarations.RangeSeal first = rangeSeal(64L, "full", 1, 41L, 9L, 0);
+        FrozenDeclarations.RangeSeal second = rangeSeal(65L, "features", 2, 42L, 9L, 0);
+        ReplayComparator.Evidence full = rangeRun(tableOf(first, second), 9L, 0, first, second);
+        ReplayComparator.Evidence broken = new ReplayComparator.Evidence(full.sourceCommit(),
+            full.recordDigest(), full.declarations(), full.replay(), tableOf(first).snapshot());
+
+        ReplayComparator.Verdict verdict = new ReplayComparator().compare(broken, full);
+
+        assertTrue(verdict.refused());
+        assertEquals(ReplayComparator.REFUSED_ILLEGAL_IDENTITY, verdict.reason());
+        assertFalse(verdict.equal());
+    }
+
+    @Test
+    void aRangeClosureWhoseSnapshotFoldDoesNotRecomputeIsRefused() {
+        FrozenDeclarations.RangeSeal seal = rangeSeal(64L, "full", 1, 41L, 9L, 0);
+        RangeSealTable table = tableOf(seal);
+        ReplayComparator.Evidence good = rangeRun(table, 9L, 0, seal);
+        RangeSealTable.Snapshot snapshot = table.snapshot();
+        RangeSealTable.Snapshot tampered = new RangeSealTable.Snapshot(snapshot.freeze(),
+            snapshot.planSequence(), snapshot.seals(), snapshot.digest() + 1L);
+        ReplayComparator.Evidence bad = new ReplayComparator.Evidence(good.sourceCommit(),
+            good.recordDigest(), good.declarations(), good.replay(), tampered);
+
+        ReplayComparator.Verdict verdict = new ReplayComparator().compare(bad, good);
+
+        assertTrue(verdict.refused(), "a digest that does not recompute is not compared");
+        assertEquals(ReplayComparator.REFUSED_ILLEGAL_IDENTITY, verdict.reason());
+    }
+
+    @Test
+    void aRangeRecordWithoutItsSnapshotIsRefusedInsteadOfApproximated() {
+        FrozenDeclarations.RangeSeal seal = rangeSeal(64L, "full", 1, 41L, 9L, 0);
+        ReplayComparator.Evidence good = rangeRun(tableOf(seal), 9L, 0, seal);
+        ReplayComparator.Evidence noClosure = new ReplayComparator.Evidence(good.sourceCommit(),
+            good.recordDigest(), FrozenDeclarations.none(), good.replay());
+
+        ReplayComparator.Verdict verdict = new ReplayComparator().compare(noClosure, noClosure);
+
+        assertTrue(verdict.refused(), "a range record without a range closure is not read");
+        assertEquals(ReplayComparator.REFUSED_ILLEGAL_IDENTITY, verdict.reason());
+    }
+
+    @Test
+    void anEntrySideAgainstARangeSideIsRefusedAsTwoProtocols() {
+        CommitLog.TypedBatch only = report("a/0", 1L, 5L, 64L, "full", 3L, 100L, 4242L,
+            "chunk=64");
+        CommitLog.SchemaReplay entry = run(order(1L), only);
+        ReplayComparator.Evidence entrySide = new ReplayComparator.Evidence("commit-1",
+            ReplayComparator.recordsDigest(entry), declarationsOf(entry), entry);
+        FrozenDeclarations.RangeSeal seal = rangeSeal(64L, "full", 1, 41L, 9L, 0);
+        ReplayComparator.Evidence rangeSide = rangeRun(tableOf(seal), 9L, 0, seal);
+
+        ReplayComparator.Verdict verdict = new ReplayComparator().compare(entrySide, rangeSide);
+
+        assertTrue(verdict.refused(), "one entry side and one range side are never compared");
+        assertEquals(ReplayComparator.REFUSED_MIXED_PROTOCOL, verdict.reason());
+    }
+
+    @Test
+    void anEntryRecordAgainstARangeClosureOfItsSeatIsRefused() {
+        CommitLog.TypedBatch only = report("a/0", 1L, 5L, 64L, "full", 3L, 100L, 4242L,
+            "chunk=64");
+        CommitLog.SchemaReplay entry = run(order(1L), only);
+        FrozenDeclarations.RangeSeal seal = rangeSeal(64L, "full", 1, 41L, 1L, 0);
+        CommitLog.Resolved resolved = new CommitLog.Resolved(1L, 0, false);
+        FrozenDeclarations.Seat seat = new FrozenDeclarations.Seat(WORLD, DOMAIN, 1L, 0);
+        assertTrue(seal.seat().equals(seat), "the range claims the entry record's own seat");
+        ReplayComparator.Evidence mixed = new ReplayComparator.Evidence("commit-1",
+            ReplayComparator.recordsDigest(entry), declarationsOf(entry), entry,
+            tableOf(seal).snapshot());
+
+        ReplayComparator.Verdict verdict = new ReplayComparator().compare(mixed, mixed);
+
+        assertTrue(verdict.refused(), "an entry record is never read as a range closure");
+        assertEquals(ReplayComparator.REFUSED_ILLEGAL_IDENTITY, verdict.reason());
+    }
 }
+

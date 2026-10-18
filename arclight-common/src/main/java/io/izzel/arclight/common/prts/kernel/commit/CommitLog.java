@@ -9,17 +9,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.IntSupplier;
 
-/** The single write entry of one tick. Every producer that reaches a commit reports it here, the log
- * resolves which step of which plan ordered it, and it accepts the report only while the order of
- * each (world, domain) pair keeps rising. The buffers are one ring per pair; the traversal that
- * closes the tick walks them in a fixed order and folds what it read, which is what a replayed run is
- * compared on. Nothing here sorts: the order is the plan's, and a report that contradicts it is
- * counted and dropped rather than reordered.
- *
- * <p>A report may also declare a schema version, the identity of the instance it published and the
- * effect record it points at. That path takes the ring slot and the room of the record before it
- * stores anything, and it copies the record into the replay before it releases the reference, while
- * a report of the plain path keeps writing exactly the columns it always did. */
+/** The single write entry of one tick: every producer reports here, the log resolves which plan step
+ * ordered the report and accepts it only while each (world, domain) pair keeps rising. Nothing here
+ * sorts; a report that contradicts the order is counted and dropped. A versioned report may also
+ * declare its columns and point at an effect record, which is copied into the replay before the
+ * reference is released; the plain path keeps writing exactly the columns it always did. */
 public final class CommitLog {
 
     /** One commit a producer reached. The batch is the only shape that reaches the log, so no
@@ -160,17 +154,14 @@ public final class CommitLog {
         }
     }
 
-    /** One ring slot handed out before anything is stored in it. The handle carries the log
-     * lifetime and the reset generation it was handed out under, so a handle of an earlier lifecycle,
-     * of another log or of another pair is answered as unknown instead of releasing a later slot. */
+    /** One ring slot handed out before anything is stored in it, carrying the lifetime and reset
+     * generation it was handed out under, so an earlier handle releases no later slot. */
     public record RingSlot(String worldId, String domainId, long ticket, long lifetime,
                            long resetEpoch) {
     }
 
-    /** One permission to touch the inside of one ring of this log: fill one slot, read one slot or
-     * clear the ring. Only the log mints one, at the point where it decided the touch is allowed.
-     * A fill spends its permission and names the reservation it fills, so a spent permission, one
-     * of another ring of the same pair, one of an earlier lifecycle or a null one is refused. */
+    /** One permission to touch the inside of one ring. Only the log mints one, where it already
+     * decided the touch is allowed, and a fill spends it in the same call. */
     static final class RingAuthority {
 
         enum Kind {
@@ -594,12 +585,9 @@ public final class CommitLog {
         return Replay.compare(left, right);
     }
 
-    /** The versioned report: the plain report plus the columns it declares and the effect it points
-     * at. The ring slot and the room of the effect are taken before anything is stored, and a report
-     * that is refused leaves neither a line nor a record behind.
-     *
-     * <p>A refusal of this path takes no report number of its own: the ordinal counts the reports the
-     * log took, and a report that never reached the store is not one of them. */
+    /** The versioned report: the plain report plus its declared columns and its effect. The ring slot
+     * and the room are taken before anything is stored; a refusal leaves neither line nor record and
+     * takes no report number. */
     public Verdict reachTyped(TypedBatch typed) {
         if (typed == null || typed.batch() == null || typed.identity() == null
             || typed.effect() == null) {
@@ -610,9 +598,8 @@ public final class CommitLog {
         }
         Batch batch = typed.batch();
         Identity identity = typed.identity();
-        // A versioned line declares every column and its two halves agree: the authorization
-        // generation is the expected version of the batch, the line names the record it carries, and
-        // it names a node of the frozen plan it was ordered from.
+        // A versioned line declares every column and its halves agree: the authorization generation
+        // is the expected version, the line names its record and a node of the frozen plan.
         if (identity.schemaVersion() != SCHEMA_TYPED || !identity.declaredTyped()
             || identity.effectRef() != typed.effect().effectRef()
             || identity.authorizationGeneration() != batch.expectedVersion()
@@ -635,20 +622,28 @@ public final class CommitLog {
             orderViolations++;
             return typedRefusal(RejectCode.COMMIT_ORDER_VIOLATION, position);
         }
-        String instance = instanceOf(identity);
+        FrozenDeclarations.Seat seat = new FrozenDeclarations.Seat(batch.worldId(), batch.domainId(),
+            resolved.planSequence(), position);
+        FrozenDeclarations.RangeSeal range = identitySource.range(seat, identity.chunkPos());
+        if (range == null && identitySource.hasRange(seat)) {
+            // The seat published a range this line names no seal of: no entry-path fallback.
+            return typedRefusal(RejectCode.VERSION_MISMATCH, position);
+        }
+        String instance = instanceOf(identity, range);
         String instanceKey = instanceKeyOf(batch.worldId(), batch.domainId(), identity.instanceId());
         String held = instanceNamespaces.get(instanceKey);
         if (held != null && !held.equals(instance)) {
-            // One instance number names one instance: the lifecycle, the chunk and the published
-            // state it carries. Another lifecycle, another chunk or another state under that number
-            // is a second instance wearing the name of the first, and the number alone says nothing.
+            // One instance number names one instance: lifecycle plus artefact or range folds.
             identityCollisions++;
             return typedRefusal(RejectCode.VERSION_MISMATCH, position);
         }
         FrozenDeclarations sealed = identitySource.declarations(batch.worldId(), batch.domainId(),
             resolved.planSequence());
-        IdentityWitness.Verdict witness = IdentityWitness.verify(sealed, resolved, batch.worldId(),
-            batch.domainId(), batch.nodeKey(), identity, identitySource.currentController());
+        IdentityWitness.Verdict witness = range != null
+            ? IdentityWitness.verifyRange(range, resolved, batch.worldId(), batch.domainId(),
+                batch.nodeKey(), identity, identitySource.currentController())
+            : IdentityWitness.verify(sealed, resolved, batch.worldId(), batch.domainId(),
+                batch.nodeKey(), identity, identitySource.currentController());
         if (!witness.accepted()) {
             return typedRefusal(RejectCode.VERSION_MISMATCH, position);
         }
@@ -668,8 +663,7 @@ public final class CommitLog {
             return typedRefusal(stored.code(), position);
         }
         if (stored.record().content().size() != batch.rows()) {
-            // The batch declares how many rows its write set has and the record carries exactly
-            // those: a line whose halves count different things is not stored at all.
+            // The batch declares its row count and the record carries exactly those.
             giveBack(identity.effectRef(), slot);
             return typedRefusal(RejectCode.VERSION_MISMATCH, position);
         }
@@ -686,7 +680,7 @@ public final class CommitLog {
             return typedRefusal(push.code(), position);
         }
         consumeSlot(slot);
-        owe(sealed);
+        owe(sealed, range);
         lastPlanOfRing.put(key(batch.worldId(), batch.domainId()), resolved.planSequence());
         lastPositionOfRing.put(key(batch.worldId(), batch.domainId()), position);
         instanceNamespaces.put(instanceKey, instance);
@@ -702,10 +696,9 @@ public final class CommitLog {
         return new Verdict(true, disposition, null, sequence, position);
     }
 
-    /** Records the terminal line of a reservation taken before the side effect: the order the plan
-     * froze into the ticket, the ring slot and the room the ticket holds, and the record written
-     * inside that room. Nothing is resolved again and nothing is charged again; a ticket of another
-     * log, of another store or of a lifecycle this log has left is refused instead of written. */
+    /** Records the terminal line of a reservation: the frozen order, the slot and the room the ticket
+     * holds, and the record written inside that room. A ticket of another log, store or lifecycle is
+     * refused instead of written. */
     public Verdict recordTicket(CommitTicket ticket, CommitTicket.Outcome outcome) {
         if (ticket == null || outcome == null || effects == null) {
             return ticketRefusal(RejectCode.COUNTER_MISSING, -1);
@@ -744,6 +737,14 @@ public final class CommitLog {
             orderViolations++;
             return ticketRefusal(RejectCode.COMMIT_ORDER_VIOLATION, ticket.position());
         }
+        FrozenDeclarations.Seat seat = new FrozenDeclarations.Seat(ticket.batch().worldId(),
+            ticket.batch().domainId(), ticket.planSequence(), ticket.position());
+        FrozenDeclarations.RangeSeal range = identitySource.range(seat,
+            ticket.identity().chunkPos());
+        if (range == null && identitySource.hasRange(seat)) {
+            // The seat published a range and this identity names no seal of its cell.
+            return ticketRefusal(RejectCode.VERSION_MISMATCH, ticket.position());
+        }
         EffectStore.CapacityResult finished = effects.finalizeCapacity(ticket.effectSlot(),
             outcome.asEffect(ticket.identity().effectRef()));
         if (!finished.admitted()) {
@@ -772,7 +773,7 @@ public final class CommitLog {
         lastPlanOfRing.put(pairKey, ticket.planSequence());
         lastPositionOfRing.put(pairKey, ticket.position());
         instanceNamespaces.put(instanceKeyOf(ticket.batch().worldId(), ticket.batch().domainId(),
-            ticket.identity().instanceId()), instanceOf(ticket.identity()));
+            ticket.identity().instanceId()), instanceOf(ticket.identity(), range));
         switch (disposition) {
             case ACCEPTED -> accepted++;
             case MERGED -> merged++;
@@ -788,17 +789,26 @@ public final class CommitLog {
     /** Whether this instance number is already held by another lifecycle, chunk or published state.
      * Read-only: it counts nothing, and it is asked before a reservation is taken. */
     public boolean instanceCollision(String worldId, String domainId, Identity identity) {
+        return instanceCollision(worldId, domainId, identity, null);
+    }
+
+    /** The same question for a range line: the mapping is the lifecycle and the two range folds. */
+    public boolean instanceCollision(String worldId, String domainId, Identity identity,
+                                     FrozenDeclarations.RangeSeal range) {
         String held = instanceNamespaces.get(instanceKeyOf(worldId, domainId, identity.instanceId()));
-        return held != null && !held.equals(instanceOf(identity));
+        return held != null && !held.equals(instanceOf(identity, range));
     }
 
     private static String instanceKeyOf(String worldId, String domainId, long instanceId) {
         return key(worldId, domainId) + "/" + instanceId;
     }
 
-    /** Holds the freeze a stored line was judged against: it is not given up while it waits unread. */
-    private void owe(FrozenDeclarations sealed) {
+    /** Holds the freeze, and for a range line the seal, while the line waits unread. */
+    private void owe(FrozenDeclarations sealed, FrozenDeclarations.RangeSeal range) {
         IdentityWitness.Obligation held = identitySource.oblige(sealed);
+        if (range != null) {
+            held = IdentityWitness.combine(held, identitySource.oblige(range));
+        }
         if (held != null && held != IdentityWitness.Obligation.NONE) {
             unread.add(held);
         }
@@ -826,9 +836,8 @@ public final class CommitLog {
         return new Verdict(false, Entry.Disposition.DROPPED, code, sequence, position);
     }
 
-    /** Hands out one ring slot of a pair before anything is stored in it. While the slot is held the
-     * pair has that much less room, so a plain report cannot take it; a slot that is never filled is
-     * given back by {@link #releaseSlot}. */
+    /** Hands out one ring slot of a pair before it is stored in; the pair has that much less room
+     * while the slot is held, and {@link #releaseSlot} gives it back. */
     public RingSlot reserveSlot(String worldId, String domainId) {
         return reserveSlot(worldId, domainId, null);
     }
@@ -906,9 +915,8 @@ public final class CommitLog {
         }
     }
 
-    /** Gives back a slot that was not filled. The handle is answered against the slot this log saved
-     * under its ticket, whole: a handle of another log, of another pair or of a lifecycle this log
-     * has left is not a slot of this one, and giving it back would release a later reservation. */
+    /** Gives back a slot that was not filled, answered against the whole handle this log saved: a
+     * handle of another log, pair or lifecycle is not a slot of this one. */
     public boolean releaseSlot(RingSlot slot) {
         if (slot == null) {
             return false;
@@ -985,6 +993,27 @@ public final class CommitLog {
             identity.targetStatus());
     }
 
+    /** The range key of one seal as its witness carries it, folds included. */
+    public static IdentityWitness.LogicalKey logicalKeyOf(FrozenDeclarations.RangeSeal range) {
+        if (range == null || range.seat() == null) {
+            return null;
+        }
+        return IdentityWitness.LogicalKey.ranged(range.seat().worldId(), range.seat().domainId(),
+            range.nodeKey(), range.role(), range.spaceDigest(), range.statusMapDigest());
+    }
+
+    /** The same key rebuilt with both folds recomputed from the cells and the status map. */
+    public static IdentityWitness.LogicalKey logicalKeyOfRange(String worldId, String domainId,
+                                                               String nodeKey, int role,
+                                                               FrozenDeclarations.RangeSeal range) {
+        if (range == null) {
+            return null;
+        }
+        return IdentityWitness.LogicalKey.ranged(worldId, domainId, nodeKey, role,
+            RangeDigests.spaceDigest(range.cells()),
+            RangeDigests.statusMapDigest(range.statuses()));
+    }
+
     /** The lifecycle of a versioned line: the owner, the lifetime and the reset generation of both
      * namespaces. The thread column is a diagnostic and is not part of it. */
     private static String lifecycleKeyOf(Identity identity) {
@@ -995,6 +1024,15 @@ public final class CommitLog {
      * the state it publishes there. The same instance met on another thread is the same instance. */
     private static String instanceOf(Identity identity) {
         return lifecycleKeyOf(identity) + "|" + identity.chunkPos() + "|" + identity.targetStatus();
+    }
+
+    /** The same mapping for a range line: lifecycle plus both range folds. */
+    private static String instanceOf(Identity identity, FrozenDeclarations.RangeSeal range) {
+        if (range == null) {
+            return instanceOf(identity);
+        }
+        return lifecycleKeyOf(identity) + "|" + range.spaceDigest() + "|"
+            + range.statusMapDigest();
     }
 
     private static Entry.Disposition dispositionOf(Batch.Kind kind) {
@@ -1064,11 +1102,8 @@ public final class CommitLog {
         return ring.push(entry, fill(ring, slotTicket));
     }
 
-    /** A permission to fill one ring, minted only where the log already decided the touch is
-     * allowed and only while the reservation it names is this log's, of this ring's pair, of this
-     * lifecycle and of this reset generation. Nothing outside the log can mint one and every mint is
-     * spent by the push that follows it in the same call, so a permission never outlives the
-     * reservation that justified it. */
+    /** A permission to fill one ring, minted only while the reservation it names is this log's, of
+     * this pair and lifecycle; every mint is spent by the push in the same call. */
     private RingAuthority fill(CommitRing ring, long slotTicket) {
         if (slotTicket == 0L) {
             // The plain path is admitted by the room check that precedes it, and the mint repeats it

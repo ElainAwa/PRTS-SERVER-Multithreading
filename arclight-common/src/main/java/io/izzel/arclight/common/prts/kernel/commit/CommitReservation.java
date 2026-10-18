@@ -10,19 +10,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** The one holder that mints a ticket. It takes the three reservations a controlled write needs
- * before the first side effect — the place the frozen plan gave the line, a ring slot and the room of
- * the terminal record — and it is the only place that ends one: a ticket is filled by
- * {@link #finalize}, given back by {@link #release} or voided by a reset of its lifecycle.
- *
- * <p>Every control operation is confined to the owner thread that bound itself here. A call from
- * another thread is refused and counted: the reservation never steals the thread of the owner, and
- * the ledgers are left exactly where they were.
- *
- * <p>A refusal takes nothing: the ring slot and the room are given back, the three levels read what
- * they read before the call, and no publish action has run. A terminal the log refuses after the side
- * effect has run is not a refusal of the reservation: the item leaves the publishing state, stays in
- * flight and is readable with the reason it is waiting. */
+/** The one holder that mints a ticket: the place the frozen plan gave a line, a ring slot and the
+ * room of its terminal record are taken before the first side effect, and only this holder ends one.
+ * Every control operation is confined to the owner thread. A refusal takes nothing back, while a
+ * terminal the log refuses after the side effect leaves the item readable as still waiting. */
 public final class CommitReservation {
 
     /** What one reservation did. A refusal says which check refused it. */
@@ -74,12 +65,13 @@ public final class CommitReservation {
     private record Refusal(RejectCode code, String diagnostic) {
     }
 
-    /** What one request was judged against: the piece that refused it, or the freeze the seat it
-     * claims was verified in. The table is carried out of the check so the ticket can hold it. */
-    private record Judged(Refusal refusal, FrozenDeclarations declarations) {
+    /** What one request was judged against: the refusal, or the freeze and range seal it was verified
+     * in, carried out so the ticket holds them until its line is stored. */
+    private record Judged(Refusal refusal, FrozenDeclarations declarations,
+                          FrozenDeclarations.RangeSeal range) {
 
         static Judged refused(Refusal refusal) {
-            return new Judged(refusal, FrozenDeclarations.none());
+            return new Judged(refusal, FrozenDeclarations.none(), null);
         }
     }
 
@@ -225,7 +217,12 @@ public final class CommitReservation {
             controller());
         tickets.put(ticket.ticketId(), ticket);
         phases.put(ticket.ticketId(), Phase.RESERVED);
-        obligations.put(ticket.ticketId(), log.identitySource().oblige(judged.declarations()));
+        IdentityWitness.Obligation obligation = log.identitySource().oblige(judged.declarations());
+        if (judged.range() != null) {
+            obligation = IdentityWitness.combine(obligation,
+                log.identitySource().oblige(judged.range()));
+        }
+        obligations.put(ticket.ticketId(), obligation);
         reserveSuccess++;
         return new ReserveResult(true, null, "reserved", ticket);
     }
@@ -267,18 +264,28 @@ public final class CommitReservation {
             || identity.authorizationGeneration() == CommitLog.NO_AUTHORIZATION_GENERATION) {
             return Judged.refused(new Refusal(RejectCode.VERSION_MISMATCH, "authorization-mismatch"));
         }
-        // The seat the plan resolved is what the sealed declarations are looked up by, so this runs
-        // after the plan reference was checked and before a ring slot or a room is taken. The
-        // namespace agreement is asked of the holder's current controller, not of the request.
+        // The seat is looked up after the plan reference was checked and before a slot or a room is
+        // taken; the namespace agreement is asked of the holder's current controller.
+        FrozenDeclarations.Seat seat = new FrozenDeclarations.Seat(request.worldId(),
+            request.domainId(), resolved.planSequence(), resolved.position());
+        FrozenDeclarations.RangeSeal range = log.identitySource().range(seat,
+            identity.chunkPos());
+        if (range == null && log.identitySource().hasRange(seat)) {
+            // The seat published a range this request names no seal of: no entry-path attribution.
+            return Judged.refused(new Refusal(RejectCode.VERSION_MISMATCH, "range-seal-missing"));
+        }
         FrozenDeclarations sealed = log.identitySource().declarations(request.worldId(),
             request.domainId(), resolved.planSequence());
-        IdentityWitness.Verdict witness = IdentityWitness.verify(sealed, resolved, request.worldId(),
-            request.domainId(), request.nodeKey(), identity, controller());
+        IdentityWitness.Verdict witness = range != null
+            ? IdentityWitness.verifyRange(range, resolved, request.worldId(), request.domainId(),
+                request.nodeKey(), identity, controller())
+            : IdentityWitness.verify(sealed, resolved, request.worldId(), request.domainId(),
+                request.nodeKey(), identity, controller());
         if (!witness.accepted()) {
             witnessRefusals++;
             return Judged.refused(new Refusal(RejectCode.VERSION_MISMATCH, witness.reason()));
         }
-        if (log.instanceCollision(request.worldId(), request.domainId(), identity)) {
+        if (log.instanceCollision(request.worldId(), request.domainId(), identity, range)) {
             return Judged.refused(new Refusal(RejectCode.VERSION_MISMATCH, "instance-collision"));
         }
         if (placeHeld(request.worldId(), request.domainId(), request.planSequence(),
@@ -306,7 +313,7 @@ public final class CommitReservation {
             || authorization.source().generation() != identity.authorizationGeneration()) {
             return Judged.refused(new Refusal(RejectCode.VERSION_MISMATCH, "authorization-mismatch"));
         }
-        return new Judged(null, sealed);
+        return new Judged(null, sealed, range);
     }
 
     /** Whether a reservation in flight already holds this place of this pair. */

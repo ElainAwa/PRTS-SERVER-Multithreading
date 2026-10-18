@@ -3,6 +3,8 @@ package io.izzel.arclight.common.prts.kernel.commit;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.Deque;
 import java.util.IdentityHashMap;
@@ -10,12 +12,11 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
-/** The declarations one freeze accepted, sealed once inside that freeze and read-only afterwards.
- * An entry exists only where the frozen plan's own commit order gave a place to a node a domain had
- * declared with the artefact it would publish and the mapping its own handle mints an identity from,
- * so a lookup answers with the plan's final seat and never the order the declarations arrived in. A
- * table that sealed nothing reads {@link #NOT_WIRED} instead of an empty success. */
+/** The declarations one freeze accepted, sealed once and read-only afterwards. An entry exists only
+ * where the frozen plan gave a declared node a place, so a lookup answers the plan's seat and never
+ * the declaration order; a table that sealed nothing reads {@link #NOT_WIRED}. */
 public final class FrozenDeclarations {
 
     /** A table that sealed at least one declaration carrying its artefact. */
@@ -27,9 +28,7 @@ public final class FrozenDeclarations {
     /** A seal that refused: the table it would have written is not there. */
     public static final String REFUSED = "REFUSED";
 
-    /** What a declaration and an assignment are joined by: the three names as themselves. Splicing
-     * them into one text would read ("a/b", "c") and ("a", "b/c") as the same node and connect a
-     * declaration to a seat it never declared. */
+    /** What a declaration and an assignment are joined by: the three names as themselves. */
     public record NodeKey(String worldId, String domainId, String nodeKey) {
 
         public NodeKey {
@@ -48,9 +47,7 @@ public final class FrozenDeclarations {
     public record DeclaredChunk(long packedPos) {
     }
 
-    /** The lifecycle one freeze belongs to: its own generation beside the lifecycle key it was taken
-     * under. The plan counter is not one of these, because a reset hands it back and it therefore
-     * cannot tell the freeze of one lifecycle from the freeze of the next. */
+    /** The lifecycle one freeze belongs to: its own generation beside the key it was taken under. */
     public record FreezeKey(String lifecycleKey, long generation) {
 
         public static final FreezeKey NONE = new FreezeKey("", 0L);
@@ -135,6 +132,102 @@ public final class FrozenDeclarations {
         }
     }
 
+    /** The identity of the one demand a status was read from; a stamp is copied, never derived twice. */
+    public record Stamp(long taskOrdinal, String world, String mailbox, long cell, long mintTick,
+                        long batchFreezeOrdinal, long planSequence, long demandToken) {
+
+        public Stamp {
+            world = world == null ? "" : world;
+            mailbox = mailbox == null ? "" : mailbox;
+        }
+    }
+
+    /** One cell's status inside a range seal, paired with the stamp of the task that reported it. */
+    public record CellStatus(String targetStatus, Stamp stamp) {
+
+        public CellStatus {
+            targetStatus = targetStatus == null ? "" : targetStatus;
+        }
+    }
+
+    /** One task's run-start seal of the range its batch covers: the batch identity, the cells the
+     * freeze cut, the one status it presented and the numbers it was minted with. The other cells of
+     * the range are proved by their own task's seal; a witness recomputes the folds, never trusts them. */
+    public record RangeSeal(Seat seat, String nodeKey, int role, String worldId, String mailbox,
+                            long freezeOrdinal, long planSequence, FreezeKey freeze, long[] cells,
+                            String spaceDigest, Map<Long, CellStatus> statuses,
+                            String statusMapDigest, long instanceId, long worldEpoch, Stamp stamp) {
+
+        public RangeSeal {
+            nodeKey = nodeKey == null ? "" : nodeKey;
+            worldId = worldId == null ? "" : worldId;
+            mailbox = mailbox == null ? "" : mailbox;
+            freeze = freeze == null ? FreezeKey.NONE : freeze;
+            cells = cells == null ? new long[0] : cells.clone();
+            spaceDigest = spaceDigest == null ? "" : spaceDigest;
+            statuses = statuses == null ? Map.of()
+                : Collections.unmodifiableMap(new LinkedHashMap<>(statuses));
+            statusMapDigest = statusMapDigest == null ? "" : statusMapDigest;
+        }
+
+        /** The cells of this seal, copied so a caller cannot edit the range. */
+        @Override
+        public long[] cells() {
+            return cells.clone();
+        }
+
+        /** Whether this seal is a shape a table may publish; the folds are judged by a witness. */
+        public boolean wellFormed() {
+            if (seat == null || freeze == null || !freeze.declared() || stamp == null
+                || nodeKey.isEmpty() || worldId.isEmpty() || mailbox.isEmpty() || role <= 0
+                || freezeOrdinal <= 0L || planSequence <= 0L || seat.planSequence() != planSequence
+                || !RangeDigests.wellFormed(cells) || spaceDigest.isEmpty() || statusMapDigest.isEmpty()
+                || instanceId <= 0L || worldEpoch <= 0L || statuses.size() != 1) {
+                return false;
+            }
+            Map.Entry<Long, CellStatus> only = statuses.entrySet().iterator().next();
+            CellStatus status = only.getValue();
+            if (only.getKey() == null || status == null || status.stamp() == null) {
+                return false;
+            }
+            Stamp read = status.stamp();
+            return stamp.equals(read) && contains(only.getKey()) && read.cell() == only.getKey()
+                && read.world().equals(worldId) && read.mailbox().equals(mailbox)
+                && read.batchFreezeOrdinal() == freezeOrdinal
+                && read.planSequence() == planSequence && read.taskOrdinal() > 0L;
+        }
+
+        /** Whether one cell falls inside the range this seal covers. */
+        public boolean contains(long cell) {
+            return RangeDigests.wellFormed(cells) && Arrays.binarySearch(cells, cell) >= 0;
+        }
+
+        /** The status this seal proves for one cell, or null when the seal carries none for it. */
+        public CellStatus statusFor(long cell) {
+            return statuses.get(cell);
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof RangeSeal seal && Objects.equals(seat, seal.seat)
+                && nodeKey.equals(seal.nodeKey) && role == seal.role
+                && worldId.equals(seal.worldId) && mailbox.equals(seal.mailbox)
+                && freezeOrdinal == seal.freezeOrdinal && planSequence == seal.planSequence
+                && Objects.equals(freeze, seal.freeze) && Arrays.equals(cells, seal.cells)
+                && spaceDigest.equals(seal.spaceDigest) && statuses.equals(seal.statuses)
+                && statusMapDigest.equals(seal.statusMapDigest) && instanceId == seal.instanceId
+                && worldEpoch == seal.worldEpoch && Objects.equals(stamp, seal.stamp);
+        }
+
+        @Override
+        public int hashCode() {
+            int hash = Objects.hash(seat, nodeKey, role, worldId, mailbox, freezeOrdinal,
+                planSequence, freeze, spaceDigest, statuses, statusMapDigest, instanceId, worldEpoch,
+                stamp);
+            return 31 * hash + Arrays.hashCode(cells);
+        }
+    }
+
     /** What a seal produced: the table, or the piece that refused it. A refusal writes no table. */
     public record Sealed(FrozenDeclarations declarations, String refusal) {
 
@@ -192,14 +285,7 @@ public final class FrozenDeclarations {
                 return new Sealed(null, "declaration-duplicate");
             }
         }
-        List<Assignment> ordered = new ArrayList<>(places);
-        ordered.sort(Comparator.comparing(Assignment::worldId).thenComparing(Assignment::domainId)
-            .thenComparing(Assignment::nodeKey));
-        Map<NodeKey, Integer> roles = new LinkedHashMap<>();
-        for (Assignment place : ordered) {
-            roles.putIfAbsent(keyOf(place.worldId(), place.domainId(), place.nodeKey()),
-                roles.size() + 1);
-        }
+        Map<NodeKey, Integer> roles = rolesOf(places);
         Map<Seat, Entry> sealed = new LinkedHashMap<>();
         for (Assignment place : places) {
             NodeKey node = keyOf(place.worldId(), place.domainId(), place.nodeKey());
@@ -262,6 +348,20 @@ public final class FrozenDeclarations {
         }
         return new Sealed(new FrozenDeclarations(freeze, planSequence,
             table.isEmpty() ? NOT_WIRED : SEALED, table, digestOf(freeze, planSequence, table)), "");
+    }
+
+    /** The one-based rank every declared node carries, assigned after sorting the places by world,
+     * domain and node key; a node named twice keeps its first rank. */
+    public static Map<NodeKey, Integer> rolesOf(List<Assignment> places) {
+        Map<NodeKey, Integer> roles = new LinkedHashMap<>();
+        List<Assignment> ordered = new ArrayList<>(places == null ? List.<Assignment>of() : places);
+        ordered.sort(Comparator.comparing(Assignment::worldId).thenComparing(Assignment::domainId)
+            .thenComparing(Assignment::nodeKey));
+        for (Assignment place : ordered) {
+            roles.putIfAbsent(keyOf(place.worldId(), place.domainId(), place.nodeKey()),
+                roles.size() + 1);
+        }
+        return roles;
     }
 
     private static NodeKey keyOf(String worldId, String domainId, String nodeKey) {

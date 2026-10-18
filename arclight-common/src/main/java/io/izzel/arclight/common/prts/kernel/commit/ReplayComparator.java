@@ -77,7 +77,14 @@ public final class ReplayComparator {
      * so what a strict reading proves is consistency among these four and not provenance: see
      * {@link #EVIDENCE_TIER}. */
     public record Evidence(String sourceCommit, String recordDigest,
-                           FrozenDeclarations declarations, CommitLog.SchemaReplay replay) {
+                           FrozenDeclarations declarations, CommitLog.SchemaReplay replay,
+                           RangeSealTable.Snapshot ranges) {
+
+        /** The evidence of a run that sealed no range: the four historical parts and no closure. */
+        public Evidence(String sourceCommit, String recordDigest, FrozenDeclarations declarations,
+                        CommitLog.SchemaReplay replay) {
+            this(sourceCommit, recordDigest, declarations, replay, null);
+        }
     }
 
     /** What a strict closure proves and what it does not. The records, their summary, the sealed
@@ -117,8 +124,13 @@ public final class ReplayComparator {
         if (broken != null) {
             return refuse(broken, "closure");
         }
+        if ((left.ranges() == null) != (right.ranges() == null)) {
+            // One side carries a range closure and the other reads an entry table: the two sides
+            // answered two protocols, and neither is compared as the weaker one.
+            return refuse(REFUSED_MIXED_PROTOCOL, "only one side carries a range closure");
+        }
         return compare(left.replay(), right.replay(),
-            new Strict(left.declarations(), right.declarations()));
+            new Strict(left.declarations(), right.declarations(), left.ranges(), right.ranges()));
     }
 
     /** The integrity summary of one side, computed from the records themselves. A closure that
@@ -151,18 +163,74 @@ public final class ReplayComparator {
 
     private static String closure(Evidence evidence) {
         if (evidence.sourceCommit() == null || evidence.sourceCommit().isEmpty()
-            || evidence.declarations() == null || evidence.recordDigest() == null) {
-            return REFUSED_ILLEGAL_IDENTITY;
-        }
-        if (evidence.declarations().size() == 0) {
-            // A table that sealed nothing is no closure: it backs no seat, so no record can be read
-            // as one of its freeze however well the summary matches.
+            || evidence.recordDigest() == null) {
             return REFUSED_ILLEGAL_IDENTITY;
         }
         if (!recordsDigest(evidence.replay()).equals(evidence.recordDigest())) {
             return REFUSED_ILLEGAL_IDENTITY;
         }
+        RangeSealTable.Snapshot ranges = evidence.ranges();
+        FrozenDeclarations table = evidence.declarations();
+        if (ranges == null) {
+            if (table == null || table.size() == 0) {
+                // A table that sealed nothing is no closure: it backs no seat, so no record can be
+                // read as one of its freeze however well the summary matches.
+                return REFUSED_ILLEGAL_IDENTITY;
+            }
+            return recordsOf(evidence);
+        }
+        if (!ranges.wellFormed() || ranges.digest() != ranges.recompute()) {
+            // The closure carries a fold its own seals do not produce: it is refused rather than
+            // compared as the weaker historical side.
+            return REFUSED_ILLEGAL_IDENTITY;
+        }
+        List<CommitLog.TypedStep> typed = evidence.replay().typedSteps();
+        List<CommitLog.TypedStep> sealed = new ArrayList<>(typed.size());
+        for (CommitLog.TypedStep step : typed) {
+            if (ranges.has(step.planSequence(), step.position(), step.identity().chunkPos())) {
+                sealed.add(step);
+            }
+        }
+        if (table == null || table.size() == 0) {
+            // A range-only closure is readable only when every typed step has a seal: a step without
+            // one is a hole the closure cannot answer, and no empty table is read as a pass.
+            if (ranges.empty() || sealed.size() != typed.size()) {
+                return REFUSED_ILLEGAL_IDENTITY;
+            }
+            return null;
+        }
+        if (!sealed.isEmpty() && sealed.size() < typed.size()) {
+            // One side cannot carry both protocols: a step read against a range and a step read from
+            // an entry are two identities in one closure.
+            return REFUSED_MIXED_WITHIN_SIDE;
+        }
+        if (sealed.size() == typed.size()) {
+            if (!ranges.freeze().equals(table.freeze())
+                || ranges.planSequence() != table.planSequence()) {
+                return REFUSED_ILLEGAL_IDENTITY;
+            }
+            for (CommitLog.TypedStep step : typed) {
+                if (verifyStep(step, ranges) != null) {
+                    return REFUSED_ILLEGAL_IDENTITY;
+                }
+            }
+        }
         return recordsOf(evidence);
+    }
+
+    /** The witness verdict of one typed step against the seal its seat and cell name, or the refusal
+     * constant. Role, owner and stamp are not re-derived: a replay has no assignment or binding
+     * input, and those were proved where the seal was built and frozen. */
+    private static String verifyStep(CommitLog.TypedStep step, RangeSealTable.Snapshot ranges) {
+        FrozenDeclarations.RangeSeal seal = ranges.sealAt(step.planSequence(), step.position(),
+            step.identity().chunkPos());
+        if (seal == null) {
+            return REFUSED_ILLEGAL_IDENTITY;
+        }
+        CommitLog.Resolved seat = new CommitLog.Resolved(step.planSequence(), step.position(), false);
+        IdentityWitness.Verdict witness = IdentityWitness.verifyRange(seal, seat, step.worldId(),
+            step.domainId(), step.nodeKey(), step.identity(), null);
+        return witness.accepted() ? null : REFUSED_ILLEGAL_IDENTITY;
     }
 
     /** Whether the records are the ones the table and the summary were taken from: every step was
@@ -171,9 +239,22 @@ public final class ReplayComparator {
      * came with it was kept is refused here instead of being compared as the run it claims to be. */
     private static String recordsOf(Evidence evidence) {
         FrozenDeclarations table = evidence.declarations();
+        RangeSealTable.Snapshot ranges = evidence.ranges();
         for (CommitLog.TypedStep step : evidence.replay().typedSteps()) {
             EffectStore.Recorded effect = step.effect();
-            if (step.planSequence() != table.planSequence() || effect == null
+            if (ranges != null) {
+                // A range closure is read on its own: the step has to name a seal of its own seat and
+                // cell, and only a closure that also carries an entry table is judged against it.
+                if (ranges.sealAt(step.planSequence(), step.position(),
+                    step.identity().chunkPos()) == null
+                    || (table != null && table.size() > 0
+                        && step.planSequence() != table.planSequence())) {
+                    return REFUSED_ILLEGAL_IDENTITY;
+                }
+            } else if (table == null || step.planSequence() != table.planSequence()) {
+                return REFUSED_ILLEGAL_IDENTITY;
+            }
+            if (effect == null
                 || !EffectStore.contentDigest(effect.content()).equals(effect.contentDigest())
                 || !EffectStore.declaredRows(effect.content()).equals(effect.declared())) {
                 return REFUSED_ILLEGAL_IDENTITY;
@@ -224,11 +305,11 @@ public final class ReplayComparator {
         if (!left.plainSteps().isEmpty() || !right.plainSteps().isEmpty()) {
             return refuse(REFUSED_MIXED_WITHIN_SIDE, "a version 1 side carries plain steps");
         }
-        String broken = integrity(left);
+        String broken = integrity(left, strict == null ? null : strict.leftRanges());
         if (broken != null) {
             return refuse(broken, "left");
         }
-        broken = integrity(right);
+        broken = integrity(right, strict == null ? null : strict.rightRanges());
         if (broken != null) {
             return refuse(broken, "right");
         }
@@ -240,7 +321,8 @@ public final class ReplayComparator {
 
     /** The two sealed declarations a strict comparison reads its instance column from; null on the
      * historical path, which has none and says so in its note. */
-    private record Strict(FrozenDeclarations left, FrozenDeclarations right) {
+    private record Strict(FrozenDeclarations left, FrozenDeclarations right,
+                          RangeSealTable.Snapshot leftRanges, RangeSealTable.Snapshot rightRanges) {
     }
 
     private Verdict comparePlain(List<CommitLog.Entry.Step> left, List<CommitLog.Entry.Step> right) {
@@ -275,9 +357,9 @@ public final class ReplayComparator {
         Canonical leftOrdinals = new Canonical();
         Canonical rightOrdinals = new Canonical();
         List<String> leftInstances = instanceColumn(left, strict == null ? null : strict.left(),
-            leftOrdinals);
+            strict == null ? null : strict.leftRanges(), leftOrdinals);
         List<String> rightInstances = instanceColumn(right, strict == null ? null : strict.right(),
-            rightOrdinals);
+            strict == null ? null : strict.rightRanges(), rightOrdinals);
         if (leftInstances == null || rightInstances == null) {
             return refuse(REFUSED_ILLEGAL_IDENTITY, "the records of this side are not backed by the "
                 + "declarations its closure carries");
@@ -307,9 +389,28 @@ public final class ReplayComparator {
      * {@link CommitLog#logicalKeyOf(FrozenDeclarations.Entry)}); a step the verdict refuses answers
      * no column. The historical side keeps the first-appearance ordinal. */
     private static List<String> instanceColumn(List<CommitLog.TypedStep> steps,
-                                               FrozenDeclarations declarations, Canonical ordinals) {
+                                               FrozenDeclarations declarations,
+                                               RangeSealTable.Snapshot ranges, Canonical ordinals) {
         List<String> column = new ArrayList<>(steps.size());
         for (CommitLog.TypedStep step : steps) {
+            if (ranges != null) {
+                // A range row reads its column from the seal of its own seat and cell; a side with a
+                // range closure never falls back to the first-appearance ordinal for that row.
+                FrozenDeclarations.RangeSeal seal = ranges.sealAt(step.planSequence(), step.position(),
+                    step.identity().chunkPos());
+                if (seal == null) {
+                    return null;
+                }
+                CommitLog.Resolved seat = new CommitLog.Resolved(step.planSequence(), step.position(),
+                    false);
+                IdentityWitness.Verdict witness = IdentityWitness.verifyRange(seal, seat,
+                    step.worldId(), step.domainId(), step.nodeKey(), step.identity(), null);
+                if (!witness.accepted()) {
+                    return null;
+                }
+                column.add(witness.instance());
+                continue;
+            }
             if (declarations == null) {
                 column.add(String.valueOf(ordinals.ordinal("instance/" + step.worldId() + "/"
                     + step.domainId() + "/" + step.identity().instanceId())));
@@ -327,7 +428,7 @@ public final class ReplayComparator {
         return column;
     }
 
-    private static String integrity(CommitLog.SchemaReplay side) {
+    private static String integrity(CommitLog.SchemaReplay side, RangeSealTable.Snapshot ranges) {
         if (side.effectMissing() > 0) {
             return REFUSED_EFFECT_MISSING;
         }
@@ -357,8 +458,11 @@ public final class ReplayComparator {
             if (carried != null && !carried.equals(mapping)) {
                 return REFUSED_ORPHAN_EFFECT;
             }
-            String instance = lifecycleOf(identity) + "|" + identity.chunkPos() + "|"
-                + identity.targetStatus();
+            FrozenDeclarations.RangeSeal seal = ranges == null ? null
+                : ranges.sealAt(step.planSequence(), step.position(), identity.chunkPos());
+            String instance = seal == null
+                ? lifecycleOf(identity) + "|" + identity.chunkPos() + "|" + identity.targetStatus()
+                : lifecycleOf(identity) + "|" + seal.spaceDigest() + "|" + seal.statusMapDigest();
             String pair = step.worldId() + "/" + step.domainId() + "/" + identity.instanceId();
             String held = instances.putIfAbsent(pair, instance);
             if (held != null && !held.equals(instance)) {

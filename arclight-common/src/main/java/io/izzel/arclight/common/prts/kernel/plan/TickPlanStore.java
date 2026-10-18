@@ -136,6 +136,14 @@ public final class TickPlanStore {
         return null;
     }
 
+    /** The commit order of the exact plan and lifecycle a seal names, as an immutable copy; a plan
+     * that fell out of the bounded history and a lifecycle the store has left both answer null, and
+     * this path never falls back to the newest plan that reused the sequence. */
+    public List<TickPlan.CommitStep> orderIn(long planSequence, long lifecycle) {
+        TickPlan plan = lifecycle == this.lifecycle ? history.get(planSequence) : null;
+        return plan == null ? null : List.copyOf(plan.commitOrder());
+    }
+
     /** Resolves the order of one commit by the key its job declared, newest plan first. */
     public StepRef resolve(String worldId, String domainId, String nodeKey) {
         List<TickPlan> plans = new ArrayList<>(history.values());

@@ -1,6 +1,9 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.jobs;
 
+import io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations;
+import io.izzel.arclight.common.prts.kernel.commit.RangeSealFixture;
+import io.izzel.arclight.common.prts.kernel.commit.RangeSealTable;
 import io.izzel.arclight.common.prts.support.PrtsChunkDemand;
 import io.izzel.arclight.common.prts.support.PrtsPipelineBatches;
 import net.minecraft.util.Unit;
@@ -49,6 +52,7 @@ class PipelineRunSealTest {
 
     @AfterEach
     void tearDown() {
+        PipelineRunSeal.installRange(null);
         PipelineRunSeal.install(null);
         PrtsChunkDemand.install(null);
         PrtsPipelineBatches.uninstall();
@@ -268,5 +272,200 @@ class PipelineRunSealTest {
         assertTrue(ledger.runStart(task));
         assertNull(PipelineRunSeal.current());
         ledger.runEnd(task);
+    }
+
+    /** A range sink that answers one fixed seal, counts its calls and publishes through a real
+     * table so the generation and the release path are the real ones. */
+    private static final class FixedRangeSink implements PipelineRunSeal.RangeSink {
+
+        private final RangeSealTable table;
+        private final FrozenDeclarations.RangeSeal seal;
+        private int calls;
+        private int releases;
+
+        private FixedRangeSink(RangeSealTable table, FrozenDeclarations.RangeSeal seal) {
+            this.table = table;
+            this.seal = seal;
+        }
+
+        @Override
+        public long generation() {
+            return table.generation();
+        }
+
+        @Override
+        public FrozenDeclarations.RangeSeal seal(PipelineBatchLedger.TrackedTask task,
+                                                 DemandShadowCandidates.TaskStatus status,
+                                                 long captured) {
+            calls++;
+            if (table.generation() != captured) {
+                return null;
+            }
+            return table.publish(seal, captured) == RangeSealTable.Publish.REJECTED ? null : seal;
+        }
+
+        @Override
+        public void release(FrozenDeclarations.RangeSeal released) {
+            releases++;
+            table.release(released);
+        }
+    }
+
+    @Test
+    void theFirstPresentStatusSealsOneRangeAndLeavesTheStatusAnswerUntouched() {
+        RangeSealTable table = new RangeSealTable(8);
+        FixedRangeSink sink = new FixedRangeSink(table, new RangeSealFixture().build());
+        PipelineRunSeal.installRange(sink);
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        freeze(PLAN);
+        AtomicReference<DemandShadowCandidates.TaskStatus> answer = new AtomicReference<>();
+        AtomicReference<FrozenDeclarations.RangeSeal> sealed = new AtomicReference<>();
+
+        runBody(task, () -> {
+            assertTrue(demand(task, "full") > 0L);
+            answer.set(PipelineRunSeal.current().status());
+            sealed.set(PipelineRunSeal.current().range());
+        });
+
+        assertTrue(answer.get().present());
+        assertEquals("full", answer.get().status());
+        assertNotNull(sealed.get());
+        assertEquals(1, sink.calls);
+        assertEquals(1, sink.releases, "the window close releases the published range");
+        assertEquals(0, table.size(), "no obligation kept the fixed seal");
+    }
+
+    @Test
+    void aSecondStatusReadDoesNotAskTheSinkAgainAndAnswersTheSameRange() {
+        RangeSealTable table = new RangeSealTable(8);
+        FixedRangeSink sink = new FixedRangeSink(table, new RangeSealFixture().build());
+        PipelineRunSeal.installRange(sink);
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        freeze(PLAN);
+        AtomicReference<FrozenDeclarations.RangeSeal> first = new AtomicReference<>();
+        AtomicReference<FrozenDeclarations.RangeSeal> second = new AtomicReference<>();
+
+        runBody(task, () -> {
+            assertTrue(demand(task, "full") > 0L);
+            PipelineRunSeal.current().status();
+            first.set(PipelineRunSeal.current().range());
+            PipelineRunSeal.current().status();
+            second.set(PipelineRunSeal.current().range());
+        });
+
+        assertNotNull(first.get());
+        assertSame(first.get(), second.get());
+        assertEquals(1, sink.calls);
+    }
+
+    @Test
+    void anEmptyFirstStatusLeavesTheWindowWithoutARange() {
+        RangeSealTable table = new RangeSealTable(8);
+        FixedRangeSink sink = new FixedRangeSink(table, new RangeSealFixture().build());
+        PipelineRunSeal.installRange(sink);
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        freeze(PLAN);
+        AtomicReference<DemandShadowCandidates.TaskStatus> before = new AtomicReference<>();
+        AtomicReference<DemandShadowCandidates.TaskStatus> after = new AtomicReference<>();
+        AtomicReference<FrozenDeclarations.RangeSeal> range = new AtomicReference<>();
+
+        runBody(task, () -> {
+            before.set(PipelineRunSeal.current().status());
+            assertTrue(demand(task, "full") > 0L);
+            after.set(PipelineRunSeal.current().status());
+            range.set(PipelineRunSeal.current().range());
+        });
+
+        assertFalse(before.get().present());
+        assertFalse(after.get().present(), "a demand after the seal is not adopted");
+        assertNull(range.get());
+        assertEquals(0, sink.calls, "an empty first read asks the sink nothing");
+    }
+
+    @Test
+    void aClosedWindowAnswersNoRangeAndReleasesTheOneItPublished() {
+        RangeSealTable table = new RangeSealTable(8);
+        FixedRangeSink sink = new FixedRangeSink(table, new RangeSealFixture().build());
+        PipelineRunSeal.installRange(sink);
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        freeze(PLAN);
+        AtomicReference<PipelineRunSeal> window = new AtomicReference<>();
+
+        runBody(task, () -> {
+            assertTrue(demand(task, "full") > 0L);
+            window.set(PipelineRunSeal.current());
+            window.get().status();
+            assertNotNull(window.get().range());
+        });
+
+        assertTrue(window.get().closed());
+        assertNull(window.get().range(), "the closed window carries no range");
+        assertEquals(1, sink.releases);
+    }
+
+    @Test
+    void aTaskResetBeforeTheStatusSealsNoRange() {
+        RangeSealTable table = new RangeSealTable(8);
+        FixedRangeSink sink = new FixedRangeSink(table, new RangeSealFixture().build());
+        PipelineRunSeal.installRange(sink);
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        freeze(PLAN);
+        AtomicReference<DemandShadowCandidates.TaskStatus> answer = new AtomicReference<>();
+        AtomicReference<FrozenDeclarations.RangeSeal> range = new AtomicReference<>();
+
+        runBody(task, () -> {
+            assertTrue(demand(task, "full") > 0L);
+            ledger.reset();
+            answer.set(PipelineRunSeal.current().status());
+            range.set(PipelineRunSeal.current().range());
+        });
+
+        assertFalse(answer.get().present());
+        assertNull(range.get());
+        assertEquals(0, sink.calls);
+    }
+
+    @Test
+    void twoDifferentStatusesOnOneTaskSealNoRange() {
+        RangeSealTable table = new RangeSealTable(8);
+        FixedRangeSink sink = new FixedRangeSink(table, new RangeSealFixture().build());
+        PipelineRunSeal.installRange(sink);
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        freeze(PLAN);
+        AtomicReference<DemandShadowCandidates.TaskStatus> answer = new AtomicReference<>();
+        AtomicReference<FrozenDeclarations.RangeSeal> range = new AtomicReference<>();
+
+        runBody(task, () -> {
+            assertTrue(demand(task, "full") > 0L);
+            assertTrue(demand(task, "features") > 0L);
+            answer.set(PipelineRunSeal.current().status());
+            range.set(PipelineRunSeal.current().range());
+        });
+
+        assertFalse(answer.get().present());
+        assertNull(range.get());
+        assertEquals(0, sink.calls);
+        assertEquals(1L, candidates.statusConflicts());
+    }
+
+    @Test
+    void aTableResetInsideTheWindowPublishesNoRangeOfTheOlderGeneration() {
+        RangeSealTable table = new RangeSealTable(8);
+        FixedRangeSink sink = new FixedRangeSink(table, new RangeSealFixture().build());
+        PipelineRunSeal.installRange(sink);
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        freeze(PLAN);
+        AtomicReference<FrozenDeclarations.RangeSeal> range = new AtomicReference<>();
+
+        runBody(task, () -> {
+            assertTrue(demand(task, "full") > 0L);
+            table.reset();
+            PipelineRunSeal.current().status();
+            range.set(PipelineRunSeal.current().range());
+        });
+
+        assertNull(range.get());
+        assertEquals(1, sink.calls);
+        assertEquals(0, table.size());
     }
 }

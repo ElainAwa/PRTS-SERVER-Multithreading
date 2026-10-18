@@ -4,6 +4,7 @@ package io.izzel.arclight.common.prts.kernel.commit;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -542,5 +543,211 @@ class CommitLogTypedSchemaTest {
         assertTrue(log.reachTyped(new CommitLog.TypedBatch(versionedBatch("a/1", 12L, 1),
             identity(2L, 65L, "full", 3L, 101L, LIFETIME),
             new EffectStore.Effect(101L, "chunk-materialize", "full", List.of("chunk=65")))).logged());
+    }
+
+    // ---- range rows: the seat publishes a seal and the line is attributed against it ----
+
+    private static final String RANGE_WORLD = RangeSealFixture.WORLD;
+    private static final String RANGE_DOMAIN = RangeSealFixture.DOMAIN;
+    private static final String RANGE_NODE = "chunk-pipeline/" + RANGE_WORLD + "/"
+        + RangeSealFixture.MAILBOX + "#" + RangeSealFixture.FREEZE_ORDINAL;
+    private static final long RANGE_LIFETIME = 4242L;
+    private static final long RANGE_AUTHORIZATION = 3L;
+    private static final FrozenDeclarations.FreezeKey RANGE_FREEZE =
+        new FrozenDeclarations.FreezeKey(RangeSealFixture.LIFECYCLE, 1L);
+
+    private static CommitLog.OrderSource rangeOrder(int position) {
+        return (worldId, domainId, nodeKey) -> RANGE_WORLD.equals(worldId)
+            && RANGE_DOMAIN.equals(domainId) && RANGE_NODE.equals(nodeKey)
+            ? new CommitLog.Resolved(RangeSealFixture.PLAN, position, false) : null;
+    }
+
+    private static CommitLog.Identity rangeIdentity(FrozenDeclarations.RangeSeal seal, long cell,
+                                                    String status, long instance, long effectRef) {
+        return new CommitLog.Identity(CommitLog.SCHEMA_TYPED, instance, seal.worldEpoch(), cell,
+            status, RANGE_AUTHORIZATION, effectRef,
+            new CommitNamespaces.Namespace("producer", RANGE_LIFETIME, 0L, CommitNamespaces.NO_THREAD),
+            new CommitNamespaces.Namespace("controller", RANGE_LIFETIME, 0L,
+                CommitNamespaces.NO_THREAD));
+    }
+
+    private static CommitLog.TypedBatch rangeTyped(FrozenDeclarations.RangeSeal seal, long cell,
+                                                   String status, long instance, long effectRef) {
+        return new CommitLog.TypedBatch(new CommitLog.Batch(RANGE_WORLD, RANGE_DOMAIN, RANGE_NODE,
+            CommitLog.Batch.Kind.APPLY, RANGE_AUTHORIZATION, 11L, 1), rangeIdentity(seal, cell,
+            status, instance, effectRef), new EffectStore.Effect(effectRef, "chunk-materialize", status,
+            List.of("chunk=" + cell)));
+    }
+
+    private static CommitLog rangeLog(RangeSealTable table, int position,
+                                      FrozenDeclarations declarations) {
+        return new CommitLog(() -> 8, rangeOrder(position), new EffectStore(4096, 16),
+            new RangeSource(table, declarations, RANGE_FREEZE, RangeSealFixture.EPOCH,
+                RANGE_AUTHORIZATION));
+    }
+
+    @Test
+    void aRangeLineIsStoredUnderItsI2InstanceAndHoldsTheSealObligation() {
+        FrozenDeclarations.RangeSeal seal = new RangeSealFixture().build();
+        RangeSealTable table = new RangeSealTable(8);
+        assertEquals(RangeSealTable.Publish.PUBLISHED, table.publish(seal));
+        CommitLog log = rangeLog(table, seal.seat().position(), FrozenDeclarations.none());
+        log.beginTick(10L);
+
+        CommitLog.Verdict verdict = log.reachTyped(rangeTyped(seal, RangeSealFixture.CELL,
+            RangeSealFixture.STATUS, seal.instanceId(), 100L));
+
+        assertTrue(verdict.logged());
+        assertEquals(1L, log.accepted());
+        assertEquals(1L, log.typedStored());
+        assertEquals(0L, log.typedRefused());
+        assertEquals(1, log.unreadObligations());
+        assertEquals(1L, log.sequence());
+        assertEquals(1, table.pinnedCount(), "the stored line holds the range seal");
+        IdentityWitness.Verdict witness = IdentityWitness.verifyRange(seal,
+            new CommitLog.Resolved(seal.planSequence(), seal.seat().position(), false), RANGE_WORLD,
+            RANGE_DOMAIN, RANGE_NODE, rangeIdentity(seal, RangeSealFixture.CELL,
+                RangeSealFixture.STATUS, seal.instanceId(), 100L), null);
+        assertTrue(witness.accepted());
+        assertTrue(witness.instance().startsWith("I2"));
+        assertEquals(CommitLog.logicalKeyOf(seal).canonical(), witness.instance());
+        assertTrue(IdentityWitness.parse(witness.instance()).ranged());
+    }
+
+    @Test
+    void aLineThatWearsAnotherInstanceNumberThanItsSealsIsRefused() {
+        FrozenDeclarations.RangeSeal seal = new RangeSealFixture().build();
+        RangeSealTable table = new RangeSealTable(8);
+        table.publish(seal);
+        CommitLog log = rangeLog(table, seal.seat().position(), FrozenDeclarations.none());
+        log.beginTick(10L);
+
+        CommitLog.Verdict verdict = log.reachTyped(rangeTyped(seal, RangeSealFixture.CELL,
+            RangeSealFixture.STATUS, seal.instanceId() + 1L, 100L));
+
+        assertFalse(verdict.logged());
+        assertEquals(RejectCode.VERSION_MISMATCH, verdict.code());
+        assertEquals(0L, log.accepted());
+        assertEquals(1L, log.typedRefused());
+        assertEquals(0, log.unreadObligations());
+        assertEquals(0, log.ringDepth());
+        assertEquals(0, log.effects().records());
+    }
+
+    @Test
+    void aSeatThatPublishedARangeRefusesAnEntryLineInsteadOfReadingTheOlderTable() {
+        FrozenDeclarations.RangeSeal seal = new RangeSealFixture().build();
+        RangeSealTable table = new RangeSealTable(8);
+        table.publish(seal);
+        FrozenDeclarations.Entry entry = new FrozenDeclarations.Entry(seal.seat(), seal.nodeKey(), 1,
+            RangeSealFixture.CELL2, "full", 444L, seal.worldEpoch());
+        FrozenDeclarations.Sealed old = FrozenDeclarations.of(seal.freeze(), seal.planSequence(),
+            List.of(entry));
+        assertTrue(old.sealed());
+        CommitLog log = rangeLog(table, seal.seat().position(), old.declarations());
+        log.beginTick(10L);
+
+        CommitLog.Verdict verdict = log.reachTyped(rangeTyped(seal, RangeSealFixture.CELL2, "full",
+            444L, 100L));
+
+        assertFalse(verdict.logged());
+        assertEquals(RejectCode.VERSION_MISMATCH, verdict.code());
+        assertEquals(0L, log.accepted());
+        assertEquals(1L, log.typedRefused());
+        assertEquals(0, log.unreadObligations());
+        assertEquals(0, log.ringDepth());
+        assertEquals(1, table.size(), "the published seal is left where it was");
+    }
+
+    @Test
+    void aTamperedRangeFoldIsRefusedAndTakesNoSlotOrEffect() {
+        FrozenDeclarations.RangeSeal seal = new RangeSealFixture()
+            .spaceDigest("00000000deadbeef").build();
+        RangeSealTable table = new RangeSealTable(8);
+        table.publish(seal);
+        CommitLog log = rangeLog(table, seal.seat().position(), FrozenDeclarations.none());
+        log.beginTick(10L);
+
+        CommitLog.Verdict verdict = log.reachTyped(rangeTyped(seal, RangeSealFixture.CELL,
+            RangeSealFixture.STATUS, seal.instanceId(), 100L));
+
+        assertFalse(verdict.logged());
+        assertEquals(RejectCode.VERSION_MISMATCH, verdict.code());
+        assertEquals(0, log.ringDepth());
+        assertEquals(0, log.reservedSlots());
+        assertEquals(0, log.effects().records());
+        assertEquals(0L, log.typedStored());
+        assertEquals(1L, log.typedRefused());
+    }
+
+    @Test
+    void aRangeSeatWhoseLineCellHasNoSealIsRefusedWithoutTakingASlot() {
+        FrozenDeclarations.RangeSeal seal = new RangeSealFixture().build();
+        RangeSealTable table = new RangeSealTable(8);
+        table.publish(seal);
+        CommitLog log = rangeLog(table, seal.seat().position(), FrozenDeclarations.none());
+        log.beginTick(10L);
+
+        CommitLog.Verdict verdict = log.reachTyped(rangeTyped(seal, RangeSealFixture.CELL2,
+            RangeSealFixture.STATUS, seal.instanceId(), 100L));
+
+        assertFalse(verdict.logged());
+        assertEquals(RejectCode.VERSION_MISMATCH, verdict.code());
+        assertEquals(1L, log.typedRefused());
+        assertEquals(0L, log.accepted());
+        assertEquals(0, log.reservedSlots());
+        assertEquals(0, log.ringDepth());
+    }
+
+    @Test
+    void oneInstanceNumberUnderTwoRangesIsRefusedInsteadOfMerged() {
+        FrozenDeclarations.RangeSeal first = new RangeSealFixture().build();
+        RangeSealFixture other = new RangeSealFixture();
+        other.cells(RangeSealFixture.CELL2).cell(RangeSealFixture.CELL2)
+            .status("features").instance(first.instanceId());
+        FrozenDeclarations.RangeSeal second = other.build();
+        RangeSealTable table = new RangeSealTable(8);
+        table.publish(first);
+        table.publish(second);
+        CommitLog log = rangeLog(table, first.seat().position(), FrozenDeclarations.none());
+        log.beginTick(10L);
+        assertTrue(log.reachTyped(rangeTyped(first, RangeSealFixture.CELL,
+            RangeSealFixture.STATUS, first.instanceId(), 100L)).logged());
+
+        CommitLog.Verdict verdict = log.reachTyped(rangeTyped(second, RangeSealFixture.CELL2,
+            "features", first.instanceId(), 101L));
+        assertFalse(verdict.logged());
+        assertEquals(RejectCode.VERSION_MISMATCH, verdict.code());
+        assertEquals(1L, log.identityCollisions());
+        assertEquals(1L, log.typedStored());
+        assertEquals(1, log.effects().records(), "the refused line stores no second record");
+        assertEquals(1, log.ringDepth());
+    }
+
+    @Test
+    void anEntryLineKeepsItsGoldenI1CanonicalAndItsInstance() {
+        CommitLog log = log(store());
+        log.beginTick(10L);
+        CommitLog.TypedBatch line = typed("a/0", 100L, LIFETIME, "chunk=64", "state=full");
+
+        CommitLog.Verdict verdict = log.reachTyped(line);
+
+        assertTrue(verdict.logged());
+        assertEquals(1L, log.typedStored());
+        assertEquals(0, log.unreadObligations(),
+            "this stand-in keeps no declaration history to owe");
+        String golden = "I17:world-a6:entity3:a/0#1;#64;4:full";
+        IdentityWitness.LogicalKey parsed = IdentityWitness.parse(golden);
+        assertNotNull(parsed);
+        assertFalse(parsed.ranged());
+        assertEquals(golden, parsed.canonical());
+        WitnessSource source = declared(order(1L));
+        IdentityWitness.Verdict witness = IdentityWitness.verify(source.declarations(WORLD, DOMAIN,
+            1L), new CommitLog.Resolved(1L, 0, false), WORLD, DOMAIN, "a/0", line.identity(), null);
+        assertTrue(witness.accepted());
+        assertEquals(golden, witness.instance());
+        assertTrue(witness.instance().startsWith("I1"));
+        assertFalse(IdentityWitness.parse(witness.instance()).ranged(),
+            "an entry line is never read as a range line");
     }
 }

@@ -1,0 +1,532 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+package io.izzel.arclight.common.prts.kernel.jobs;
+
+import io.izzel.arclight.common.prts.kernel.PipelineRangeSeals;
+import io.izzel.arclight.common.prts.kernel.commit.DeclarationInstanceAllocator;
+import io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations;
+import io.izzel.arclight.common.prts.kernel.commit.IdentityWitness;
+import io.izzel.arclight.common.prts.kernel.commit.RangeDigests;
+import io.izzel.arclight.common.prts.kernel.commit.RangeSealTable;
+import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
+import io.izzel.arclight.common.prts.kernel.plan.TickPlanStore;
+import io.izzel.arclight.common.prts.kernel.sites.WriteControlledSlots;
+import io.izzel.arclight.common.prts.support.PrtsChunkDemand;
+import io.izzel.arclight.common.prts.support.PrtsPipelineBatches;
+import net.minecraft.util.Unit;
+import net.minecraft.util.thread.ProcessorHandle;
+import net.minecraft.world.level.ChunkPos;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/** The seal factory, driven through the real run-start window: the real ledger cuts the batch, the
+ * real demand bridge reads the status, the real plan store answers the seat and the real table takes
+ * the seal. Nothing is started beyond these objects. */
+class PipelineRangeSealsTest {
+
+    private static final String WORLD = "minecraft:overworld";
+    private static final String MAILBOX = "worldgen";
+    private static final String DOMAIN = "chunk-pipeline";
+    private static final long TICK = 100L;
+    private static final long PLAN = 7L;
+    private static final long CELL = ChunkPos.asLong(3, -7);
+    private static final long CELL2 = ChunkPos.asLong(4, -7);
+    private static final long EPOCH = 5L;
+    private static final String LIFECYCLE = "host/1/0";
+    private static final FrozenDeclarations.FreezeKey FREEZE =
+        new FrozenDeclarations.FreezeKey(LIFECYCLE, 1L);
+
+    private PipelineBatchLedger ledger;
+    private DemandShadowCandidates candidates;
+    private TickPlanStore plans;
+    private RangeSealTable table;
+    private DeclarationInstanceAllocator instances;
+    private PipelineRangeSeals factory;
+
+    @BeforeEach
+    void setUp() {
+        ledger = new PipelineBatchLedger(64, 1000);
+        candidates = new DemandShadowCandidates(ledger.pendingLimit());
+        PrtsChunkDemand.install(candidates);
+        PrtsPipelineBatches.install(ledger, () -> TICK);
+        PipelineRunSeal.install(candidates::statusFor);
+        plans = new TickPlanStore(8);
+        table = new RangeSealTable(ledger.pendingLimit());
+        instances = new DeclarationInstanceAllocator();
+        factory = new PipelineRangeSeals(ledger, table, plans, instances::mintOne,
+            world -> EPOCH, () -> FREEZE, IdentityWitness.NONE);
+        PipelineRunSeal.installRange(factory);
+    }
+
+    @AfterEach
+    void tearDown() {
+        PipelineRunSeal.installRange(null);
+        PipelineRunSeal.install(null);
+        PrtsChunkDemand.install(null);
+        PrtsPipelineBatches.uninstall();
+    }
+
+    private PipelineBatchLedger.TrackedTask submit(long cell) {
+        PipelineBatchLedger.TrackedTask task = ledger.mint(new Object(), WORLD, MAILBOX, cell, TICK);
+        ledger.enqueued(task);
+        return task;
+    }
+
+    private PipelineBatchLedger.BatchId freeze(long plan) {
+        return ledger.freeze(WORLD, MAILBOX, plan, TICK);
+    }
+
+    private static TickPlan plan(long planSequence, String... nodeKeys) {
+        List<TickPlan.CommitStep> steps = new ArrayList<>();
+        for (int index = 0; index < nodeKeys.length; index++) {
+            steps.add(new TickPlan.CommitStep(index, WORLD, DOMAIN, nodeKeys[index], 1L, 0, 1,
+                false));
+        }
+        return new TickPlan(TICK, planSequence, 1L, List.of(WORLD), null, List.of(), steps, null,
+            List.of(), 0, 0, 0L, null);
+    }
+
+    private void publishPlan(PipelineBatchLedger.BatchId batch) {
+        plans.publish(plan(batch.planSequence(), PipelineRoundJobs.batchKeyOf(batch)));
+    }
+
+    private void runBody(PipelineBatchLedger.TrackedTask task, Runnable body) {
+        Function<ProcessorHandle<Unit>, Runnable> delegate = reply -> body::run;
+        Function<ProcessorHandle<Unit>, Runnable> wrapped =
+            PipelineBatchWrapper.function(ledger, task, delegate);
+        Runnable produced = wrapped.apply(null);
+        assertNotNull(produced);
+        produced.run();
+    }
+
+    private long demand(PipelineBatchLedger.TrackedTask task, String status) {
+        return PrtsChunkDemand.demandDescriptorToken(WORLD, ChunkPos.getX(task.id().cell()),
+            ChunkPos.getZ(task.id().cell()), status, true, task);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void setState(PipelineBatchLedger.TrackedTask task,
+                                 PipelineBatchLedger.TaskState state) {
+        try {
+            Field field = PipelineBatchLedger.TrackedTask.class.getDeclaredField("state");
+            field.setAccessible(true);
+            ((AtomicReference<PipelineBatchLedger.TaskState>) field.get(task)).set(state);
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+        }
+    }
+
+    private static DemandShadowCandidates.TaskStatus statusOf(PipelineBatchLedger.TrackedTask task,
+                                                              PipelineBatchLedger.BatchId batch) {
+        PipelineBatchLedger.TaskId id = task.id();
+        return new DemandShadowCandidates.TaskStatus("full", new DemandShadowCandidates.TaskStamp(
+            id.ordinal(), id.worldId(), id.mailbox(), id.cell(), id.mintTick(),
+            batch.freezeOrdinal(), batch.planSequence(), 77L));
+    }
+
+    @Test
+    void oneTaskSealsTheWholeBatchRangeAndOnlyItsOwnCell() {
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        publishPlan(batch);
+        AtomicReference<FrozenDeclarations.RangeSeal> seen = new AtomicReference<>();
+        AtomicReference<Integer> publishedInWindow = new AtomicReference<>();
+        runBody(task, () -> {
+            demand(task, "full");
+            PipelineRunSeal.current().status();
+            seen.set(PipelineRunSeal.current().range());
+            publishedInWindow.set(table.size());
+        });
+        FrozenDeclarations.RangeSeal seal = seen.get();
+
+        assertNotNull(seal);
+        assertTrue(seal.wellFormed());
+        assertEquals(WORLD, seal.worldId());
+        assertEquals(MAILBOX, seal.mailbox());
+        assertEquals(FREEZE, seal.freeze());
+        assertEquals(batch.freezeOrdinal(), seal.freezeOrdinal());
+        assertEquals(batch.planSequence(), seal.planSequence());
+        assertEquals(PLAN, seal.seat().planSequence());
+        assertNotEquals(0L, seal.instanceId());
+        assertEquals(EPOCH, seal.worldEpoch());
+        assertEquals(1, seal.cells().length);
+        assertEquals(CELL, seal.cells()[0]);
+        assertEquals(1, seal.statuses().size());
+        assertNotNull(seal.statusFor(CELL));
+        assertEquals("full", seal.statusFor(CELL).targetStatus());
+        assertEquals(seal.spaceDigest(), RangeDigests.spaceDigest(seal.cells()));
+        assertEquals(seal.statusMapDigest(), RangeDigests.statusMapDigest(seal.statuses()));
+        assertEquals(task.id().ordinal(), seal.stamp().taskOrdinal());
+        assertEquals(WORLD, seal.stamp().world());
+        assertEquals(MAILBOX, seal.stamp().mailbox());
+        assertEquals(CELL, seal.stamp().cell());
+        assertEquals(TICK, seal.stamp().mintTick());
+        assertEquals(seal.freezeOrdinal(), seal.stamp().batchFreezeOrdinal());
+        assertEquals(PLAN, seal.stamp().planSequence());
+        assertTrue(seal.stamp().demandToken() > 0L);
+        assertEquals(1, publishedInWindow.get(), "the seal is in the table while the window runs");
+        assertEquals(0, table.size(), "the window close releases an unpinned seal");
+        assertEquals(1L, table.published());
+        assertEquals(1L, table.releasals());
+    }
+
+    @Test
+    void theSingleCellBatchIsALegalShapeAndTheRangeNamesIt() {
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        publishPlan(batch);
+        AtomicReference<FrozenDeclarations.RangeSeal> seen = new AtomicReference<>();
+        AtomicReference<long[]> cells = new AtomicReference<>();
+        runBody(task, () -> {
+            demand(task, "full");
+            PipelineRunSeal.current().status();
+            seen.set(PipelineRunSeal.current().range());
+            cells.set(ledger.cellsOf(batch));
+        });
+
+        assertNotNull(seen.get());
+        assertEquals(1, seen.get().cells().length);
+        assertEquals(1, cells.get().length);
+        assertEquals(1, seen.get().statuses().size());
+    }
+
+    @Test
+    void aSixteenCellBatchSealsEveryCellInAscendingOrder() {
+        List<PipelineBatchLedger.TrackedTask> tasks = new ArrayList<>();
+        for (int index = 0; index < 16; index++) {
+            tasks.add(submit(ChunkPos.asLong(index, 0)));
+        }
+        PipelineBatchLedger.TrackedTask first = tasks.get(0);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        publishPlan(batch);
+        AtomicReference<FrozenDeclarations.RangeSeal> seen = new AtomicReference<>();
+        runBody(first, () -> {
+            demand(first, "full");
+            PipelineRunSeal.current().status();
+            seen.set(PipelineRunSeal.current().range());
+        });
+
+        FrozenDeclarations.RangeSeal seal = seen.get();
+        assertNotNull(seal);
+        assertEquals(16, seal.cells().length);
+        long[] cells = seal.cells();
+        for (int index = 1; index < cells.length; index++) {
+            assertTrue(cells[index] > cells[index - 1], "the range is ascending");
+        }
+        WriteControlledSlots.WriteSpace space = WriteControlledSlots.WriteSpace.of(
+            WriteControlledSlots.CellKind.CHUNK, cells);
+        assertEquals(space.digest(), seal.spaceDigest(),
+            "the range fold is the write-range fold");
+    }
+
+    @Test
+    void twoTasksOfTwoCellsShareTheBatchIdentityAndSealTheirOwnCells() {
+        PipelineBatchLedger.TrackedTask firstTask = submit(CELL);
+        PipelineBatchLedger.TrackedTask secondTask = submit(CELL2);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        publishPlan(batch);
+        AtomicReference<FrozenDeclarations.RangeSeal> first = new AtomicReference<>();
+        AtomicReference<FrozenDeclarations.RangeSeal> second = new AtomicReference<>();
+        AtomicReference<Integer> firstSize = new AtomicReference<>();
+        AtomicReference<Integer> secondSize = new AtomicReference<>();
+        runBody(firstTask, () -> {
+            demand(firstTask, "full");
+            PipelineRunSeal.current().status();
+            first.set(PipelineRunSeal.current().range());
+            firstSize.set(table.size());
+        });
+        runBody(secondTask, () -> {
+            demand(secondTask, "features");
+            PipelineRunSeal.current().status();
+            second.set(PipelineRunSeal.current().range());
+            secondSize.set(table.size());
+        });
+
+        assertNotNull(first.get());
+        assertNotNull(second.get());
+        assertEquals(1, firstSize.get());
+        assertEquals(1, secondSize.get(), "the first seal was released by its window");
+        assertEquals(2L, table.published());
+        assertEquals(2L, table.releasals());
+        assertEquals(2, first.get().cells().length, "the batch range is carried whole");
+        assertEquals(2, second.get().cells().length);
+        assertEquals(first.get().cells()[0], CELL);
+        assertEquals(first.get().cells()[1], CELL2);
+        assertEquals(second.get().cells()[0], CELL);
+        assertEquals(second.get().cells()[1], CELL2);
+        assertEquals(1, first.get().statuses().size());
+        assertEquals(1, second.get().statuses().size());
+        assertEquals("full", first.get().statusFor(CELL).targetStatus());
+        assertEquals("features", second.get().statusFor(CELL2).targetStatus());
+        assertNotEquals(first.get().instanceId(), second.get().instanceId());
+        assertEquals(firstTask.id().ordinal(), first.get().stamp().taskOrdinal());
+        assertEquals(secondTask.id().ordinal(), second.get().stamp().taskOrdinal());
+        assertEquals(first.get().freezeOrdinal(), second.get().freezeOrdinal());
+        assertEquals(first.get().planSequence(), second.get().planSequence());
+    }
+
+    @Test
+    void theSmallestOrdinalOwnsOneCellAndTheOtherNeverPublishesASecondSeal() {
+        PipelineBatchLedger.TrackedTask owner = submit(CELL);
+        PipelineBatchLedger.TrackedTask other = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        publishPlan(batch);
+        assertTrue(other.id().ordinal() > owner.id().ordinal());
+        AtomicReference<FrozenDeclarations.RangeSeal> otherSeal = new AtomicReference<>();
+        AtomicReference<FrozenDeclarations.RangeSeal> secondPresent = new AtomicReference<>();
+        AtomicReference<DemandShadowCandidates.TaskStatus> otherStatus = new AtomicReference<>();
+        runBody(other, () -> {
+            demand(other, "full");
+            otherStatus.set(PipelineRunSeal.current().status());
+            otherSeal.set(PipelineRunSeal.current().range());
+            secondPresent.set(factory.seal(other, otherStatus.get(), factory.generation()));
+        });
+
+        assertNull(otherSeal.get(), "a non owner task publishes no seal");
+        assertNull(secondPresent.get(), "a second present of the same task publishes none either");
+        assertEquals(0, table.size());
+        assertTrue(factory.refused() >= 1L);
+
+        AtomicReference<FrozenDeclarations.RangeSeal> ownerSeal = new AtomicReference<>();
+        AtomicReference<Integer> ownerSize = new AtomicReference<>();
+        runBody(owner, () -> {
+            demand(owner, "full");
+            PipelineRunSeal.current().status();
+            ownerSeal.set(PipelineRunSeal.current().range());
+            ownerSize.set(table.size());
+        });
+        assertNotNull(ownerSeal.get());
+        assertEquals(owner.id().ordinal(), ownerSeal.get().stamp().taskOrdinal());
+        assertEquals(1, ownerSize.get());
+        assertEquals(1L, table.published());
+        assertEquals(0, table.size(), "the window released the only seal");
+    }
+
+    @Test
+    void aStampOfAnotherBatchOrCellSealsNothing() {
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        publishPlan(batch);
+        AtomicReference<FrozenDeclarations.RangeSeal> forged = new AtomicReference<>();
+        runBody(task, () -> {
+            PipelineBatchLedger.TaskId id = task.id();
+            DemandShadowCandidates.TaskStatus wrongMailbox =
+                new DemandShadowCandidates.TaskStatus("full", new DemandShadowCandidates.TaskStamp(
+                    id.ordinal(), id.worldId(), "another-mailbox", id.cell(), id.mintTick(),
+                    batch.freezeOrdinal(), batch.planSequence(), 77L));
+            forged.set(factory.seal(task, wrongMailbox, factory.generation()));
+        });
+
+        assertNull(forged.get());
+        assertEquals(0, table.size());
+    }
+
+    @Test
+    void aPlanThatDoesNotCarryTheBatchSealsNothing() {
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        AtomicReference<FrozenDeclarations.RangeSeal> seen = new AtomicReference<>();
+        runBody(task, () -> {
+            demand(task, "full");
+            plans.publish(plan(PLAN, "chunk-pipeline/" + WORLD + "/" + MAILBOX + "#other"));
+            PipelineRunSeal.current().status();
+            seen.set(PipelineRunSeal.current().range());
+        });
+        assertNull(seen.get(), "a plan that does not carry this batch publishes no seal");
+        assertEquals(0, table.size());
+
+        PipelineBatchLedger.TrackedTask second = submit(CELL2);
+        PipelineBatchLedger.BatchId secondBatch = freeze(PLAN);
+        publishPlan(secondBatch);
+        AtomicReference<FrozenDeclarations.RangeSeal> afterReset = new AtomicReference<>();
+        runBody(second, () -> {
+            demand(second, "full");
+            plans.reset();
+            PipelineRunSeal.current().status();
+            afterReset.set(PipelineRunSeal.current().range());
+        });
+        assertNull(afterReset.get(), "a plan of another lifecycle publishes no seal");
+        assertEquals(0, table.size());
+    }
+
+    @Test
+    void theRankIsThePlansOwnRanksAndMustAgreeWithTheSealedEntry() {
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        String nodeKey = PipelineRoundJobs.batchKeyOf(batch);
+        String earlier = "chunk-pipeline/" + WORLD + "/aaa";
+        plans.publish(plan(PLAN, earlier, nodeKey));
+        int role = 2;
+        FrozenDeclarations.Seat seat = new FrozenDeclarations.Seat(WORLD, DOMAIN, PLAN, 1);
+        FrozenDeclarations.Entry entry = new FrozenDeclarations.Entry(seat, nodeKey, role, CELL,
+            "full", 41L, EPOCH);
+        FrozenDeclarations.Sealed sealed = FrozenDeclarations.of(FREEZE, PLAN, List.of(entry));
+        assertTrue(sealed.sealed());
+        PipelineRunSeal.installRange(new PipelineRangeSeals(ledger, table, plans,
+            instances::mintOne, world -> EPOCH, () -> FREEZE, source(sealed.declarations())));
+        AtomicReference<FrozenDeclarations.RangeSeal> agreeing = new AtomicReference<>();
+        runBody(task, () -> {
+            demand(task, "full");
+            PipelineRunSeal.current().status();
+            agreeing.set(PipelineRunSeal.current().range());
+        });
+        assertNotNull(agreeing.get());
+        assertEquals(role, agreeing.get().role());
+
+        PipelineBatchLedger.TrackedTask other = submit(CELL2);
+        PipelineBatchLedger.BatchId otherBatch = freeze(PLAN);
+        String otherNode = PipelineRoundJobs.batchKeyOf(otherBatch);
+        plans.publish(plan(PLAN, earlier, otherNode));
+        FrozenDeclarations.Seat otherSeat = new FrozenDeclarations.Seat(WORLD, DOMAIN, PLAN, 1);
+        FrozenDeclarations.Entry disagreeing = new FrozenDeclarations.Entry(otherSeat, otherNode, 1,
+            CELL2, "full", 42L, EPOCH);
+        FrozenDeclarations.Sealed otherTable = FrozenDeclarations.of(FREEZE, PLAN,
+            List.of(disagreeing));
+        PipelineRunSeal.installRange(new PipelineRangeSeals(ledger, table, plans,
+            instances::mintOne, world -> EPOCH, () -> FREEZE, source(otherTable.declarations())));
+        AtomicReference<FrozenDeclarations.RangeSeal> refused = new AtomicReference<>();
+        runBody(other, () -> {
+            demand(other, "full");
+            PipelineRunSeal.current().status();
+            refused.set(PipelineRunSeal.current().range());
+        });
+        assertNull(refused.get(), "an entry whose rank disagrees refuses the seal");
+    }
+
+    private static IdentityWitness.Source source(FrozenDeclarations declarations) {
+        return new IdentityWitness.Source() {
+
+            @Override
+            public FrozenDeclarations declarations(String worldId, String domainId,
+                                                   long planSequence) {
+                return declarations != null && declarations.planSequence() == planSequence
+                    ? declarations : FrozenDeclarations.none();
+            }
+
+            @Override
+            public long liveWorldEpoch(String worldId) {
+                return EPOCH;
+            }
+
+            @Override
+            public IdentityWitness.Authorization liveAuthorization(long planSequence,
+                    io.izzel.arclight.common.prts.kernel.commit.CommitNamespaces.Namespace controller,
+                    String worldId, String domainId, String nodeKey) {
+                return IdentityWitness.Authorization.refused("", 0L,
+                    IdentityWitness.Authorization.Face.notRead(), "no-record");
+            }
+
+            @Override
+            public io.izzel.arclight.common.prts.kernel.commit.CommitNamespaces.Namespace
+                currentController() {
+                return null;
+            }
+        };
+    }
+
+    @Test
+    void aDeadWorldGenerationSealsNothing() {
+        PipelineRunSeal.installRange(new PipelineRangeSeals(ledger, table, plans,
+            instances::mintOne, world -> 0L, () -> FREEZE, IdentityWitness.NONE));
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        publishPlan(batch);
+        AtomicReference<FrozenDeclarations.RangeSeal> seen = new AtomicReference<>();
+        runBody(task, () -> {
+            demand(task, "full");
+            PipelineRunSeal.current().status();
+            seen.set(PipelineRunSeal.current().range());
+        });
+
+        assertNull(seen.get());
+        assertEquals(0, table.size());
+    }
+
+    @Test
+    void aPlanThatMovedOnBeforeTheStatusSealsNothing() {
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        publishPlan(batch);
+        AtomicReference<FrozenDeclarations.RangeSeal> seen = new AtomicReference<>();
+        runBody(task, () -> {
+            demand(task, "full");
+            ledger.freeze(WORLD, MAILBOX, PLAN + 1L, TICK);
+            PipelineRunSeal.current().status();
+            seen.set(PipelineRunSeal.current().range());
+        });
+
+        assertNull(seen.get(), "a batch the current plan replaced publishes no seal");
+        assertEquals(0, table.size());
+    }
+
+    @Test
+    void aTableResetInsideTheWindowSealsNothing() {
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        publishPlan(batch);
+        AtomicReference<FrozenDeclarations.RangeSeal> seen = new AtomicReference<>();
+        runBody(task, () -> {
+            demand(task, "full");
+            table.reset();
+            PipelineRunSeal.current().status();
+            seen.set(PipelineRunSeal.current().range());
+        });
+
+        assertNull(seen.get(), "a window of the previous generation publishes no seal");
+        assertEquals(0, table.size());
+        assertEquals(1L, factory.rejected());
+    }
+
+    @Test
+    void aTaskNoFreezeHasCutSealsNothing() {
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        AtomicReference<FrozenDeclarations.RangeSeal> direct = new AtomicReference<>();
+        runBody(task, () -> {
+            PipelineBatchLedger.BatchId absent = new PipelineBatchLedger.BatchId(WORLD, MAILBOX, 1L,
+                PLAN);
+            direct.set(factory.seal(task, statusOf(task, absent), factory.generation()));
+        });
+
+        assertNull(direct.get(), "a task whose state is not a running batch publishes no seal");
+        assertEquals(0, table.size());
+    }
+
+    @Test
+    void aBindingThatFellOutOfTheHistorySealsNothing() {
+        PipelineBatchLedger.BatchId first = null;
+        for (int round = 0; round < 65; round++) {
+            PipelineBatchLedger.TrackedTask task = submit(1000L + round);
+            PipelineBatchLedger.BatchId batch = ledger.freeze(WORLD, MAILBOX, PLAN, TICK);
+            assertNotNull(batch);
+            if (first == null) {
+                first = batch;
+                publishPlan(batch);
+            }
+            ledger.runStart(task);
+            ledger.runEnd(task);
+        }
+        assertNotNull(first);
+        assertEquals(0, ledger.cellsOf(first).length, "the binding of the first batch was evicted");
+
+        PipelineBatchLedger.TrackedTask late = ledger.mint(new Object(), WORLD, MAILBOX, 1000L, TICK);
+        setState(late, new PipelineBatchLedger.Running(first));
+        FrozenDeclarations.RangeSeal seal = factory.seal(late, statusOf(late, first),
+            factory.generation());
+
+        assertNull(seal, "an evicted binding has no cells and seals nothing");
+        assertEquals(0, table.size());
+    }
+}

@@ -6,15 +6,19 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** The one source of the instance numbers a freeze seals: every declaration carrying its artefact and
- * naming a live world is given a positive number in the order the frozen plan committed its nodes, no
- * number is handed out twice, and the counter only moves forward - a rebuilt plan, a new generation
- * and a refused seal leave the numbers they took spent. A number is not an identity across runs; what
- * identifies a line is the mapping its own declaration sealed. The freeze point holds this source and
- * hands it out to no one, so a caller cannot fill the instance column of what it sends in. */
+/** The one source of the instance numbers a freeze seals: each declaration carrying its artefact and
+ * naming a live world gets a positive number in plan order, the counter only moves forward, and no
+ * number is handed out twice. A number is not an identity across runs; the mapping the declaration
+ * sealed identifies the line, and the freeze point hands this source out to no one. */
 public final class DeclarationInstanceAllocator {
 
     private long minted;
+
+    /** Takes the next number of the same counter the declarations are numbered from; a taken number
+     * is spent whatever happens next. */
+    public synchronized long mintOne() {
+        return ++minted;
+    }
 
     /** Copies the declarations with the next numbers of this source, joined to the places the plan
      * gave them. A declaration the plan gave no place, one that carries no artefact, or one whose

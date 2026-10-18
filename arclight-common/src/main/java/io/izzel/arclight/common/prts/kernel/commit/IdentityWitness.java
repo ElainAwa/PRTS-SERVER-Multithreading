@@ -19,14 +19,50 @@ public final class IdentityWitness {
     /** The stable semantic identity of one declared instance: everything a cross-run comparison may
      * read, and nothing a run assigned. The role is the rank the freeze's own declared nodes give
      * this one, so two runs of the same declarations agree on it whatever order the final graph
-     * happened to take. */
+     * happened to take.
+     *
+     * <p>An entry key names a cell and its status, and keeps the canonical form the log always
+     * carried. A range key names the two folds instead; the forms are never equal and neither
+     * parses as the other. */
     public record LogicalKey(String worldId, String domainId, String nodeKey, int role,
-                             long packedChunkPos, String targetStatus) {
+                             long packedChunkPos, String targetStatus, String spaceDigest,
+                             String statusMapDigest) {
+
+        public LogicalKey {
+            worldId = worldId == null ? "" : worldId;
+            domainId = domainId == null ? "" : domainId;
+            nodeKey = nodeKey == null ? "" : nodeKey;
+            targetStatus = targetStatus == null ? "" : targetStatus;
+            spaceDigest = spaceDigest == null ? "" : spaceDigest;
+            statusMapDigest = statusMapDigest == null ? "" : statusMapDigest;
+        }
+
+        /** The key of one accepted entry, in the form the log has carried since before ranges. */
+        public LogicalKey(String worldId, String domainId, String nodeKey, int role,
+                          long packedChunkPos, String targetStatus) {
+            this(worldId, domainId, nodeKey, role, packedChunkPos, targetStatus, "", "");
+        }
+
+        /** The key of one range seat: the two folds replace the artefact columns. */
+        public static LogicalKey ranged(String worldId, String domainId, String nodeKey, int role,
+                                        String spaceDigest, String statusMapDigest) {
+            return new LogicalKey(worldId, domainId, nodeKey, role, 0L, "", spaceDigest,
+                statusMapDigest);
+        }
+
+        /** Whether this key names a range rather than one accepted entry. */
+        public boolean ranged() {
+            return !spaceDigest.isEmpty() && !statusMapDigest.isEmpty();
+        }
 
         /** The unambiguous canonical form this key is carried and compared as: every text field is
-         * its own length, a colon and exactly that many characters, and the two numbers are opened
-         * by a marker and closed by a semicolon. */
+         * its own length, a colon and exactly that many characters, and the numbers are opened by a
+         * marker and closed by a semicolon. */
         public String canonical() {
+            if (ranged()) {
+                return "I2" + segment(worldId) + segment(domainId) + segment(nodeKey) + "#" + role
+                    + ";#" + segment(spaceDigest) + ";" + segment(statusMapDigest);
+            }
             return "I1" + segment(worldId) + segment(domainId) + segment(nodeKey) + "#" + role + ";#"
                 + packedChunkPos + ";" + segment(targetStatus);
         }
@@ -49,6 +85,22 @@ public final class IdentityWitness {
         /** Keeps the freeze of one verified seat readable while the obligation that outlived it still
          * names it; a holder that keeps no bounded history answers with a lease that holds nothing. */
         default Obligation oblige(FrozenDeclarations declarations) {
+            return Obligation.NONE;
+        }
+
+        /** The range seal one seat holds for one cell, or null when this holder has none. */
+        default FrozenDeclarations.RangeSeal range(FrozenDeclarations.Seat seat, long cell) {
+            return null;
+        }
+
+        /** Whether one seat carries any range seal; a line of a cell without one is refused, never
+         * read against the entry path. */
+        default boolean hasRange(FrozenDeclarations.Seat seat) {
+            return false;
+        }
+
+        /** Keeps one range seal readable while the line judged against it is still unread. */
+        default Obligation oblige(FrozenDeclarations.RangeSeal seal) {
             return Obligation.NONE;
         }
 
@@ -264,10 +316,139 @@ public final class IdentityWitness {
         return new Verdict(true, "", declared.canonical());
     }
 
+    /** Judges one line against the range seal its run start published: the seat, cell, per-cell
+     * status, instance and generation, with both folds recomputed and the declared range key
+     * compared with the one rebuilt from the line. Role, owner and stamp are not re-derived here;
+     * they were proved where the seal was built. */
+    public static Verdict verifyRange(FrozenDeclarations.RangeSeal range, CommitLog.Resolved resolved,
+                                      String worldId, String domainId, String nodeKey,
+                                      CommitLog.Identity identity, CommitNamespaces.Namespace current) {
+        if (range == null || resolved == null || identity == null) {
+            return refuse("declaration-missing");
+        }
+        if (range.planSequence() != resolved.planSequence() || range.seat() == null
+            || !range.seat().equals(new FrozenDeclarations.Seat(worldId, domainId,
+                resolved.planSequence(), resolved.position()))
+            || !range.nodeKey().equals(nodeKey)) {
+            return refuse("range-seat-mismatch");
+        }
+        if (!identity.declaredTyped()) {
+            return refuse("identity-undeclared");
+        }
+        CommitNamespaces.Namespace worn = identity.controller();
+        if (current != null && !worn.lifecycleKey().equals(current.lifecycleKey())) {
+            return refuse("controller-namespace-mismatch");
+        }
+        if (current != null && !range.freeze().lifecycleKey().isEmpty()
+            && !range.freeze().lifecycleKey().equals(current.lifecycleKey())) {
+            return refuse("declaration-lifecycle-mismatch");
+        }
+        long[] cells = range.cells();
+        if (!RangeDigests.wellFormed(cells)
+            || !RangeDigests.spaceDigest(cells).equals(range.spaceDigest())) {
+            return refuse("range-digest-mismatch");
+        }
+        if (!range.contains(identity.chunkPos())) {
+            return refuse("chunk-witness-mismatch");
+        }
+        FrozenDeclarations.CellStatus cell = range.statusFor(identity.chunkPos());
+        if (cell == null) {
+            return refuse("range-status-missing");
+        }
+        if (!identity.targetStatus().equals(cell.targetStatus())) {
+            return refuse("declaration-status-mismatch");
+        }
+        if (identity.instanceId() != range.instanceId()) {
+            return refuse("declaration-instance-mismatch");
+        }
+        if (identity.worldEpoch() != range.worldEpoch()) {
+            return refuse("declaration-epoch-mismatch");
+        }
+        if (!stampMatches(range, identity.chunkPos())) {
+            return refuse("range-stamp-mismatch");
+        }
+        if (!RangeDigests.statusMapDigest(range.statuses())
+            .equals(range.statusMapDigest())) {
+            return refuse("range-digest-mismatch");
+        }
+        LogicalKey declared = CommitLog.logicalKeyOf(range);
+        LogicalKey carried = CommitLog.logicalKeyOfRange(worldId, domainId, nodeKey, range.role(),
+            range);
+        if (declared == null || carried == null || !declared.equals(carried)) {
+            return refuse("identity-recompute-mismatch");
+        }
+        return new Verdict(true, "", declared.canonical());
+    }
+
+    private static boolean stampMatches(FrozenDeclarations.RangeSeal range, long cell) {
+        FrozenDeclarations.Stamp stamp = range.stamp();
+        if (stamp == null || stamp.cell() != cell || !stamp.world().equals(range.worldId())
+            || !stamp.mailbox().equals(range.mailbox()) || stamp.taskOrdinal() <= 0L
+            || stamp.batchFreezeOrdinal() != range.freezeOrdinal()
+            || stamp.planSequence() != range.planSequence() || stamp.demandToken() <= 0L) {
+            return false;
+        }
+        FrozenDeclarations.CellStatus status = range.statusFor(cell);
+        return status != null && status.stamp() != null && status.stamp().equals(stamp);
+    }
+
+    /** One obligation that settles both tables a range line was judged against. */
+    public static Obligation combine(Obligation first, Obligation second) {
+        Obligation left = first == null ? Obligation.NONE : first;
+        Obligation right = second == null ? Obligation.NONE : second;
+        if (left == Obligation.NONE) {
+            return right;
+        }
+        if (right == Obligation.NONE) {
+            return left;
+        }
+        return new Obligation() {
+
+            private boolean settled;
+
+            @Override
+            public synchronized void settle() {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                left.settle();
+                right.settle();
+            }
+        };
+    }
+
     /** Reads a canonical form back, for the round trip a carried comparison key is shown to
-     * survive. A form that does not parse is answered with null rather than a guess. */
+     * survive. An entry form and a range form are read apart, and a form that does not parse,
+     * carries another prefix or names a range with an empty fold is answered with null. */
     public static LogicalKey parse(String text) {
-        if (text == null || !text.startsWith("I1")) {
+        if (text == null) {
+            return null;
+        }
+        if (text.startsWith("I2")) {
+            int[] cursor = {2};
+            String world = readSegment(text, cursor);
+            String domain = readSegment(text, cursor);
+            String node = readSegment(text, cursor);
+            Long role = readNumber(text, cursor);
+            if (world == null || domain == null || node == null || role == null
+                || cursor[0] >= text.length() || text.charAt(cursor[0]) != '#') {
+                return null;
+            }
+            cursor[0]++;
+            String space = readSegment(text, cursor);
+            if (space == null || space.isEmpty() || cursor[0] >= text.length()
+                || text.charAt(cursor[0]) != ';') {
+                return null;
+            }
+            cursor[0]++;
+            String statusMap = readSegment(text, cursor);
+            if (statusMap == null || statusMap.isEmpty() || cursor[0] != text.length()) {
+                return null;
+            }
+            return LogicalKey.ranged(world, domain, node, role.intValue(), space, statusMap);
+        }
+        if (!text.startsWith("I1")) {
             return null;
         }
         int[] cursor = {2};
