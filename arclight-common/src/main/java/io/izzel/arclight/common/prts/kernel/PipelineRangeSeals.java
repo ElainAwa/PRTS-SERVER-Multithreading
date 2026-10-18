@@ -3,9 +3,9 @@ package io.izzel.arclight.common.prts.kernel;
 
 import io.izzel.arclight.common.prts.kernel.commit.CommitLog;
 import io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations;
-import io.izzel.arclight.common.prts.kernel.commit.IdentityWitness;
 import io.izzel.arclight.common.prts.kernel.commit.RangeDigests;
 import io.izzel.arclight.common.prts.kernel.commit.RangeSealTable;
+import io.izzel.arclight.common.prts.kernel.commit.RangeSettlementObligations;
 import io.izzel.arclight.common.prts.kernel.jobs.DemandShadowCandidates;
 import io.izzel.arclight.common.prts.kernel.jobs.PipelineBatchLedger;
 import io.izzel.arclight.common.prts.kernel.jobs.PipelineRoundJobs;
@@ -37,25 +37,35 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
     private final TickPlanStore plans;
     private final LongSupplier instances;
     private final ToLongFunction<String> worldEpochs;
-    private final Supplier<FrozenDeclarations.FreezeKey> freezes;
-    private final IdentityWitness.Source declarations;
+    private final Supplier<FrozenDeclarations> declarationsInForce;
+    private final RangeSettlementObligations obligations;
     private long seals;
     private long refused;
     private long conflicts;
     private long overflows;
     private long rejected;
 
+    /** Creates the factory with no settlement registry: a published seal is pinned by no one, which
+     * keeps the default path exactly where it was. */
     public PipelineRangeSeals(PipelineBatchLedger ledger, RangeSealTable table, TickPlanStore plans,
                               LongSupplier instances, ToLongFunction<String> worldEpochs,
-                              Supplier<FrozenDeclarations.FreezeKey> freezes,
-                              IdentityWitness.Source declarations) {
+                              Supplier<FrozenDeclarations> declarationsInForce) {
+        this(ledger, table, plans, instances, worldEpochs, declarationsInForce, null);
+    }
+
+    /** The same, with the registry a published seal is held by until its settlement. A null
+     * registry is the production default: the seal is published and released as before. */
+    public PipelineRangeSeals(PipelineBatchLedger ledger, RangeSealTable table, TickPlanStore plans,
+                              LongSupplier instances, ToLongFunction<String> worldEpochs,
+                              Supplier<FrozenDeclarations> declarationsInForce,
+                              RangeSettlementObligations obligations) {
         this.ledger = ledger;
         this.table = table;
         this.plans = plans;
         this.instances = instances;
         this.worldEpochs = worldEpochs == null ? worldId -> CommitLog.NO_WORLD_EPOCH : worldEpochs;
-        this.freezes = freezes;
-        this.declarations = declarations;
+        this.declarationsInForce = declarationsInForce;
+        this.obligations = obligations;
     }
 
     @Override
@@ -102,6 +112,18 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
                 // carries. A later task of the same cell never publishes a second seal.
                 return refuse();
             }
+            FrozenDeclarations declared =
+                declarationsInForce == null ? null : declarationsInForce.get();
+            if (declared == null || !declared.freeze().declared()) {
+                return refuse();
+            }
+            if (declared.planSequence() != batch.planSequence()) {
+                // A freeze has no plan number of its own, so pairing the freeze in force with a
+                // batch of another plan would publish a seal no replay can place: refuse here,
+                // before the alignment reads are turned into an identity.
+                return refuse();
+            }
+            FrozenDeclarations.FreezeKey freeze = declared.freeze();
             if (plans == null) {
                 return refuse();
             }
@@ -119,10 +141,6 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
             if (role <= 0) {
                 return refuse();
             }
-            FrozenDeclarations.FreezeKey freeze = freezes == null ? null : freezes.get();
-            if (freeze == null || !freeze.declared()) {
-                return refuse();
-            }
             long[] cells = ledger.cellsOf(batch);
             if (!RangeDigests.wellFormed(cells) || !contains(cells, id.cell())) {
                 return refuse();
@@ -133,7 +151,8 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
             }
             FrozenDeclarations.Seat seat = new FrozenDeclarations.Seat(step.worldId(),
                 step.domainId(), batch.planSequence(), step.position());
-            if (!crossChecked(seat, freeze, batch, nodeKey, role, id.cell(), status, worldEpoch)) {
+            if (!crossChecked(seat, declared, nodeKey, role, id.cell(), status.status(),
+                worldEpoch)) {
                 return refuse();
             }
             long instanceId = instances == null ? CommitLog.NO_INSTANCE : instances.getAsLong();
@@ -150,6 +169,7 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
             switch (outcome) {
                 case PUBLISHED -> {
                     seals++;
+                    hold(seal);
                     return seal;
                 }
                 case IDEMPOTENT -> {
@@ -172,9 +192,48 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
         }
     }
 
+    /** Keeps one published seal pinned until its settlement; a registry that is absent leaves the
+     * seal unpinned, and a place some holder already names is not pinned a second time. */
+    private void hold(FrozenDeclarations.RangeSeal seal) {
+        if (obligations == null || obligations.holds(seal)) {
+            return;
+        }
+        obligations.hold(seal, table.oblige(seal));
+    }
+
     @Override
     public void release(FrozenDeclarations.RangeSeal seal) {
         table.release(seal);
+    }
+
+    /** Settles the obligations of one seat after its settlement: a settlement that names a seat
+     * the registry does not hold settles nothing. */
+    public void settleSeat(FrozenDeclarations.Seat seat) {
+        if (obligations != null) {
+            obligations.settleSeat(seat);
+        }
+    }
+
+    /** Settles the obligations of the plans older than the given one: a settlement period that has
+     * moved past them can no longer name their seals. */
+    public void settleBefore(long planSequence) {
+        if (obligations != null) {
+            obligations.settleBefore(planSequence);
+        }
+    }
+
+    /** Drops the registry after the table reset it named has cleared its pins. It is called where
+     * the range table is reset so no entry of the previous lifecycle outlives it. */
+    public void resetObligations() {
+        if (obligations != null) {
+            obligations.reset();
+        }
+    }
+
+    /** Whether a settlement registry is wired: the production factory is handed none, so this
+     * answers false and no seal it publishes is pinned. */
+    public boolean settlementObligationsRegistered() {
+        return obligations != null;
     }
 
     private FrozenDeclarations.RangeSeal refuse() {
@@ -214,24 +273,16 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
         return role == null ? 0 : role;
     }
 
-    private boolean crossChecked(FrozenDeclarations.Seat seat, FrozenDeclarations.FreezeKey freeze,
-                                 PipelineBatchLedger.BatchId batch, String nodeKey, int role,
-                                 long cell, DemandShadowCandidates.TaskStatus status, long worldEpoch) {
-        if (declarations == null) {
-            return true;
-        }
-        FrozenDeclarations held = declarations.declarations(batch.worldId(), seat.domainId(),
-            batch.planSequence());
-        if (held == null || held.size() == 0) {
+    private static boolean crossChecked(FrozenDeclarations.Seat seat, FrozenDeclarations declared,
+                                        String nodeKey, int role, long cell, String targetStatus,
+                                        long worldEpoch) {
+        if (declared.size() == 0) {
             // Nothing sealed for this seat: the rank and the plan's own snapshot are the proof.
             return true;
         }
-        if (!freeze.equals(held.freeze())) {
-            return false;
-        }
-        FrozenDeclarations.Entry entry = held.entryAt(seat);
+        FrozenDeclarations.Entry entry = declared.entryAt(seat);
         return entry == null || (entry.nodeKey().equals(nodeKey) && entry.role() == role
-            && entry.packedChunkPos() == cell && entry.targetStatus().equals(status.status())
+            && entry.packedChunkPos() == cell && entry.targetStatus().equals(targetStatus)
             && entry.worldEpoch() == worldEpoch);
     }
 

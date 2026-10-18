@@ -62,6 +62,7 @@ class PipelineRangeSealProductionWiringTest {
     private TickPlanStore plans;
     private RangeSealTable table;
     private DeclarationInstanceAllocator instances;
+    private FrozenDeclarations declarations;
     private PipelineRangeSeals factory;
 
     @BeforeEach
@@ -74,8 +75,9 @@ class PipelineRangeSealProductionWiringTest {
         plans = new TickPlanStore(8);
         table = new RangeSealTable(ledger.pendingLimit());
         instances = new DeclarationInstanceAllocator();
+        declarations = FrozenDeclarations.of(FREEZE, PLAN, List.of()).declarations();
         factory = new PipelineRangeSeals(ledger, table, plans, instances::mintOne, world -> EPOCH,
-            () -> FREEZE, IdentityWitness.NONE);
+            () -> declarations);
         PipelineRunSeal.installRange(factory);
     }
 
@@ -270,7 +272,7 @@ class PipelineRangeSealProductionWiringTest {
     void aFullTableSealsNothingAndKeepsTheSealsAndPinsItHas() {
         RangeSealTable small = new RangeSealTable(1);
         PipelineRangeSeals local = new PipelineRangeSeals(ledger, small, plans,
-            instances::mintOne, world -> EPOCH, () -> FREEZE, IdentityWitness.NONE);
+            instances::mintOne, world -> EPOCH, () -> declarations);
         PipelineRunSeal.installRange(local);
         RangeSealFixture filler = new RangeSealFixture();
         filler.freeze(FREEZE).cells(CELL3).cell(CELL3).at(PLAN, 5);

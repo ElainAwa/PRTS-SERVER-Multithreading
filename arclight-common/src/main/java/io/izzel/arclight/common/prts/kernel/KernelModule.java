@@ -337,11 +337,11 @@ public final class KernelModule {
     private final DeclarationInstanceAllocator declarationInstances =
         new DeclarationInstanceAllocator();
     /** The factory of the range seals a run start may publish. It is handed the same table the
-     * identity source reads and the freeze in force, and it seals nothing until a window asks. */
+     * identity source reads and the declarations in force, and it seals nothing until a window
+     * asks. It carries no settlement registry, so nothing it publishes is pinned by default. */
     private final PipelineRangeSeals rangeSealFactory = new PipelineRangeSeals(pipelineBatches,
         rangeSeals, plans, declarationInstances::mintOne,
-        worldId -> guard.worldEpochs().epochOf(worldId), this::currentFreezeKey,
-        commitIdentitySource);
+        worldId -> guard.worldEpochs().epochOf(worldId), this::declarations);
     private long declarationGeneration;
     private String declarationRefusal = "";
     private long declarationRefusals;
@@ -956,12 +956,6 @@ public final class KernelModule {
         return declarationHistory.current();
     }
 
-    /** The freeze in force, or the undeclared key when no declaration was sealed: a window that
-     * found no freeze publishes no seal rather than one under a guessed generation. */
-    private FrozenDeclarations.FreezeKey currentFreezeKey() {
-        return declarationHistory.current().freeze();
-    }
-
     /** The freeze the current declarations belong to: its lifecycle key and its own generation. */
     public String declarationFreeze() {
         FrozenDeclarations.FreezeKey freeze = declarations().freeze();
@@ -1092,6 +1086,33 @@ public final class KernelModule {
      * run-start factory is handed. Read-only for every caller. */
     public RangeSealTable rangeSeals() {
         return rangeSeals;
+    }
+
+    /** The read-only readiness of a typed consumer: which inputs the kernel already holds. The
+     * settlement point that would write a line is not wired, so this is a description, not a
+     * trigger. */
+    public record TypedConsumerReadiness(boolean effectsBound, boolean controllerBound,
+                                         boolean obligationsRegistered, boolean attributionArmed) {
+
+        /** Whether this build wires the settlement point; false until an authorized batch does. */
+        public static final boolean SETTLEMENT_WIRED = false;
+
+        /** Whether every input a typed line needs is present and the settlement point is wired. */
+        public boolean ready() {
+            return SETTLEMENT_WIRED && inputsBound();
+        }
+
+        /** Whether every input except the settlement point itself is present. */
+        public boolean inputsBound() {
+            return effectsBound && controllerBound && obligationsRegistered && attributionArmed;
+        }
+    }
+
+    /** The read-only readiness of a typed consumer: what the module already holds, and that the
+     * settlement point which would write a line is not wired. It reads state and produces nothing. */
+    public TypedConsumerReadiness typedConsumerReadiness() {
+        return new TypedConsumerReadiness(commits.effects() != null, commitController() != null,
+            rangeSealFactory.settlementObligationsRegistered(), claims.settlementArmed());
     }
 
     /** The chunk demands the freeze reads as shadow candidates. The reader seals nothing; the freeze
@@ -2922,6 +2943,7 @@ public final class KernelModule {
         pipelineJobs.reset();
         pipelineBatches.reset();
         rangeSeals.reset();
+        rangeSealFactory.resetObligations();
         claims.reset();
         jobDeclarations = 0L;
         lastDispatchHandedOut = 0L;

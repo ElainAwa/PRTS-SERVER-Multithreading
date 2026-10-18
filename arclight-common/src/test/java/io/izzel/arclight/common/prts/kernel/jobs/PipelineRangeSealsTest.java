@@ -5,7 +5,6 @@ import io.izzel.arclight.common.prts.kernel.PipelineRangeSeals;
 import io.izzel.arclight.common.prts.kernel.commit.CommitLog;
 import io.izzel.arclight.common.prts.kernel.commit.DeclarationInstanceAllocator;
 import io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations;
-import io.izzel.arclight.common.prts.kernel.commit.IdentityWitness;
 import io.izzel.arclight.common.prts.kernel.commit.RangeDigests;
 import io.izzel.arclight.common.prts.kernel.commit.RangeSealFixture;
 import io.izzel.arclight.common.prts.kernel.commit.RangeSealTable;
@@ -56,6 +55,7 @@ class PipelineRangeSealsTest {
     private TickPlanStore plans;
     private RangeSealTable table;
     private DeclarationInstanceAllocator instances;
+    private FrozenDeclarations declarations;
     private PipelineRangeSeals factory;
 
     @BeforeEach
@@ -68,8 +68,9 @@ class PipelineRangeSealsTest {
         plans = new TickPlanStore(8);
         table = new RangeSealTable(ledger.pendingLimit());
         instances = new DeclarationInstanceAllocator();
+        declarations = FrozenDeclarations.of(FREEZE, PLAN, List.of()).declarations();
         factory = new PipelineRangeSeals(ledger, table, plans, instances::mintOne,
-            world -> EPOCH, () -> FREEZE, IdentityWitness.NONE);
+            world -> EPOCH, () -> declarations);
         PipelineRunSeal.installRange(factory);
     }
 
@@ -378,7 +379,7 @@ class PipelineRangeSealsTest {
         FrozenDeclarations.Sealed sealed = FrozenDeclarations.of(FREEZE, PLAN, List.of(entry));
         assertTrue(sealed.sealed());
         PipelineRunSeal.installRange(new PipelineRangeSeals(ledger, table, plans,
-            instances::mintOne, world -> EPOCH, () -> FREEZE, source(sealed.declarations())));
+            instances::mintOne, world -> EPOCH, () -> sealed.declarations()));
         AtomicReference<FrozenDeclarations.RangeSeal> agreeing = new AtomicReference<>();
         runBody(task, () -> {
             demand(task, "full");
@@ -398,7 +399,7 @@ class PipelineRangeSealsTest {
         FrozenDeclarations.Sealed otherTable = FrozenDeclarations.of(FREEZE, PLAN,
             List.of(disagreeing));
         PipelineRunSeal.installRange(new PipelineRangeSeals(ledger, table, plans,
-            instances::mintOne, world -> EPOCH, () -> FREEZE, source(otherTable.declarations())));
+            instances::mintOne, world -> EPOCH, () -> otherTable.declarations()));
         AtomicReference<FrozenDeclarations.RangeSeal> refused = new AtomicReference<>();
         runBody(other, () -> {
             demand(other, "full");
@@ -408,41 +409,10 @@ class PipelineRangeSealsTest {
         assertNull(refused.get(), "an entry whose rank disagrees refuses the seal");
     }
 
-    private static IdentityWitness.Source source(FrozenDeclarations declarations) {
-        return new IdentityWitness.Source() {
-
-            @Override
-            public FrozenDeclarations declarations(String worldId, String domainId,
-                                                   long planSequence) {
-                return declarations != null && declarations.planSequence() == planSequence
-                    ? declarations : FrozenDeclarations.none();
-            }
-
-            @Override
-            public long liveWorldEpoch(String worldId) {
-                return EPOCH;
-            }
-
-            @Override
-            public IdentityWitness.Authorization liveAuthorization(long planSequence,
-                    io.izzel.arclight.common.prts.kernel.commit.CommitNamespaces.Namespace controller,
-                    String worldId, String domainId, String nodeKey) {
-                return IdentityWitness.Authorization.refused("", 0L,
-                    IdentityWitness.Authorization.Face.notRead(), "no-record");
-            }
-
-            @Override
-            public io.izzel.arclight.common.prts.kernel.commit.CommitNamespaces.Namespace
-                currentController() {
-                return null;
-            }
-        };
-    }
-
     @Test
     void aDeadWorldGenerationSealsNothing() {
         PipelineRunSeal.installRange(new PipelineRangeSeals(ledger, table, plans,
-            instances::mintOne, world -> 0L, () -> FREEZE, IdentityWitness.NONE));
+            instances::mintOne, world -> 0L, () -> declarations));
         PipelineBatchLedger.TrackedTask task = submit(CELL);
         PipelineBatchLedger.BatchId batch = freeze(PLAN);
         publishPlan(batch);
@@ -509,7 +479,7 @@ class PipelineRangeSealsTest {
     @Test
     void noInstanceNumberIsSpentWhenTheChecksRefuseBeforeTheMint() {
         PipelineRunSeal.installRange(new PipelineRangeSeals(ledger, table, plans,
-            instances::mintOne, world -> 0L, () -> FREEZE, IdentityWitness.NONE));
+            instances::mintOne, world -> 0L, () -> declarations));
         PipelineBatchLedger.TrackedTask task = submit(CELL);
         PipelineBatchLedger.BatchId batch = freeze(PLAN);
         publishPlan(batch);
@@ -559,7 +529,7 @@ class PipelineRangeSealsTest {
     void anInstanceNumberSpentByAFullTableIsNotHandedOutAgain() {
         RangeSealTable small = new RangeSealTable(1);
         PipelineRangeSeals local = new PipelineRangeSeals(ledger, small, plans,
-            instances::mintOne, world -> EPOCH, () -> FREEZE, IdentityWitness.NONE);
+            instances::mintOne, world -> EPOCH, () -> declarations);
         PipelineRunSeal.installRange(local);
         RangeSealFixture filler = new RangeSealFixture();
         filler.freeze(FREEZE).cells(CELL2).cell(CELL2).at(PLAN, 1);
@@ -611,7 +581,8 @@ class PipelineRangeSealsTest {
         RangeSealTable localTable = new RangeSealTable(64);
         DeclarationInstanceAllocator localInstances = new DeclarationInstanceAllocator();
         PipelineRangeSeals localFactory = new PipelineRangeSeals(local, localTable, localPlans,
-            localInstances::mintOne, world -> EPOCH, () -> FREEZE, IdentityWitness.NONE);
+            localInstances::mintOne, world -> EPOCH,
+            () -> FrozenDeclarations.of(FREEZE, PLAN, List.of()).declarations());
         AtomicReference<FrozenDeclarations.RangeSeal> ownerSeal = new AtomicReference<>();
         Runnable presentOwner = () -> {
             setState(owner, new PipelineBatchLedger.Running(batch));

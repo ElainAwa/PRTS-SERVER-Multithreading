@@ -6,6 +6,7 @@ import io.izzel.arclight.common.prts.kernel.auth.WriteLevel;
 import io.izzel.arclight.common.prts.kernel.auth.WriteVersionSlots;
 import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
+import io.izzel.arclight.common.prts.kernel.jobs.PipelineBatchLedger;
 import io.izzel.arclight.common.prts.kernel.sites.WriteClaimTable;
 import io.izzel.arclight.common.prts.kernel.sites.WriteControlledSlots;
 import io.izzel.arclight.common.prts.kernel.sites.WorldEpochs;
@@ -60,6 +61,22 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
                          int rows) {
     }
 
+    /** One cell a reported batch landed writes for, with the task ordinal its window carried. */
+    public record CellRows(long cell, long taskOrdinal, int rows) {
+    }
+
+    /** One batch report upgraded to its per-cell form. The plain report is carried unchanged; the
+     * cells are the windows the writes were attributed to. A batch with a landing whose window
+     * carried no task token keeps an empty cell list and {@code attributed()} false, so a consumer
+     * of this payload can only fall back to the plain path and never split a batch it cannot
+     * attribute. */
+    public record Attributed(Report report, List<CellRows> cells, boolean attributed) {
+
+        public Attributed {
+            cells = cells == null ? List.of() : List.copyOf(cells);
+        }
+    }
+
     /** One open window: the slots it seated, the tick it was seated on and the token of the task it
      * covers. An unplaced mailbox seats every declared job of that mailbox, and the level decides. */
     private record Window(List<WriteControlledSlots.SlotKey> keys, long tickIndex, Object token) {
@@ -69,9 +86,23 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
 
         private final WriteControlledSlots.Slot slot;
         private final LongAdder rows = new LongAdder();
+        private final Map<Long, CellCount> cells = new LinkedHashMap<>();
+        private boolean unattributed;
 
         private Landed(WriteControlledSlots.Slot slot) {
             this.slot = slot;
+        }
+    }
+
+    /** The writes one task window landed for one cell; a second task of the same cell makes the
+     * attribution ambiguous rather than naming one of them. */
+    private static final class CellCount {
+
+        private final long ordinal;
+        private final LongAdder rows = new LongAdder();
+
+        private CellCount(long ordinal) {
+            this.ordinal = ordinal;
         }
     }
 
@@ -101,6 +132,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
     private volatile Map<String, List<Claim>> byMailbox = new ConcurrentHashMap<>();
     private volatile Authorization authorizing;
     private final Map<String, LongAdder> landedByNode = new ConcurrentHashMap<>();
+    private final Consumer<Attributed> settlement;
 
     private volatile WriteControlledSlots table = WriteControlledSlots.NOTHING;
     private volatile Function<JobGraph.Node, WriteControlledSlots.WriteSpace> writeSpaces =
@@ -136,10 +168,20 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
     /** Creates the point. Nothing arms a claim until a table is wired in and the window is on. */
     public PipelineWriteClaims(WriteVersionSlots versions, WorldEpochs epochs,
                                BooleanSupplier judgeThread, Function<String, Object> levelOf) {
+        this(versions, epochs, judgeThread, levelOf, null);
+    }
+
+    /** The same, with the sink one settlement period hands the per-cell form of every report to. A
+     * null sink keeps the plain shape: the reports are built and consumed exactly as before, and
+     * the attribution bookkeeping is not kept. */
+    public PipelineWriteClaims(WriteVersionSlots versions, WorldEpochs epochs,
+                               BooleanSupplier judgeThread, Function<String, Object> levelOf,
+                               Consumer<Attributed> settlement) {
         this.versions = versions;
         this.epochs = epochs;
         this.judgeThread = judgeThread;
         this.levelOf = levelOf;
+        this.settlement = settlement;
     }
 
     /** Names the claim table a seated slot is registered in. */
@@ -166,6 +208,12 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
 
     public boolean enabled() {
         return enabled;
+    }
+
+    /** Whether a settlement sink is installed: with none the point keeps the plain report shape
+     * and never builds the per-cell payload. */
+    public boolean settlementArmed() {
+        return settlement != null;
     }
 
     /** Takes the write sets the plan just froze and turns the claimed ones into the claims the next
@@ -218,10 +266,15 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
                 continue;
             }
             WriteControlledSlots.Slot slot = landed.slot;
-            sink.accept(new Report(seat.worldId(), seat.domainId(), seat.nodeKey(),
+            Report report = new Report(seat.worldId(), seat.domainId(), seat.nodeKey(),
                 held.planSequence(), seat.position(), held.lifecycle(), slot.expectedVersion(),
                 WriteControlledSlots.foldValue(slot.writeSet()),
-                (int) Math.min(Integer.MAX_VALUE, rows)));
+                (int) Math.min(Integer.MAX_VALUE, rows));
+            sink.accept(report);
+            Consumer<Attributed> armed = settlement;
+            if (armed != null) {
+                armed.accept(attributedOf(report, landed));
+            }
             reported++;
         }
         for (Landing key : new ArrayList<>(landings.keySet())) {
@@ -381,9 +434,53 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
             return;
         }
         Landing seat = new Landing(slot.key().planSequence(), slot.position(), slot.planNodeKey());
-        landings.computeIfAbsent(seat, key -> new Landed(slot)).rows.increment();
+        Landed landed = landings.computeIfAbsent(seat, key -> new Landed(slot));
+        landed.rows.increment();
+        if (settlement != null) {
+            attribute(landed);
+        }
         landedByNode.computeIfAbsent(slot.planNodeKey(), key -> new LongAdder()).increment();
         landedWrites++;
+    }
+
+    /** Attributes one landing to the cell of the window the writing thread runs. A write made
+     * outside a task window, or through a window that carried no task token, makes the whole
+     * landing unattributable instead of guessing the cell it belongs to. */
+    private void attribute(Landed landed) {
+        Window open = windows.get(Thread.currentThread());
+        Object token = open == null ? null : open.token();
+        if (!(token instanceof PipelineBatchLedger.TrackedTask task)) {
+            landed.unattributed = true;
+            return;
+        }
+        long cell = task.id().cell();
+        long ordinal = task.id().ordinal();
+        CellCount held = landed.cells.get(cell);
+        if (held == null) {
+            held = new CellCount(ordinal);
+            landed.cells.put(cell, held);
+        } else if (held.ordinal != ordinal) {
+            // Two tasks of one cell cannot both be the writer this attribution names.
+            landed.unattributed = true;
+        }
+        held.rows.increment();
+    }
+
+    /** The per-cell form of one report: empty and marked unattributed when a landing of the batch
+     * was made outside a task window, so a consumer can only take the plain path for it. */
+    private static Attributed attributedOf(Report report, Landed landed) {
+        if (landed == null || landed.unattributed || landed.cells.isEmpty()) {
+            return new Attributed(report, List.of(), false);
+        }
+        List<Long> ordered = new ArrayList<>(landed.cells.keySet());
+        ordered.sort(Long::compareTo);
+        List<CellRows> cells = new ArrayList<>(ordered.size());
+        for (Long cell : ordered) {
+            CellCount held = landed.cells.get(cell);
+            cells.add(new CellRows(cell, held.ordinal,
+                (int) Math.min(Integer.MAX_VALUE, held.rows.sum())));
+        }
+        return new Attributed(report, cells, true);
     }
 
     /** The claims the newest plan declared, in a fixed order. */
