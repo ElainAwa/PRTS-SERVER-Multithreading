@@ -36,6 +36,7 @@ import io.izzel.arclight.common.prts.kernel.jobs.JobIntake;
 import io.izzel.arclight.common.prts.kernel.jobs.JobScheduler;
 import io.izzel.arclight.common.prts.kernel.jobs.PipelineBatchLedger;
 import io.izzel.arclight.common.prts.kernel.jobs.PipelineRoundJobs;
+import io.izzel.arclight.common.prts.kernel.jobs.PipelineRunSeal;
 import io.izzel.arclight.common.prts.kernel.jobs.ShareMeterPoint;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlanPlanner;
@@ -608,6 +609,7 @@ public final class KernelModule {
             attribution.attach();
             chunkDemand.attach();
             chunkDemand.attachSecondPath(demandShadows);
+            PipelineRunSeal.install(demandShadows::statusFor);
             PrtsSelfCosts.install(selfCosts);
             // The chunk row's declared signal is bound only while its producer is installed: a row
             // whose producer is switched off keeps reporting an unbound slot rather than a zero.
@@ -621,6 +623,7 @@ public final class KernelModule {
             chunkMaterialization.detach();
             attribution.detach();
             chunkDemand.detach();
+            PipelineRunSeal.install(null);
             PrtsSelfCosts.install(null);
         }
     }

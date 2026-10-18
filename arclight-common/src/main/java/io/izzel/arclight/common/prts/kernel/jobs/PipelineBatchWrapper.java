@@ -71,6 +71,7 @@ public final class PipelineBatchWrapper {
         @Override
         public void run() {
             boolean window = ledger.runStart(task);
+            PipelineRunSeal seal = window ? PipelineRunSeal.begin(task) : null;
             boolean begun = false;
             Throwable failure = null;
             try {
@@ -87,6 +88,9 @@ public final class PipelineBatchWrapper {
             } finally {
                 failure = merge(failure, begun ? tapped(() -> PrtsPipelineRows.ownerTaskEnd(
                     task.processor(), task.id().mailbox(), task)) : null);
+                if (seal != null) {
+                    seal.close();
+                }
                 failure = merge(failure, tapped(() -> ledger.runEnd(task)));
             }
             rethrow(failure);
