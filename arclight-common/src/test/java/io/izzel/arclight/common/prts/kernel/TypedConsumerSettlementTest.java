@@ -24,6 +24,7 @@ import io.izzel.arclight.common.prts.kernel.sites.WriteControlledSlots.WriteSpac
 import io.izzel.arclight.common.prts.kernel.sites.WritePath;
 import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
 import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard;
+import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
 import net.minecraft.core.SectionPos;
 import net.minecraft.world.level.ChunkPos;
 import org.junit.jupiter.api.Test;
@@ -190,6 +191,73 @@ class TypedConsumerSettlementTest {
     }
 
     @Test
+    void theRealGuardNamesEveryWriteOfItsWindowWithTheCellAndTheTask() {
+        Scratch scratch = new Scratch(true);
+        scratch.declare(ROUNDS);
+        PipelineBatchLedger.TrackedTask token = scratch.token(CELL);
+        scratch.open(token);
+        scratch.write(8, 64, 8);
+        scratch.write(8, 64, 9);
+        scratch.close(token);
+
+        List<PipelineWriteClaims.Report> reports = scratch.report();
+        assertEquals(1, reports.size());
+        PipelineWriteClaims.Attributed payload = scratch.attributed.get(0);
+        assertTrue(payload.attributed());
+        assertTrue(payload.rowsNamed(), "both writes of the window named their identity");
+        assertEquals(1, payload.cells().size());
+        assertEquals(2, payload.cells().get(0).rows());
+        List<String> rows = payload.cells().get(0).rowContent();
+        assertEquals(2, rows.size());
+        assertNotEquals(rows.get(0), rows.get(1), "two writes at two places are two rows");
+        for (String row : rows) {
+            assertTrue(WorldWriteGuard.LandedRow.rowIdentity(row), () -> "row=" + row);
+            assertTrue(row.contains("cell=" + CELL), () -> "row=" + row);
+            assertTrue(row.contains("task=" + token.id().ordinal()), () -> "row=" + row);
+        }
+    }
+
+    @Test
+    void twoOrdinalsOfOneCellMakeTheWholeBatchUnattributable() {
+        Scratch scratch = new Scratch(true);
+        scratch.declare(ROUNDS);
+        PipelineBatchLedger.TrackedTask first = scratch.token(CELL);
+        scratch.open(first);
+        scratch.land();
+        scratch.close(first);
+        PipelineBatchLedger.TrackedTask second = scratch.token(CELL);
+        assertNotEquals(first.id().ordinal(), second.id().ordinal());
+        scratch.open(second);
+        scratch.land();
+        scratch.close(second);
+
+        scratch.report();
+
+        PipelineWriteClaims.Attributed payload = scratch.attributed.get(0);
+        assertFalse(payload.attributed(), "one cell cannot be named by two task ordinals");
+        assertTrue(payload.cells().isEmpty(), "no cell is guessed for the batch");
+        assertEquals(2, payload.report().rows(), "the plain report still counts every landing");
+    }
+
+    @Test
+    void aLandingWithoutARowIdentityKeepsTheRowsButNotTheirNames() {
+        Scratch scratch = new Scratch(true);
+        scratch.declare(ROUNDS);
+        PipelineBatchLedger.TrackedTask token = scratch.token(CELL);
+        scratch.open(token);
+        scratch.land();
+        scratch.close(token);
+
+        scratch.report();
+
+        PipelineWriteClaims.Attributed payload = scratch.attributed.get(0);
+        assertTrue(payload.attributed(), "the cell is still attributed by its window");
+        assertFalse(payload.rowsNamed(), "a landing without a named row marks the batch");
+        assertEquals(1, payload.cells().get(0).rows());
+        assertTrue(payload.cells().get(0).rowContent().isEmpty());
+    }
+
+    @Test
     void theReadinessAccessorReadsTheKernelAndProducesNothing() {
         KernelModule module = KernelModule.instance();
         module.removeWaitSiteTap();
@@ -204,12 +272,12 @@ class TypedConsumerSettlementTest {
             long declared = module.claims().declaredCount();
             KernelModule.TypedConsumerReadiness readiness = module.typedConsumerReadiness();
 
-            assertFalse(KernelModule.TypedConsumerReadiness.SETTLEMENT_WIRED);
+            assertTrue(KernelModule.TypedConsumerReadiness.SETTLEMENT_WIRED);
             assertFalse(readiness.effectsBound(), "the module's own log carries no effect store");
             assertFalse(readiness.controllerBound(), "no chain is adopted");
-            assertFalse(readiness.obligationsRegistered(), "the factory is handed no registry");
-            assertFalse(readiness.attributionArmed(), "the claim point has no settlement sink");
-            assertFalse(readiness.inputsBound());
+            assertTrue(readiness.obligationsRegistered(), "the factory holds published seals");
+            assertTrue(readiness.attributionArmed(), "the claim point carries a settlement sink");
+            assertFalse(readiness.inputsBound(), "a build without a chain still lacks two inputs");
             assertFalse(readiness.ready());
             assertEquals(readiness, module.typedConsumerReadiness(),
                 "the readiness is a value of the state it read");
@@ -220,7 +288,7 @@ class TypedConsumerSettlementTest {
             assertEquals(0L, module.claims().landedWriteCount());
             assertEquals(0, module.rangeSeals().size());
             assertEquals(0, module.rangeSeals().pinnedCount());
-            assertFalse(module.claims().settlementArmed());
+            assertTrue(module.claims().settlementArmed());
             assertNotEquals(0, module.rangeSeals().capacity(),
                 "the table the readiness reads is the installed one");
         } finally {
@@ -264,7 +332,7 @@ class TypedConsumerSettlementTest {
             guard.bindServerThread(Thread.currentThread(), SITE);
             guard.versionSlots(versions);
             guard.controlledSlots(slots);
-            guard.claimLandedTap((slot, world, tick) -> claims.noteLanded(slot, world));
+            guard.claimLandedTap((slot, world, tick, row) -> claims.noteLanded(slot, world, row));
             guard.refresh(true, false, false, TICK);
             guard.noteLiveWorlds(List.of(WORLD));
             versions.refresh(true);
@@ -295,6 +363,14 @@ class TypedConsumerSettlementTest {
 
         private void land() {
             claims.noteLanded(capture(), WORLD);
+        }
+
+        private void write(int x, int y, int z) {
+            assertEquals(PrtsWorldWriteTaps.BlockWriteTap.JUDGE,
+                guard.classifyBlockWrite(LEVEL, x, y, z),
+                () -> "claim refusal=" + slots.lastRefusal());
+            assertTrue(guard.admitBlockWrite(LEVEL, WORLD, null),
+                "the judged path grants the claimed write");
         }
 
         private List<PipelineWriteClaims.Report> report() {

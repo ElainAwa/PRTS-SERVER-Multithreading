@@ -23,6 +23,7 @@ import io.izzel.arclight.common.prts.kernel.commit.EffectStore;
 import io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations;
 import io.izzel.arclight.common.prts.kernel.commit.IdentityWitness;
 import io.izzel.arclight.common.prts.kernel.commit.RangeSealTable;
+import io.izzel.arclight.common.prts.kernel.commit.RangeSettlementObligations;
 import io.izzel.arclight.common.prts.kernel.exits.DualExits;
 import io.izzel.arclight.common.prts.kernel.safety.SafetyNet;
 import io.izzel.arclight.common.prts.kernel.safety.ZeroEffectDetector;
@@ -212,12 +213,17 @@ public final class KernelModule {
     /** The range seals a run start may publish: the table the identity source reads, sized by the
      * ledger's own pending bound and by no literal. */
     private final RangeSealTable rangeSeals = new RangeSealTable(pipelineBatches.pendingLimit());
+    /** The settlement obligations the seals a run start publishes owe: a published seal is held here
+     * until the settlement that names its seat releases it. */
+    private final RangeSettlementObligations settlementObligations =
+        new RangeSettlementObligations();
     private final PipelineRoundJobs pipelineJobs = new PipelineRoundJobs();
     /** The demands a freeze reads as shadow candidates. This reader seals nothing; the freeze does. */
     private final DemandShadowCandidates demandShadows =
         new DemandShadowCandidates(pipelineBatches.pendingLimit());
     private final PipelineWriteClaims claims = new PipelineWriteClaims(versionSlots,
-        guard.worldEpochs(), guard::onServerThread, LiveEntityAccess::level);
+        guard.worldEpochs(), guard::onServerThread, LiveEntityAccess::level,
+        this::noteTypedSettlement);
     private final ShareMeterPoint jobMeter = new ShareMeterPoint();
     private final TickPlanStore plans = new TickPlanStore(KernelSettings.planHistoryCap());
     private final SafetyNet safety = new SafetyNet(KernelSettings::safetyDegrade,
@@ -338,10 +344,12 @@ public final class KernelModule {
         new DeclarationInstanceAllocator();
     /** The factory of the range seals a run start may publish. It is handed the same table the
      * identity source reads and the declarations in force, and it seals nothing until a window
-     * asks. It carries no settlement registry, so nothing it publishes is pinned by default. */
+     * asks. A seal it publishes is held by the settlement obligations until the settlement that
+     * names its seat releases it. */
     private final PipelineRangeSeals rangeSealFactory = new PipelineRangeSeals(pipelineBatches,
         rangeSeals, plans, declarationInstances::mintOne,
-        worldId -> guard.worldEpochs().epochOf(worldId), this::declarations);
+        worldId -> guard.worldEpochs().epochOf(worldId), this::declarations,
+        settlementObligations);
     private long declarationGeneration;
     private String declarationRefusal = "";
     private long declarationRefusals;
@@ -352,6 +360,10 @@ public final class KernelModule {
     /** The log in use: the module's own until a whole chain is adopted, and the log of that chain
      * afterwards. Only an install moves it, and an install moves it whole or not at all. */
     private CommitLog commits = ownCommits;
+    /** The typed fan-out of one settlement period: it validates a whole batch before it writes a line
+     * and writes nothing for a batch any of whose inputs is missing. */
+    private final TypedConsumerSettlement typedConsumer = new TypedConsumerSettlement(
+        () -> commits, rangeSeals, () -> commitIdentitySource.currentController());
     /** The generation holder of a chain this module adopts: the module is its lifecycle owner. */
     private final CommitNamespaces.ResetEpochs commitChainEpochs = new CommitNamespaces.ResetEpochs();
     private long tickIndex;
@@ -447,7 +459,7 @@ public final class KernelModule {
         // The claim point seats a declared job's slot and reports the batches that landed.
         claims.table(controlledSlots);
         claims.writeSpaces(KernelWriteRanges.reader());
-        guard.claimLandedTap((slot, worldId, tick) -> claims.noteLanded(slot, worldId));
+        guard.claimLandedTap((slot, worldId, tick, row) -> claims.noteLanded(slot, worldId, row));
         pipelineJobs.bind(pipelineBatches);
         // The progress side of the two rows whose producer already exists: the intent channel depth
         // and the world epoch change count are the same counters the readout publishes, so a signal
@@ -877,6 +889,11 @@ public final class KernelModule {
                     plans.lifecycle());
             }
             if (KernelSettings.pipelineJobs() && KernelSettings.tickPlan()) {
+                // A seal whose plan the settlement has moved past can no longer be named by it: the
+                // sweep ends its obligation here, so a window that published one leaves no pin.
+                rangeSealFactory.settleBefore(result.plan().planSequence());
+            }
+            if (KernelSettings.pipelineJobs() && KernelSettings.tickPlan()) {
                 dispatchFrozen(result.plan());
             }
         } else {
@@ -1056,6 +1073,19 @@ public final class KernelModule {
             report.rows()), report.planSequence(), report.position(), report.lifecycle());
     }
 
+    /** Settles one attributed batch: the typed fan-out writes the lines its inputs support, and the
+     * seal obligations of its seat are settled whatever it wrote, so a refused batch cannot pin the
+     * table. A settlement that names no seat settles nothing. */
+    private void noteTypedSettlement(PipelineWriteClaims.Attributed payload) {
+        if (payload == null) {
+            return;
+        }
+        typedConsumer.settle(payload);
+        PipelineWriteClaims.Report report = payload.report();
+        rangeSealFactory.settleSeat(new FrozenDeclarations.Seat(report.worldId(), report.domainId(),
+            report.planSequence(), report.position()));
+    }
+
     /** Counts the declarations the domains handed to the planning period, whether the intake took
      * them or refused them: the count is what a reader of the job layer sees as declared. */
     public void noteJobDeclarations(int count) {
@@ -1089,13 +1119,13 @@ public final class KernelModule {
     }
 
     /** The read-only readiness of a typed consumer: which inputs the kernel already holds. The
-     * settlement point that would write a line is not wired, so this is a description, not a
-     * trigger. */
+     * settlement point is wired, so the columns describe the inputs of a build rather than the
+     * build's own wiring. */
     public record TypedConsumerReadiness(boolean effectsBound, boolean controllerBound,
                                          boolean obligationsRegistered, boolean attributionArmed) {
 
-        /** Whether this build wires the settlement point; false until an authorized batch does. */
-        public static final boolean SETTLEMENT_WIRED = false;
+        /** Whether this build wires the settlement point. */
+        public static final boolean SETTLEMENT_WIRED = true;
 
         /** Whether every input a typed line needs is present and the settlement point is wired. */
         public boolean ready() {
@@ -1108,8 +1138,8 @@ public final class KernelModule {
         }
     }
 
-    /** The read-only readiness of a typed consumer: what the module already holds, and that the
-     * settlement point which would write a line is not wired. It reads state and produces nothing. */
+    /** The read-only readiness of a typed consumer: what the module already holds at this moment. It
+     * reads state and produces nothing. */
     public TypedConsumerReadiness typedConsumerReadiness() {
         return new TypedConsumerReadiness(commits.effects() != null, commitController() != null,
             rangeSealFactory.settlementObligationsRegistered(), claims.settlementArmed());
@@ -2945,6 +2975,7 @@ public final class KernelModule {
         rangeSeals.reset();
         rangeSealFactory.resetObligations();
         claims.reset();
+        typedConsumer.reset();
         jobDeclarations = 0L;
         lastDispatchHandedOut = 0L;
         jobMeter.reset();

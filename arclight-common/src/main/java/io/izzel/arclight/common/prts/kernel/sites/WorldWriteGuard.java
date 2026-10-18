@@ -56,6 +56,9 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
     private volatile ClaimLandedTap claimLanded;
     /** The claim of the write the short path just handed over, held on the thread that made it. */
     private final ThreadLocal<WriteControlledSlots.Slot> pendingClaim = new ThreadLocal<>();
+    /** The block position the caller named for the write it is about to hand to the judged path,
+     * held on the thread that made it. A caller that names no position leaves it empty. */
+    private final ThreadLocal<WriteControlledSlots.WritePosition> pendingPosition = new ThreadLocal<>();
     private final LongAdder claimedWrites = new LongAdder();
     private final LongAdder landedWrites = new LongAdder();
 
@@ -87,11 +90,51 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
         this.controlled = slots == null ? WriteControlledSlots.NOTHING : slots;
     }
 
+    /** The identity one claimed write landed with: the seat the claim named, the block position the
+     * caller handed to the fast question and the tick the write landed on. The row a settlement
+     * publishes is built from this alone, so a write whose caller named no position has none. */
+    public record LandedRow(String worldId, String domainId, String nodeKey, long planSequence,
+                            int position, long expectedVersion, long worldEpoch, long tickIndex,
+                            int x, int y, int z) {
+
+        private static final String[] COLUMNS = {"world=", "domain=", "node=", "plan=", "seat=",
+            "version=", "epoch=", "tick=", "cell=", "task=", "pos=", "source="};
+
+        /** The one text this write is named by: the columns that identify the landing, never a fold
+         * of them. The cell and the task ordinal come from the window the write was attributed to. */
+        public String text(long cell, long taskOrdinal) {
+            return "write world=" + worldId + " domain=" + domainId + " node=" + nodeKey
+                + " plan=" + planSequence + " seat=" + position + " version=" + expectedVersion
+                + " epoch=" + worldEpoch + " tick=" + tickIndex + " cell=" + cell
+                + " task=" + taskOrdinal + " pos=" + x + "," + y + "," + z + " source=judged-claim";
+        }
+
+        /** Whether one row text is a row identity of this write path: the fixed opening and every
+         * column it names, each with a value. A digest, a summary or an empty row is not one. */
+        public static boolean rowIdentity(String text) {
+            if (text == null || !text.startsWith("write ")) {
+                return false;
+            }
+            for (String column : COLUMNS) {
+                int at = text.indexOf(" " + column);
+                if (at < 0) {
+                    return false;
+                }
+                int value = at + 1 + column.length();
+                if (value >= text.length() || text.charAt(value) == ' ') {
+                    return false;
+                }
+            }
+            return text.endsWith("source=judged-claim");
+        }
+    }
+
     /** One write a claim captured and the judged path took: it landed in the world, and the batch
-     * it belongs to is what a commit log orders. Only a write that proceeded is reported. */
+     * it belongs to is what a commit log orders. Only a write that proceeded is reported, and the
+     * row identity is null when the caller named no position for the write. */
     public interface ClaimLandedTap {
 
-        void landed(WriteControlledSlots.Slot claim, String worldId, long tickIndex);
+        void landed(WriteControlledSlots.Slot claim, String worldId, long tickIndex, LandedRow row);
     }
 
     /** Names the entry a landed claim is reported to. A null tap keeps the write path as it was. */
@@ -211,8 +254,10 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
                 // that was refused carries no identity: its write is judged as the write path write
                 // it was, and the refusal stays readable on the claim face.
                 pendingClaim.remove();
+                pendingPosition.remove();
                 if (decision.verdict() == WriteControlledSlots.Verdict.CAPTURED) {
                     pendingClaim.set(controlled.lastCoveredSlot());
+                    pendingPosition.set(position);
                     claimedWrites.increment();
                 }
                 return JUDGE;
@@ -243,6 +288,8 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
             claim = null;
         }
         pendingClaim.remove();
+        WriteControlledSlots.WritePosition position = pendingPosition.get();
+        pendingPosition.remove();
         counters.noteAttempt(path, origin, holder.kind());
         ArrivalWriteTap arrival = arrivalTap;
         if (arrival != null) {
@@ -293,7 +340,7 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
             landedWrites.increment();
             ClaimLandedTap tap = claimLanded;
             if (tap != null) {
-                tap.landed(claim, worldId, tickIndex);
+                tap.landed(claim, worldId, tickIndex, rowOf(claim, worldId, position));
             }
         }
         lastDecision = new WriteDecision(path, origin, decidedHolder, disposition, code, decidedSite,
@@ -379,6 +426,7 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
         nextAttemptId.set(1L);
         lastDecision = null;
         pendingClaim.remove();
+        pendingPosition.remove();
         claimedWrites.reset();
         landedWrites.reset();
     }
@@ -402,6 +450,18 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
         }
         payloads.drop(handle);
         return RejectCode.QUEUE_CAP_EXCEEDED;
+    }
+
+    /** The row identity of one landing, or null when the caller named no block position for it: a
+     * write of unknown place cannot be named in a record of what was published. */
+    private LandedRow rowOf(WriteControlledSlots.Slot claim, String worldId,
+                            WriteControlledSlots.WritePosition position) {
+        if (claim == null || position == null || !position.readable()) {
+            return null;
+        }
+        return new LandedRow(worldId, claim.key().domainId(), claim.planNodeKey(),
+            claim.key().planSequence(), claim.position(), claim.expectedVersion(), claim.worldEpoch(),
+            tickIndex, position.x(), position.y(), position.z());
     }
 
     /** The attempt of a write a claim covers: the write is made under the identity of the job that

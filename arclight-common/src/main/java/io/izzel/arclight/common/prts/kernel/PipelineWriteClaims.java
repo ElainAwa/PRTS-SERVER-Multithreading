@@ -8,6 +8,7 @@ import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
 import io.izzel.arclight.common.prts.kernel.jobs.PipelineBatchLedger;
 import io.izzel.arclight.common.prts.kernel.sites.WriteClaimTable;
+import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard;
 import io.izzel.arclight.common.prts.kernel.sites.WriteControlledSlots;
 import io.izzel.arclight.common.prts.kernel.sites.WorldEpochs;
 import io.izzel.arclight.common.prts.support.PrtsPipelineRows;
@@ -61,16 +62,24 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
                          int rows) {
     }
 
-    /** One cell a reported batch landed writes for, with the task ordinal its window carried. */
-    public record CellRows(long cell, long taskOrdinal, int rows) {
+    /** One cell a reported batch landed writes for, with the task ordinal its window carried and
+     * the identity of every write behind those rows. A landing whose write named no identity leaves
+     * this list short of the row count, so a settlement can only fail closed on it. */
+    public record CellRows(long cell, long taskOrdinal, int rows, List<String> rowContent) {
+
+        public CellRows {
+            rowContent = rowContent == null ? List.of() : List.copyOf(rowContent);
+        }
     }
 
     /** One batch report upgraded to its per-cell form. The plain report is carried unchanged; the
-     * cells are the windows the writes were attributed to. A batch with a landing whose window
-     * carried no task token keeps an empty cell list and {@code attributed()} false, so a consumer
-     * of this payload can only fall back to the plain path and never split a batch it cannot
-     * attribute. */
-    public record Attributed(Report report, List<CellRows> cells, boolean attributed) {
+     * cells are the windows the writes were attributed to and the identities of their writes. A
+     * batch with a landing whose window carried no task token keeps an empty cell list and
+     * {@code attributed()} false, so a consumer of this payload can only fall back to the plain
+     * path and never split a batch it cannot attribute. A batch with a landing whose caller named
+     * no position keeps {@code rowsNamed()} false and the same fallback. */
+    public record Attributed(Report report, List<CellRows> cells, boolean attributed,
+                             boolean rowsNamed) {
 
         public Attributed {
             cells = cells == null ? List.of() : List.copyOf(cells);
@@ -88,6 +97,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         private final LongAdder rows = new LongAdder();
         private final Map<Long, CellCount> cells = new LinkedHashMap<>();
         private boolean unattributed;
+        private boolean rowsNamed = true;
 
         private Landed(WriteControlledSlots.Slot slot) {
             this.slot = slot;
@@ -100,6 +110,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
 
         private final long ordinal;
         private final LongAdder rows = new LongAdder();
+        private final List<String> content = new ArrayList<>();
 
         private CellCount(long ordinal) {
             this.ordinal = ordinal;
@@ -427,9 +438,16 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         }
     }
 
-    /** One write a claim landed: the batch it belongs to is counted here and reported at the freeze
-     * that closes the span, never during the write. */
+    /** One write a claim landed without a row identity: the batch it belongs to is counted here and
+     * reported at the freeze that closes the span, never during the write. */
     public void noteLanded(WriteControlledSlots.Slot slot, String worldId) {
+        noteLanded(slot, worldId, null);
+    }
+
+    /** One write a claim landed with the identity the write path named for it: the batch it belongs
+     * to is counted here and reported at the freeze that closes the span, never during the write. */
+    public void noteLanded(WriteControlledSlots.Slot slot, String worldId,
+                           WorldWriteGuard.LandedRow row) {
         if (slot == null) {
             return;
         }
@@ -437,7 +455,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         Landed landed = landings.computeIfAbsent(seat, key -> new Landed(slot));
         landed.rows.increment();
         if (settlement != null) {
-            attribute(landed);
+            attribute(landed, row);
         }
         landedByNode.computeIfAbsent(slot.planNodeKey(), key -> new LongAdder()).increment();
         landedWrites++;
@@ -445,8 +463,10 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
 
     /** Attributes one landing to the cell of the window the writing thread runs. A write made
      * outside a task window, or through a window that carried no task token, makes the whole
-     * landing unattributable instead of guessing the cell it belongs to. */
-    private void attribute(Landed landed) {
+     * landing unattributable instead of guessing the cell it belongs to. A landing whose write
+     * named no identity keeps the batch's rows named only in part, and a settlement writes nothing
+     * for it. */
+    private void attribute(Landed landed, WorldWriteGuard.LandedRow row) {
         Window open = windows.get(Thread.currentThread());
         Object token = open == null ? null : open.token();
         if (!(token instanceof PipelineBatchLedger.TrackedTask task)) {
@@ -464,13 +484,18 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
             landed.unattributed = true;
         }
         held.rows.increment();
+        if (row == null) {
+            landed.rowsNamed = false;
+            return;
+        }
+        held.content.add(row.text(cell, ordinal));
     }
 
     /** The per-cell form of one report: empty and marked unattributed when a landing of the batch
      * was made outside a task window, so a consumer can only take the plain path for it. */
     private static Attributed attributedOf(Report report, Landed landed) {
         if (landed == null || landed.unattributed || landed.cells.isEmpty()) {
-            return new Attributed(report, List.of(), false);
+            return new Attributed(report, List.of(), false, false);
         }
         List<Long> ordered = new ArrayList<>(landed.cells.keySet());
         ordered.sort(Long::compareTo);
@@ -478,9 +503,9 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         for (Long cell : ordered) {
             CellCount held = landed.cells.get(cell);
             cells.add(new CellRows(cell, held.ordinal,
-                (int) Math.min(Integer.MAX_VALUE, held.rows.sum())));
+                (int) Math.min(Integer.MAX_VALUE, held.rows.sum()), held.content));
         }
-        return new Attributed(report, cells, true);
+        return new Attributed(report, cells, true, landed.rowsNamed);
     }
 
     /** The claims the newest plan declared, in a fixed order. */

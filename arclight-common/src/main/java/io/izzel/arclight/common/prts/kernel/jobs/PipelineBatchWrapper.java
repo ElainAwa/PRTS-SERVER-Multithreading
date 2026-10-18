@@ -89,6 +89,10 @@ public final class PipelineBatchWrapper {
                 failure = merge(failure, begun ? tapped(() -> PrtsPipelineRows.ownerTaskEnd(
                     task.processor(), task.id().mailbox(), task)) : null);
                 if (seal != null) {
+                    // The window asks its one status here, before it closes: a present status may
+                    // publish the range seal and the obligation that keeps it, while an absent one
+                    // leaves the window with no range. The read changes no write's answer.
+                    seal.status();
                     seal.close();
                 }
                 failure = merge(failure, tapped(() -> ledger.runEnd(task)));

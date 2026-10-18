@@ -468,7 +468,7 @@ class PipelineBatchRunsTest {
             guard.bindServerThread(Thread.currentThread(), SITE);
             guard.versionSlots(versions);
             guard.controlledSlots(slots);
-            guard.claimLandedTap((slot, world, tick) -> claims.noteLanded(slot, world));
+            guard.claimLandedTap((slot, world, tick, row) -> claims.noteLanded(slot, world, row));
             guard.refresh(true, false, false, TICK);
             guard.noteLiveWorlds(List.of(WORLD));
             versions.refresh(true);
