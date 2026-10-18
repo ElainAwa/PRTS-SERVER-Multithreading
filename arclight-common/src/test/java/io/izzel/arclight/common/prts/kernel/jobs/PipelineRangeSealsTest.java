@@ -2,10 +2,12 @@
 package io.izzel.arclight.common.prts.kernel.jobs;
 
 import io.izzel.arclight.common.prts.kernel.PipelineRangeSeals;
+import io.izzel.arclight.common.prts.kernel.commit.CommitLog;
 import io.izzel.arclight.common.prts.kernel.commit.DeclarationInstanceAllocator;
 import io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations;
 import io.izzel.arclight.common.prts.kernel.commit.IdentityWitness;
 import io.izzel.arclight.common.prts.kernel.commit.RangeDigests;
+import io.izzel.arclight.common.prts.kernel.commit.RangeSealFixture;
 import io.izzel.arclight.common.prts.kernel.commit.RangeSealTable;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlanStore;
@@ -502,6 +504,134 @@ class PipelineRangeSealsTest {
 
         assertNull(direct.get(), "a task whose state is not a running batch publishes no seal");
         assertEquals(0, table.size());
+    }
+
+    @Test
+    void noInstanceNumberIsSpentWhenTheChecksRefuseBeforeTheMint() {
+        PipelineRunSeal.installRange(new PipelineRangeSeals(ledger, table, plans,
+            instances::mintOne, world -> 0L, () -> FREEZE, IdentityWitness.NONE));
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        publishPlan(batch);
+        long before = instances.mintOne();
+        AtomicReference<FrozenDeclarations.RangeSeal> seen = new AtomicReference<>();
+        runBody(task, () -> {
+            demand(task, "full");
+            PipelineRunSeal.current().status();
+            seen.set(PipelineRunSeal.current().range());
+        });
+
+        assertNull(seen.get(), "the dead generation refuses the seal");
+        assertEquals(before + 1L, instances.mintOne(),
+            "a refusal before the mint spends no number");
+        assertEquals(0, table.size());
+    }
+
+    @Test
+    void anInstanceNumberSpentByAConflictIsNotHandedOutAgain() {
+        RangeSealFixture blocker = new RangeSealFixture();
+        blocker.world = WORLD;
+        blocker.domain = DOMAIN;
+        blocker.nodeKey = PipelineRoundJobs.batchKeyOf(
+            new PipelineBatchLedger.BatchId(WORLD, MAILBOX, 1L, PLAN));
+        blocker.freeze(FREEZE);
+        blocker.cells(CELL).cell(CELL).status("empty").at(PLAN, 0);
+        assertEquals(RangeSealTable.Publish.PUBLISHED, table.publish(blocker.build()));
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        publishPlan(batch);
+        long before = instances.mintOne();
+        AtomicReference<FrozenDeclarations.RangeSeal> seen = new AtomicReference<>();
+        runBody(task, () -> {
+            demand(task, "full");
+            PipelineRunSeal.current().status();
+            seen.set(PipelineRunSeal.current().range());
+        });
+
+        assertNull(seen.get());
+        assertEquals(1L, factory.conflicts());
+        assertEquals(before + 2L, instances.mintOne(),
+            "the number spent before a conflict is not handed out again");
+        assertEquals(1, table.size(), "the blocking seal is still the one under the key");
+    }
+
+    @Test
+    void anInstanceNumberSpentByAFullTableIsNotHandedOutAgain() {
+        RangeSealTable small = new RangeSealTable(1);
+        PipelineRangeSeals local = new PipelineRangeSeals(ledger, small, plans,
+            instances::mintOne, world -> EPOCH, () -> FREEZE, IdentityWitness.NONE);
+        PipelineRunSeal.installRange(local);
+        RangeSealFixture filler = new RangeSealFixture();
+        filler.freeze(FREEZE).cells(CELL2).cell(CELL2).at(PLAN, 1);
+        assertEquals(RangeSealTable.Publish.PUBLISHED, small.publish(filler.build()));
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        publishPlan(batch);
+        long before = instances.mintOne();
+        AtomicReference<FrozenDeclarations.RangeSeal> seen = new AtomicReference<>();
+        runBody(task, () -> {
+            demand(task, "full");
+            PipelineRunSeal.current().status();
+            seen.set(PipelineRunSeal.current().range());
+        });
+
+        assertNull(seen.get());
+        assertEquals(1L, local.overflows());
+        assertEquals(before + 2L, instances.mintOne(),
+            "a number spent before a full table is not handed out again");
+        assertEquals(1, small.size());
+    }
+
+    @Test
+    void theOwnerAndItsCanonicalKeyAreTheSameWhicheverTaskRunsFirst() {
+        FrozenDeclarations.RangeSeal nonOwnerFirst = ownerScenario(false);
+        FrozenDeclarations.RangeSeal ownerFirst = ownerScenario(true);
+
+        assertNotNull(nonOwnerFirst);
+        assertNotNull(ownerFirst);
+        assertEquals(CommitLog.logicalKeyOf(nonOwnerFirst).canonical(),
+            CommitLog.logicalKeyOf(ownerFirst).canonical(),
+            "the owner key does not depend on the order the two tasks present in");
+        assertEquals(nonOwnerFirst.stamp().taskOrdinal(), ownerFirst.stamp().taskOrdinal());
+        assertEquals(CELL, nonOwnerFirst.statuses().keySet().iterator().next());
+        assertEquals(CELL, ownerFirst.statuses().keySet().iterator().next());
+    }
+
+    /** One fresh batch with two tasks on one cell; the flagged order drives their presents and the
+     * owner seal is returned. */
+    private static FrozenDeclarations.RangeSeal ownerScenario(boolean ownerPresentFirst) {
+        PipelineBatchLedger local = new PipelineBatchLedger(64, 1000);
+        PipelineBatchLedger.TrackedTask owner = local.mint(new Object(), WORLD, MAILBOX, CELL, TICK);
+        local.enqueued(owner);
+        PipelineBatchLedger.TrackedTask other = local.mint(new Object(), WORLD, MAILBOX, CELL, TICK);
+        local.enqueued(other);
+        PipelineBatchLedger.BatchId batch = local.freeze(WORLD, MAILBOX, PLAN, TICK);
+        TickPlanStore localPlans = new TickPlanStore(8);
+        localPlans.publish(plan(batch.planSequence(), PipelineRoundJobs.batchKeyOf(batch)));
+        RangeSealTable localTable = new RangeSealTable(64);
+        DeclarationInstanceAllocator localInstances = new DeclarationInstanceAllocator();
+        PipelineRangeSeals localFactory = new PipelineRangeSeals(local, localTable, localPlans,
+            localInstances::mintOne, world -> EPOCH, () -> FREEZE, IdentityWitness.NONE);
+        AtomicReference<FrozenDeclarations.RangeSeal> ownerSeal = new AtomicReference<>();
+        Runnable presentOwner = () -> {
+            setState(owner, new PipelineBatchLedger.Running(batch));
+            ownerSeal.set(localFactory.seal(owner, statusOf(owner, batch),
+                localFactory.generation()));
+        };
+        Runnable presentOther = () -> {
+            setState(other, new PipelineBatchLedger.Running(batch));
+            assertNull(localFactory.seal(other, statusOf(other, batch), localFactory.generation()));
+        };
+        if (ownerPresentFirst) {
+            presentOwner.run();
+            presentOther.run();
+        } else {
+            presentOther.run();
+            presentOwner.run();
+        }
+        assertEquals(1L, localFactory.seals());
+        assertEquals(1, localTable.size());
+        return ownerSeal.get();
     }
 
     @Test

@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** The range witness: a line of a sealed cell is judged by the range that covers it and by the one
@@ -323,5 +324,41 @@ class RangeWitnessTest {
         assertEquals(0L, log.accepted());
         assertEquals(1L, log.typedRefused());
         assertEquals(0, log.unreadObligations());
+    }
+
+    @Test
+    void aSealKeepsItsColumnsAndFoldsAfterItsInputsAreMutated() {
+        FrozenDeclarations.RangeSeal template = new RangeSealFixture().build();
+        long[] cells = {RangeSealFixture.CELL};
+        Map<Long, FrozenDeclarations.CellStatus> statuses = new LinkedHashMap<>();
+        FrozenDeclarations.Stamp stamp = template.stamp();
+        statuses.put(RangeSealFixture.CELL, new FrozenDeclarations.CellStatus(
+            RangeSealFixture.STATUS, stamp));
+        FrozenDeclarations.RangeSeal seal = new FrozenDeclarations.RangeSeal(template.seat(),
+            template.nodeKey(), template.role(), template.worldId(), template.mailbox(),
+            template.freezeOrdinal(), template.planSequence(), template.freeze(), cells,
+            RangeDigests.spaceDigest(cells), statuses, RangeDigests.statusMapDigest(statuses),
+            template.instanceId(), template.worldEpoch(), stamp);
+
+        cells[0] = RangeSealFixture.CELL2;
+        statuses.put(RangeSealFixture.CELL2, new FrozenDeclarations.CellStatus("features", stamp));
+        statuses.remove(RangeSealFixture.CELL);
+
+        assertEquals(RangeSealFixture.CELL, seal.cells()[0],
+            "the seal copied the cell array it was built with");
+        assertEquals(1, seal.statuses().size());
+        assertTrue(seal.statuses().containsKey(RangeSealFixture.CELL));
+        assertTrue(seal.wellFormed());
+        assertEquals(seal.spaceDigest(), RangeDigests.spaceDigest(seal.cells()),
+            "the carried fold still recomputes from the sealed columns");
+        assertEquals(seal.statusMapDigest(), RangeDigests.statusMapDigest(seal.statuses()));
+        long[] returned = seal.cells();
+        returned[0] = RangeSealFixture.CELL2;
+        assertEquals(RangeSealFixture.CELL, seal.cells()[0],
+            "the accessor hands out a copy, not the sealed array");
+        assertThrows(UnsupportedOperationException.class,
+            () -> seal.statuses().put(RangeSealFixture.CELL2,
+                new FrozenDeclarations.CellStatus("features", stamp)),
+            "the sealed status map cannot be edited through its accessor");
     }
 }

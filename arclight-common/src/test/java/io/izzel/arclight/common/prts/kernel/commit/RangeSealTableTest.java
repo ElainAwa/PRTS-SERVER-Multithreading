@@ -34,15 +34,16 @@ class RangeSealTableTest {
         RangeSealTable table = table();
         FrozenDeclarations.RangeSeal seal = seal(RangeSealFixture.CELL, "full");
 
+        FrozenDeclarations.RangeSeal sameValue = seal(RangeSealFixture.CELL, "full");
+        assertEquals(seal, sameValue);
         assertEquals(RangeSealTable.Publish.PUBLISHED, table.publish(seal));
-        assertEquals(RangeSealTable.Publish.IDEMPOTENT, table.publish(seal(RangeSealFixture.CELL,
-            "full")));
+        assertEquals(RangeSealTable.Publish.IDEMPOTENT, table.publish(sameValue));
         assertEquals(1, table.size());
         assertEquals(1L, table.published());
         assertEquals(1L, table.idempotent());
-        assertSame(table.lookup(seal.freeze(), seal.seat(), seal.statuses().keySet().iterator()
-            .next()), table.lookup(seal.freeze(), seal.seat(), seal.statuses().keySet().iterator()
-            .next()));
+        FrozenDeclarations.RangeSeal held = table.lookup(seal.freeze(), seal.seat(),
+            seal.statuses().keySet().iterator().next());
+        assertSame(seal, held, "the first published object is still the one in the table");
     }
 
     @Test
@@ -193,7 +194,7 @@ class RangeSealTableTest {
     }
 
     @Test
-    void aSnapshotFoldsEveryPublicFieldAndIgnoresTheInputOrder() {
+    void aSnapshotFoldCoversTheSealColumnsAndIgnoresTheInputOrder() {
         FrozenDeclarations.RangeSeal first = seal(RangeSealFixture.CELL, "full");
         FrozenDeclarations.RangeSeal second = seal(RangeSealFixture.CELL2, "features");
         RangeSealTable one = table();
@@ -213,12 +214,31 @@ class RangeSealTableTest {
         assertFalse(snapshot.has(first.planSequence(), first.seat().position(),
             RangeSealFixture.CELL2 + 10L));
 
-        RangeSealFixture changed = new RangeSealFixture();
-        changed.cells(RangeSealFixture.CELL).cell(RangeSealFixture.CELL).status("empty");
-        RangeSealTable edited = table();
-        edited.publish(changed.build());
-        assertFalse(snapshot.digest() == edited.snapshot().digest(),
-            "a changed public field changes the fold");
+        List<RangeSealFixture> variants = new ArrayList<>();
+        RangeSealFixture status = new RangeSealFixture();
+        status.cells(RangeSealFixture.CELL).cell(RangeSealFixture.CELL).status("empty");
+        variants.add(status);
+        RangeSealFixture instance = new RangeSealFixture();
+        instance.instance(RangeSealFixture.INSTANCE + 3L);
+        variants.add(instance);
+        RangeSealFixture epoch = new RangeSealFixture();
+        epoch.epoch(RangeSealFixture.EPOCH + 3L);
+        variants.add(epoch);
+        RangeSealFixture role = new RangeSealFixture();
+        role.role(2);
+        variants.add(role);
+        RangeSealFixture shape = new RangeSealFixture();
+        shape.cells(RangeSealFixture.CELL, RangeSealFixture.CELL2 + 4L);
+        variants.add(shape);
+        RangeSealFixture generation = new RangeSealFixture();
+        generation.freeze(new FrozenDeclarations.FreezeKey(RangeSealFixture.LIFECYCLE, 2L));
+        variants.add(generation);
+        for (RangeSealFixture variant : variants) {
+            RangeSealTable edited = table();
+            edited.publish(variant.build());
+            assertFalse(snapshot.digest() == edited.snapshot().digest(),
+                "a changed seal column changes the fold");
+        }
     }
 
     @Test
