@@ -89,10 +89,15 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
             FrozenDeclarations.Stamp stamp = new FrozenDeclarations.Stamp(read.taskOrdinal(),
                 read.world(), read.mailbox(), read.cell(), read.mintTick(),
                 read.batchFreezeOrdinal(), read.planSequence(), read.demandToken());
+            if (!ledger.bindingPublished(batch)) {
+                // A binding still being formed, or one the bounded history dropped, carries no range
+                // to publish: refusing here keeps the forming members from standing in for it.
+                return refuse();
+            }
             if (ledger.currentPlan() != batch.planSequence()) {
                 return refuse();
             }
-            if (ownerOrdinal(batch, id.cell()) != id.ordinal()) {
+            if (ledger.ownerOrdinal(batch, id.cell()) != id.ordinal()) {
                 // One cell has one owner: the task with the smallest ordinal the published binding
                 // carries. A later task of the same cell never publishes a second seal.
                 return refuse();
@@ -186,16 +191,6 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
             && stamp.batchFreezeOrdinal() == batch.freezeOrdinal()
             && stamp.planSequence() == batch.planSequence() && stamp.demandToken() > 0L
             && batch.worldId().equals(id.worldId()) && batch.mailbox().equals(id.mailbox());
-    }
-
-    private long ownerOrdinal(PipelineBatchLedger.BatchId batch, long cell) {
-        long owner = -1L;
-        for (PipelineBatchLedger.TrackedTask member : ledger.tasksOf(batch)) {
-            if (member.id().cell() == cell && (owner < 0L || member.id().ordinal() < owner)) {
-                owner = member.id().ordinal();
-            }
-        }
-        return owner;
     }
 
     private static TickPlan.CommitStep stepOf(List<TickPlan.CommitStep> order, String nodeKey,

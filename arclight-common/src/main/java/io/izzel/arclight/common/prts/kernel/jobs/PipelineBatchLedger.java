@@ -688,6 +688,33 @@ public final class PipelineBatchLedger implements PrtsPipelineBatches.TaskSink {
         return pendingLimit;
     }
 
+    /** Whether one batch's binding is published; a claim a freeze has not published yet, and one
+     * the bounded history dropped, both answer false. Read-only: it counts nothing. */
+    public boolean bindingPublished(BatchId batch) {
+        if (batch == null) {
+            return false;
+        }
+        BatchBinding published = batches.get(batch.freezeOrdinal());
+        return published != null && published.batch().equals(batch);
+    }
+
+    /** The smallest ordinal a published binding carries on one cell, or -1 when the binding is not
+     * published or names no task of that cell. Read-only: it reads the published binding alone, never
+     * the pending index, and counts nothing. */
+    public long ownerOrdinal(BatchId batch, long cell) {
+        BatchBinding published = batch == null ? null : batches.get(batch.freezeOrdinal());
+        if (published == null || !published.batch().equals(batch)) {
+            return -1L;
+        }
+        long owner = -1L;
+        for (TrackedTask task : published.tasks()) {
+            if (task.id().cell() == cell && (owner < 0L || task.id().ordinal() < owner)) {
+                owner = task.id().ordinal();
+            }
+        }
+        return owner;
+    }
+
     /** The tasks one batch claimed, in mint order; while its binding is still being formed they are
      * read from the claims that already carry it, and empty once the batch fell out of the bounded
      * history. */

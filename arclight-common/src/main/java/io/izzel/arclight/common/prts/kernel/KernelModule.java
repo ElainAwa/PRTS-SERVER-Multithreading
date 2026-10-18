@@ -22,6 +22,7 @@ import io.izzel.arclight.common.prts.kernel.commit.DeclarationInstanceAllocator;
 import io.izzel.arclight.common.prts.kernel.commit.EffectStore;
 import io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations;
 import io.izzel.arclight.common.prts.kernel.commit.IdentityWitness;
+import io.izzel.arclight.common.prts.kernel.commit.RangeSealTable;
 import io.izzel.arclight.common.prts.kernel.exits.DualExits;
 import io.izzel.arclight.common.prts.kernel.safety.SafetyNet;
 import io.izzel.arclight.common.prts.kernel.safety.ZeroEffectDetector;
@@ -208,6 +209,9 @@ public final class KernelModule {
     private final JobIntake jobIntake = new JobIntake(KernelSettings::jobQueueCap);
     private final JobScheduler scheduler = new JobScheduler();
     private final PipelineBatchLedger pipelineBatches = new PipelineBatchLedger();
+    /** The range seals a run start may publish: the table the identity source reads, sized by the
+     * ledger's own pending bound and by no literal. */
+    private final RangeSealTable rangeSeals = new RangeSealTable(pipelineBatches.pendingLimit());
     private final PipelineRoundJobs pipelineJobs = new PipelineRoundJobs();
     /** The demands a freeze reads as shadow candidates. This reader seals nothing; the freeze does. */
     private final DemandShadowCandidates demandShadows =
@@ -254,6 +258,21 @@ public final class KernelModule {
         @Override
         public IdentityWitness.Obligation oblige(FrozenDeclarations declarations) {
             return declarationHistory.oblige(declarations);
+        }
+
+        @Override
+        public FrozenDeclarations.RangeSeal range(FrozenDeclarations.Seat seat, long cell) {
+            return rangeSeals.locate(seat, cell);
+        }
+
+        @Override
+        public boolean hasRange(FrozenDeclarations.Seat seat) {
+            return rangeSeals.hasSeat(seat);
+        }
+
+        @Override
+        public IdentityWitness.Obligation oblige(FrozenDeclarations.RangeSeal seal) {
+            return rangeSeals.oblige(seal);
         }
 
         @Override
@@ -317,6 +336,12 @@ public final class KernelModule {
     /** The one source of the instance numbers a freeze seals: held here and handed to no one. */
     private final DeclarationInstanceAllocator declarationInstances =
         new DeclarationInstanceAllocator();
+    /** The factory of the range seals a run start may publish. It is handed the same table the
+     * identity source reads and the freeze in force, and it seals nothing until a window asks. */
+    private final PipelineRangeSeals rangeSealFactory = new PipelineRangeSeals(pipelineBatches,
+        rangeSeals, plans, declarationInstances::mintOne,
+        worldId -> guard.worldEpochs().epochOf(worldId), this::currentFreezeKey,
+        commitIdentitySource);
     private long declarationGeneration;
     private String declarationRefusal = "";
     private long declarationRefusals;
@@ -610,6 +635,7 @@ public final class KernelModule {
             chunkDemand.attach();
             chunkDemand.attachSecondPath(demandShadows);
             PipelineRunSeal.install(demandShadows::statusFor);
+            PipelineRunSeal.installRange(rangeSealFactory);
             PrtsSelfCosts.install(selfCosts);
             // The chunk row's declared signal is bound only while its producer is installed: a row
             // whose producer is switched off keeps reporting an unbound slot rather than a zero.
@@ -624,6 +650,7 @@ public final class KernelModule {
             attribution.detach();
             chunkDemand.detach();
             PipelineRunSeal.install(null);
+            PipelineRunSeal.installRange(null);
             PrtsSelfCosts.install(null);
         }
     }
@@ -929,6 +956,12 @@ public final class KernelModule {
         return declarationHistory.current();
     }
 
+    /** The freeze in force, or the undeclared key when no declaration was sealed: a window that
+     * found no freeze publishes no seal rather than one under a guessed generation. */
+    private FrozenDeclarations.FreezeKey currentFreezeKey() {
+        return declarationHistory.current().freeze();
+    }
+
     /** The freeze the current declarations belong to: its lifecycle key and its own generation. */
     public String declarationFreeze() {
         FrozenDeclarations.FreezeKey freeze = declarations().freeze();
@@ -1053,6 +1086,12 @@ public final class KernelModule {
     /** The batches the chunk pipeline submitted, as the ledger that tracks them reads them. */
     public PipelineBatchLedger pipelineBatches() {
         return pipelineBatches;
+    }
+
+    /** The range seals a run start may publish: the one table the identity source reads and the
+     * run-start factory is handed. Read-only for every caller. */
+    public RangeSealTable rangeSeals() {
+        return rangeSeals;
     }
 
     /** The chunk demands the freeze reads as shadow candidates. The reader seals nothing; the freeze
@@ -2882,6 +2921,7 @@ public final class KernelModule {
         scheduler.reset();
         pipelineJobs.reset();
         pipelineBatches.reset();
+        rangeSeals.reset();
         claims.reset();
         jobDeclarations = 0L;
         lastDispatchHandedOut = 0L;
