@@ -3,13 +3,10 @@ package io.izzel.arclight.common.prts.support;
 
 import java.util.concurrent.atomic.AtomicLong;
 
-/** The seam the chunk cache reports its demand side through: what was asked of it, what the ask was
- * answered with, and the futures it handed out, each named for the call it belongs to. The calls are
- * not changed and nothing is cancelled, delayed or reordered; every call is a no-op while no tap is
- * installed. A tap that has no use for the chunk implements the entries that do not name it, and is
- * told about each ask once. A tap that throws is not the ask failing: its count is dropped, and a
- * stamp it cannot answer reads -1, which is no observation time to report -- not a refusal code, not
- * a failure of the host and not a new reading key. */
+/** The seam the chunk cache reports its demand side through: what was asked, what answered it, and
+ * the futures it handed out, each named for its call. Every call is a no-op while no tap is
+ * installed, and a tap that throws is not the ask failing: its count is dropped and a stamp it
+ * cannot answer reads -1, which is no observation time and not a refusal code. */
 public final class PrtsChunkDemand {
 
     public interface DemandTap {
@@ -49,6 +46,12 @@ public final class PrtsChunkDemand {
         default void demandDescriptor(String worldId, int chunkX, int chunkZ, String status,
                                       boolean requireChunk, long token) {
             demandDescriptor(worldId, chunkX, chunkZ, status, requireChunk);
+        }
+
+        /** A named ask that also names the task it was made under; the default drops the task. */
+        default void demandDescriptor(String worldId, int chunkX, int chunkZ, String status,
+                                      boolean requireChunk, long token, Object taskToken) {
+            demandDescriptor(worldId, chunkX, chunkZ, status, requireChunk, token);
         }
 
         /** A named future was handed to the caller; the default keeps the old count. */
@@ -204,13 +207,21 @@ public final class PrtsChunkDemand {
      * @return the name of this call, or {@link #NO_TOKEN} when nothing is installed */
     public static long demandDescriptorToken(String worldId, int chunkX, int chunkZ, String status,
                                              boolean requireChunk) {
+        return demandDescriptorToken(worldId, chunkX, chunkZ, status, requireChunk, null);
+    }
+
+    /** The entry a future-returning ask arrives through, naming the call and the task it was made
+     * under.
+     * @return the name of this call, or {@link #NO_TOKEN} when nothing is installed */
+    public static long demandDescriptorToken(String worldId, int chunkX, int chunkZ, String status,
+                                             boolean requireChunk, Object taskToken) {
         DemandTap watcher = tap;
         if (watcher == null) {
             return NO_TOKEN;
         }
         long token = nextToken();
         try {
-            watcher.demandDescriptor(worldId, chunkX, chunkZ, status, requireChunk, token);
+            watcher.demandDescriptor(worldId, chunkX, chunkZ, status, requireChunk, token, taskToken);
         } catch (Throwable ignored) {
             // A watcher that throws is not the ask failing: the name is this call's either way.
         }

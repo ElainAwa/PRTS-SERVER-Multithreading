@@ -360,13 +360,14 @@ class DemandShadowCandidatesTest {
         }
 
         assertEquals(new TreeSet<>(List.of("[L" + DemandShadowCandidates.class.getName() + "$Slot;",
-            "boolean", "int", "long", "java.lang.String", "java.util.List",
+            "boolean", "int", "long", "java.lang.Object", "java.util.List", "java.util.Map",
+            "java.lang.String",
             FrozenDeclarations.DeclaredChunk.class.getName(),
             FrozenDeclarations.FreezeKey.class.getName(),
             DemandShadowCandidates.DemandDescriptor.class.getName(),
             "[L" + DemandShadowCandidates.class.getName() + "$Slot;")), types,
-            "every column of a candidate and of the window it waits in, and nothing else: "
-                + types);
+            "every column of a candidate, an opaque task identity and the register map, and "
+                + "nothing else: " + types);
         for (String name : types) {
             assertFalse(name.startsWith("net.minecraft."), name + " is a platform type");
             assertFalse(name.startsWith("org.bukkit."), name + " is a platform type");

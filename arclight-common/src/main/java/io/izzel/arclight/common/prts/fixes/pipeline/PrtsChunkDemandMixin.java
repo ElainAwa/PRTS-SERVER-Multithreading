@@ -9,6 +9,7 @@ import com.llamalad7.mixinextras.sugar.ref.LocalLongRef;
 import io.izzel.arclight.api.ArclightPlatform;
 import io.izzel.arclight.common.mod.mixins.annotation.OnlyInPlatform;
 import io.izzel.arclight.common.prts.support.PrtsChunkDemand;
+import io.izzel.arclight.common.prts.support.PrtsPipelineBatches;
 import net.minecraft.server.level.ChunkResult;
 import net.minecraft.server.level.ServerChunkCache;
 import net.minecraft.server.level.ServerLevel;
@@ -67,7 +68,7 @@ public abstract class PrtsChunkDemandMixin {
         if (PrtsChunkDemand.installed()) {
             // A frame that never reaches this line reads the carrier's own start: no name.
             callToken.set(PrtsChunkDemand.demandDescriptorToken(prts$worldId(), x, z,
-                status.getName(), load));
+                status.getName(), load, PrtsPipelineBatches.currentTask()));
         }
     }
 

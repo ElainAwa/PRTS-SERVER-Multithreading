@@ -209,7 +209,8 @@ public final class KernelModule {
     private final PipelineBatchLedger pipelineBatches = new PipelineBatchLedger();
     private final PipelineRoundJobs pipelineJobs = new PipelineRoundJobs();
     /** The demands a freeze reads as shadow candidates. This reader seals nothing; the freeze does. */
-    private final DemandShadowCandidates demandShadows = new DemandShadowCandidates();
+    private final DemandShadowCandidates demandShadows =
+        new DemandShadowCandidates(pipelineBatches.pendingLimit());
     private final PipelineWriteClaims claims = new PipelineWriteClaims(versionSlots,
         guard.worldEpochs(), guard::onServerThread, LiveEntityAccess::level);
     private final ShareMeterPoint jobMeter = new ShareMeterPoint();

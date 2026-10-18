@@ -272,18 +272,22 @@ public final class ChunkDemandObserver implements PrtsChunkDemand.DemandTap {
                                  boolean requireChunk) {
         // An ask that arrives without a name is still an ask: it is stamped and told on, and the
         // reader that needs a name reads none rather than one made up here.
-        openAndForwardDescriptor(worldId, chunkX, chunkZ, status, requireChunk,
-            PrtsChunkDemand.NO_TOKEN);
+        if (!openFutureStamp()) {
+            return;
+        }
+        DemandTap second = secondPath;
+        if (second == null) {
+            return;
+        }
+        try {
+            second.demandDescriptor(worldId, chunkX, chunkZ, status, requireChunk);
+        } catch (Throwable ignored) {
+        }
     }
 
     @Override
     public void demandDescriptor(String worldId, int chunkX, int chunkZ, String status,
                                  boolean requireChunk, long token) {
-        openAndForwardDescriptor(worldId, chunkX, chunkZ, status, requireChunk, token);
-    }
-
-    private void openAndForwardDescriptor(String worldId, int chunkX, int chunkZ, String status,
-                                          boolean requireChunk, long token) {
         if (!openFutureStamp()) {
             return;
         }
@@ -293,6 +297,22 @@ public final class ChunkDemandObserver implements PrtsChunkDemand.DemandTap {
         }
         try {
             second.demandDescriptor(worldId, chunkX, chunkZ, status, requireChunk, token);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    @Override
+    public void demandDescriptor(String worldId, int chunkX, int chunkZ, String status,
+                                 boolean requireChunk, long token, Object taskToken) {
+        if (!openFutureStamp()) {
+            return;
+        }
+        DemandTap second = secondPath;
+        if (second == null) {
+            return;
+        }
+        try {
+            second.demandDescriptor(worldId, chunkX, chunkZ, status, requireChunk, token, taskToken);
         } catch (Throwable ignored) {
         }
     }

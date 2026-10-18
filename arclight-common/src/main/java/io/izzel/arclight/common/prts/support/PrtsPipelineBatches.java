@@ -8,8 +8,7 @@ import net.minecraft.util.thread.ProcessorHandle;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 
-/** The tasks the chunk pipeline submits, handed to the kernel through opaque handles; with no sink
- * every entry is a no-op and the submitted function is handed back as it arrived. */
+/** The tasks the chunk pipeline submits, handed to the kernel through opaque handles. */
 public final class PrtsPipelineBatches {
 
     /** A wrapped function that still names the task it carries. */
@@ -29,6 +28,11 @@ public final class PrtsPipelineBatches {
         void enqueued(Object task);
 
         void released(Object processor, long cell, boolean clearQueue);
+
+        /** The task whose body the calling thread runs, or null; the identity stays opaque. */
+        default Object currentTask() {
+            return null;
+        }
     }
 
     private static volatile TaskSink sink;
@@ -53,6 +57,12 @@ public final class PrtsPipelineBatches {
 
     public static long tick() {
         return tick.getAsLong();
+    }
+
+    /** The task the calling thread is running a body of, or null while no sink is installed. */
+    public static Object currentTask() {
+        TaskSink current = sink;
+        return current == null ? null : current.currentTask();
     }
 
     /** Mints one tracked submit, or answers null while no sink is installed. */

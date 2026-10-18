@@ -678,6 +678,16 @@ public final class PipelineBatchLedger implements PrtsPipelineBatches.TaskSink {
         return running.get();
     }
 
+    @Override
+    public Object currentTask() {
+        return running.get();
+    }
+
+    /** The number of tracked tasks this ledger indexes at most; a task above it is untracked. */
+    public int pendingLimit() {
+        return pendingLimit;
+    }
+
     /** The tasks one batch claimed, in mint order; while its binding is still being formed they are
      * read from the claims that already carry it, and empty once the batch fell out of the bounded
      * history. */

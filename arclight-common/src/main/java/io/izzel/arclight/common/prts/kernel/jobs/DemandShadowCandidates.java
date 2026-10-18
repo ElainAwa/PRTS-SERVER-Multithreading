@@ -8,7 +8,10 @@ import io.izzel.arclight.common.prts.support.PrtsChunkDemand;
 import net.minecraft.world.level.ChunkPos;
 
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Reads the chunk demands one freeze saw as shadow candidates: every column is a parameter of the one
@@ -29,6 +32,31 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
     public static final String LATE_BEFORE_FREEZE = "late-before-freeze";
 
     public static final int CAP = 64;
+
+    /** The identity one demand call was made under: the task's own fields and the batch state that
+     * carried it, plus the name of that call. */
+    public record TaskStamp(long taskOrdinal, String world, String mailbox, long cell, long mintTick,
+                            long batchFreezeOrdinal, long planSequence, long demandToken) {
+
+        public TaskStamp {
+            world = world == null ? "" : world;
+            mailbox = mailbox == null ? "" : mailbox;
+        }
+    }
+
+    /** The one status of a task before its run-start seal, or an empty answer when the task cannot
+     * be joined to this register. */
+    public record TaskStatus(String status, TaskStamp stamp) {
+
+        public TaskStatus {
+            status = status == null ? "" : status;
+        }
+
+        /** @return whether this answer names one status of one joined task */
+        public boolean present() {
+            return !status.isEmpty() && stamp != null;
+        }
+    }
 
     /** The parameters of one ask for a chunk as that call named them, and the chunk it named packed
      * by the platform's own function. An ask that named no coordinates carries no chunk: the origin
@@ -128,6 +156,24 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
          * the entries written before the stage existed. It matches a completion and is read into no
          * column. */
         private long token = PrtsChunkDemand.NO_TOKEN;
+        /** The task identity the call was made under, or null; it is read into no column. */
+        private Object taskToken;
+    }
+
+    /** One task's one status and the stamp it was joined through. */
+    private static final class StatusEntry {
+
+        private final PipelineBatchLedger.TrackedTask task;
+        private final TaskStamp stamp;
+        private final String status;
+        private boolean conflicted;
+        private boolean sealed;
+
+        private StatusEntry(PipelineBatchLedger.TrackedTask task, TaskStamp stamp, String status) {
+            this.task = task;
+            this.stamp = stamp;
+            this.status = status;
+        }
     }
 
     private final Slot[] ring = new Slot[CAP];
@@ -150,8 +196,27 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
     private long lateRefusals;
     private long unshaped;
     private long unlive;
+    /** The register holds one entry per live running task and refuses above this bound. */
+    private final int statusCapacity;
+    private final Map<PipelineBatchLedger.TrackedTask, StatusEntry> statuses = new IdentityHashMap<>();
+    private long statusOverflows;
+    private long statusConflicts;
+    private long statusLate;
+    private long statusDuplicates;
+    private long statusReclaimed;
+    private long statusRefused;
 
     public DemandShadowCandidates() {
+        this(PipelineBatchLedger.DEFAULT_PENDING_LIMIT);
+    }
+
+    /** The register is sized to the owning ledger's pending limit: every entry is a live running
+     * task and the ledger indexes no more than that, so a full register refuses, never evicts. */
+    public DemandShadowCandidates(int taskCapacity) {
+        if (taskCapacity < 1) {
+            throw new IllegalArgumentException("task capacity must be positive");
+        }
+        this.statusCapacity = taskCapacity;
         for (int index = 0; index < CAP; index++) {
             ring[index] = new Slot();
             staged[index] = new Slot();
@@ -217,14 +282,24 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
             // no window is allowed to read. The untokened entry remains the one that captures.
             return;
         }
-        stage(DemandDescriptor.at(worldId, chunkX, chunkZ, status, requireChunk), token);
+        stage(DemandDescriptor.at(worldId, chunkX, chunkZ, status, requireChunk), token, null);
+    }
+
+    @Override
+    public void demandDescriptor(String worldId, int chunkX, int chunkZ, String status,
+                                 boolean requireChunk, long token, Object taskToken) {
+        if (token == PrtsChunkDemand.NO_TOKEN) {
+            return;
+        }
+        stage(DemandDescriptor.at(worldId, chunkX, chunkZ, status, requireChunk), token, taskToken);
+        rememberStatus(taskToken, status, token);
     }
 
     private synchronized void capture(DemandDescriptor descriptor) {
-        captureIntoRing(descriptor, PrtsChunkDemand.NO_TOKEN);
+        captureIntoRing(descriptor, PrtsChunkDemand.NO_TOKEN, null);
     }
 
-    private void captureIntoRing(DemandDescriptor descriptor, long token) {
+    private void captureIntoRing(DemandDescriptor descriptor, long token, Object taskToken) {
         captured++;
         Slot slot;
         if (size < CAP) {
@@ -238,11 +313,12 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         slot.descriptor = descriptor;
         slot.completionSeen = false;
         slot.token = token;
+        slot.taskToken = taskToken;
     }
 
     /** Holds one named capture until its call confirms its registration. The area is bounded and
      * evicts its oldest entry, which is a discarded diagnosis and not a ring overwrite. */
-    private synchronized void stage(DemandDescriptor descriptor, long token) {
+    private synchronized void stage(DemandDescriptor descriptor, long token, Object taskToken) {
         stagedTotal++;
         Slot slot;
         if (stagedSize < CAP) {
@@ -255,6 +331,7 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         slot.descriptor = descriptor;
         slot.completionSeen = false;
         slot.token = token;
+        slot.taskToken = taskToken;
     }
 
     /** Moves the one capture of this call into the ring and only that one. A call whose completion
@@ -269,8 +346,9 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
             }
             DemandDescriptor descriptor = slot.descriptor;
             boolean completed = slot.completionSeen;
+            Object taskToken = slot.taskToken;
             removeStaged(index);
-            captureIntoRing(descriptor, token);
+            captureIntoRing(descriptor, token, taskToken);
             ring[(head + size - 1 + CAP) % CAP].completionSeen = completed;
             promoted++;
             return;
@@ -284,11 +362,13 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
             to.descriptor = from.descriptor;
             to.completionSeen = from.completionSeen;
             to.token = from.token;
+            to.taskToken = from.taskToken;
         }
         Slot last = staged[(stagedHead + stagedSize - 1) % CAP];
         last.descriptor = null;
         last.completionSeen = false;
         last.token = PrtsChunkDemand.NO_TOKEN;
+        last.taskToken = null;
         stagedSize--;
     }
 
@@ -332,6 +412,127 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         }
     }
 
+    /** Records the one status a live running task named. A second different value conflicts, a value
+     * after the read is late, and a full register refuses the new task instead of dropping an old
+     * one; the demand itself is never delayed or refused. */
+    private synchronized void rememberStatus(Object taskToken, String status, long token) {
+        if (status == null || status.isEmpty() || token == PrtsChunkDemand.NO_TOKEN
+            || !(taskToken instanceof PipelineBatchLedger.TrackedTask task)) {
+            return;
+        }
+        PipelineBatchLedger.TaskState state = task.state();
+        if (!task.live() || !(state instanceof PipelineBatchLedger.Running running)) {
+            statusRefused++;
+            return;
+        }
+        PipelineBatchLedger.TaskId id = task.id();
+        PipelineBatchLedger.BatchId batch = running.batch();
+        if (batch == null || !batch.worldId().equals(id.worldId())
+            || !batch.mailbox().equals(id.mailbox())) {
+            statusRefused++;
+            return;
+        }
+        StatusEntry entry = statuses.get(task);
+        if (entry != null) {
+            registerOnEntry(entry, status);
+            return;
+        }
+        reclaimStatuses();
+        if (statuses.size() >= statusCapacity) {
+            statusOverflows++;
+            return;
+        }
+        statuses.put(task, new StatusEntry(task, stampOf(id, batch, token), status));
+    }
+
+    private void registerOnEntry(StatusEntry entry, String status) {
+        if (entry.sealed) {
+            statusLate++;
+            return;
+        }
+        if (entry.conflicted) {
+            statusConflicts++;
+            return;
+        }
+        if (status.equals(entry.status)) {
+            statusDuplicates++;
+            return;
+        }
+        entry.conflicted = true;
+        statusConflicts++;
+    }
+
+    private void reclaimStatuses() {
+        Iterator<Map.Entry<PipelineBatchLedger.TrackedTask, StatusEntry>> walk =
+            statuses.entrySet().iterator();
+        while (walk.hasNext()) {
+            StatusEntry entry = walk.next().getValue();
+            if (!entry.task.live()
+                || !(entry.task.state() instanceof PipelineBatchLedger.Running)) {
+                walk.remove();
+                statusReclaimed++;
+            }
+        }
+    }
+
+    /** The one status of the task the demand was made under, read before its run-start seal. The
+     * answer is empty unless the same live task still runs in the same batch the stamp names. */
+    public synchronized TaskStatus statusFor(Object taskToken) {
+        if (!(taskToken instanceof PipelineBatchLedger.TrackedTask task)) {
+            return new TaskStatus("", null);
+        }
+        StatusEntry entry = statuses.get(task);
+        if (entry == null) {
+            return new TaskStatus("", null);
+        }
+        if (entry.task != task) {
+            statuses.remove(task);
+            return new TaskStatus("", null);
+        }
+        if (!task.live()) {
+            statuses.remove(task);
+            return new TaskStatus("", null);
+        }
+        PipelineBatchLedger.TaskState state = task.state();
+        if (!(state instanceof PipelineBatchLedger.Running running)) {
+            statuses.remove(task);
+            return new TaskStatus("", null);
+        }
+        PipelineBatchLedger.TaskId id = task.id();
+        if (!sameTask(entry.stamp, id)) {
+            statuses.remove(task);
+            return new TaskStatus("", null);
+        }
+        if (!sameBatch(entry.stamp, running.batch(), id)) {
+            statuses.remove(task);
+            return new TaskStatus("", null);
+        }
+        if (entry.conflicted || entry.status.isEmpty()) {
+            return new TaskStatus("", null);
+        }
+        entry.sealed = true;
+        return new TaskStatus(entry.status, entry.stamp);
+    }
+
+    private static TaskStamp stampOf(PipelineBatchLedger.TaskId id,
+                                     PipelineBatchLedger.BatchId batch, long token) {
+        return new TaskStamp(id.ordinal(), id.worldId(), id.mailbox(), id.cell(), id.mintTick(),
+            batch.freezeOrdinal(), batch.planSequence(), token);
+    }
+
+    private static boolean sameTask(TaskStamp stamp, PipelineBatchLedger.TaskId id) {
+        return stamp.taskOrdinal() == id.ordinal() && stamp.world().equals(id.worldId())
+            && stamp.mailbox().equals(id.mailbox()) && stamp.cell() == id.cell()
+            && stamp.mintTick() == id.mintTick();
+    }
+
+    private static boolean sameBatch(TaskStamp stamp, PipelineBatchLedger.BatchId batch,
+                                     PipelineBatchLedger.TaskId id) {
+        return batch != null && stamp.batchFreezeOrdinal() == batch.freezeOrdinal()
+            && stamp.planSequence() == batch.planSequence()
+            && batch.worldId().equals(id.worldId()) && batch.mailbox().equals(id.mailbox());
+    }
+
     /** Reads the captures of one freeze and takes them: a window belongs to the freeze that read it.
      * The generation of a capture's own world is read once here and never re-read into the column. */
     public synchronized List<Shadow> readFor(Freeze freeze, LiveWorldEpoch epochs) {
@@ -355,6 +556,7 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
                 planSequence, planGeneration, key, lateBeforeFreeze(slot.completionSeen));
             slot.completionSeen = false;
             slot.token = PrtsChunkDemand.NO_TOKEN;
+            slot.taskToken = null;
             count(shadow);
             shadows.add(shadow);
         }
@@ -524,15 +726,49 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         return unlive;
     }
 
+    int statusCapacity() {
+        return statusCapacity;
+    }
+
+    synchronized int statusHeld() {
+        return statuses.size();
+    }
+
+    long statusOverflows() {
+        return statusOverflows;
+    }
+
+    long statusConflicts() {
+        return statusConflicts;
+    }
+
+    long statusLate() {
+        return statusLate;
+    }
+
+    long statusDuplicates() {
+        return statusDuplicates;
+    }
+
+    long statusReclaimed() {
+        return statusReclaimed;
+    }
+
+    long statusRefused() {
+        return statusRefused;
+    }
+
     public synchronized void reset() {
         for (Slot slot : ring) {
             slot.descriptor = null;
             slot.completionSeen = false;
+            slot.taskToken = null;
         }
         for (Slot slot : staged) {
             slot.descriptor = null;
             slot.completionSeen = false;
             slot.token = PrtsChunkDemand.NO_TOKEN;
+            slot.taskToken = null;
         }
         stagedHead = 0;
         stagedSize = 0;
@@ -550,5 +786,12 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         lateRefusals = 0L;
         unshaped = 0L;
         unlive = 0L;
+        statuses.clear();
+        statusOverflows = 0L;
+        statusConflicts = 0L;
+        statusLate = 0L;
+        statusDuplicates = 0L;
+        statusReclaimed = 0L;
+        statusRefused = 0L;
     }
 }
