@@ -671,6 +671,144 @@ class PipelineWriteClaimsTest {
         assertTrue(scratch.slots.conservationHolds());
     }
 
+    @Test
+    void aPlanWithoutATaskBodySeatsItsDeclarationAndCoversTheWriteInItsCell() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        assertEquals(0, scratch.slots.slots(), "no slot before the declaration is seated");
+
+        assertEquals(1, scratch.claims.seatDeclared(),
+            "the declared write set is seated from the plan alone");
+        assertEquals(1, scratch.slots.slots());
+        assertEquals(1L, scratch.slots.registeredCount());
+        assertEquals(0L, scratch.claims.seatedCount(), "no task window was needed");
+
+        assertEquals(Verdict.CAPTURED, scratch.judge(WritePath.BLOCK_WRITE.key()));
+        assertEquals(1, scratch.slots.lastDecision().covering(),
+            "the write has a candidate and one covering range");
+        assertFalse(scratch.slots.lastDecision().pathDigest().isEmpty());
+        assertEquals(1L, scratch.slots.capturedCount());
+        assertTrue(scratch.slots.conservationHolds());
+    }
+
+    @Test
+    void aWriteOutsideTheDeclaredCellIsNotCapturedWithoutATaskBody() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        scratch.claims.seatDeclared();
+
+        assertEquals(Verdict.DEFAULT_PATH, scratch.slots.judge(LEVEL, WritePath.BLOCK_WRITE.key(),
+            WritePosition.at(8, 0, 8), TICK).verdict());
+        assertEquals(0L, scratch.slots.capturedCount(), "outside the cell nothing is captured");
+        assertEquals(0L, scratch.slots.rejectedCount(), "outside the cell nothing is refused");
+        assertTrue(scratch.slots.conservationHolds());
+    }
+
+    @Test
+    void seatingTheSameDeclarationTwiceKeepsOneSeat() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        assertEquals(1, scratch.claims.seatDeclared());
+        assertEquals(1, scratch.claims.seatDeclared(),
+            "a repeated declaration of the same plan is idempotent");
+        assertEquals(1, scratch.slots.slots(), "no second slot leaks from the repeat");
+        assertEquals(Verdict.CAPTURED, scratch.judge(WritePath.BLOCK_WRITE.key()));
+    }
+
+    @Test
+    void theNextPlanReplacesTheSeatAndTheOldPlanLeavesNoSlot() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        assertEquals(1, scratch.claims.seatDeclared());
+        scratch.declareNext(PLAN_SEQUENCE + 1);
+
+        assertEquals(1, scratch.claims.seatDeclared());
+        assertEquals(1, scratch.slots.slots(), "the old plan's seat is retired, the new one kept");
+        assertEquals(Verdict.CAPTURED, scratch.judge(WritePath.BLOCK_WRITE.key()));
+        assertEquals(PLAN_SEQUENCE + 1, scratch.slots.lastDecision().planSequence(),
+            "the write is judged against the plan that declared it");
+    }
+
+    @Test
+    void aTaskWindowOverADeclaredSeatDoesNotRetireIt() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        scratch.claims.seatDeclared();
+
+        scratch.claims.ownerTaskBegin(WORLD, MAILBOX);
+        assertEquals(1, scratch.slots.slots(), "the window renews the same seat, not a second one");
+        scratch.capture();
+        scratch.claims.ownerTaskEnd(WORLD, MAILBOX);
+        assertEquals(1, scratch.slots.slots(),
+            "the declaration still covers the span after its task window ends");
+        assertEquals(0L, scratch.claims.disarmedCount());
+        assertEquals(Verdict.CAPTURED, scratch.judge(WritePath.BLOCK_WRITE.key()));
+        assertEquals(2L, scratch.slots.capturedCount());
+        assertTrue(scratch.slots.conservationHolds());
+    }
+
+    @Test
+    void aDeclaredSeatExpiresWhenItsWindowCloses() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        scratch.claims.seatDeclared();
+        scratch.tick = TICK + PipelineWriteClaims.HOLD_TICKS;
+
+        assertEquals(Verdict.REJECTED, scratch.judge(WritePath.BLOCK_WRITE.key()));
+        assertEquals("expiry", scratch.slots.lastRefusal().reason());
+        assertEquals(0L, scratch.slots.capturedCount());
+        assertTrue(scratch.slots.conservationHolds());
+    }
+
+    @Test
+    void aDeclarationThatCannotBeSeatedLeavesNoHalfCoverage() {
+        Scratch scratch = new Scratch();
+        scratch.claims.writeSpaces(null);
+        scratch.declare(ROUNDS);
+        assertEquals(0, scratch.claims.active());
+
+        assertEquals(0, scratch.claims.seatDeclared(), "no claim means no seat, never a half one");
+        assertEquals(0, scratch.slots.slots());
+        assertEquals(Verdict.DEFAULT_PATH, scratch.judge(WritePath.BLOCK_WRITE.key()));
+        assertEquals(0L, scratch.slots.capturedCount());
+    }
+
+    @Test
+    void declaredSeatsServeConcurrentJudgesWithoutTornState() throws Exception {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        scratch.claims.seatDeclared();
+        int threads = 4;
+        int perThread = 100;
+        CountDownLatch done = new CountDownLatch(threads);
+        List<Throwable> errors = new ArrayList<>();
+        List<Thread> started = new ArrayList<>();
+        for (int index = 0; index < threads; index++) {
+            Thread thread = new Thread(() -> {
+                try {
+                    for (int n = 0; n < perThread; n++) {
+                        Verdict verdict = scratch.slots.judge(LEVEL, WritePath.BLOCK_WRITE.key(),
+                            WITNESS, TICK).verdict();
+                        if (verdict != Verdict.CAPTURED && verdict != Verdict.REJECTED) {
+                            throw new AssertionError("verdict=" + verdict);
+                        }
+                    }
+                } catch (Throwable error) { // noqa: BLE001 - a torn read is exactly what this test hunts
+                    synchronized (errors) {
+                        errors.add(error);
+                    }
+                } finally {
+                    done.countDown();
+                }
+            });
+            started.add(thread);
+        }
+        started.forEach(Thread::start);
+        assertTrue(done.await(30, TimeUnit.SECONDS), "the judges finish");
+        assertTrue(errors.isEmpty(), () -> "errors=" + errors);
+        assertTrue(scratch.slots.conservationHolds());
+    }
+
     /** The write paths, the registries and the claim table of one process, wired the way the kernel
      * wires them; only the level of a world and the step of the plan are fixtures. */
     private static final class Scratch {
@@ -814,10 +952,28 @@ class PipelineWriteClaimsTest {
             return publish(frozen.graph());
         }
 
+        /** A next plan over the same declaration, as the next freeze would publish it. */
+        private JobGraph declareNext(long planSequence) {
+            JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef(WORLD, DOMAIN, 0);
+            JobDeclaration declaration = new JobDeclaration(NODE_KEY, 1L, WORLD, DOMAIN, 0, List.of(),
+                0, MAILBOX, "world:" + WORLD, List.of(ref), List.of(ref), ShareClass.OTHER,
+                JobDeclaration.SiteClass.PARALLEL, 0, (int) ROUNDS,
+                List.of(new JobDeclaration.OwnerDemand(WORLD, WriteLevel.REGION, DOMAIN,
+                    HolderKind.REGISTERED, HOLDER, 40)));
+            JobGraphBuilder.Freeze frozen = JobGraphBuilder.freeze(List.of(declaration), TICK,
+                planSequence, 1L, 16);
+            assertTrue(frozen.ok(), () -> "freeze refused: " + frozen.code() + " " + frozen.item());
+            return publishAs(frozen.graph(), planSequence);
+        }
+
         /** Grants the version of every declared write domain and publishes what those grants
          * answered as this plan's record, then hands the graph to the grant point and turns the
          * declared write sets into the claims of the next span. */
         private JobGraph publish(JobGraph frozen) {
+            return publishAs(frozen, PLAN_SEQUENCE);
+        }
+
+        private JobGraph publishAs(JobGraph frozen, long planSequence) {
             graph = frozen;
             Map<OwnershipDomain, Long> granted = new HashMap<>();
             for (JobGraph.Node node : graph.nodes()) {
@@ -828,11 +984,11 @@ class PipelineWriteClaimsTest {
                         versions.grant(ref.worldId(), WriteLevel.REGION, ref.domainId()));
                 }
             }
-            versions.noteGranted(PLAN_SEQUENCE, granted);
+            versions.noteGranted(planSequence, granted);
             grants.apply(graph, TICK);
-            claims.declare(graph, PLAN_SEQUENCE, TICK);
+            claims.declare(graph, planSequence, TICK);
             if (!graph.nodes().isEmpty()) {
-                source.step = new WriteControlledSlots.Source.Step(PLAN_SEQUENCE,
+                source.step = new WriteControlledSlots.Source.Step(planSequence,
                     graph.nodes().get(0).position());
             }
             return graph;

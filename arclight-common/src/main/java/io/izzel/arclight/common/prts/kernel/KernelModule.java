@@ -887,6 +887,10 @@ public final class KernelModule {
                 claims.reportLanded(this::noteLandedBatch);
                 claims.declare(result.plan().graph(), result.plan().planSequence(), tickIndex,
                     plans.lifecycle());
+                // A plan that declared a write set is its own writer for the span that follows: the
+                // seat comes from the declaration itself, so a span whose jobs run no task body still
+                // covers the writes its own range names until the next freeze replaces the set.
+                claims.seatDeclared();
             }
             if (KernelSettings.pipelineJobs() && KernelSettings.tickPlan()) {
                 // A seal whose plan the settlement has moved past can no longer be named by it: the

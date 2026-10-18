@@ -149,6 +149,8 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
     private volatile Function<JobGraph.Node, WriteControlledSlots.WriteSpace> writeSpaces =
         node -> WriteControlledSlots.WriteSpace.NONE;
     private volatile Map<String, Claim> declarations = Map.of();
+    /** The slots the newest declaration seated; the next freeze replaces them. */
+    private volatile List<WriteControlledSlots.SlotKey> declaredSeats = List.of();
     private volatile String lastWindow = "";
     private volatile boolean enabled;
     private long tickIndex;
@@ -213,6 +215,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
     public void refresh(boolean enabled) {
         this.enabled = enabled;
         if (!enabled) {
+            retireDeclared();
             closeAll();
         }
     }
@@ -344,14 +347,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         }
         List<WriteControlledSlots.SlotKey> keys = new ArrayList<>(candidates.size());
         for (Claim claim : candidates) {
-            long generation = ++generations;
-            WriteControlledSlots.Slot slot = new WriteControlledSlots.Slot(
-                new WriteControlledSlots.SlotKey(claim.worldId(), claim.domainId(),
-                    WriteLevel.REGION, WriteControlledSlots.SlotKey.segmentOf(claim.space()),
-                    claim.planSequence()),
-                claim.levelRef(), claim.nodeKey(), claim.position(), claim.expectedVersion(),
-                generation, claim.worldEpoch(), claim.expireTick(), claim.holderKind(),
-                claim.holderSiteId(), claim.writeSet(), claim.space());
+            WriteControlledSlots.Slot slot = slotOf(claim, ++generations);
             if (table.register(slot) != WriteControlledSlots.Refusal.NONE) {
                 refused++;
                 continue;
@@ -416,10 +412,46 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
             return;
         }
         for (WriteControlledSlots.SlotKey key : open.keys()) {
-            if (table.retire(key)) {
+            if (retireWindow(key)) {
                 disarmed++;
             }
         }
+    }
+
+    /** Seats the write set the declaration carries, so a plan with no task body still covers its own
+     * range until the next freeze; a failed registration leaves no slot at all (fail-closed). */
+    public int seatDeclared() {
+        if (!enabled) {
+            return 0;
+        }
+        List<Claim> claimed = claims();
+        retireDeclared();
+        if (claimed.isEmpty()) {
+            return 0;
+        }
+        List<WriteControlledSlots.SlotKey> keys = new ArrayList<>(claimed.size());
+        for (Claim claim : claimed) {
+            WriteControlledSlots.Slot slot = slotOf(claim, ++generations);
+            if (table.register(slot) != WriteControlledSlots.Refusal.NONE) {
+                for (WriteControlledSlots.SlotKey key : keys) {
+                    table.retire(key);
+                }
+                return -1;
+            }
+            keys.add(slot.key());
+        }
+        declaredSeats = List.copyOf(keys);
+        return keys.size();
+    }
+
+    private static WriteControlledSlots.Slot slotOf(Claim claim, long generation) {
+        return new WriteControlledSlots.Slot(
+            new WriteControlledSlots.SlotKey(claim.worldId(), claim.domainId(),
+                WriteLevel.REGION, WriteControlledSlots.SlotKey.segmentOf(claim.space()),
+                claim.planSequence()),
+            claim.levelRef(), claim.nodeKey(), claim.position(), claim.expectedVersion(),
+            generation, claim.worldEpoch(), claim.expireTick(), claim.holderKind(),
+            claim.holderSiteId(), claim.writeSet(), claim.space());
     }
 
     /** One tick of the kernel: a window that was left open across the tick boundary is retired, so a
@@ -432,7 +464,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
                 continue;
             }
             for (WriteControlledSlots.SlotKey key : open.keys()) {
-                if (table.retire(key)) {
+                if (retireWindow(key)) {
                     disarmed++;
                 }
             }
@@ -645,6 +677,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
 
     /** Clears every reading and every claim. */
     public void reset() {
+        retireDeclared();
         closeAll();
         levelWorlds.clear();
         landings.clear();
@@ -678,12 +711,29 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         noEpoch = 0L;
     }
 
+    /** Retires a window's key unless the newest declaration holds it too. */
+    private boolean retireWindow(WriteControlledSlots.SlotKey key) {
+        if (declaredSeats.contains(key)) {
+            return false;
+        }
+        return table.retire(key);
+    }
+
+    /** Retires every seat the newest declaration made, so no plan keeps a slot the freeze replaced. */
+    private void retireDeclared() {
+        List<WriteControlledSlots.SlotKey> held = declaredSeats;
+        declaredSeats = List.of();
+        for (WriteControlledSlots.SlotKey key : held) {
+            table.retire(key);
+        }
+    }
+
     private void closeAll() {
         for (Map.Entry<Thread, Window> entry : windows.entrySet()) {
             Window open = entry.getValue();
             if (windows.remove(entry.getKey(), open)) {
                 for (WriteControlledSlots.SlotKey key : open.keys()) {
-                    table.retire(key);
+                    retireWindow(key);
                 }
             }
         }
