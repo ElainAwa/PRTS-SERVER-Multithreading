@@ -192,6 +192,107 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
         }
     }
 
+    /** Publishes the declared-level seals of the settlement that just closed: one seal per owner
+     * cell of the retained statuses, built from the declaration table of the plan being settled.
+     * A status whose batch, cell ownership, seat, freeze, instance or generation cannot be proved
+     * is skipped; no seal is guessed and the task run-start path is unchanged. */
+    public int publishDeclaredDeclared(FrozenDeclarations declared,
+                                       List<DemandShadowCandidates.TaskStatus> retained,
+                                       long generation) {
+        if (declared == null || !declared.freeze().declared() || retained == null
+            || retained.isEmpty() || plans == null) {
+            return 0;
+        }
+        synchronized (table) {
+            if (table.generation() != generation) {
+                rejected++;
+                return 0;
+            }
+            long plan = declared.planSequence();
+            long lifecycle = plans.lifecycle();
+            List<TickPlan.CommitStep> order = plans.orderIn(plan, lifecycle);
+            if (order == null) {
+                return 0;
+            }
+            FrozenDeclarations.FreezeKey freeze = declared.freeze();
+            int published = 0;
+            for (DemandShadowCandidates.TaskStatus held : retained) {
+                if (held == null || !held.present() || held.stamp() == null) {
+                    continue;
+                }
+                DemandShadowCandidates.TaskStamp read = held.stamp();
+                if (read.planSequence() != plan) {
+                    continue;
+                }
+                PipelineBatchLedger.BatchId batch = new PipelineBatchLedger.BatchId(read.world(),
+                    read.mailbox(), read.batchFreezeOrdinal(), read.planSequence());
+                if (!ledger.bindingPublished(batch)) {
+                    continue;
+                }
+                PipelineBatchLedger.TaskId id = new PipelineBatchLedger.TaskId(read.taskOrdinal(),
+                    read.world(), read.mailbox(), read.cell(), read.mintTick());
+                if (ledger.ownerOrdinal(batch, id.cell()) != id.ordinal()) {
+                    continue;
+                }
+                String nodeKey = PipelineRoundJobs.batchKeyOf(batch);
+                TickPlan.CommitStep step = stepOf(order, nodeKey, batch);
+                if (step == null || step.position() < 0) {
+                    continue;
+                }
+                int role = roleOf(order, step);
+                if (role <= 0) {
+                    continue;
+                }
+                long[] cells = ledger.cellsOf(batch);
+                if (!RangeDigests.wellFormed(cells) || !contains(cells, id.cell())) {
+                    continue;
+                }
+                long worldEpoch = worldEpochs.applyAsLong(batch.worldId());
+                if (!CommitLog.liveWorldEpoch(worldEpoch)) {
+                    continue;
+                }
+                FrozenDeclarations.Seat seat = new FrozenDeclarations.Seat(step.worldId(),
+                    step.domainId(), plan, step.position());
+                if (!crossChecked(seat, declared, nodeKey, role, id.cell(), held.status(),
+                    worldEpoch)) {
+                    continue;
+                }
+                FrozenDeclarations.RangeSeal existing = table.locate(seat, id.cell());
+                if (existing != null && existing.statusFor(id.cell()) != null
+                    && existing.statusFor(id.cell()).targetStatus().equals(held.status())) {
+                    published++;
+                    continue;
+                }
+                long instanceId = instances == null ? CommitLog.NO_INSTANCE
+                    : instances.getAsLong();
+                if (!CommitLog.liveInstance(instanceId)) {
+                    continue;
+                }
+                FrozenDeclarations.Stamp stamp = new FrozenDeclarations.Stamp(read.taskOrdinal(),
+                    read.world(), read.mailbox(), read.cell(), read.mintTick(),
+                    read.batchFreezeOrdinal(), read.planSequence(), read.demandToken());
+                Map<Long, FrozenDeclarations.CellStatus> statuses = Map.of(id.cell(),
+                    new FrozenDeclarations.CellStatus(held.status(), stamp));
+                FrozenDeclarations.RangeSeal seal = new FrozenDeclarations.RangeSeal(seat, nodeKey,
+                    role, batch.worldId(), batch.mailbox(), batch.freezeOrdinal(), plan, freeze,
+                    cells, RangeDigests.spaceDigest(cells), statuses,
+                    RangeDigests.statusMapDigest(statuses), instanceId, worldEpoch, stamp);
+                switch (table.publish(seal, generation)) {
+                    case PUBLISHED -> {
+                        seals++;
+                        hold(seal);
+                        published++;
+                    }
+                    case IDEMPOTENT -> published++;
+                    case CONFLICT -> conflicts++;
+                    case FULL -> overflows++;
+                    case REJECTED -> rejected++;
+                }
+            }
+            return published;
+        }
+    }
+
     /** Keeps one published seal pinned until its settlement; a registry that is absent leaves the
      * seal unpinned, and a place some holder already names is not pinned a second time. */
     private void hold(FrozenDeclarations.RangeSeal seal) {

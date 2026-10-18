@@ -606,6 +606,62 @@ class PipelineRangeSealsTest {
     }
 
     @Test
+    void aRealStatusIsRetainedAfterDoneUntilItsSettlementReleasesIt() {
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        publishPlan(batch);
+        runBody(task, () -> demand(task, "full"));
+
+        assertTrue(task.state() instanceof PipelineBatchLedger.Done,
+            "the body closed the task and the ledger moved it to Done");
+        assertEquals(1, candidates.retainedCount(), "the status survives the reach of Done");
+        List<DemandShadowCandidates.TaskStatus> retained = candidates.retainedStatuses();
+        assertEquals(1, retained.size());
+        DemandShadowCandidates.TaskStamp stamp = retained.get(0).stamp();
+        assertNotNull(stamp);
+        assertEquals(task.id().ordinal(), stamp.taskOrdinal());
+        assertEquals(task.id().cell(), stamp.cell());
+        assertEquals(batch.freezeOrdinal(), stamp.batchFreezeOrdinal());
+        assertEquals(batch.planSequence(), stamp.planSequence());
+        assertEquals("full", retained.get(0).status());
+
+        assertEquals(1, candidates.releaseBatch(batch), "the settlement releases its batch");
+        assertEquals(0, candidates.retainedCount());
+        assertTrue(candidates.retainedStatuses().isEmpty());
+    }
+
+    @Test
+    void aDeclaredLevelSealIsPublishedFromTheRetainedStatusAndMissingStatusPublishesNothing() {
+        assertEquals(0, factory.publishDeclaredDeclared(declarations, List.of(),
+            factory.generation()), "no retained status publishes no seal");
+        assertEquals(0, table.size());
+
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        publishPlan(batch);
+        runBody(task, () -> demand(task, "full"));
+        List<DemandShadowCandidates.TaskStatus> retained = candidates.retainedStatuses();
+        assertEquals(1, retained.size());
+
+        int published = factory.publishDeclaredDeclared(declarations, retained,
+            factory.generation());
+        assertEquals(1, published, "the retained real status publishes the declared seat");
+        FrozenDeclarations.Seat seat = new FrozenDeclarations.Seat(WORLD, DOMAIN, PLAN, 0);
+        FrozenDeclarations.RangeSeal located = table.locate(seat, CELL);
+        assertNotNull(located, "the seal is published under the plan's own seat");
+        assertTrue(java.util.Arrays.binarySearch(located.cells(), CELL) >= 0);
+        assertEquals("full", located.statusFor(CELL).targetStatus());
+
+        int size = table.size();
+        assertEquals(1, factory.publishDeclaredDeclared(declarations, retained,
+            factory.generation()), "a second publish of the same seat is idempotent");
+        assertEquals(size, table.size(), "idempotence does not grow the table");
+        assertEquals(1, candidates.releaseBatch(batch));
+        assertNotNull(table.locate(seat, CELL),
+            "a published seal stays readable until a settlement or reset removes it");
+    }
+
+    @Test
     void aBindingThatFellOutOfTheHistorySealsNothing() {
         PipelineBatchLedger.BatchId first = null;
         for (int round = 0; round < 65; round++) {

@@ -875,6 +875,17 @@ public final class KernelModule {
             planNanosMax = freezeNanos;
         }
         if (result.ok()) {
+            // The declared-level seals of the span that just closed are published from the retained
+            // real statuses before the new plan's declarations replace the ones they name; a status
+            // that cannot be proved publishes nothing.
+            FrozenDeclarations settledDeclarations = declarations();
+            List<DemandShadowCandidates.TaskStatus> retainedStatuses =
+                demandShadows.retainedStatuses();
+            if (!retainedStatuses.isEmpty()) {
+                rangeSealFactory.publishDeclaredDeclared(settledDeclarations, retainedStatuses,
+                    rangeSeals.generation());
+                demandShadows.releaseBefore(result.plan().planSequence());
+            }
             // Sealed against this plan's own commit order and bound before the plan is published:
             // the interval authorizes nothing because the pair is told apart by the plan sequence.
             sealDeclarations(result.plan());
@@ -2978,6 +2989,7 @@ public final class KernelModule {
         pipelineBatches.reset();
         rangeSeals.reset();
         rangeSealFactory.resetObligations();
+        demandShadows.resetStatuses();
         claims.reset();
         typedConsumer.reset();
         jobDeclarations = 0L;

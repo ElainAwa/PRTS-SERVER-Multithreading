@@ -164,13 +164,16 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
     private static final class StatusEntry {
 
         private final PipelineBatchLedger.TrackedTask task;
+        private final PipelineBatchLedger.BatchId batch;
         private final TaskStamp stamp;
         private final String status;
         private boolean conflicted;
         private boolean sealed;
 
-        private StatusEntry(PipelineBatchLedger.TrackedTask task, TaskStamp stamp, String status) {
+        private StatusEntry(PipelineBatchLedger.TrackedTask task, PipelineBatchLedger.BatchId batch,
+                            TaskStamp stamp, String status) {
             this.task = task;
+            this.batch = batch;
             this.stamp = stamp;
             this.status = status;
         }
@@ -438,11 +441,27 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
             return;
         }
         reclaimStatuses();
+        while (statuses.size() >= statusCapacity) {
+            PipelineBatchLedger.TrackedTask evict = null;
+            for (StatusEntry held : statuses.values()) {
+                PipelineBatchLedger.TaskState heldState = held.task.state();
+                if (heldState instanceof PipelineBatchLedger.Done
+                    || heldState instanceof PipelineBatchLedger.DoneUnclaimed) {
+                    evict = held.task;
+                    break;
+                }
+            }
+            if (evict == null) {
+                break;
+            }
+            statuses.remove(evict);
+            statusReclaimed++;
+        }
         if (statuses.size() >= statusCapacity) {
             statusOverflows++;
             return;
         }
-        statuses.put(task, new StatusEntry(task, stampOf(id, batch, token), status));
+        statuses.put(task, new StatusEntry(task, batch, stampOf(id, batch, token), status));
     }
 
     private void registerOnEntry(StatusEntry entry, String status) {
@@ -467,8 +486,10 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
             statuses.entrySet().iterator();
         while (walk.hasNext()) {
             StatusEntry entry = walk.next().getValue();
-            if (!entry.task.live()
-                || !(entry.task.state() instanceof PipelineBatchLedger.Running)) {
+            PipelineBatchLedger.TaskState state = entry.task.state();
+            if (!entry.task.live() || !(state instanceof PipelineBatchLedger.Running
+                || state instanceof PipelineBatchLedger.Done
+                || state instanceof PipelineBatchLedger.DoneUnclaimed)) {
                 walk.remove();
                 statusReclaimed++;
             }
@@ -512,6 +533,79 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         }
         entry.sealed = true;
         return new TaskStatus(entry.status, entry.stamp);
+    }
+
+    /** The statuses retained for the settlement of one plan: the task reached Done and its status
+     * is still the same task/batch the ledger minted, so a declared-level seal can read it once the
+     * run-start window is gone. An entry is released by the settlement that names its batch. */
+    public synchronized List<TaskStatus> retainedStatuses() {
+        List<TaskStatus> retained = new ArrayList<>();
+        for (Map.Entry<PipelineBatchLedger.TrackedTask, StatusEntry> held : statuses.entrySet()) {
+            StatusEntry entry = held.getValue();
+            PipelineBatchLedger.TrackedTask task = held.getKey();
+            PipelineBatchLedger.TaskState state = task.state();
+            if (!task.live() || entry.conflicted || entry.status.isEmpty()) {
+                continue;
+            }
+            PipelineBatchLedger.BatchId batch;
+            if (state instanceof PipelineBatchLedger.Done
+                || state instanceof PipelineBatchLedger.DoneUnclaimed) {
+                batch = task.batch();
+            } else {
+                continue;
+            }
+            if (!sameTask(entry.stamp, task.id()) || !sameBatch(entry.stamp, batch, task.id())) {
+                continue;
+            }
+            retained.add(new TaskStatus(entry.status, entry.stamp));
+        }
+        return List.copyOf(retained);
+    }
+
+    /** Releases the retained statuses of one batch at its settlement. */
+    public synchronized int releaseBatch(PipelineBatchLedger.BatchId batch) {
+        if (batch == null) {
+            return 0;
+        }
+        int released = 0;
+        Iterator<Map.Entry<PipelineBatchLedger.TrackedTask, StatusEntry>> walk =
+            statuses.entrySet().iterator();
+        while (walk.hasNext()) {
+            StatusEntry entry = walk.next().getValue();
+            if (entry.batch.equals(batch)) {
+                walk.remove();
+                released++;
+                statusReclaimed++;
+            }
+        }
+        return released;
+    }
+
+    /** Releases every retained status of a plan the settlement has moved past. */
+    public synchronized int releaseBefore(long planSequence) {
+        int released = 0;
+        Iterator<Map.Entry<PipelineBatchLedger.TrackedTask, StatusEntry>> walk =
+            statuses.entrySet().iterator();
+        while (walk.hasNext()) {
+            StatusEntry entry = walk.next().getValue();
+            if (entry.stamp.planSequence() < planSequence) {
+                walk.remove();
+                released++;
+                statusReclaimed++;
+            }
+        }
+        return released;
+    }
+
+    /** Drops every retained status: called where the ledger generation is reset. */
+    public synchronized void resetStatuses() {
+        statusReclaimed += statuses.size();
+        statuses.clear();
+    }
+
+    /** How many status entries are retained for a settlement. */
+    public synchronized int retainedCount() {
+        return statuses.size();
     }
 
     private static TaskStamp stampOf(PipelineBatchLedger.TaskId id,
