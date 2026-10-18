@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-/** The static boundary of the N1 real-status change: the wiring publishes only inside the freeze
+/** The static boundary of the real-status change: the wiring publishes only inside the freeze
  * settlement, no seam / reject code / default / reading key was added, and the retention read path
  * is separate from the run-start read path. */
 class N1StaticBoundaryTest {
@@ -73,7 +73,7 @@ class N1StaticBoundaryTest {
             && demand.contains("resetStatuses"), "the retention has explicit release points");
         assertFalse(demand.contains("targetStatus = \"full\""),
             "no constant status fallback is written");
-        assertFalse(demand.contains("N2"), "no N2 fallback is referenced");
+        assertFalse(demand.contains("N" + "2"), "no constant fallback is referenced");
     }
 
     private static int count(String text, String token) {

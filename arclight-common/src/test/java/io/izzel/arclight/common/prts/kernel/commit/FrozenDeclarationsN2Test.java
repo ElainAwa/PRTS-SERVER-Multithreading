@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** The N2 seal rule: an entry whose declaration carries no target status is skipped per seat, and
+/** The declaration seal rule: an entry whose declaration carries no target status is skipped per seat, and
  * every other seal check stays. The pipeline's own declarations carry no state today, so the table
  * they produce is NOT_WIRED (no seal) and this change never makes them reachable. */
 class FrozenDeclarationsN2Test {
