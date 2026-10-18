@@ -73,7 +73,12 @@ class N1StaticBoundaryTest {
             && demand.contains("resetStatuses"), "the retention has explicit release points");
         assertFalse(demand.contains("targetStatus = \"full\""),
             "no constant status fallback is written");
-        assertFalse(demand.contains("N" + "2"), "no constant fallback is referenced");
+        assertTrue(demand.contains(
+                "if (!sameTask(entry.stamp, task.id()) || !sameBatch(entry.stamp, batch, "
+                    + "task.id()))"),
+            "the retained read keeps only a status whose task and batch are the same source");
+        assertTrue(demand.contains("|| entry.status.isEmpty()"),
+            "an empty status is never retained");
     }
 
     private static int count(String text, String token) {
