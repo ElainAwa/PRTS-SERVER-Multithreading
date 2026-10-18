@@ -297,11 +297,6 @@ public final class FrozenDeclarations {
             if (candidate == null || !candidate.artefactDeclared() || !candidate.bindingDeclared()) {
                 continue;
             }
-            if (candidate.targetStatus() == null || candidate.targetStatus().isEmpty()) {
-                // A declaration that names no state takes no entry: the seat stays absent from the
-                // table, and a consumer that would need a status can only fail closed on it.
-                continue;
-            }
             Seat seat = new Seat(place.worldId(), place.domainId(), planSequence, place.position());
             Entry entry = new Entry(seat, place.nodeKey(), roles.getOrDefault(node, 0),
                 candidate.chunk().packedPos(), candidate.targetStatus(), candidate.instanceId(),
