@@ -39,14 +39,14 @@ public abstract class PrtsPipelineMailboxMixin {
     @Inject(method = "pollTask", at = @At("RETURN"))
     private void prts$countPipelineTask(CallbackInfoReturnable<Boolean> cir) {
         if (cir.getReturnValueZ()) {
-            PrtsPipelineRows.task(name(), System.nanoTime() - prts$taskStartedAt);
+            PrtsPipelineRows.task(this, name(), System.nanoTime() - prts$taskStartedAt);
             PrtsPipelineRows.ownerTask(this, name());
         }
     }
 
     @Inject(method = "run", at = @At("RETURN"))
     private void prts$countPipelineRound(CallbackInfo ci) {
-        PrtsPipelineRows.round(name());
+        PrtsPipelineRows.round(this, name());
         PrtsPipelineRows.ownerRound(this, name());
     }
 }

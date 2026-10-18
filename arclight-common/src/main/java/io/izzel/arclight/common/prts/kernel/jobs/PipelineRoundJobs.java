@@ -73,6 +73,26 @@ public final class PipelineRoundJobs implements PrtsPipelineRows.MailboxOwnerTap
         roundsSeen.increment();
     }
 
+    /** A round of a mailbox the placement walk classified as non-target is never a target seen
+     * round, not even when a later placement would have given it a world. */
+    @Override
+    public void ownerRound(Object mailbox, String world, String mailboxName) {
+        if (PrtsPipelineRows.isNonTargetMailbox(mailbox)) {
+            roundsUnplaced.increment();
+            return;
+        }
+        ownerRound(world, mailboxName);
+    }
+
+    @Override
+    public void ownerTask(Object mailbox, String world, String mailboxName) {
+        if (PrtsPipelineRows.isNonTargetMailbox(mailbox)) {
+            tasksSeen.increment();
+            return;
+        }
+        ownerTask(world, mailboxName);
+    }
+
     /** Takes the batches the ledger cut at this freeze and hands one declaration per batch to the
      * intake. A batch whose tasks a competing freeze already claimed declares nothing; the intake's
      * capacity decides the rest.

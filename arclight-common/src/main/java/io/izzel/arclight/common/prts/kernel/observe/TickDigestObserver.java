@@ -202,6 +202,8 @@ public final class TickDigestObserver implements PrtsPipelineRows.MailboxOwnerTa
         attached = false;
         PrtsPipelineRows.removeOwnerTap(this);
         PrtsPipelineRows.bindMailboxWorlds(Map.of());
+        PrtsPipelineRows.bindNonTargetMailboxes(java.util.Set.of());
+        PrtsPipelineRows.bindNonTargetSorters(java.util.Set.of());
         placement = Map.of();
     }
 
@@ -428,12 +430,26 @@ public final class TickDigestObserver implements PrtsPipelineRows.MailboxOwnerTa
             return;
         }
         Map<Object, String> placed = new java.util.IdentityHashMap<>();
+        java.util.Set<Object> nonTargetMailboxes =
+            java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        java.util.Set<Object> nonTargetSorters =
+            java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
         try {
             for (ServerLevel level : server.getAllLevels()) {
                 String world = level.dimension().location().toString();
                 Object chunkMap = level.getChunkSource().chunkMap;
+                Object ticketSorter = ticketThrottlerOf(chunkMap);
+                if (ticketSorter != null) {
+                    nonTargetSorters.add(ticketSorter);
+                    Object ticketMailbox = field(ticketSorter, "mailbox");
+                    if (ticketMailbox instanceof ProcessorMailbox<?>) {
+                        nonTargetMailboxes.add(ticketMailbox);
+                    }
+                }
                 for (Object mailbox : mailboxesOf(chunkMap)) {
-                    placed.put(mailbox, world);
+                    if (!nonTargetMailboxes.contains(mailbox)) {
+                        placed.put(mailbox, world);
+                    }
                 }
             }
         } catch (Throwable failure) {
@@ -441,13 +457,15 @@ public final class TickDigestObserver implements PrtsPipelineRows.MailboxOwnerTa
         }
         placement = Map.copyOf(placed);
         PrtsPipelineRows.bindMailboxWorlds(placement);
+        PrtsPipelineRows.bindNonTargetMailboxes(nonTargetMailboxes);
+        PrtsPipelineRows.bindNonTargetSorters(nonTargetSorters);
     }
 
     /** The processors one chunk map owns: every queue the sorter holds, named mailbox or plain
      * handle, plus its own sorter mailbox. The main thread handle is not a mailbox but is the one
      * pipeline processor that runs on the server thread, so it must be placed on its world too.
      * Reached reflectively so this observer needs no accessor and no hook of its own. */
-    private static List<Object> mailboxesOf(Object chunkMap) {
+    static List<Object> mailboxesOf(Object chunkMap) {
         List<Object> found = new ArrayList<>(3);
         Object sorter = field(chunkMap, "queueSorter");
         if (sorter == null) {
@@ -468,7 +486,16 @@ public final class TickDigestObserver implements PrtsPipelineRows.MailboxOwnerTa
         return found;
     }
 
+    /** The second sorter one chunk map owns: the ticket throttler of its distance manager. Its
+     * mailbox carries the same name as the target sorter, so only the object tells them apart. */
+    static Object ticketThrottlerOf(Object chunkMap) {
+        return fieldInHierarchy(field(chunkMap, "distanceManager"), "ticketThrottler");
+    }
+
     private static Object field(Object owner, String name) {
+        if (owner == null) {
+            return null;
+        }
         try {
             Field resolved = owner.getClass().getDeclaredField(name);
             resolved.setAccessible(true);
@@ -476,6 +503,22 @@ public final class TickDigestObserver implements PrtsPipelineRows.MailboxOwnerTa
         } catch (Throwable failure) {
             return null;
         }
+    }
+
+    private static Object fieldInHierarchy(Object owner, String name) {
+        Class<?> type = owner == null ? null : owner.getClass();
+        while (type != null && type != Object.class) {
+            try {
+                Field resolved = type.getDeclaredField(name);
+                resolved.setAccessible(true);
+                return resolved.get(owner);
+            } catch (NoSuchFieldException missing) {
+                type = type.getSuperclass();
+            } catch (Throwable failure) {
+                return null;
+            }
+        }
+        return null;
     }
 
     /** The newest {@link #windowTicks()} ticks, oldest first. */

@@ -18,6 +18,19 @@ public final class PrtsChunkSorterSubmit {
                                                               Function<ProcessorHandle<Unit>, T>
                                                                   task,
                                                               long cell) {
+        return wrap(null, processor, task, cell);
+    }
+
+    /** The same wrap with the sorter object the submit came through: a sorter the placement walk
+     * classified as non-target never mints, even while a sink is installed. */
+    public static <T> Function<ProcessorHandle<Unit>, T> wrap(Object sorter,
+                                                              ProcessorHandle<T> processor,
+                                                              Function<ProcessorHandle<Unit>, T>
+                                                                  task,
+                                                              long cell) {
+        if (PrtsPipelineRows.isNonTargetSorter(sorter)) {
+            return task;
+        }
         if (!PrtsPipelineBatches.installed()) {
             return task;
         }

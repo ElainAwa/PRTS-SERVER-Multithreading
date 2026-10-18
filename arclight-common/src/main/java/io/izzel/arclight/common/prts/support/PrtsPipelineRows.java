@@ -3,8 +3,11 @@
  * round that carried work. Both are no-ops while no watcher is installed. */
 package io.izzel.arclight.common.prts.support;
 
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /** The seam the chunk pipeline mailboxes open, identified by the name the pipeline gave them. */
@@ -20,6 +23,16 @@ public final class PrtsPipelineRows {
 
         /** @param mailbox the mailbox name */
         void mailboxRound(String mailbox);
+
+        /** The same row with the mailbox it came out of; a watcher that sorts by identity overrides
+         * this one instead of the name-only face. */
+        default void mailboxTask(Object mailbox, String mailboxName, long nanos) {
+            mailboxTask(mailboxName, nanos);
+        }
+
+        default void mailboxRound(Object mailbox, String mailboxName) {
+            mailboxRound(mailboxName);
+        }
     }
 
     /** The same rows, told apart by the mailbox they came out of and by the world it belongs to. */
@@ -28,6 +41,16 @@ public final class PrtsPipelineRows {
         void ownerTask(String world, String mailbox);
 
         void ownerRound(String world, String mailbox);
+
+        /** The same round with the mailbox object, so a watcher can tell two mailboxes of one name
+         * apart; the world is the placement answer for that object. */
+        default void ownerRound(Object mailbox, String world, String mailboxName) {
+            ownerRound(world, mailboxName);
+        }
+
+        default void ownerTask(Object mailbox, String world, String mailboxName) {
+            ownerTask(world, mailboxName);
+        }
 
         default void ownerTaskBegin(String world, String mailbox) {
         }
@@ -53,6 +76,10 @@ public final class PrtsPipelineRows {
         new CopyOnWriteArrayList<>();
 
     private static volatile Map<Object, String> mailboxWorlds = Map.of();
+
+    private static volatile Map<Object, Boolean> nonTargetMailboxes = Map.of();
+
+    private static volatile Map<Object, Boolean> nonTargetSorters = Map.of();
 
     private PrtsPipelineRows() {
     }
@@ -101,6 +128,40 @@ public final class PrtsPipelineRows {
         return world == null ? UNPLACED_WORLD : world;
     }
 
+    /** Publishes the mailboxes the placement walk classified as not part of the target pipeline.
+     * The set is held by identity: two mailboxes of one name stay apart. */
+    public static void bindNonTargetMailboxes(Set<Object> mailboxes) {
+        nonTargetMailboxes = identitySet(mailboxes);
+    }
+
+    /** Publishes the sorters whose submits are not target pipeline submits. */
+    public static void bindNonTargetSorters(Set<Object> sorters) {
+        nonTargetSorters = identitySet(sorters);
+    }
+
+    /** @return whether the mailbox object was classified as not part of the target pipeline */
+    public static boolean isNonTargetMailbox(Object mailbox) {
+        return mailbox != null && nonTargetMailboxes.containsKey(mailbox);
+    }
+
+    /** @return whether the sorter object was classified as not the target pipeline sorter */
+    public static boolean isNonTargetSorter(Object sorter) {
+        return sorter != null && nonTargetSorters.containsKey(sorter);
+    }
+
+    private static Map<Object, Boolean> identitySet(Set<Object> objects) {
+        if (objects == null || objects.isEmpty()) {
+            return Map.of();
+        }
+        Map<Object, Boolean> byIdentity = new IdentityHashMap<>(objects.size());
+        for (Object object : objects) {
+            if (object != null) {
+                byIdentity.put(object, Boolean.TRUE);
+            }
+        }
+        return Collections.unmodifiableMap(byIdentity);
+    }
+
     public static void task(String mailbox, long nanos) {
         MailboxRowTap watcher = tap;
         if (watcher != null) {
@@ -115,11 +176,27 @@ public final class PrtsPipelineRows {
         }
     }
 
+    /** Reports one executed task with the mailbox object, so the row face can classify it. */
+    public static void task(Object mailbox, String name, long nanos) {
+        MailboxRowTap watcher = tap;
+        if (watcher != null) {
+            watcher.mailboxTask(mailbox, name, nanos);
+        }
+    }
+
+    /** Reports one drain round with the mailbox object, so the row face can classify it. */
+    public static void round(Object mailbox, String name) {
+        MailboxRowTap watcher = tap;
+        if (watcher != null) {
+            watcher.mailboxRound(mailbox, name);
+        }
+    }
+
     /** Reports one executed task to every watcher of the owner aware face. */
     public static void ownerTask(Object mailbox, String name) {
         String world = worldOf(mailbox);
         for (MailboxOwnerTap watcher : ownerTaps) {
-            watcher.ownerTask(world, name);
+            watcher.ownerTask(mailbox, world, name);
         }
     }
 
@@ -127,7 +204,7 @@ public final class PrtsPipelineRows {
     public static void ownerRound(Object mailbox, String name) {
         String world = worldOf(mailbox);
         for (MailboxOwnerTap watcher : ownerTaps) {
-            watcher.ownerRound(world, name);
+            watcher.ownerRound(mailbox, world, name);
         }
     }
 

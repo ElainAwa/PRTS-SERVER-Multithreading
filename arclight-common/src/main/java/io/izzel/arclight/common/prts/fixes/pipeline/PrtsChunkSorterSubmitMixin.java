@@ -45,8 +45,8 @@ public abstract class PrtsChunkSorterSubmitMixin {
                                              ProcessorHandle<T> processor,
                                              Function<ProcessorHandle<Unit>, T> task,
                                              long chunkPos, IntSupplier level, boolean flush) {
-        this.submit(processor, PrtsChunkSorterSubmit.wrap(processor, task, chunkPos), chunkPos,
-            level, flush);
+        this.submit(processor, PrtsChunkSorterSubmit.wrap(sorter, processor, task, chunkPos),
+            chunkPos, level, flush);
     }
 
     @Inject(method = "lambda$submit$12", require = 1, at = @At("HEAD"))

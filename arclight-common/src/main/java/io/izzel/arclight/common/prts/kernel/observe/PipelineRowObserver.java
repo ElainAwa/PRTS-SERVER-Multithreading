@@ -48,6 +48,24 @@ public final class PipelineRowObserver implements PrtsPipelineRows.MailboxRowTap
         rounds[indexOf(mailbox)].increment();
     }
 
+    /** A mailbox object the placement walk classified as non-target is recorded in the other row,
+     * never in the bucket its name claims. */
+    @Override
+    public void mailboxTask(Object mailbox, String mailboxName, long nanos) {
+        int index = PrtsPipelineRows.isNonTargetMailbox(mailbox) ? indexOf(OTHER)
+            : indexOf(mailboxName);
+        tasks[index].increment();
+        if (nanos > 0L) {
+            taskNanos[index].add(nanos);
+        }
+    }
+
+    @Override
+    public void mailboxRound(Object mailbox, String mailboxName) {
+        rounds[PrtsPipelineRows.isNonTargetMailbox(mailbox) ? indexOf(OTHER)
+            : indexOf(mailboxName)].increment();
+    }
+
     /** @return the bucket names, in index order */
     public static String[] buckets() {
         return BUCKETS.clone();
