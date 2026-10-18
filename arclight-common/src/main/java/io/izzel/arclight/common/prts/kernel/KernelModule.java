@@ -461,6 +461,7 @@ public final class KernelModule {
         claims.writeSpaces(KernelWriteRanges.reader());
         guard.claimLandedTap((slot, worldId, tick, row) -> claims.noteLanded(slot, worldId, row));
         pipelineJobs.bind(pipelineBatches);
+        claims.ledger(pipelineBatches);
         // The progress side of the two rows whose producer already exists: the intent channel depth
         // and the world epoch change count are the same counters the readout publishes, so a signal
         // reading and its control-plane value can never disagree.

@@ -5,6 +5,7 @@ import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLevel;
 import io.izzel.arclight.common.prts.kernel.auth.WriteVersionSlots;
 import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
+import io.izzel.arclight.common.prts.kernel.jobs.PipelineRoundJobs;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
 import io.izzel.arclight.common.prts.kernel.jobs.PipelineBatchLedger;
 import io.izzel.arclight.common.prts.kernel.sites.WriteClaimTable;
@@ -51,7 +52,8 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
                         long planSequence, int position, long expectedVersion, long worldEpoch,
                         long expireTick, HolderKind holderKind, String holderSiteId,
                         Set<String> writeSet, Object levelRef,
-                        WriteControlledSlots.WriteSpace space) {
+                        WriteControlledSlots.WriteSpace space,
+                        PipelineBatchLedger.BatchId batch) {
     }
 
     /** One batch a claim landed, named the way the commit log identifies a batch, with the plan, seat
@@ -144,6 +146,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
     private volatile Authorization authorizing;
     private final Map<String, LongAdder> landedByNode = new ConcurrentHashMap<>();
     private final Consumer<Attributed> settlement;
+    private volatile PipelineBatchLedger ledger;
 
     private volatile WriteControlledSlots table = WriteControlledSlots.NOTHING;
     private volatile Function<JobGraph.Node, WriteControlledSlots.WriteSpace> writeSpaces =
@@ -195,6 +198,12 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         this.judgeThread = judgeThread;
         this.levelOf = levelOf;
         this.settlement = settlement;
+    }
+
+    /** Names the ledger the declared-slot attribution reads the published binding and its owner
+     * ordinal from; absent, every declared-slot attribution fails closed. */
+    public void ledger(PipelineBatchLedger ledger) {
+        this.ledger = ledger;
     }
 
     /** Names the claim table a seated slot is registered in. */
@@ -503,26 +512,86 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
     private void attribute(Landed landed, WorldWriteGuard.LandedRow row) {
         Window open = windows.get(Thread.currentThread());
         Object token = open == null ? null : open.token();
-        if (!(token instanceof PipelineBatchLedger.TrackedTask task)) {
+        if (token instanceof PipelineBatchLedger.TrackedTask task) {
+            long cell = task.id().cell();
+            long ordinal = task.id().ordinal();
+            CellCount held = landed.cells.get(cell);
+            if (held == null) {
+                held = new CellCount(ordinal);
+                landed.cells.put(cell, held);
+            } else if (held.ordinal != ordinal) {
+                // Two tasks of one cell cannot both be the writer this attribution names.
+                landed.unattributed = true;
+            }
+            held.rows.increment();
+            if (row == null) {
+                landed.rowsNamed = false;
+                return;
+            }
+            held.content.add(row.text(cell, ordinal));
+            return;
+        }
+        attributeDeclared(landed, row);
+    }
+
+    /** Attributes a landing through the declaration that seated it: the claim names the declared
+     * range, the row position names exactly one of its cells and the published binding names the
+     * owner ordinal. Any missing or ambiguous term makes the whole landing unattributable; nothing
+     * is derived from a coordinate copy, a window the write did not run in, or a guessed cell. */
+    private void attributeDeclared(Landed landed, WorldWriteGuard.LandedRow row) {
+        WriteControlledSlots.Slot slot = landed.slot;
+        if (slot == null || ledger == null) {
             landed.unattributed = true;
             return;
         }
-        long cell = task.id().cell();
-        long ordinal = task.id().ordinal();
-        CellCount held = landed.cells.get(cell);
-        if (held == null) {
-            held = new CellCount(ordinal);
-            landed.cells.put(cell, held);
-        } else if (held.ordinal != ordinal) {
-            // Two tasks of one cell cannot both be the writer this attribution names.
+        Claim claim = declarations.get(slot.planNodeKey());
+        if (claim == null || claim.batch() == null
+            || claim.planSequence() != slot.key().planSequence()) {
             landed.unattributed = true;
+            return;
         }
-        held.rows.increment();
         if (row == null) {
             landed.rowsNamed = false;
             return;
         }
-        held.content.add(row.text(cell, ordinal));
+        WriteControlledSlots.WriteSpace space = claim.space();
+        if (space == null || !space.wellFormed()) {
+            landed.unattributed = true;
+            return;
+        }
+        WriteControlledSlots.WritePosition position =
+            WriteControlledSlots.WritePosition.at(row.x(), row.y(), row.z());
+        long found = -1L;
+        for (long cell : space.cells()) {
+            WriteControlledSlots.WriteSpace one = WriteControlledSlots.WriteSpace.of(space.kind(), cell);
+            if (!one.covers(position)) {
+                continue;
+            }
+            if (found >= 0L && found != cell) {
+                landed.unattributed = true;
+                return;
+            }
+            found = cell;
+        }
+        if (found < 0L) {
+            landed.unattributed = true;
+            return;
+        }
+        long ordinal = ledger.ownerOrdinal(claim.batch(), found);
+        if (ordinal < 0L) {
+            landed.unattributed = true;
+            return;
+        }
+        CellCount held = landed.cells.get(found);
+        if (held == null) {
+            held = new CellCount(ordinal);
+            landed.cells.put(found, held);
+        } else if (held.ordinal != ordinal) {
+            landed.unattributed = true;
+            return;
+        }
+        held.rows.increment();
+        held.content.add(row.text(found, ordinal));
     }
 
     /** The per-cell form of one report: empty and marked unattributed when a landing of the batch
@@ -739,6 +808,36 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         }
     }
 
+    /** Resolves the batch a declaration key names, from the key the plan declared it by. The
+     * canonical rendering is rebuilt and compared as a whole, and the ledger must hold the published
+     * binding: a key that does not render back to itself resolves nothing. */
+    private PipelineBatchLedger.BatchId batchOf(String nodeKey, long planSequence) {
+        if (nodeKey == null || ledger == null) {
+            return null;
+        }
+        int hash = nodeKey.lastIndexOf('#');
+        if (hash <= 0 || hash == nodeKey.length() - 1) {
+            return null;
+        }
+        String[] parts = nodeKey.substring(0, hash).split("/", -1);
+        if (parts.length != 3) {
+            return null;
+        }
+        long freezeOrdinal;
+        try {
+            freezeOrdinal = Long.parseLong(nodeKey.substring(hash + 1));
+        } catch (NumberFormatException refused) {
+            return null;
+        }
+        PipelineBatchLedger.BatchId batch = new PipelineBatchLedger.BatchId(parts[1], parts[2],
+            freezeOrdinal, planSequence);
+        if (!PipelineRoundJobs.batchKeyOf(batch).equals(nodeKey)
+            || !ledger.bindingPublished(batch)) {
+            return null;
+        }
+        return batch;
+    }
+
     private Claim claimOf(JobGraph.Node node, long planSequence, long tick) {
         if (!WriteClaimTable.claims(node.domainId())) {
             unclaimedDomain++;
@@ -761,6 +860,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
             emptyWriteSet++;
             return null;
         }
+        PipelineBatchLedger.BatchId batch = batchOf(node.key(), planSequence);
         WriteControlledSlots.WriteSpace space = writeSpaces.apply(node);
         if (space == null || !space.wellFormed()) {
             // A claim names the writes of one job, and a write is placed by the range it falls in.
@@ -798,7 +898,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         int hold = Math.max(1, demand.holdTicks());
         return new Claim(node.key(), node.worldId(), mailbox, node.domainId(), planSequence,
             node.position(), version, epoch, tick + hold, demand.holderKind(), demand.holderSiteId(),
-            Set.copyOf(paths), level, space);
+            Set.copyOf(paths), level, space, batch);
     }
 
     private static JobDeclaration.OwnerDemand demandOf(JobGraph.Node node) {

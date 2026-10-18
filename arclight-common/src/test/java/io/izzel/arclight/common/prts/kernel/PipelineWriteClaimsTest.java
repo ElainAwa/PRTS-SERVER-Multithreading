@@ -809,6 +809,82 @@ class PipelineWriteClaimsTest {
         assertTrue(scratch.slots.conservationHolds());
     }
 
+    @Test
+    void aSeatedDeclarationAttributesAWriteThroughItsClaimAndTheOwnerOrdinal() {
+        Scratch scratch = new Scratch();
+        scratch.claims.ledger(scratch.batches);
+        scratch.claims.writeSpaces(node -> WriteSpace.of(CellKind.CHUNK, CELL));
+        scratch.declare(ROUNDS);
+        List<PipelineWriteClaims.Attributed> settled = new ArrayList<>();
+        PipelineWriteClaims sink = new PipelineWriteClaims(scratch.versions,
+            scratch.guard.worldEpochs(), () -> true, world -> LEVEL, settled::add);
+        sink.table(scratch.slots);
+        sink.writeSpaces(node -> WriteSpace.of(CellKind.CHUNK, CELL));
+        sink.ledger(scratch.batches);
+        sink.refresh(true);
+        sink.declare(scratch.graph, PLAN_SEQUENCE, TICK);
+        assertEquals(1, sink.seatDeclared(), "the declared seat is registered");
+
+        assertEquals(Verdict.CAPTURED, scratch.slots.judge(LEVEL, WritePath.BLOCK_WRITE.key(),
+            WITNESS, TICK).verdict());
+        WriteControlledSlots.Slot slot = scratch.slots.lastCoveredSlot();
+        assertNotNull(slot, "the write is seated against the declared claim");
+        WorldWriteGuard.LandedRow row = new WorldWriteGuard.LandedRow(WORLD, DOMAIN,
+            slot.planNodeKey(), PLAN_SEQUENCE, slot.position(), slot.expectedVersion(),
+            slot.worldEpoch(), TICK, 8, 64, 8);
+        sink.noteLanded(slot, WORLD, row);
+        List<PipelineWriteClaims.Report> reports = new ArrayList<>();
+        assertEquals(1, sink.reportLanded(reports::add));
+        assertEquals(1, settled.size(), "the attributed payload reaches the settlement sink");
+        PipelineWriteClaims.Attributed payload = settled.get(0);
+        assertTrue(payload.attributed(), "a seated declaration and a real row name the batch");
+        assertTrue(payload.rowsNamed(), "the row carries its identity");
+        assertEquals(1, payload.cells().size(), "one declared cell, never a guessed one");
+        PipelineWriteClaims.CellRows cell = payload.cells().get(0);
+        assertEquals(CELL, cell.cell(), "the one declared cell the row position covers");
+        long owner = scratch.batches.ownerOrdinal(scratch.claims.claims().get(0).batch(), CELL);
+        assertEquals(owner, cell.taskOrdinal(), "the published binding's owner ordinal");
+        assertEquals(1, cell.rows());
+        assertTrue(WorldWriteGuard.LandedRow.rowIdentity(cell.rowContent().get(0)),
+            "the row keeps the identity of the write path");
+    }
+
+    @Test
+    void aDeclaredSlotAttributionFailsClosedOutsideItsRangeOrWithoutARow() {
+        Scratch scratch = new Scratch();
+        scratch.claims.ledger(scratch.batches);
+        scratch.claims.writeSpaces(node -> WriteSpace.of(CellKind.CHUNK, CELL));
+        scratch.declare(ROUNDS);
+        List<PipelineWriteClaims.Attributed> settled = new ArrayList<>();
+        PipelineWriteClaims sink = new PipelineWriteClaims(scratch.versions,
+            scratch.guard.worldEpochs(), () -> true, world -> LEVEL, settled::add);
+        sink.table(scratch.slots);
+        sink.writeSpaces(node -> WriteSpace.of(CellKind.CHUNK, CELL));
+        sink.ledger(scratch.batches);
+        sink.refresh(true);
+        sink.declare(scratch.graph, PLAN_SEQUENCE, TICK);
+        assertEquals(1, sink.seatDeclared());
+        assertEquals(Verdict.CAPTURED, scratch.slots.judge(LEVEL, WritePath.BLOCK_WRITE.key(),
+            WITNESS, TICK).verdict());
+        WriteControlledSlots.Slot slot = scratch.slots.lastCoveredSlot();
+        assertNotNull(slot);
+
+        WorldWriteGuard.LandedRow outside = new WorldWriteGuard.LandedRow(WORLD, DOMAIN,
+            slot.planNodeKey(), PLAN_SEQUENCE, slot.position(), slot.expectedVersion(),
+            slot.worldEpoch(), TICK, 200, 64, 200);
+        sink.noteLanded(slot, WORLD, outside);
+        sink.reportLanded(report -> { });
+        assertEquals(1, settled.size());
+        assertFalse(settled.get(0).attributed(), "a write outside the declared range is refused");
+        assertTrue(settled.get(0).cells().isEmpty(), "no cell is guessed for it");
+
+        sink.noteLanded(slot, WORLD, null);
+        sink.reportLanded(report -> { });
+        assertEquals(2, settled.size(), "the second landing is reported too");
+        assertTrue(settled.get(1).cells().isEmpty(), "a row without identity names no cell");
+        assertFalse(settled.get(1).rowsNamed(), "and the rows are not named");
+    }
+
     /** The write paths, the registries and the claim table of one process, wired the way the kernel
      * wires them; only the level of a world and the step of the plan are fixtures. */
     private static final class Scratch {
