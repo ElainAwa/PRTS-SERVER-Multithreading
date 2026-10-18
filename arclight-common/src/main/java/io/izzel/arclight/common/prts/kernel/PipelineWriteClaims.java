@@ -320,13 +320,15 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
     /** One work item of a mailbox begins: while it runs, the job that mailbox carried is the writer
      * of its world, and the claim of that job is seated for exactly that span. A thread that already
      * holds a window is refused rather than overwritten, so a nested body cannot inherit the outer
-     * claim. */
+     * claim.
+     *
+     * <p>A token names a pipeline task body: the window is seated on the thread that runs the body. */
     @Override
     public void ownerTaskBegin(String world, String mailbox, Object token) {
         if (!enabled) {
             return;
         }
-        if (judgeThread != null && !judgeThread.getAsBoolean()) {
+        if (token == null && judgeThread != null && !judgeThread.getAsBoolean()) {
             offThreadWindows++;
             return;
         }

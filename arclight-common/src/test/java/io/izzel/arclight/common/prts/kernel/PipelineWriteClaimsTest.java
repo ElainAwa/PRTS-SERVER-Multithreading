@@ -40,6 +40,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -218,6 +220,76 @@ class PipelineWriteClaimsTest {
         assertEquals(1L, scratch.claims.offThreadWindowCount());
         assertEquals(0, scratch.guard.classifyBlockWrite(LEVEL));
         assertEquals(1L, scratch.slots.defaultPathCount());
+    }
+
+    @Test
+    void aTokenizedSpanSeatsItsClaimOnTheThreadThatRunsTheBody() throws Exception {
+        Scratch scratch = new Scratch();
+        scratch.judge = false;
+        scratch.declare(ROUNDS);
+        Object token = new Object();
+        CountDownLatch seated = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Thread body = new Thread(() -> {
+            scratch.claims.ownerTaskBegin(WORLD, MAILBOX, token);
+            seated.countDown();
+            try {
+                release.await();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+            scratch.claims.ownerTaskEnd(WORLD, MAILBOX, token);
+        }, "pipeline-task-body");
+        body.start();
+        assertTrue(seated.await(5, TimeUnit.SECONDS), "the body thread reached its begin");
+
+        assertEquals(1, scratch.slots.slots(),
+            "a tokenized span seats its claim on the thread that runs the body");
+        assertEquals(1L, scratch.claims.seatedCount());
+        assertEquals(0L, scratch.claims.offThreadWindowCount(),
+            "a tokenized span is not refused for running off the judged thread");
+
+        assertEquals(1, scratch.guard.classifyBlockWrite(LEVEL, 8, 64, 8),
+            "the judged write finds the slot the body declared");
+        assertEquals(Verdict.CAPTURED, scratch.slots.lastDecision().verdict(),
+            () -> "refusal=" + scratch.slots.lastRefusal());
+        assertEquals(1L, scratch.guard.claimedWrites(),
+            "the captured path is taken instead of the default path");
+
+        release.countDown();
+        body.join(5000L);
+        assertFalse(body.isAlive(), "the body thread closed its window");
+        assertEquals(0, scratch.slots.slots(), "the token's end retires the slot");
+    }
+
+    @Test
+    void aTokenizedSpanWithNoClaimIsUnclaimedExactlyLikeTheJudgedThreadPath() {
+        Scratch scratch = new Scratch();
+        scratch.judge = false;
+
+        scratch.claims.ownerTaskBegin(WORLD, MAILBOX, new Object());
+        assertEquals(0, scratch.slots.slots());
+        assertEquals(1L, scratch.claims.unclaimedWindowCount(),
+            "a token names a body, not a claim: with no declaration it claims nothing");
+        assertEquals(0L, scratch.claims.offThreadWindowCount());
+        assertEquals(0, scratch.guard.classifyBlockWrite(LEVEL));
+        assertEquals(1L, scratch.slots.defaultPathCount());
+    }
+
+    @Test
+    void aDisabledClaimPointStillSeatsNothingForATokenizedSpan() {
+        Scratch scratch = new Scratch();
+        scratch.judge = false;
+        scratch.declare(ROUNDS);
+        scratch.claims.refresh(false);
+
+        scratch.claims.ownerTaskBegin(WORLD, MAILBOX, new Object());
+        assertEquals(0, scratch.slots.slots(), "the claim point is off, so no window is seated");
+        assertEquals(0L, scratch.claims.seatedCount());
+        assertEquals(0L, scratch.claims.offThreadWindowCount());
+        assertEquals(0, scratch.guard.classifyBlockWrite(LEVEL));
+        assertEquals(1L, scratch.slots.defaultPathCount(),
+            "the write keeps the default path it had");
     }
 
     @Test
