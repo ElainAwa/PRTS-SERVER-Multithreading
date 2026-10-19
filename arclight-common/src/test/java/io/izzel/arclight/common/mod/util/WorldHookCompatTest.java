@@ -60,10 +60,14 @@ class WorldHookCompatTest {
     }
 
     @Test
-    void bridgeContractKeepsStrictGetWorldAndAddsOrNull() {
+    void bridgeContractKeepsStrictGetWorldAndAddsOrNull() throws Exception {
         InjectLevelBridge bridge = new InjectLevelBridge() { };
-        assertNull(bridge.bridge$getWorldOrNull());
-        assertThrows(IllegalStateException.class, bridge::bridge$getWorld);
+        java.lang.reflect.Method orNull = InjectLevelBridge.class.getMethod("bridge$getWorldOrNull");
+        assertNull(orNull.invoke(bridge));
+        java.lang.reflect.Method strict = InjectLevelBridge.class.getMethod("bridge$getWorld");
+        java.lang.reflect.InvocationTargetException thrown =
+            assertThrows(java.lang.reflect.InvocationTargetException.class, () -> strict.invoke(bridge));
+        assertTrue(thrown.getCause() instanceof IllegalStateException);
     }
 
     @Test
