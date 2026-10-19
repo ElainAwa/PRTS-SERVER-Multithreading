@@ -1,5 +1,6 @@
 package io.izzel.arclight.common.mixin.core.world.level.block;
 
+import org.bukkit.event.block.BlockPhysicsEvent;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
@@ -16,7 +17,8 @@ public class DoublePlantBlockMixin {
 
     @Inject(method = "preventDropFromBottomPart", cancellable = true, at = @At("HEAD"))
     private static void arclight$blockPhysics(Level worldIn, BlockPos pos, BlockState state, Player player, CallbackInfo ci) {
-        if (CraftEventFactory.callBlockPhysicsEvent(worldIn, pos) != null && CraftEventFactory.callBlockPhysicsEvent(worldIn, pos).isCancelled()) {
+        BlockPhysicsEvent physics = CraftEventFactory.callBlockPhysicsEvent(worldIn, pos);
+        if (physics != null && physics.isCancelled()) {
             ci.cancel();
         }
     }
