@@ -121,42 +121,44 @@ public abstract class LevelChunkMixin extends ChunkAccessMixin implements LevelC
 
     public void loadCallback() {
         org.bukkit.Server server = Bukkit.getServer();
-        if (server != null) {
-            /*
-             * If it's a new world, the first few chunks are generated inside
-             * the World constructor. We can't reliably alter that, so we have
-             * no way of creating a CraftWorld/CraftServer at that point.
-             */
+        if (server == null) {
+            return;
+        }
+        org.bukkit.World world = ((WorldBridge) this.level).bridge$getWorldOrNull();
+        if (ChunkHookCompat.shouldSkip(world)) {
+            return;
+        }
+        var bukkitChunk = new CraftChunk((LevelChunk) (Object) this);
+        server.getPluginManager().callEvent(new ChunkLoadEvent(bukkitChunk, this.needsDecoration));
 
-            var bukkitChunk = new CraftChunk((LevelChunk) (Object) this);
-            server.getPluginManager().callEvent(new ChunkLoadEvent(bukkitChunk, this.needsDecoration));
+        if (this.needsDecoration) {
+            this.needsDecoration = false;
+            java.util.Random random = new java.util.Random();
+            random.setSeed(((ServerLevel) level).getSeed());
+            long xRand = random.nextLong() / 2L * 2L + 1L;
+            long zRand = random.nextLong() / 2L * 2L + 1L;
+            random.setSeed((long) this.chunkPos.x * xRand + (long) this.chunkPos.z * zRand ^ ((ServerLevel) level).getSeed());
 
-            if (this.needsDecoration) {
-                this.needsDecoration = false;
-                java.util.Random random = new java.util.Random();
-                random.setSeed(((ServerLevel) level).getSeed());
-                long xRand = random.nextLong() / 2L * 2L + 1L;
-                long zRand = random.nextLong() / 2L * 2L + 1L;
-                random.setSeed((long) this.chunkPos.x * xRand + (long) this.chunkPos.z * zRand ^ ((ServerLevel) level).getSeed());
-
-                org.bukkit.World world = ((WorldBridge) this.level).bridge$getWorld();
-                if (world != null) {
-                    ((WorldBridge) this.level).bridge$setPopulating(true);
-                    try {
-                        for (org.bukkit.generator.BlockPopulator populator : world.getPopulators()) {
-                            populator.populate(world, random, bukkitChunk);
-                        }
-                    } finally {
-                        ((WorldBridge) this.level).bridge$setPopulating(false);
-                    }
+            ((WorldBridge) this.level).bridge$setPopulating(true);
+            try {
+                for (org.bukkit.generator.BlockPopulator populator : world.getPopulators()) {
+                    populator.populate(world, random, bukkitChunk);
                 }
-                server.getPluginManager().callEvent(new org.bukkit.event.world.ChunkPopulateEvent(bukkitChunk));
+            } finally {
+                ((WorldBridge) this.level).bridge$setPopulating(false);
             }
+            server.getPluginManager().callEvent(new org.bukkit.event.world.ChunkPopulateEvent(bukkitChunk));
         }
     }
 
     public void unloadCallback() {
         org.bukkit.Server server = Bukkit.getServer();
+        if (server == null) {
+            return;
+        }
+        if (ChunkHookCompat.shouldSkip(((WorldBridge) this.level).bridge$getWorldOrNull())) {
+            return;
+        }
         var bukkitChunk = new CraftChunk((LevelChunk) (Object) this);
         org.bukkit.event.world.ChunkUnloadEvent unloadEvent = new org.bukkit.event.world.ChunkUnloadEvent(bukkitChunk, this.isUnsaved());
         server.getPluginManager().callEvent(unloadEvent);
