@@ -28,6 +28,16 @@ public final class ChunkHookCompat {
         return true;
     }
 
+    /** Runs the chunk-event action only when a Bukkit world exists; a skip is logged once per path. */
+    public static boolean runChunkEventHook(Object world, String path, Runnable action) {
+        if (shouldSkip(world)) {
+            markAndLog(path);
+            return false;
+        }
+        action.run();
+        return true;
+    }
+
     /** Logs the skip once per chunk path so a missing-world level shows why its events are absent. */
     public static void markAndLog(String path) {
         if (!LOGGED.add(path)) {

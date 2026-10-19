@@ -126,12 +126,14 @@ public abstract class LevelChunkMixin extends ChunkAccessMixin implements LevelC
             return;
         }
         org.bukkit.World world = ((io.izzel.arclight.common.bridge.inject.InjectLevelBridge) this.level).bridge$getWorldOrNull();
-        if (ChunkHookCompat.shouldSkip(world)) {
-            ChunkHookCompat.markAndLog("load");
+        if (!ChunkHookCompat.runChunkEventHook(world, "load", () -> this.arclight$loadChunkEvents(world))) {
             return;
         }
+    }
+
+    private void arclight$loadChunkEvents(org.bukkit.World world) {
         var bukkitChunk = new CraftChunk((LevelChunk) (Object) this);
-        server.getPluginManager().callEvent(new ChunkLoadEvent(bukkitChunk, this.needsDecoration));
+        Bukkit.getServer().getPluginManager().callEvent(new ChunkLoadEvent(bukkitChunk, this.needsDecoration));
 
         if (this.needsDecoration) {
             this.needsDecoration = false;
@@ -149,7 +151,7 @@ public abstract class LevelChunkMixin extends ChunkAccessMixin implements LevelC
             } finally {
                 ((WorldBridge) this.level).bridge$setPopulating(false);
             }
-            server.getPluginManager().callEvent(new org.bukkit.event.world.ChunkPopulateEvent(bukkitChunk));
+            Bukkit.getServer().getPluginManager().callEvent(new org.bukkit.event.world.ChunkPopulateEvent(bukkitChunk));
         }
     }
 
@@ -158,13 +160,16 @@ public abstract class LevelChunkMixin extends ChunkAccessMixin implements LevelC
         if (server == null) {
             return;
         }
-        if (ChunkHookCompat.shouldSkip(((io.izzel.arclight.common.bridge.inject.InjectLevelBridge) this.level).bridge$getWorldOrNull())) {
-            ChunkHookCompat.markAndLog("unload");
+        org.bukkit.World world = ((io.izzel.arclight.common.bridge.inject.InjectLevelBridge) this.level).bridge$getWorldOrNull();
+        if (!ChunkHookCompat.runChunkEventHook(world, "unload", this::arclight$unloadChunkEvents)) {
             return;
         }
+    }
+
+    private void arclight$unloadChunkEvents() {
         var bukkitChunk = new CraftChunk((LevelChunk) (Object) this);
         org.bukkit.event.world.ChunkUnloadEvent unloadEvent = new org.bukkit.event.world.ChunkUnloadEvent(bukkitChunk, this.isUnsaved());
-        server.getPluginManager().callEvent(unloadEvent);
+        Bukkit.getServer().getPluginManager().callEvent(unloadEvent);
         // note: saving can be prevented, but not forced if no saving is actually required
         this.mustNotSave = !unloadEvent.isSaveChunk();
     }
