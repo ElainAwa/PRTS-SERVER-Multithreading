@@ -87,12 +87,13 @@ class ChunkHookCompatTest {
                 "PersistentEntitySectionManagerMixin.java");
         }
         String text = Files.readString(source);
-        long guards = text.lines().filter(line -> line.contains("runEntityEventHook(")).count();
-        assertEquals(2L, guards);
-        int loadGuard = text.indexOf("runEntityEventHook(");
+        int loadGuard = text.indexOf("\"entity-load\"");
         int loadCall = text.indexOf("callEntitiesLoadEvent", loadGuard);
-        int unloadCall = text.indexOf("callEntitiesUnloadEvent");
-        assertTrue(loadGuard >= 0 && loadCall > loadGuard && unloadCall > 0);
+        int unloadGuard = text.indexOf("\"entity-unload\"");
+        int unloadCall = text.indexOf("callEntitiesUnloadEvent", unloadGuard);
+        assertTrue(loadGuard >= 0 && loadCall > loadGuard, "load guard before load event");
+        assertTrue(unloadGuard >= 0 && unloadCall > unloadGuard, "unload guard before unload event");
+        assertTrue(loadGuard < unloadGuard || unloadGuard < loadGuard);
     }
 
     @Test

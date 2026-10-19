@@ -59,7 +59,7 @@ public final class ChunkHookCompat {
         }
         try {
             io.izzel.arclight.common.mod.server.ArclightServer.LOGGER.info(
-                "Skipping Bukkit chunk {} for a level without a CraftWorld", path);
+                (path.startsWith("entity") ? "Skipping Bukkit entity event {} for a level without a CraftWorld" : "Skipping Bukkit chunk event {} for a level without a CraftWorld"), path);
         } catch (Throwable ignored) {
             // offline unit runs have no initialized server logger
         }
