@@ -25,7 +25,12 @@ public final class WorldHookCompat {
         }
         String key = callerKey();
         if (LOGGED.add(key)) {
-            ArclightServer.LOGGER.info("Skipping Bukkit-only startup hook for a dimension without a CraftWorld ({})", key);
+            try {
+                ArclightServer.LOGGER.info(
+                    "Skipping Bukkit-only startup hook for a dimension without a CraftWorld ({})", key);
+            } catch (Throwable ignored) {
+                // Offline unit runs have no initialized server logger; the decision above is unchanged.
+            }
         }
     }
 

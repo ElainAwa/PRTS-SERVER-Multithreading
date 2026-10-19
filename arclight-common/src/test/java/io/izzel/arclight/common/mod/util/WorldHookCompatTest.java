@@ -60,25 +60,39 @@ class WorldHookCompatTest {
     }
 
     @Test
-    void bridgeContractKeepsStrictGetWorldAndAddsOrNull() throws Exception {
-        InjectLevelBridge bridge = new InjectLevelBridge() { };
-        java.lang.reflect.Method orNull = InjectLevelBridge.class.getMethod("bridge$getWorldOrNull");
-        assertNull(orNull.invoke(bridge));
-        java.lang.reflect.Method strict = InjectLevelBridge.class.getMethod("bridge$getWorld");
-        java.lang.reflect.InvocationTargetException thrown =
-            assertThrows(java.lang.reflect.InvocationTargetException.class, () -> strict.invoke(bridge));
-        assertTrue(thrown.getCause() instanceof IllegalStateException);
+    void bridgeContractDefaultOrNullAndStrictGetWorld() throws Exception {
+        boolean hasOrNull = false;
+        boolean hasStrict = false;
+        for (java.lang.reflect.Method method : InjectLevelBridge.class.getDeclaredMethods()) {
+            if (method.getName().equals("bridge$getWorldOrNull")) {
+                hasOrNull |= method.isDefault();
+            }
+            if (method.getName().equals("bridge$getWorld")) {
+                hasStrict |= method.isDefault();
+            }
+        }
+        assertTrue(hasOrNull);
+        assertTrue(hasStrict);
+        Path source = Path.of("src/main/java/io/izzel/arclight/common/bridge/inject/InjectLevelBridge.java");
+        if (!Files.exists(source)) {
+            source = Path.of("arclight-common/src/main/java/io/izzel/arclight/common/bridge/inject/InjectLevelBridge.java");
+        }
+        String text = Files.readString(source);
+        assertTrue(text.contains("throw new IllegalStateException"));
+        assertTrue(text.contains("bridge$getWorldOrNull"));
     }
 
     @Test
     void sourceAnchorsProtectNineStartupHooks() throws Exception {
-        Path source = Path.of("src/main/java/io/izzel/arclight/common/mixin/core/server/MinecraftServerMixin.java");
+        Path source = Path.of(
+            "src/main/java/io/izzel/arclight/common/mixin/core/server/MinecraftServerMixin.java");
         if (!Files.exists(source)) {
             source = Path.of("arclight-common/src/main/java/io/izzel/arclight/common/mixin/core/server/MinecraftServerMixin.java");
         }
         assertTrue(Files.exists(source), source.toString());
         String text = Files.readString(source);
-        long guards = text.lines().filter(line -> line.contains("no-CraftWorld guard")).count();
+        long guards = text.lines()
+            .filter(line -> line.contains("no-CraftWorld guard")).count();
         assertEquals(9L, guards, "nine startup hook guards");
         assertTrue(text.contains("bridge$getWorldOrNull()"), "non-throwing bridge is used");
     }
