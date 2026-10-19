@@ -264,6 +264,11 @@ public abstract class LevelMixin implements WorldBridge, LevelAccessor, LevelWri
     }
 
     @Override
+    public CraftWorld bridge$getWorldOrNull() {
+        return this.world;
+    }
+
+    @Override
     public boolean bridge$isPvpMode() {
         return this.pvpMode;
     }
