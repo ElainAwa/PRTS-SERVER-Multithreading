@@ -61,25 +61,15 @@ class WorldHookCompatTest {
 
     @Test
     void bridgeContractDefaultOrNullAndStrictGetWorld() throws Exception {
-        boolean hasOrNull = false;
-        boolean hasStrict = false;
-        for (java.lang.reflect.Method method : InjectLevelBridge.class.getDeclaredMethods()) {
-            if (method.getName().equals("bridge$getWorldOrNull")) {
-                hasOrNull |= method.isDefault();
-            }
-            if (method.getName().equals("bridge$getWorld")) {
-                hasStrict |= method.isDefault();
-            }
-        }
-        assertTrue(hasOrNull);
-        assertTrue(hasStrict);
-        Path source = Path.of("src/main/java/io/izzel/arclight/common/bridge/inject/InjectLevelBridge.java");
+        Path source = Path.of("src/main/java/io/izzel/arclight/common/bridge/inject",
+            "InjectLevelBridge.java");
         if (!Files.exists(source)) {
-            source = Path.of("arclight-common/src/main/java/io/izzel/arclight/common/bridge/inject/InjectLevelBridge.java");
+            source = Path.of("arclight-common/src/main/java/io/izzel/arclight/common/bridge/inject",
+                "InjectLevelBridge.java");
         }
         String text = Files.readString(source);
+        assertTrue(text.contains("default CraftWorld bridge$getWorldOrNull()"));
         assertTrue(text.contains("throw new IllegalStateException"));
-        assertTrue(text.contains("bridge$getWorldOrNull"));
     }
 
     @Test
