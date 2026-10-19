@@ -1,5 +1,6 @@
 package io.izzel.arclight.common.mixin.core.world.level.chunk;
 
+import io.izzel.arclight.common.mod.util.ChunkHookCompat;
 import io.izzel.arclight.common.bridge.core.world.level.LevelAccessorBridge;
 import io.izzel.arclight.common.bridge.core.world.level.WorldBridge;
 import io.izzel.arclight.common.bridge.core.world.chunk.ChunkAccessBridge;
