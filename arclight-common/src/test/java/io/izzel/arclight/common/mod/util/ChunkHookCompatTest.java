@@ -35,7 +35,7 @@ class ChunkHookCompatTest {
                 "LevelChunkMixin.java");
         }
         String text = Files.readString(source);
-        long guards = text.lines().filter(line -> line.contains("bridge$getWorldOrNull()")).count();
+        long guards = text.lines().filter(line -> line.contains("ChunkHookCompat.shouldSkip(")).count();
         assertEquals(2L, guards);
         long chunks = text.lines().filter(line -> line.contains("new CraftChunk(")).count();
         assertEquals(2L, chunks);
