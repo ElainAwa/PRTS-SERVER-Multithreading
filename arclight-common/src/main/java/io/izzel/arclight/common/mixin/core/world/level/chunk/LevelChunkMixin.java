@@ -124,7 +124,7 @@ public abstract class LevelChunkMixin extends ChunkAccessMixin implements LevelC
         if (server == null) {
             return;
         }
-        org.bukkit.World world = ((WorldBridge) this.level).bridge$getWorldOrNull();
+        org.bukkit.World world = ((io.izzel.arclight.common.bridge.inject.InjectLevelBridge) this.level).bridge$getWorldOrNull();
         if (ChunkHookCompat.shouldSkip(world)) {
             return;
         }
@@ -156,7 +156,7 @@ public abstract class LevelChunkMixin extends ChunkAccessMixin implements LevelC
         if (server == null) {
             return;
         }
-        if (ChunkHookCompat.shouldSkip(((WorldBridge) this.level).bridge$getWorldOrNull())) {
+        if (ChunkHookCompat.shouldSkip(((io.izzel.arclight.common.bridge.inject.InjectLevelBridge) this.level).bridge$getWorldOrNull())) {
             return;
         }
         var bukkitChunk = new CraftChunk((LevelChunk) (Object) this);

@@ -42,7 +42,7 @@ class ChunkHookCompatTest {
         int loadGuard = text.indexOf("ChunkHookCompat.shouldSkip(world)");
         int loadChunk = text.indexOf("new CraftChunk(", loadGuard);
         int unload = text.indexOf("public void unloadCallback()");
-        int unloadGuard = text.indexOf("ChunkHookCompat.shouldSkip(((WorldBridge) this.level)", unload);
+        int unloadGuard = text.indexOf("ChunkHookCompat.shouldSkip(", unload);
         int unloadChunk = text.indexOf("new CraftChunk(", unload);
         assertTrue(loadGuard >= 0 && loadChunk > loadGuard);
         assertTrue(unloadGuard >= 0 && unloadChunk > unloadGuard);
