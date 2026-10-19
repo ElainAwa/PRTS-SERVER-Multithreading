@@ -20,6 +20,18 @@ class ChunkHookCompatTest {
     }
 
     @Test
+    void nullPathLogsOnceAndNormalPathDoesNotLog() {
+        java.util.List<String> log = new java.util.ArrayList<>();
+        ChunkHookCompat.setLogSinkForTests(log::add);
+        ChunkHookCompat.markAndLog("load");
+        ChunkHookCompat.markAndLog("load");
+        ChunkHookCompat.markAndLog("unload");
+        org.junit.jupiter.api.Assertions.assertEquals(java.util.List.of("load", "unload"), log);
+        ChunkHookCompat.resetForTests();
+        org.junit.jupiter.api.Assertions.assertTrue(log.size() == 2);
+    }
+
+    @Test
     void worldRunsActionOnce() {
         boolean[] ran = {false};
         assertTrue(ChunkHookCompat.runIfWorld(new Object(), () -> ran[0] = true));
