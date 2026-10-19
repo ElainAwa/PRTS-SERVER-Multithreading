@@ -45,6 +45,25 @@ class BukkitValueSkipTest {
     }
 
     @Test
+    void addWorldAppearsOnceInsideGuard() throws Exception {
+        java.nio.file.Path source = java.nio.file.Path.of(
+            "src/main/java/io/izzel/arclight/common/mixin/core/server/level",
+            "ServerLevelMixin.java");
+        if (!java.nio.file.Files.exists(source)) {
+            source = java.nio.file.Path.of(
+                "arclight-common/src/main/java/io/izzel/arclight/common/mixin/core/server/level",
+                "ServerLevelMixin.java");
+        }
+        String text = java.nio.file.Files.readString(source);
+        long calls = text.lines().filter(line -> line.contains("addWorld(")).count();
+        assertEquals(1L, calls);
+        int guard = text.indexOf("runIfWorld(this.world");
+        int add = text.indexOf("addWorld(");
+        int close = text.indexOf("})", guard);
+        assertTrue(guard >= 0 && add > guard && close > add);
+    }
+
+    @Test
     void eachPathLogsOnce() {
         BukkitValueSkip.setLogSinkForTests(log::add);
         assertTrue(BukkitValueSkip.markAndLog("save"));

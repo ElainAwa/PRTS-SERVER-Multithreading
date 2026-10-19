@@ -266,7 +266,6 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
             })) {
                 BukkitValueSkip.markAndLog("load");
             }
-            this.getCraftServer().addWorld(this.getWorld());
         }
     }
 
