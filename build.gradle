@@ -150,9 +150,9 @@ rootProject.ext.platformProjects.each { Project p ->
 
         jar {
             manifest.attributes 'MixinConnector': 'io.izzel.arclight.common.mod.ArclightConnector'
-            manifest.attributes 'Implementation-Title': 'Arclight'
+            manifest.attributes 'Implementation-Title': 'PRTS'
             manifest.attributes 'Implementation-Version': "${p.name}-${libs.versions.minecraft.get()}-${project.version}+$gitHash"
-            manifest.attributes 'Implementation-Vendor': 'Arclight Team'
+            manifest.attributes 'Implementation-Vendor': 'PRTS Team'
             manifest.attributes 'Implementation-Timestamp': new Date().format("yyyy-MM-dd HH:mm:ss")
         }
 

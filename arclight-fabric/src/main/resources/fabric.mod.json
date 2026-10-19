@@ -2,11 +2,11 @@
   "id": "arclight",
   "version": "${version}",
   "schemaVersion": 1,
-  "name": "Arclight Mod",
+  "name": "PRTS",
   "authors": [
     "IzzelAliz"
   ],
-  "description": "Arclight bukkit layer for Fabric",
+  "description": "PRTS bukkit layer for Fabric",
   "license": "GNU GENERAL PUBLIC LICENSE Version 3",
   "environment": "server",
   "mixins": [

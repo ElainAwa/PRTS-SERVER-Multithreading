@@ -62,7 +62,7 @@ tasks.register('fabricMappings', Copy) {
 project.sourceSets.main.output.dir file('build/fabric_mappings'), builtBy: tasks.fabricMappings
 
 processResources {
-    def ver = "${project.version}+$gitHash"
+    def ver = "${libs.versions.minecraft.get()}-${project.version.replace('-SNAPSHOT','')}"
     inputs.property 'version', ver
 
     filesMatching('fabric.mod.json') {
