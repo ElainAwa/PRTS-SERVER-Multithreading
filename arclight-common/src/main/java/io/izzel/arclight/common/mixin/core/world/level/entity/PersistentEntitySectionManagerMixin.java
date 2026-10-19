@@ -1,5 +1,6 @@
 package io.izzel.arclight.common.mixin.core.world.level.entity;
 
+import io.izzel.arclight.common.mod.util.ChunkHookCompat;
 import io.izzel.arclight.common.bridge.core.entity.EntityBridge;
 import io.izzel.arclight.common.bridge.core.world.level.entity.PersistentEntitySectionManagerBridge;
 import io.izzel.arclight.mixin.Decorate;
