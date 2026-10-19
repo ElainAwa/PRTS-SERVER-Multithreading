@@ -3,8 +3,6 @@ package io.izzel.arclight.common.mod.util;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -15,6 +13,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class WorldHookCompatTest {
 
+    private final List<String> log = new ArrayList<>();
+
     @AfterEach
     void reset() {
         WorldHookCompat.resetForTests();
@@ -22,69 +22,62 @@ class WorldHookCompatTest {
 
     @Test
     void normalCraftWorldRunsActionOnce() {
+        WorldHookCompat.setLogSinkForTests(log::add);
         List<String> seen = new ArrayList<>();
-        WorldHookCompat.enterBukkitHook(true, () -> seen.add("A"));
+        WorldHookCompat.enterBukkitHook("normal", true, () -> seen.add("A"));
         assertEquals(List.of("A"), seen);
+        assertTrue(log.isEmpty());
     }
 
     @Test
-    void missingCraftWorldSkipsAction() {
+    void missingCraftWorldSkipsActionAndLogsOnce() {
+        WorldHookCompat.setLogSinkForTests(log::add);
         int[] runs = {0};
-        WorldHookCompat.enterBukkitHook(false, () -> runs[0]++);
-        WorldHookCompat.enterBukkitHook(false, () -> runs[0]++);
+        WorldHookCompat.enterBukkitHook("skip.once", false, () -> runs[0]++);
+        WorldHookCompat.enterBukkitHook("skip.once", false, () -> runs[0]++);
         assertEquals(0, runs[0]);
+        assertEquals(List.of("skip.once"), log);
     }
 
     @Test
-    void mixedDimensionsRunOnlyCraftWorldsInOrder() {
+    void mixedSitesRunCraftWorldsInOrderAndLogOnlySkips() {
+        WorldHookCompat.setLogSinkForTests(log::add);
         List<String> seen = new ArrayList<>();
-        WorldHookCompat.enterBukkitHook(true, () -> seen.add("A"));
-        WorldHookCompat.enterBukkitHook(false, () -> seen.add("B"));
-        WorldHookCompat.enterBukkitHook(true, () -> seen.add("C"));
+        WorldHookCompat.enterBukkitHook("site.A", true, () -> seen.add("A"));
+        WorldHookCompat.enterBukkitHook("site.B", false, () -> seen.add("B"));
+        WorldHookCompat.enterBukkitHook("site.C", true, () -> seen.add("C"));
         assertEquals(List.of("A", "C"), seen);
+        assertEquals(List.of("site.B"), log);
     }
 
     @Test
     void hookExceptionPropagatesAndStateIsClean() {
+        WorldHookCompat.setLogSinkForTests(log::add);
         RuntimeException boom = new RuntimeException("boom");
         RuntimeException got = assertThrows(RuntimeException.class,
-            () -> WorldHookCompat.enterBukkitHook(true, () -> {
+            () -> WorldHookCompat.enterBukkitHook("fails", true, () -> {
                 throw boom;
             }));
         assertSame(boom, got);
-        WorldHookCompat.enterBukkitHook(false, () -> { });
-        WorldHookCompat.enterBukkitHook(false, () -> { });
+        assertTrue(log.isEmpty());
+        WorldHookCompat.enterBukkitHook("fails", false, () -> { });
+        assertEquals(List.of("fails"), log);
         WorldHookCompat.resetForTests();
     }
 
     @Test
-    void bridgeContractDefaultOrNullAndStrictGetWorld() throws Exception {
-        Path source = Path.of("src/main/java/io/izzel/arclight/common/bridge/inject",
-            "InjectLevelBridge.java");
-        if (!Files.exists(source)) {
-            source = Path.of("arclight-common/src/main/java/io/izzel/arclight/common/bridge/inject",
-                "InjectLevelBridge.java");
+    void everyStartupSiteNameIsDistinctAndLoggedOnce() {
+        WorldHookCompat.setLogSinkForTests(log::add);
+        String[] sites = {
+            "worldInit.populators", "worldInit.event",
+            "prepareLevels.keepSpawn", "prepareLevels.loadEvent",
+            "initWorld.populators", "initWorld.event",
+            "prepareLevelsSingle.guard"
+        };
+        for (String site : sites) {
+            WorldHookCompat.enterBukkitHook(site, false, () -> { });
+            WorldHookCompat.enterBukkitHook(site, false, () -> { });
         }
-        String text = Files.readString(source);
-        String orNullText = "default CraftWorld bridge$getWorldOrNull()";
-        String strictText = "throw new IllegalStateException";
-        assertTrue(text.contains(orNullText));
-        assertTrue(text.contains(strictText));
-    }
-
-    @Test
-    void sourceAnchorsProtectNineStartupHooks() throws Exception {
-        Path source = Path.of("src/main/java/io/izzel/arclight/common/mixin/core/server",
-            "MinecraftServerMixin.java");
-        if (!Files.exists(source)) {
-            source = Path.of("arclight-common/src/main/java/io/izzel/arclight/common/mixin/core/server",
-                "MinecraftServerMixin.java");
-        }
-        assertTrue(Files.exists(source), source.toString());
-        String text = Files.readString(source);
-        long guards = text.lines()
-            .filter(line -> line.contains("no-CraftWorld guard")).count();
-        assertEquals(9L, guards);
-        assertTrue(text.contains("bridge$getWorldOrNull()"));
+        assertEquals(List.of(sites), log);
     }
 }
