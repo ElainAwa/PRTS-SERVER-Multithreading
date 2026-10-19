@@ -38,7 +38,7 @@ class ChunkHookCompatTest {
         long guards = text.lines().filter(line -> line.contains("ChunkHookCompat.shouldSkip(")).count();
         assertEquals(2L, guards);
         long chunks = text.lines().filter(line -> line.contains("new CraftChunk(")).count();
-        assertEquals(2L, chunks);
+        assertEquals(3L, chunks);
         int loadGuard = text.indexOf("ChunkHookCompat.shouldSkip(world)");
         int loadChunk = text.indexOf("new CraftChunk(", loadGuard);
         int unload = text.indexOf("public void unloadCallback()");
