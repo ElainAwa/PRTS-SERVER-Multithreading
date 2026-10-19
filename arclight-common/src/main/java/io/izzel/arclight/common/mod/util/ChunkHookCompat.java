@@ -58,7 +58,6 @@ public final class ChunkHookCompat {
             return;
         }
         try {
-            io.izzel.arclight.common.mod.server.ArclightServer.LOGGER.info(
             String kind = path.startsWith("entity") ? "entity event" : "chunk event";
             io.izzel.arclight.common.mod.server.ArclightServer.LOGGER.info(
                 "Skipping Bukkit {} {} for a level without a CraftWorld", kind, path);
