@@ -30,6 +30,21 @@ class BukkitValueSkipTest {
     }
 
     @Test
+    void loadNullDoesNotRunAction() {
+        boolean[] ran = {false};
+        assertTrue(BukkitValueSkip.shouldSkip(null));
+        assertFalse(BukkitValueSkip.runIfWorld(null, () -> ran[0] = true));
+        assertFalse(ran[0]);
+    }
+
+    @Test
+    void loadWithWorldRunsAction() {
+        boolean[] ran = {false};
+        assertTrue(BukkitValueSkip.runIfWorld(new Object(), () -> ran[0] = true));
+        assertTrue(ran[0]);
+    }
+
+    @Test
     void eachPathLogsOnce() {
         BukkitValueSkip.setLogSinkForTests(log::add);
         assertTrue(BukkitValueSkip.markAndLog("save"));

@@ -260,10 +260,11 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
         if (arclight$isActual()) {
             ((PrimaryLevelDataBridge) this.K).bridge$setWorld((ServerLevel) (Object) this);
             var data = this.getDataStorage().computeIfAbsent(LevelPersistentData.factory(), "bukkit_pdc");
-            if (BukkitValueSkip.shouldSkip(this.world)) {
-                BukkitValueSkip.markAndLog("load");
-            } else {
+            if (!BukkitValueSkip.runIfWorld(this.world, () -> {
                 this.getWorld().readBukkitValues(data.getTag());
+                this.getCraftServer().addWorld(this.getWorld());
+            })) {
+                BukkitValueSkip.markAndLog("load");
             }
             this.getCraftServer().addWorld(this.getWorld());
         }

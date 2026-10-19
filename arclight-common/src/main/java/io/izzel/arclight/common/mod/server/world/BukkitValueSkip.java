@@ -15,6 +15,15 @@ public final class BukkitValueSkip {
         return world == null;
     }
 
+    /** Runs the action only when a CraftWorld-backed world exists; returns whether it ran. */
+    public static boolean runIfWorld(Object world, Runnable action) {
+        if (shouldSkip(world)) {
+            return false;
+        }
+        action.run();
+        return true;
+    }
+
     /** Records the first skip for a path, so each save/load path logs at most once. */
     public static boolean markAndLog(String path) {
         if (!LOGGED.add(path)) {
