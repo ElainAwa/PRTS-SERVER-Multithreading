@@ -65,8 +65,10 @@ public abstract class PersistentEntitySectionManagerMixin<T extends EntityAccess
         at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/entity/EntityPersistentStorage;storeEntities(Lnet/minecraft/world/level/entity/ChunkEntities;)V"))
     private void arclight$fireUnload(long pos, @Local(ordinal = -1) List<T> list) {
         if (arclight$fireEvent) {
-            CraftEventFactory.callEntitiesUnloadEvent(((EntityStorage) permanentStorage).level, new ChunkPos(pos),
-                list.stream().map(entity -> (Entity) entity).collect(Collectors.toList()));
+            if (!ChunkHookCompat.runEntityEventHook(((io.izzel.arclight.common.bridge.inject.InjectLevelBridge) ((EntityStorage) permanentStorage).level).bridge$getWorldOrNull(), "entity-unload", () -> CraftEventFactory.callEntitiesUnloadEvent(((EntityStorage) permanentStorage).level, new ChunkPos(pos),
+                list.stream().map(entity -> (Entity) entity).collect(Collectors.toList())))) {
+                return;
+            }
         }
     }
 
@@ -83,7 +85,9 @@ public abstract class PersistentEntitySectionManagerMixin<T extends EntityAccess
     @Inject(method = "processPendingLoads", locals = LocalCapture.CAPTURE_FAILHARD, at = @At(value = "INVOKE", shift = At.Shift.AFTER, remap = false, target = "Lit/unimi/dsi/fastutil/longs/Long2ObjectMap;put(JLjava/lang/Object;)Ljava/lang/Object;"))
     private void arclight$fireLoad(CallbackInfo ci, ChunkEntities<T> chunkEntities) {
         List<Entity> entities = getEntities(chunkEntities.getPos());
-        CraftEventFactory.callEntitiesLoadEvent(((EntityStorage) permanentStorage).level, chunkEntities.getPos(), entities);
+        if (!ChunkHookCompat.runEntityEventHook(((io.izzel.arclight.common.bridge.inject.InjectLevelBridge) ((EntityStorage) permanentStorage).level).bridge$getWorldOrNull(), "entity-load", () -> CraftEventFactory.callEntitiesLoadEvent(((EntityStorage) permanentStorage).level, chunkEntities.getPos(), entities))) {
+            return;
+        }
     }
 
     @Inject(method = "unloadEntity", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/entity/EntityAccess;setRemoved(Lnet/minecraft/world/entity/Entity$RemovalReason;)V"))

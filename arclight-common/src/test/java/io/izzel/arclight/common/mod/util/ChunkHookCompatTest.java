@@ -42,6 +42,25 @@ class ChunkHookCompatTest {
     }
 
     @Test
+    void entityNullHookSkipsActionAndLogsOnce() {
+        ChunkHookCompat.setLogSinkForTests(log::add);
+        boolean[] ran = {false};
+        assertFalse(ChunkHookCompat.runEntityEventHook(null, "entity-load", () -> ran[0] = true));
+        assertFalse(ChunkHookCompat.runEntityEventHook(null, "entity-load", () -> ran[0] = true));
+        assertFalse(ran[0]);
+        assertEquals(List.of("entity-load"), log);
+    }
+
+    @Test
+    void entityNormalHookRunsOnceWithoutLog() {
+        ChunkHookCompat.setLogSinkForTests(log::add);
+        int[] runs = {0};
+        assertTrue(ChunkHookCompat.runEntityEventHook(new Object(), "entity-load", () -> runs[0]++));
+        assertEquals(1, runs[0]);
+        assertTrue(log.isEmpty());
+    }
+
+    @Test
     void normalWorldRunsActionOnceWithoutLog() {
         ChunkHookCompat.setLogSinkForTests(log::add);
         int[] runs = {0};
@@ -57,6 +76,23 @@ class ChunkHookCompatTest {
         ChunkHookCompat.runChunkEventHook(null, "unload", () -> { });
         ChunkHookCompat.runChunkEventHook(null, "load", () -> { });
         assertEquals(List.of("load", "unload"), log);
+    }
+
+    @Test
+    void entityEventGuardsBeforeCallSites() throws Exception {
+        Path source = Path.of("src/main/java/io/izzel/arclight/common/mixin/core/world/level/entity",
+            "PersistentEntitySectionManagerMixin.java");
+        if (!Files.exists(source)) {
+            source = Path.of("arclight-common/src/main/java/io/izzel/arclight/common/mixin/core/world/level/entity",
+                "PersistentEntitySectionManagerMixin.java");
+        }
+        String text = Files.readString(source);
+        long guards = text.lines().filter(line -> line.contains("runEntityEventHook(")).count();
+        assertEquals(2L, guards);
+        int loadGuard = text.indexOf("runEntityEventHook(");
+        int loadCall = text.indexOf("callEntitiesLoadEvent", loadGuard);
+        int unloadCall = text.indexOf("callEntitiesUnloadEvent");
+        assertTrue(loadGuard >= 0 && loadCall > loadGuard && unloadCall > 0);
     }
 
     @Test
