@@ -77,9 +77,10 @@ class WorldHookCompatTest {
         Path source = Path.of(
             "src/main/java/io/izzel/arclight/common/mixin/core/server/MinecraftServerMixin.java");
         if (!Files.exists(source)) {
-            source = Path.of("arclight-common/src/main/java/io/izzel/arclight/common/mixin/core/server/MinecraftServerMixin.java");
-        }
-        assertTrue(Files.exists(source), source.toString());
+        String orNullText = "default CraftWorld bridge$getWorldOrNull()";
+        String strictText = "throw new IllegalStateException";
+        assertTrue(text.contains(orNullText));
+        assertTrue(text.contains(strictText));
         String text = Files.readString(source);
         long guards = text.lines()
             .filter(line -> line.contains("no-CraftWorld guard")).count();
