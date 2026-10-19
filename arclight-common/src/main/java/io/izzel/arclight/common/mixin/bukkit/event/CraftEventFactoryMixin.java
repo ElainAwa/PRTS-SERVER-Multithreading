@@ -214,6 +214,14 @@ public abstract class CraftEventFactoryMixin {
      */
     @Overwrite
     public static BlockPhysicsEvent callBlockPhysicsEvent(LevelAccessor world, BlockPos blockposition) {
+        if (world instanceof Level level) {
+            Object bukkitWorld = ((io.izzel.arclight.common.bridge.inject.InjectLevelBridge) level)
+                .bridge$getWorldOrNull();
+            if (io.izzel.arclight.common.mod.util.ChunkHookCompat.shouldSkip(bukkitWorld)) {
+                io.izzel.arclight.common.mod.util.ChunkHookCompat.markAndLog("block-physics");
+                return null;
+            }
+        }
         org.bukkit.block.Block block = CraftBlock.at(world, blockposition);
         BlockPhysicsEvent event = new BlockPhysicsEvent(block, block.getBlockData());
         // Suppress during worldgen

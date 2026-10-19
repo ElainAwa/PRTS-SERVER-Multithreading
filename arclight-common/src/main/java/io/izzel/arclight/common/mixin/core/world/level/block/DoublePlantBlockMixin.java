@@ -16,7 +16,7 @@ public class DoublePlantBlockMixin {
 
     @Inject(method = "preventDropFromBottomPart", cancellable = true, at = @At("HEAD"))
     private static void arclight$blockPhysics(Level worldIn, BlockPos pos, BlockState state, Player player, CallbackInfo ci) {
-        if (CraftEventFactory.callBlockPhysicsEvent(worldIn, pos).isCancelled()) {
+        if (CraftEventFactory.callBlockPhysicsEvent(worldIn, pos) != null && CraftEventFactory.callBlockPhysicsEvent(worldIn, pos).isCancelled()) {
             ci.cancel();
         }
     }

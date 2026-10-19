@@ -1,5 +1,6 @@
 package io.izzel.arclight.common.mixin.core.world.level.block;
 
+import org.bukkit.event.block.BlockPhysicsEvent;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.LevelAccessor;
@@ -16,7 +17,8 @@ public abstract class BushBlockMixin extends BlockMixin {
 
     @Redirect(method = "updateShape", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/block/Block;defaultBlockState()Lnet/minecraft/world/level/block/state/BlockState;"))
     public BlockState arclight$blockFade(Block block, BlockState stateIn, Direction facing, BlockState facingState, LevelAccessor worldIn, BlockPos currentPos, BlockPos facingPos) {
-        if (!CraftEventFactory.callBlockPhysicsEvent(worldIn, currentPos).isCancelled()) {
+        BlockPhysicsEvent physics = CraftEventFactory.callBlockPhysicsEvent(worldIn, currentPos);
+        if (physics == null || !physics.isCancelled()) {
             return block.defaultBlockState();
         } else {
             return super.updateShape(stateIn, facing, facingState, worldIn, currentPos, facingPos);
