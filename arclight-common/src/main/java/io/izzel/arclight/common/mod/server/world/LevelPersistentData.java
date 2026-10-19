@@ -21,6 +21,10 @@ public class LevelPersistentData extends SavedData {
 
     public void save(CraftWorld world) {
         this.tag = new CompoundTag();
+        if (BukkitValueSkip.shouldSkip(world)) {
+            BukkitValueSkip.markAndLog("save");
+            return;
+        }
         world.storeBukkitValues(this.tag);
     }
 
