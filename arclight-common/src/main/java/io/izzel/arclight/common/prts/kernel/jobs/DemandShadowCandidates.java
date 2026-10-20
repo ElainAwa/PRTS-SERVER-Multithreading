@@ -404,6 +404,7 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         }
         purgePending(PrtsPipelineBatches.tick());
         int bound = 0;
+        String boundStatus = null;
         Iterator<Map.Entry<Long, PendingDemand>> walk = pending.entrySet().iterator();
         while (walk.hasNext()) {
             PendingDemand held = walk.next().getValue();
@@ -416,8 +417,14 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
                     && held.planSequence() != batch.planSequence())) {
                 continue;
             }
+            // One window takes one status per cell. A different-status pending stays for a later
+            // window or the TTL; binding it here would turn the window into a conflict.
+            if (boundStatus != null && !boundStatus.equals(held.status())) {
+                continue;
+            }
             walk.remove();
             rememberStatus(task, held.status(), held.token());
+            boundStatus = held.status();
             bound++;
         }
         return bound;

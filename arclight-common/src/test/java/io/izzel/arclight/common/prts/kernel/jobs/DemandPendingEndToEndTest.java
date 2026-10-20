@@ -95,6 +95,31 @@ class DemandPendingEndToEndTest {
     }
 
     @Test
+    void oneWindowTakesOneStatusOfTwoPendingDemands() {
+        PipelineBatchLedger ledger = kernel.pipelineBatches();
+        DemandShadowCandidates shadows = kernel.demandShadowCandidates();
+        long cell = ChunkPos.asLong(2816, 2816);
+        PipelineBatchLedger.TrackedTask caller = task(ledger, OTHER, cell + 1L, TICK);
+        assertFalse(ledger.runStart(caller));
+        PipelineBatchLedger.TrackedTask target = task(ledger, MAIN, cell, TICK);
+        assertNotNull(ledger.freeze(WORLD, MAIN, PLAN, TICK));
+        assertTrue(PrtsChunkDemand.demandDescriptorToken(WORLD, 2816, 2816, "biomes", true, caller)
+            > PrtsChunkDemand.NO_TOKEN);
+        assertTrue(PrtsChunkDemand.demandDescriptorToken(WORLD, 2816, 2816, "full", true, caller)
+            > PrtsChunkDemand.NO_TOKEN);
+        assertEquals(2, shadows.pendingCount());
+
+        Runnable body = PipelineBatchWrapper.function(ledger, target, reply -> (Runnable) () -> {})
+            .apply(null);
+        body.run();
+
+        List<DemandShadowCandidates.TaskStatus> retained = shadows.retainedStatuses();
+        assertTrue(retained.stream().anyMatch(status -> status.present()
+            && "biomes".equals(status.status())));
+        assertEquals(1, shadows.pendingCount(), "the different status waits for a later window");
+    }
+
+    @Test
     void anEarlyPlanZeroDemandBindsWhenTheFirstPlanWindowOpens() {
         PipelineBatchLedger ledger = kernel.pipelineBatches();
         DemandShadowCandidates shadows = kernel.demandShadowCandidates();

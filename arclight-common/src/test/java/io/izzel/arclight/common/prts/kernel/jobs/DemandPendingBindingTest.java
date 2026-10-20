@@ -232,7 +232,7 @@ class DemandPendingBindingTest {
     }
 
     @Test
-    void sameStatusDuplicatesAndDifferentStatusConflicts() {
+    void sameStatusDuplicatesAndDifferentStatusStaysPending() {
         Fixture fixture = new Fixture(ChunkPos.asLong(2812, 2812));
         DemandShadowCandidates duplicate = candidates();
         demand(duplicate, 2812, 2812, 19L, "biomes", fixture.caller);
@@ -244,8 +244,12 @@ class DemandPendingBindingTest {
         DemandShadowCandidates conflict = candidates();
         demand(conflict, 2813, 2813, 30L, "biomes", conflictFixture.caller);
         demand(conflict, 2813, 2813, 31L, "full", conflictFixture.caller);
-        assertEquals(2, conflict.bindPending(conflictFixture.target, conflictFixture.ledger));
-        assertFalse(conflict.statusFor(conflictFixture.target).present(), "a conflict has no status");
+        assertEquals(1, conflict.bindPending(conflictFixture.target, conflictFixture.ledger),
+            "one window takes only the earliest status");
+        DemandShadowCandidates.TaskStatus chosen = conflict.statusFor(conflictFixture.target);
+        assertTrue(chosen.present(), "the first status is accepted, not conflicted");
+        assertEquals("biomes", chosen.status());
+        assertEquals(1, conflict.pendingCount(), "the full pending waits for a later window");
     }
 
     @Test
