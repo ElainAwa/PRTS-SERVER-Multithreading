@@ -220,7 +220,7 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
     private final int pendingCapacity;
     private final Map<Long, PendingDemand> pending = new LinkedHashMap<>();
     /** The plan current when a deferred demand arrived: a target window of another plan is not its owner. */
-    private final LongSupplier currentPlan;
+    private final Object planSource;
     private long statusOverflows;
     private long statusConflicts;
     private long statusLate;
@@ -244,7 +244,7 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         }
         this.statusCapacity = taskCapacity;
         this.pendingCapacity = Math.max(1, taskCapacity / PENDING_CAPACITY_DIVISOR);
-        this.currentPlan = currentPlan == null ? () -> 0L : currentPlan;
+        this.planSource = currentPlan;
         for (int index = 0; index < CAP; index++) {
             ring[index] = new Slot();
             staged[index] = new Slot();
@@ -352,7 +352,11 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         long cell = descriptor.chunk().packedPos();
         PipelineBatchLedger.TaskId id = caller.id();
         pending.put(token, new PendingDemand(token, status, cell, id.worldId(),
-            currentPlan.getAsLong(), now));
+            demandPlan(), now));
+    }
+
+    private long demandPlan() {
+        return planSource instanceof LongSupplier supplier ? supplier.getAsLong() : 0L;
     }
 
     private void purgePending(long now) {
