@@ -418,6 +418,15 @@ public final class WriteControlledSlots {
         List<Slot> candidates = candidates(levelRef, domainKey);
         boolean lazyTried = false;
         if (candidates.isEmpty()) {
+            // A retained declaration may cover the write although no slot was seated yet: ask it
+            // once before the default path, then judge the registered candidates normally.
+            lazyTried = true;
+            if (lazySeat.seat(levelRef, domainKey,
+                position == null ? WritePosition.NONE : position, tickIndex) > 0) {
+                candidates = candidates(levelRef, domainKey);
+            }
+        }
+        if (candidates.isEmpty()) {
             defaultPath.incrementAndGet();
             return lastDecision = Decision.defaultPath("");
         }

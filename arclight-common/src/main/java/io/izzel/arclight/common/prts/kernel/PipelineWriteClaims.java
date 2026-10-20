@@ -883,7 +883,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         List<WriteControlledSlots.SlotKey> keys = new ArrayList<>(declaredSeats);
         for (Claim claim : claims()) {
             if (claim.levelRef() != levelRef || !claim.writeSet().contains(domainKey)
-                || claim.expireTick() <= tick || !claim.space().covers(position)) {
+                || !claim.space().covers(position) || !stillHeld(claim, tick)) {
                 continue;
             }
             WriteControlledSlots.Slot slot = slotOf(claim, ++generations);

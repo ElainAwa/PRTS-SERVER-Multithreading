@@ -117,6 +117,7 @@ class PipelineWriteClaimsTest {
     @Test
     void aClaimIsSeatedForTheWindowOfItsOwnJobAndCoversTheWriteOfThatWindow() {
         Scratch scratch = new Scratch();
+        scratch.claims.ledger(scratch.batches);
         scratch.declare(ROUNDS);
 
         scratch.claims.ownerTaskBegin(WORLD, MAILBOX);
@@ -143,10 +144,10 @@ class PipelineWriteClaimsTest {
         scratch.claims.ownerTaskEnd(WORLD, MAILBOX);
         assertEquals(0, scratch.slots.slots());
         assertEquals(1L, scratch.claims.disarmedCount());
-        assertEquals(Verdict.DEFAULT_PATH, scratch.judge(WritePath.BLOCK_WRITE.key()),
-            "the write after the window is not a write of that job");
-        assertEquals(1L, scratch.slots.defaultPathCount());
-        assertEquals(1L, scratch.slots.capturedCount());
+        assertEquals(Verdict.CAPTURED, scratch.judge(WritePath.BLOCK_WRITE.key()),
+            "the retained declaration covers the write after the task window");
+        assertEquals(0L, scratch.slots.defaultPathCount());
+        assertEquals(2L, scratch.slots.capturedCount());
         assertEquals(1L, scratch.slots.rejectedCount());
         assertTrue(scratch.slots.conservationHolds());
     }
@@ -744,6 +745,7 @@ class PipelineWriteClaimsTest {
     @Test
     void aLazySeatRecoversACoveringClaimWhenTheOnlyCandidateDoesNotCover() {
         Scratch scratch = new Scratch();
+        scratch.claims.ledger(scratch.batches);
         scratch.declare(ROUNDS);
         scratch.claims.seatDeclared();
         WriteControlledSlots.Slot real = scratch.capture();
@@ -765,6 +767,7 @@ class PipelineWriteClaimsTest {
     @Test
     void aLazySeatDoesNotReviveAnExpiredDeclaration() {
         Scratch scratch = new Scratch();
+        scratch.claims.ledger(scratch.batches);
         scratch.declare(ROUNDS);
         scratch.claims.seatDeclared();
         WriteControlledSlots.Slot real = scratch.capture();
