@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BlockPhysicsCompatAnchorTest {
@@ -26,6 +27,18 @@ class BlockPhysicsCompatAnchorTest {
         int ctor = text.indexOf("new BlockPhysicsEvent");
         assertTrue(accessor >= 0 && ctor > accessor, "world accessor before event construction");
         assertTrue(skip > 0 && ctor > skip, "skip check before event construction");
+    }
+
+    @Test
+    void neighborUpdatesUseTheNonThrowingWorldAccessor() throws Exception {
+        String text = Files.readString(source("mixin/core/world/level/redstone",
+            "NeighborUpdaterMixin.java"));
+        int accessor = text.indexOf("bridge$getWorldOrNull()");
+        int callsite = text.indexOf("DecorationOps.callsite()");
+        assertTrue(accessor >= 0, "neighbor updates use the non-throwing world accessor");
+        assertTrue(callsite > accessor, "the callsite follows the guarded accessor");
+        assertFalse(text.contains("level.bridge$getWorld()"),
+            "neighbor updates do not call the strict world accessor");
     }
 
     @Test

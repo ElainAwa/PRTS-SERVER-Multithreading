@@ -1,6 +1,7 @@
 package io.izzel.arclight.common.mixin.core.world.level.redstone;
 
 import io.izzel.arclight.common.bridge.core.world.level.WorldBridge;
+import io.izzel.arclight.common.bridge.inject.InjectLevelBridge;
 import io.izzel.arclight.mixin.Decorate;
 import io.izzel.arclight.mixin.DecorationOps;
 import io.izzel.arclight.mixin.Local;
@@ -21,7 +22,7 @@ public interface NeighborUpdaterMixin {
 
     @Decorate(method = "executeUpdate", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/block/state/BlockState;handleNeighborChanged(Lnet/minecraft/world/level/Level;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/Block;Lnet/minecraft/core/BlockPos;Z)V"))
     private static void arclight$blockPhysicsEvent(BlockState instance, Level level, BlockPos pos, Block block, BlockPos source, boolean b) throws Throwable {
-        var cworld = level.bridge$getWorld();
+        var cworld = ((InjectLevelBridge) level).bridge$getWorldOrNull();
         if (cworld != null) {
             BlockPhysicsEvent event = new BlockPhysicsEvent(CraftBlock.at(level, pos), CraftBlockData.fromData(instance), CraftBlock.at(level, source));
             Bukkit.getPluginManager().callEvent(event);
