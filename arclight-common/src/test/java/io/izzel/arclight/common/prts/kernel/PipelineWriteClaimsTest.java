@@ -717,6 +717,30 @@ class PipelineWriteClaimsTest {
     }
 
     @Test
+    void anEmptyCandidateListAsksRetainedDeclarations() {
+        Scratch scratch = new Scratch();
+        scratch.claims.ledger(scratch.batches);
+        scratch.declare(ROUNDS);
+        scratch.claims.seatDeclared();
+        WriteControlledSlots.Slot real = scratch.capture();
+        scratch.slots.retire(real.key());
+        assertEquals(0, scratch.slots.slots());
+        long captured = scratch.slots.capturedCount();
+
+        assertEquals(Verdict.CAPTURED, scratch.judge(WritePath.BLOCK_WRITE.key()),
+            "an empty candidate list still asks the retained declaration");
+        assertEquals(captured + 1L, scratch.slots.capturedCount());
+    }
+
+    @Test
+    void anEmptyCandidateListWithoutADeclarationKeepsTheDefaultPath() {
+        Scratch scratch = new Scratch();
+
+        assertEquals(Verdict.DEFAULT_PATH, scratch.judge(WritePath.BLOCK_WRITE.key()));
+        assertEquals(0L, scratch.slots.capturedCount());
+    }
+
+    @Test
     void aDeclarationIsRetainedUntilItsHoldExpires() {
         Scratch scratch = new Scratch();
         scratch.claims.ledger(scratch.batches);
