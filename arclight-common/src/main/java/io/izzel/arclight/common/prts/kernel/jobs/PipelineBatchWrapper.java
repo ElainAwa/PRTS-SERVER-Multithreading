@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.jobs;
 
+import io.izzel.arclight.common.prts.support.PrtsChunkDemand;
 import io.izzel.arclight.common.prts.support.PrtsPipelineBatches;
 import io.izzel.arclight.common.prts.support.PrtsPipelineRows;
 import net.minecraft.util.Unit;
@@ -76,6 +77,7 @@ public final class PipelineBatchWrapper {
             Throwable failure = null;
             try {
                 if (window) {
+                    PrtsChunkDemand.bindPending(task);
                     begun = true;
                     failure = tapped(() -> PrtsPipelineRows.ownerTaskBegin(task.processor(),
                         task.id().mailbox(), task));

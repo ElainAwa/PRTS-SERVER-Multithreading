@@ -2,6 +2,7 @@
 package io.izzel.arclight.common.prts.support;
 
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 /** The seam the chunk cache reports its demand side through: what was asked, what answered it, and
  * the futures it handed out, each named for its call. Every call is a no-op while no tap is
@@ -90,6 +91,7 @@ public final class PrtsChunkDemand {
     }
 
     private static volatile DemandTap tap;
+    private static volatile Consumer<Object> pendingBinder;
 
     private PrtsChunkDemand() {
     }
@@ -104,6 +106,24 @@ public final class PrtsChunkDemand {
 
     public static DemandTap watcher() {
         return tap;
+    }
+
+    /** Installs the one binder a claimed window calls before it reads its status. It is an internal
+     * hand-off, not a key or a seam the product reads: no binder means no binding attempt. */
+    public static void installPendingBinder(Consumer<Object> binder) {
+        pendingBinder = binder;
+    }
+
+    /** Offers one started window to the installed binder; a binder that throws is not the run failing. */
+    public static void bindPending(Object task) {
+        Consumer<Object> binder = pendingBinder;
+        if (binder == null) {
+            return;
+        }
+        try {
+            binder.accept(task);
+        } catch (Throwable ignored) {
+        }
     }
 
     public static void demandStarted(String worldId, String status, boolean blocking) {

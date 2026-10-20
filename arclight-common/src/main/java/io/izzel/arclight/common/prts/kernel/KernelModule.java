@@ -82,6 +82,7 @@ import io.izzel.arclight.common.prts.kernel.observe.StallAttributionObserver;
 import io.izzel.arclight.common.prts.kernel.observe.TickDigestObserver;
 import io.izzel.arclight.common.prts.kernel.domain.entity.LiveEntityAccess;
 import io.izzel.arclight.common.prts.kernel.meter.SelfCostTap;
+import io.izzel.arclight.common.prts.support.PrtsChunkDemand;
 import io.izzel.arclight.common.prts.support.PrtsChunkMaterialization;
 import io.izzel.arclight.common.prts.support.PrtsPipelineBatches;
 import io.izzel.arclight.common.prts.support.PrtsPipelineRows;
@@ -647,6 +648,9 @@ public final class KernelModule {
             attribution.attach();
             chunkDemand.attach();
             chunkDemand.attachSecondPath(demandShadows);
+            demandShadows.clearPending();
+            PrtsChunkDemand.installPendingBinder(task -> demandShadows.bindPending(
+                (PipelineBatchLedger.TrackedTask) task, pipelineBatches));
             PipelineRunSeal.install(demandShadows::statusFor);
             PipelineRunSeal.installRange(rangeSealFactory);
             PrtsSelfCosts.install(selfCosts);
@@ -662,6 +666,8 @@ public final class KernelModule {
             chunkMaterialization.detach();
             attribution.detach();
             chunkDemand.detach();
+            PrtsChunkDemand.installPendingBinder(null);
+            demandShadows.clearPending();
             PipelineRunSeal.install(null);
             PipelineRunSeal.installRange(null);
             PrtsSelfCosts.install(null);

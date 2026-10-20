@@ -5,11 +5,13 @@ import io.izzel.arclight.common.prts.kernel.commit.CommitLog;
 import io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations;
 import io.izzel.arclight.common.prts.kernel.shares.ShareClass;
 import io.izzel.arclight.common.prts.support.PrtsChunkDemand;
+import io.izzel.arclight.common.prts.support.PrtsPipelineBatches;
 import net.minecraft.world.level.ChunkPos;
 
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -32,6 +34,12 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
     public static final String LATE_BEFORE_FREEZE = "late-before-freeze";
 
     public static final int CAP = 64;
+
+    /** A deferred demand is dropped after this many ticks; one freeze cycle is the bound. */
+    public static final int PENDING_TTL_TICKS = 3;
+
+    /** Deferred demands are a fraction of the ledger's task bound, never the whole register. */
+    public static final int PENDING_CAPACITY_DIVISOR = 8;
 
     /** The identity one demand call was made under: the task's own fields and the batch state that
      * carried it, plus the name of that call. */
@@ -148,6 +156,10 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         return DOMAIN + "/" + named.worldId() + "/" + chunk + "/" + named.targetStatus();
     }
 
+    private record PendingDemand(long token, String status, long cell, String world,
+                                 long callerOrdinal, long callerMintTick, long createdTick) {
+    }
+
     private static final class Slot {
 
         private DemandDescriptor descriptor;
@@ -202,6 +214,10 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
     /** The register holds one entry per live running task and refuses above this bound. */
     private final int statusCapacity;
     private final Map<PipelineBatchLedger.TrackedTask, StatusEntry> statuses = new IdentityHashMap<>();
+    /** Demands whose caller is a live task that has not been claimed yet: they wait for the target
+     * cell's claimed window, keyed by the call name so one demand is consumed at most once. */
+    private final int pendingCapacity;
+    private final Map<Long, PendingDemand> pending = new LinkedHashMap<>();
     private long statusOverflows;
     private long statusConflicts;
     private long statusLate;
@@ -220,6 +236,7 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
             throw new IllegalArgumentException("task capacity must be positive");
         }
         this.statusCapacity = taskCapacity;
+        this.pendingCapacity = Math.max(1, taskCapacity / PENDING_CAPACITY_DIVISOR);
         for (int index = 0; index < CAP; index++) {
             ring[index] = new Slot();
             staged[index] = new Slot();
@@ -294,8 +311,97 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         if (token == PrtsChunkDemand.NO_TOKEN) {
             return;
         }
-        stage(DemandDescriptor.at(worldId, chunkX, chunkZ, status, requireChunk), token, taskToken);
-        rememberStatus(taskToken, status, token);
+        DemandDescriptor descriptor =
+            DemandDescriptor.at(worldId, chunkX, chunkZ, status, requireChunk);
+        stage(descriptor, token, taskToken);
+        if (isDeferredCaller(taskToken) && descriptor.chunk() != null) {
+            deferPending(descriptor, status, token, (PipelineBatchLedger.TrackedTask) taskToken);
+        } else {
+            rememberStatus(taskToken, status, token);
+        }
+    }
+
+    /** A caller that has run but was never claimed: the target cell's claimed window is the owner
+     * this demand is waiting for. Other states keep the existing refusal path. */
+    private static boolean isDeferredCaller(Object taskToken) {
+        if (!(taskToken instanceof PipelineBatchLedger.TrackedTask task) || !task.live()) {
+            return false;
+        }
+        return task.state() instanceof PipelineBatchLedger.RunningUnclaimed;
+    }
+
+    private synchronized void deferPending(DemandDescriptor descriptor, String status, long token,
+                                           PipelineBatchLedger.TrackedTask caller) {
+        long now = PrtsPipelineBatches.tick();
+        purgePending(now);
+        if (token == PrtsChunkDemand.NO_TOKEN || pending.containsKey(token)) {
+            return;
+        }
+        if (pending.size() >= pendingCapacity) {
+            statusRefused++;
+            return;
+        }
+        long cell = descriptor.chunk().packedPos();
+        PipelineBatchLedger.TaskId id = caller.id();
+        pending.put(token, new PendingDemand(token, status, cell, id.worldId(),
+            id.ordinal(), id.mintTick(), now));
+    }
+
+    private void purgePending(long now) {
+        Iterator<Map.Entry<Long, PendingDemand>> walk = pending.entrySet().iterator();
+        while (walk.hasNext()) {
+            PendingDemand held = walk.next().getValue();
+            long age = now - held.createdTick();
+            if (age > PENDING_TTL_TICKS || age < 0L) {
+                walk.remove();
+                statusRefused++;
+            }
+        }
+    }
+
+    /** Binds every deferred demand of this claimed window's cell before the window reads its one
+     * status. The target TaskId is the explicit owner: a window of another cell, batch or plan is
+     * not a candidate and leaves the pending record for a later owner. */
+    public synchronized int bindPending(PipelineBatchLedger.TrackedTask task,
+                                        PipelineBatchLedger ledger) {
+        if (task == null || ledger == null || !task.live()
+            || !(task.state() instanceof PipelineBatchLedger.Running running)) {
+            return 0;
+        }
+        PipelineBatchLedger.TaskId id = task.id();
+        PipelineBatchLedger.BatchId batch = running.batch();
+        if (batch == null || !batch.worldId().equals(id.worldId())
+            || !batch.mailbox().equals(id.mailbox())
+            || !ledger.bindingPublished(batch)
+            || ledger.currentPlan() != batch.planSequence()
+            || ledger.ownerOrdinal(batch, id.cell()) != id.ordinal()) {
+            return 0;
+        }
+        purgePending(PrtsPipelineBatches.tick());
+        int bound = 0;
+        Iterator<Map.Entry<Long, PendingDemand>> walk = pending.entrySet().iterator();
+        while (walk.hasNext()) {
+            PendingDemand held = walk.next().getValue();
+            // The target TaskId is the explicit owner: the caller's mailbox is not the target
+            // window's mailbox in a cross-world future, so the window's own id is authoritative.
+            if (!held.world().equals(id.worldId()) || held.cell() != id.cell()) {
+                continue;
+            }
+            walk.remove();
+            rememberStatus(task, held.status(), held.token());
+            bound++;
+        }
+        return bound;
+    }
+
+    /** Number of demands waiting for a claimed target window, for tests and diagnostics. */
+    public synchronized int pendingCount() {
+        return pending.size();
+    }
+
+    /** Drops every deferred demand, for a reset or an uninstall; it neither seals nor publishes. */
+    public synchronized void clearPending() {
+        pending.clear();
     }
 
     private synchronized void capture(DemandDescriptor descriptor) {
@@ -601,6 +707,7 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
     public synchronized void resetStatuses() {
         statusReclaimed += statuses.size();
         statuses.clear();
+        pending.clear();
     }
 
     /** How many status entries are retained for a settlement. */
