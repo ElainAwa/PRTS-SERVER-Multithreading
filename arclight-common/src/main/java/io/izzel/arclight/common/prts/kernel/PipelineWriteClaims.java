@@ -144,6 +144,9 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
     private final Map<Landing, Landed> landings = new ConcurrentHashMap<>();
     private volatile Map<String, List<Claim>> byMailbox = new ConcurrentHashMap<>();
     private volatile Authorization authorizing;
+    /** The authorizations whose claims are still retained; an old plan is reported from its own
+     * seats until its declarations expire. */
+    private volatile List<Authorization> authorizations = List.of();
     private final Map<String, LongAdder> landedByNode = new ConcurrentHashMap<>();
     private final Consumer<Attributed> settlement;
     private volatile PipelineBatchLedger ledger;
@@ -209,6 +212,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
     /** Names the claim table a seated slot is registered in. */
     public void table(WriteControlledSlots slots) {
         this.table = slots == null ? WriteControlledSlots.NOTHING : slots;
+        this.table.lazySeat(this::lazySeat);
     }
 
     /** Names where the spatial range a declared job writes in is read from. The reader is pointed at
@@ -248,7 +252,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
 
     /** The same, with the lifecycle the plan store published the graph in. A span declared before a
      * reset keeps the lifecycle it was declared under, so the next lifecycle cannot adopt it. */
-    public int declare(JobGraph graph, long planSequence, long tick, long lifecycle) {
+    public synchronized int declare(JobGraph graph, long planSequence, long tick, long lifecycle) {
         Map<String, Claim> next = new LinkedHashMap<>();
         List<Seat> seats = new ArrayList<>();
         if (graph != null) {
@@ -260,14 +264,34 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
                 seats.add(new Seat(node.worldId(), node.domainId(), node.key(), node.position()));
             }
         }
+        // A declaration is retained for its lifetime, not replaced by the next freeze: a write made
+        // during the freeze that named its range is still the write of that declaration.
+        Map<String, Claim> merged = new LinkedHashMap<>();
+        for (Claim held : declarations.values()) {
+            if (stillHeld(held, tick)) {
+                merged.put(held.nodeKey(), held);
+            }
+        }
+        merged.putAll(next);
         Map<String, List<Claim>> byMailboxNext = new ConcurrentHashMap<>();
-        for (Claim claim : next.values()) {
+        for (Claim claim : merged.values()) {
             byMailboxNext.computeIfAbsent(claim.mailbox(), key -> new ArrayList<>()).add(claim);
         }
-        declarations = Map.copyOf(next);
+        declarations = Map.copyOf(merged);
         byMailbox = byMailboxNext;
-        authorizing = graph == null ? null
+        Authorization current = graph == null ? null
             : new Authorization(planSequence, lifecycle, List.copyOf(seats));
+        authorizing = current;
+        if (current != null) {
+            List<Authorization> kept = new ArrayList<>();
+            for (Authorization previous : authorizations) {
+                if (hasRetainedClaim(previous, merged)) {
+                    kept.add(previous);
+                }
+            }
+            kept.add(current);
+            authorizations = List.copyOf(kept);
+        }
         declared += next.size();
         return next.size();
     }
@@ -276,29 +300,31 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
      * its node. The plan read here is the one {@link #declare} saved, never the plan that just
      * froze; a landing the saved plan did not seat is counted as a landing without a node. */
     public int reportLanded(Consumer<Report> sink) {
-        Authorization held = authorizing;
-        if (held == null || sink == null) {
+        List<Authorization> held = authorizations;
+        if (held.isEmpty() || sink == null) {
             return 0;
         }
         int reported = 0;
-        for (Seat seat : held.seats()) {
-            Landed landed = landings.remove(new Landing(held.planSequence(), seat.position(),
-                seat.nodeKey()));
-            long rows = landed == null ? 0L : landed.rows.sum();
-            if (rows <= 0L) {
-                continue;
+        for (Authorization authorization : held) {
+            for (Seat seat : authorization.seats()) {
+                Landed landed = landings.remove(new Landing(authorization.planSequence(),
+                    seat.position(), seat.nodeKey()));
+                long rows = landed == null ? 0L : landed.rows.sum();
+                if (rows <= 0L) {
+                    continue;
+                }
+                WriteControlledSlots.Slot slot = landed.slot;
+                Report report = new Report(seat.worldId(), seat.domainId(), seat.nodeKey(),
+                    authorization.planSequence(), seat.position(), authorization.lifecycle(),
+                    slot.expectedVersion(), WriteControlledSlots.foldValue(slot.writeSet()),
+                    (int) Math.min(Integer.MAX_VALUE, rows));
+                sink.accept(report);
+                Consumer<Attributed> armed = settlement;
+                if (armed != null) {
+                    armed.accept(attributedOf(report, landed));
+                }
+                reported++;
             }
-            WriteControlledSlots.Slot slot = landed.slot;
-            Report report = new Report(seat.worldId(), seat.domainId(), seat.nodeKey(),
-                held.planSequence(), seat.position(), held.lifecycle(), slot.expectedVersion(),
-                WriteControlledSlots.foldValue(slot.writeSet()),
-                (int) Math.min(Integer.MAX_VALUE, rows));
-            sink.accept(report);
-            Consumer<Attributed> armed = settlement;
-            if (armed != null) {
-                armed.accept(attributedOf(report, landed));
-            }
-            reported++;
         }
         for (Landing key : new ArrayList<>(landings.keySet())) {
             if (landings.remove(key) != null) {
@@ -429,15 +455,16 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
 
     /** Seats the write set the declaration carries, so a plan with no task body still covers its own
      * range until the next freeze; a failed registration leaves no slot at all (fail-closed). */
-    public int seatDeclared() {
+    public synchronized int seatDeclared() {
         if (!enabled) {
             return 0;
         }
         List<Claim> claimed = claims();
-        retireDeclared();
         if (claimed.isEmpty()) {
+            retireDeclared();
             return 0;
         }
+        List<WriteControlledSlots.SlotKey> previous = declaredSeats;
         List<WriteControlledSlots.SlotKey> keys = new ArrayList<>(claimed.size());
         for (Claim claim : claimed) {
             WriteControlledSlots.Slot slot = slotOf(claim, ++generations);
@@ -448,6 +475,11 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
                 return -1;
             }
             keys.add(slot.key());
+        }
+        for (WriteControlledSlots.SlotKey old : previous) {
+            if (!keys.contains(old)) {
+                table.retire(old);
+            }
         }
         declaredSeats = List.copyOf(keys);
         return keys.size();
@@ -752,6 +784,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         landings.clear();
         landedByNode.clear();
         authorizing = null;
+        authorizations = List.of();
         declarations = Map.of();
         byMailbox = new ConcurrentHashMap<>();
         declared = 0L;
@@ -795,6 +828,8 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         for (WriteControlledSlots.SlotKey key : held) {
             table.retire(key);
         }
+        authorizations = List.of();
+        authorizing = null;
     }
 
     private void closeAll() {
@@ -836,6 +871,64 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
             return null;
         }
         return batch;
+    }
+
+    private synchronized int lazySeat(Object levelRef, String domainKey,
+                                      WriteControlledSlots.WritePosition position,
+                                      long tick) {
+        if (!enabled || levelRef == null || domainKey == null || position == null) {
+            return 0;
+        }
+        int seated = 0;
+        List<WriteControlledSlots.SlotKey> keys = new ArrayList<>(declaredSeats);
+        for (Claim claim : claims()) {
+            if (claim.levelRef() != levelRef || !claim.writeSet().contains(domainKey)
+                || claim.expireTick() <= tick || !claim.space().covers(position)) {
+                continue;
+            }
+            WriteControlledSlots.Slot slot = slotOf(claim, ++generations);
+            if (table.register(slot) != WriteControlledSlots.Refusal.NONE) {
+                continue;
+            }
+            if (!keys.contains(slot.key())) {
+                keys.add(slot.key());
+            }
+            seated++;
+        }
+        if (seated > 0) {
+            declaredSeats = List.copyOf(keys);
+        }
+        return seated;
+    }
+
+    private boolean stillHeld(Claim claim, long tick) {
+        if (claim.expireTick() <= tick || !claim.space().wellFormed()
+            || claim.worldEpoch() != epochs.epochOf(claim.worldId()) || ledger == null
+            || !ledger.bindingPublished(claim.batch())) {
+            return false;
+        }
+        Long granted = versions.grantedFor(claim.planSequence(), claim.worldId(),
+            WriteLevel.REGION, claim.domainId());
+        if (granted == null || granted != claim.expectedVersion()) {
+            return false;
+        }
+        for (long cell : ledger.cellsOf(claim.batch())) {
+            if (ledger.ownerOrdinal(claim.batch(), cell) >= 0L) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasRetainedClaim(Authorization authorization,
+                                            Map<String, Claim> merged) {
+        for (Seat seat : authorization.seats()) {
+            Claim claim = merged.get(seat.nodeKey());
+            if (claim != null && claim.planSequence() == authorization.planSequence()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private Claim claimOf(JobGraph.Node node, long planSequence, long tick) {

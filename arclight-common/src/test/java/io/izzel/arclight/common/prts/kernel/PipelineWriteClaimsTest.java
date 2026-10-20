@@ -716,6 +716,76 @@ class PipelineWriteClaimsTest {
     }
 
     @Test
+    void aDeclarationIsRetainedUntilItsHoldExpires() {
+        Scratch scratch = new Scratch();
+        scratch.claims.ledger(scratch.batches);
+        scratch.declare(ROUNDS);
+        assertEquals(1, scratch.claims.active());
+
+        scratch.claims.declare(null, PLAN_SEQUENCE + 1L, TICK + 1L, 1L);
+        assertEquals(1, scratch.claims.active(), "the declaration is retained across the next freeze");
+
+        scratch.claims.declare(null, PLAN_SEQUENCE + 2L, TICK + PipelineWriteClaims.HOLD_TICKS, 1L);
+        assertEquals(0, scratch.claims.active(), "the declaration leaves at its expiry");
+    }
+
+    @Test
+    void aRetainedDeclarationKeepsItsSeatAcrossAnUnrelatedFreeze() {
+        Scratch scratch = new Scratch();
+        scratch.claims.ledger(scratch.batches);
+        scratch.declare(ROUNDS);
+        assertEquals(1, scratch.claims.seatDeclared());
+
+        scratch.claims.declare(null, PLAN_SEQUENCE + 1L, TICK + 1L, 1L);
+        assertEquals(1, scratch.claims.seatDeclared());
+        assertEquals(1, scratch.slots.slots(), "the retained declaration keeps its seat");
+    }
+
+    @Test
+    void aLazySeatRecoversACoveringClaimWhenTheOnlyCandidateDoesNotCover() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        scratch.claims.seatDeclared();
+        WriteControlledSlots.Slot real = scratch.capture();
+        WriteControlledSlots.WriteSpace other = WriteControlledSlots.WriteSpace.of(
+            WriteControlledSlots.CellKind.SECTION, SectionPos.asLong(0, 99, 0));
+        WriteControlledSlots.SlotKey key = new WriteControlledSlots.SlotKey(WORLD, DOMAIN,
+            WriteLevel.REGION, WriteControlledSlots.SlotKey.segmentOf(other), PLAN_SEQUENCE + 99L);
+        WriteControlledSlots.Slot candidate = new WriteControlledSlots.Slot(key, LEVEL, "other",
+            real.position(), real.expectedVersion(), real.slotGeneration(), real.worldEpoch(),
+            real.expireTick(), real.holderKind(), real.holderSiteId(), real.writeSet(), other);
+        assertEquals(WriteControlledSlots.Refusal.NONE, scratch.slots.register(candidate));
+        scratch.slots.retire(real.key());
+
+        assertEquals(Verdict.CAPTURED, scratch.judge(WritePath.BLOCK_WRITE.key()),
+            "the retained declaration is lazily seated for the covering position");
+        assertEquals(PLAN_SEQUENCE, scratch.slots.lastDecision().planSequence());
+    }
+
+    @Test
+    void aLazySeatDoesNotReviveAnExpiredDeclaration() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        scratch.claims.seatDeclared();
+        WriteControlledSlots.Slot real = scratch.capture();
+        WriteControlledSlots.WriteSpace other = WriteControlledSlots.WriteSpace.of(
+            WriteControlledSlots.CellKind.SECTION, SectionPos.asLong(0, 99, 0));
+        WriteControlledSlots.SlotKey key = new WriteControlledSlots.SlotKey(WORLD, DOMAIN,
+            WriteLevel.REGION, WriteControlledSlots.SlotKey.segmentOf(other), PLAN_SEQUENCE + 99L);
+        WriteControlledSlots.Slot candidate = new WriteControlledSlots.Slot(key, LEVEL, "other",
+            real.position(), real.expectedVersion(), real.slotGeneration(), real.worldEpoch(),
+            real.expireTick(), real.holderKind(), real.holderSiteId(), real.writeSet(), other);
+        assertEquals(WriteControlledSlots.Refusal.NONE, scratch.slots.register(candidate));
+        scratch.slots.retire(real.key());
+        long captured = scratch.slots.capturedCount();
+        scratch.tick = TICK + PipelineWriteClaims.HOLD_TICKS;
+
+        assertEquals(Verdict.DEFAULT_PATH, scratch.judge(WritePath.BLOCK_WRITE.key()),
+            "an expired declaration is not lazily revived");
+        assertEquals(captured, scratch.slots.capturedCount());
+    }
+
+    @Test
     void theNextPlanReplacesTheSeatAndTheOldPlanLeavesNoSlot() {
         Scratch scratch = new Scratch();
         scratch.declare(ROUNDS);

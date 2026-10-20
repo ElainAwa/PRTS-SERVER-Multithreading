@@ -312,10 +312,19 @@ public final class WriteControlledSlots {
     public static final WriteControlledSlots NOTHING = new WriteControlledSlots(new OwnerRegistry(),
         WriteVersionSlots.NOTHING, new WorldEpochs(), Source.NONE);
 
+    /** Seats the retained declarations that can cover one position before the write is judged. It
+     * returns how many slots it registered; zero leaves the table exactly as it was. */
+    @FunctionalInterface
+    public interface LazySeat {
+
+        int seat(Object levelRef, String domainKey, WritePosition position, long tickIndex);
+    }
+
     private final OwnerRegistry owners;
     private final WriteVersionSlots versions;
     private final WorldEpochs epochs;
     private final Source source;
+    private volatile LazySeat lazySeat = (level, domain, position, tick) -> 0;
     private final Map<SlotKey, Slot> slots = new ConcurrentHashMap<>();
     private final Map<SlotKey, Long> generations = new ConcurrentHashMap<>();
     private final AtomicLong registered = new AtomicLong();
@@ -350,6 +359,11 @@ public final class WriteControlledSlots {
 
     public boolean enabled() {
         return enabled;
+    }
+
+    /** Names the retained declarations a write may lazy-seat before it is judged. */
+    public void lazySeat(LazySeat seated) {
+        lazySeat = seated == null ? (level, domain, position, tick) -> 0 : seated;
     }
 
     /** Declares one slot. A slot that names no usable range, or whose key does not spell the range
@@ -402,6 +416,7 @@ public final class WriteControlledSlots {
             return lastDecision = Decision.defaultPath("");
         }
         List<Slot> candidates = candidates(levelRef, domainKey);
+        boolean lazyTried = false;
         if (candidates.isEmpty()) {
             defaultPath.incrementAndGet();
             return lastDecision = Decision.defaultPath("");
@@ -411,10 +426,12 @@ public final class WriteControlledSlots {
             // read: refusing is the only answer that does not match it against a whole world.
             return refuse(candidates.get(0), REASON_UNREADABLE_POSITION, 0, tickIndex);
         }
-        Map<String, Slot> covering = new LinkedHashMap<>();
-        for (Slot slot : candidates) {
-            if (slot.space().covers(position)) {
-                covering.putIfAbsent(identityOf(slot), slot);
+        Map<String, Slot> covering = covering(candidates, position);
+        if (covering.isEmpty() && !lazyTried) {
+            lazyTried = true;
+            if (lazySeat.seat(levelRef, domainKey, position, tickIndex) > 0) {
+                candidates = candidates(levelRef, domainKey);
+                covering = covering(candidates, position);
             }
         }
         if (covering.isEmpty()) {
@@ -450,6 +467,16 @@ public final class WriteControlledSlots {
     /** Judges one write whose caller cannot name the position it is made at. */
     public Decision judge(Object levelRef, String domainKey, long tickIndex) {
         return judge(levelRef, domainKey, WritePosition.NONE, tickIndex);
+    }
+
+    private static Map<String, Slot> covering(List<Slot> candidates, WritePosition position) {
+        Map<String, Slot> covering = new LinkedHashMap<>();
+        for (Slot slot : candidates) {
+            if (slot.space().covers(position)) {
+                covering.putIfAbsent(identityOf(slot), slot);
+            }
+        }
+        return covering;
     }
 
     private List<Slot> candidates(Object levelRef, String domainKey) {
