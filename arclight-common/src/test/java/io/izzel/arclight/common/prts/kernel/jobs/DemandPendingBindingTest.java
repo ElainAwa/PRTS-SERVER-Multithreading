@@ -63,7 +63,7 @@ class DemandPendingBindingTest {
     }
 
     private static DemandShadowCandidates candidates() {
-        return new DemandShadowCandidates(64);
+        return new DemandShadowCandidates(64, () -> PLAN);
     }
 
     private static void demand(DemandShadowCandidates candidates, int x, int z, long token,
@@ -96,6 +96,45 @@ class DemandPendingBindingTest {
 
         assertEquals(0, candidates.bindPending(other.target, other.ledger));
         assertFalse(candidates.statusFor(other.target).present());
+        assertEquals(1, candidates.pendingCount());
+    }
+
+    @Test
+    void anOldPendingIsNotConsumedByAnotherPlansWindow() {
+        long cell = ChunkPos.asLong(2812, 2812);
+        Fixture fixture = new Fixture(cell);
+        DemandShadowCandidates candidates = candidates();
+        demand(candidates, 2812, 2812, 19L, "biomes", fixture.caller);
+        PipelineBatchLedger.TrackedTask next = task(fixture.ledger, MAIN, cell, TICK + 1L);
+        PipelineBatchLedger.BatchId nextBatch = fixture.ledger.freeze(WORLD, MAIN, PLAN + 1L, TICK + 1L);
+        assertNotNull(nextBatch);
+        assertTrue(fixture.ledger.runStart(next));
+
+        assertEquals(0, candidates.bindPending(next, fixture.ledger));
+        assertFalse(candidates.statusFor(next).present());
+        assertEquals(1, candidates.pendingCount());
+    }
+
+    @Test
+    void aWrongExpectedMailboxDoesNotBind() {
+        Fixture fixture = new Fixture(ChunkPos.asLong(2812, 2812));
+        DemandShadowCandidates candidates = candidates();
+        demand(candidates, 2812, 2812, 19L, "biomes", fixture.caller);
+
+        assertEquals(0, candidates.bindPending(fixture.target, fixture.ledger, OTHER));
+        assertFalse(candidates.statusFor(fixture.target).present());
+        assertEquals(1, candidates.pendingCount());
+    }
+
+    @Test
+    void anUnpublishedBatchDoesNotBind() {
+        Fixture fixture = new Fixture(ChunkPos.asLong(2812, 2812));
+        DemandShadowCandidates candidates = candidates();
+        demand(candidates, 2812, 2812, 19L, "biomes", fixture.caller);
+        PipelineBatchLedger other = new PipelineBatchLedger(64, 1000);
+
+        assertEquals(0, candidates.bindPending(fixture.target, other));
+        assertFalse(candidates.statusFor(fixture.target).present());
         assertEquals(1, candidates.pendingCount());
     }
 

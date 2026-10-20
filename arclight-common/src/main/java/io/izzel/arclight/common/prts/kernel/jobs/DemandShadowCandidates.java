@@ -14,6 +14,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.LongSupplier;
 
 /**
  * Reads the chunk demands one freeze saw as shadow candidates: every column is a parameter of the one
@@ -157,7 +158,7 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
     }
 
     private record PendingDemand(long token, String status, long cell, String world,
-                                 long callerOrdinal, long callerMintTick, long createdTick) {
+                                 long planSequence, long createdTick) {
     }
 
     private static final class Slot {
@@ -218,6 +219,8 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
      * cell's claimed window, keyed by the call name so one demand is consumed at most once. */
     private final int pendingCapacity;
     private final Map<Long, PendingDemand> pending = new LinkedHashMap<>();
+    /** The plan current when a deferred demand arrived: a target window of another plan is not its owner. */
+    private final LongSupplier currentPlan;
     private long statusOverflows;
     private long statusConflicts;
     private long statusLate;
@@ -226,17 +229,22 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
     private long statusRefused;
 
     public DemandShadowCandidates() {
-        this(PipelineBatchLedger.DEFAULT_PENDING_LIMIT);
+        this(PipelineBatchLedger.DEFAULT_PENDING_LIMIT, () -> 0L);
+    }
+
+    public DemandShadowCandidates(int taskCapacity) {
+        this(taskCapacity, () -> 0L);
     }
 
     /** The register is sized to the owning ledger's pending limit: every entry is a live running
      * task and the ledger indexes no more than that, so a full register refuses, never evicts. */
-    public DemandShadowCandidates(int taskCapacity) {
+    public DemandShadowCandidates(int taskCapacity, LongSupplier currentPlan) {
         if (taskCapacity < 1) {
             throw new IllegalArgumentException("task capacity must be positive");
         }
         this.statusCapacity = taskCapacity;
         this.pendingCapacity = Math.max(1, taskCapacity / PENDING_CAPACITY_DIVISOR);
+        this.currentPlan = currentPlan == null ? () -> 0L : currentPlan;
         for (int index = 0; index < CAP; index++) {
             ring[index] = new Slot();
             staged[index] = new Slot();
@@ -344,7 +352,7 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         long cell = descriptor.chunk().packedPos();
         PipelineBatchLedger.TaskId id = caller.id();
         pending.put(token, new PendingDemand(token, status, cell, id.worldId(),
-            id.ordinal(), id.mintTick(), now));
+            currentPlan.getAsLong(), now));
     }
 
     private void purgePending(long now) {
@@ -364,7 +372,18 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
      * not a candidate and leaves the pending record for a later owner. */
     public synchronized int bindPending(PipelineBatchLedger.TrackedTask task,
                                         PipelineBatchLedger ledger) {
-        if (task == null || ledger == null || !task.live()
+        return task == null ? 0 : bindPending(task, ledger, task.id().mailbox());
+    }
+
+    /** The same bind with an explicit target mailbox check: a TaskId of another mailbox is not the
+     * window a caller named, even when its cell and plan agree. */
+    public synchronized int bindPending(PipelineBatchLedger.TrackedTask task,
+                                        PipelineBatchLedger ledger, String expectedMailbox) {
+        if (task == null || expectedMailbox == null
+            || !expectedMailbox.equals(task.id().mailbox())) {
+            return 0;
+        }
+        if (ledger == null || !task.live()
             || !(task.state() instanceof PipelineBatchLedger.Running running)) {
             return 0;
         }
@@ -384,7 +403,8 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
             PendingDemand held = walk.next().getValue();
             // The target TaskId is the explicit owner: the caller's mailbox is not the target
             // window's mailbox in a cross-world future, so the window's own id is authoritative.
-            if (!held.world().equals(id.worldId()) || held.cell() != id.cell()) {
+            if (!held.world().equals(id.worldId()) || held.cell() != id.cell()
+                || held.planSequence() != batch.planSequence()) {
                 continue;
             }
             walk.remove();
