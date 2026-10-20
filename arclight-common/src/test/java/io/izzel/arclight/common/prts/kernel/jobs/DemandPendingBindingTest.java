@@ -232,6 +232,20 @@ class DemandPendingBindingTest {
     }
 
     @Test
+    void aSameCellDifferentStatusPendingWaitsForALaterWindow() {
+        Fixture fixture = new Fixture(ChunkPos.asLong(2817, 2817));
+        DemandShadowCandidates candidates = candidates();
+        demand(candidates, 2817, 2817, 41L, "biomes", fixture.caller);
+        demand(candidates, 2817, 2817, 42L, "full", fixture.caller);
+
+        assertEquals(1, candidates.bindPending(fixture.target, fixture.ledger));
+        DemandShadowCandidates.TaskStatus chosen = candidates.statusFor(fixture.target);
+        assertTrue(chosen.present(), "the first status wins, not a conflict");
+        assertEquals("biomes", chosen.status());
+        assertEquals(1, candidates.pendingCount(), "the different status remains pending");
+    }
+
+    @Test
     void sameStatusDuplicatesAndDifferentStatusStaysPending() {
         Fixture fixture = new Fixture(ChunkPos.asLong(2812, 2812));
         DemandShadowCandidates duplicate = candidates();
