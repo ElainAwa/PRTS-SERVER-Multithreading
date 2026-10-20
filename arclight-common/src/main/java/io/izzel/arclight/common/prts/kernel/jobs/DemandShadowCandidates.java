@@ -351,6 +351,8 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         }
         long cell = descriptor.chunk().packedPos();
         PipelineBatchLedger.TaskId id = caller.id();
+        // A zero plan means the plan has not frozen yet (first tick). Only the TTL keeps such a
+        // demand alive; the explicit target TaskId remains its owner.
         pending.put(token, new PendingDemand(token, status, cell, id.worldId(),
             demandPlan(), now));
     }
@@ -407,8 +409,11 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
             PendingDemand held = walk.next().getValue();
             // The target TaskId is the explicit owner: the caller's mailbox is not the target
             // window's mailbox in a cross-world future, so the window's own id is authoritative.
+            // A zero demand plan is the early unfrozen plan: TTL is its only freshness bound;
+            // the explicit target TaskId remains the owner. A non-zero plan must match.
             if (!held.world().equals(id.worldId()) || held.cell() != id.cell()
-                || held.planSequence() != batch.planSequence()) {
+                || (held.planSequence() != 0L
+                    && held.planSequence() != batch.planSequence())) {
                 continue;
             }
             walk.remove();

@@ -95,6 +95,30 @@ class DemandPendingEndToEndTest {
     }
 
     @Test
+    void anEarlyPlanZeroDemandBindsWhenTheFirstPlanWindowOpens() {
+        PipelineBatchLedger ledger = kernel.pipelineBatches();
+        DemandShadowCandidates shadows = kernel.demandShadowCandidates();
+        long cell = ChunkPos.asLong(2815, 2815);
+        PipelineBatchLedger.TrackedTask caller = task(ledger, OTHER, cell + 1L, TICK);
+        assertFalse(ledger.runStart(caller), "the caller is early unclaimed before any freeze");
+        long token = PrtsChunkDemand.demandDescriptorToken(WORLD, 2815, 2815, "biomes", true, caller);
+        assertTrue(token > PrtsChunkDemand.NO_TOKEN);
+        assertEquals(1, shadows.pendingCount(), "the early demand records plan zero");
+
+        PipelineBatchLedger.TrackedTask target = task(ledger, MAIN, cell, TICK);
+        assertNotNull(ledger.freeze(WORLD, MAIN, PLAN, TICK));
+        Runnable body = PipelineBatchWrapper.function(ledger, target, reply -> (Runnable) () -> {})
+            .apply(null);
+        body.run();
+
+        List<DemandShadowCandidates.TaskStatus> retained = shadows.retainedStatuses();
+        assertFalse(retained.isEmpty(), "the first claimed window retains the early demand");
+        assertTrue(retained.stream().anyMatch(status -> status.present()
+            && "biomes".equals(status.status())));
+        assertEquals(0, shadows.pendingCount());
+    }
+
+    @Test
     void theWrapperWithoutAPendingDemandRetainsNothing() {
         PipelineBatchLedger ledger = kernel.pipelineBatches();
         DemandShadowCandidates shadows = kernel.demandShadowCandidates();

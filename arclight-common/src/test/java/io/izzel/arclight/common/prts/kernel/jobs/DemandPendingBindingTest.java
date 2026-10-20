@@ -88,6 +88,31 @@ class DemandPendingBindingTest {
     }
 
     @Test
+    void aPlanZeroDemandIsAllowedWithinItsTtl() {
+        Fixture fixture = new Fixture(ChunkPos.asLong(2812, 2812));
+        DemandShadowCandidates candidates = new DemandShadowCandidates(64, () -> 0L);
+        demand(candidates, 2812, 2812, 19L, "biomes", fixture.caller);
+
+        assertEquals(1, candidates.bindPending(fixture.target, fixture.ledger));
+        assertTrue(candidates.statusFor(fixture.target).present());
+        assertEquals(0, candidates.pendingCount());
+    }
+
+    @Test
+    void aPlanZeroDemandExpiresAfterItsTtl() {
+        AtomicLong tick = new AtomicLong(0L);
+        PrtsPipelineBatches.install(null, tick::get);
+        Fixture fixture = new Fixture(ChunkPos.asLong(2812, 2812));
+        DemandShadowCandidates candidates = new DemandShadowCandidates(64, () -> 0L);
+        demand(candidates, 2812, 2812, 19L, "biomes", fixture.caller);
+        tick.set(DemandShadowCandidates.PENDING_TTL_TICKS + 1L);
+
+        assertEquals(0, candidates.bindPending(fixture.target, fixture.ledger));
+        assertFalse(candidates.statusFor(fixture.target).present());
+        assertEquals(0, candidates.pendingCount());
+    }
+
+    @Test
     void aDeferredDemandOfAnotherCellIsNotBound() {
         Fixture fixture = new Fixture(ChunkPos.asLong(2812, 2812));
         Fixture other = new Fixture(ChunkPos.asLong(2813, 2813));
