@@ -687,6 +687,31 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         return cell == null ? 0L : cell.sum();
     }
 
+    /** Whether a retained claim still names this batch, so a seal of an older plan may be read. */
+    boolean retainsBatch(PipelineBatchLedger.BatchId batch) {
+        if (batch == null) {
+            return false;
+        }
+        for (Claim claim : declarations.values()) {
+            if (claim.expireTick() > tickIndex && batch.equals(claim.batch())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The oldest plan a still-held claim names, or {@link Long#MAX_VALUE} when no claim is held.
+     * A seal sweep uses it to keep the plan its settlement has not reached yet. */
+    long retainedPlanFloor() {
+        long floor = Long.MAX_VALUE;
+        for (Claim claim : declarations.values()) {
+            if (claim.expireTick() > tickIndex) {
+                floor = Math.min(floor, claim.planSequence());
+            }
+        }
+        return floor;
+    }
+
     /** How many claims the newest plan carries. */
     public int active() {
         return declarations.size();

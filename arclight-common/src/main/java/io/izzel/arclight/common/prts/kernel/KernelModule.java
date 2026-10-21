@@ -465,6 +465,8 @@ public final class KernelModule {
         guard.claimLandedTap((slot, worldId, tick, row) -> claims.noteLanded(slot, worldId, row));
         pipelineJobs.bind(pipelineBatches);
         claims.ledger(pipelineBatches);
+        // A seal of an older plan stays readable while a retained claim still names its batch.
+        rangeSealFactory.retained(claims::retainsBatch);
         // The progress side of the two rows whose producer already exists: the intent channel depth
         // and the world epoch change count are the same counters the readout publishes, so a signal
         // reading and its control-plane value can never disagree.
@@ -892,6 +894,7 @@ public final class KernelModule {
             // real statuses before the new plan's declarations replace the ones they name; a status
             // that cannot be proved publishes nothing.
             FrozenDeclarations settledDeclarations = declarations();
+            rangeSealFactory.rememberDeclarations(settledDeclarations);
             List<DemandShadowCandidates.TaskStatus> retainedStatuses =
                 demandShadows.retainedStatuses();
             if (!retainedStatuses.isEmpty()) {
@@ -919,7 +922,10 @@ public final class KernelModule {
             if (KernelSettings.pipelineJobs() && KernelSettings.tickPlan()) {
                 // A seal whose plan the settlement has moved past can no longer be named by it: the
                 // sweep ends its obligation here, so a window that published one leaves no pin.
-                rangeSealFactory.settleBefore(result.plan().planSequence());
+                // A claim still holding an older plan keeps that plan's seals readable for the
+                // settlement that has not reached it yet.
+                long retainedFloor = claimsEnabled() ? claims.retainedPlanFloor() : Long.MAX_VALUE;
+                rangeSealFactory.settleBefore(result.plan().planSequence(), retainedFloor);
             }
             if (KernelSettings.pipelineJobs() && KernelSettings.tickPlan()) {
                 dispatchFrozen(result.plan());

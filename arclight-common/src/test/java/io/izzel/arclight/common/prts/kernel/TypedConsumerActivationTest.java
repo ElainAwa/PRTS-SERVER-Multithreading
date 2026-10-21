@@ -136,6 +136,23 @@ class TypedConsumerActivationTest {
     }
 
     @Test
+    void aRetainedPlanFloorKeepsTheOlderSealReadable() {
+        Drive drive = new Drive();
+        drive.run(() -> demand(drive.task, "full"));
+        FrozenDeclarations.RangeSeal seal = sealed.get();
+        assertNotNull(seal);
+
+        drive.factory.settleBefore(PLAN + 1L, PLAN);
+
+        assertEquals(1, registry.heldCount(), "the retained plan keeps its obligation");
+        assertEquals(1, drive.table.size(), "the seal is still readable for the retained settlement");
+        assertNotNull(drive.table.locate(seal.seat(), CELL));
+
+        drive.factory.settleBefore(PLAN + 1L, Long.MAX_VALUE);
+        assertEquals(0, registry.heldCount(), "a released floor sweeps the old plan");
+    }
+
+    @Test
     void theReadinessRecordReadsBothStatesOfTheBuild() {
         assertTrue(KernelModule.TypedConsumerReadiness.SETTLEMENT_WIRED);
         KernelModule.TypedConsumerReadiness bound =

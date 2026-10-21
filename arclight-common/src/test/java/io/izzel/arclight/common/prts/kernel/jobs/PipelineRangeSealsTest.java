@@ -445,6 +445,27 @@ class PipelineRangeSealsTest {
     }
 
     @Test
+    void aRetainedOldPlanCanStillSealItsLateWindow() {
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        publishPlan(batch);
+        factory.rememberDeclarations(declarations);
+        factory.retained(retained -> retained.equals(batch));
+        AtomicReference<FrozenDeclarations.RangeSeal> seen = new AtomicReference<>();
+
+        runBody(task, () -> {
+            demand(task, "full");
+            ledger.freeze(WORLD, MAILBOX, PLAN + 1L, TICK);
+            PipelineRunSeal.current().status();
+            seen.set(PipelineRunSeal.current().range());
+        });
+
+        assertNotNull(seen.get(), "a retained claim keeps its old plan's seal path");
+        assertEquals(PLAN, seen.get().planSequence());
+        assertEquals(1, factory.seals());
+    }
+
+    @Test
     void aTableResetInsideTheWindowSealsNothing() {
         PipelineBatchLedger.TrackedTask task = submit(CELL);
         PipelineBatchLedger.BatchId batch = freeze(PLAN);

@@ -892,6 +892,21 @@ class PipelineWriteClaimsTest {
     }
 
     @Test
+    void aRetainedClaimNamesThePlanAFloorKeeps() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        assertEquals(PLAN_SEQUENCE, scratch.claims.retainedPlanFloor());
+
+        scratch.claims.declare(null, PLAN_SEQUENCE + 1L, TICK + 1L, 1L);
+        assertEquals(PLAN_SEQUENCE, scratch.claims.retainedPlanFloor(),
+            "the older claim still names its own plan");
+
+        scratch.claims.declare(null, PLAN_SEQUENCE + 1L, TICK + 2L * PipelineWriteClaims.HOLD_TICKS, 1L);
+        assertEquals(Long.MAX_VALUE, scratch.claims.retainedPlanFloor(),
+            "an expired claim names no plan");
+    }
+
+    @Test
     void ownerEvidenceIsPrunedAtExpiryAndRetire() {
         Scratch scratch = new Scratch();
         scratch.declare(ROUNDS);

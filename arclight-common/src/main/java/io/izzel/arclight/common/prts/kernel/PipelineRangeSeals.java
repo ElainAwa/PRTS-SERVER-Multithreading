@@ -14,9 +14,11 @@ import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlanStore;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.LongSupplier;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.function.ToLongFunction;
 
@@ -39,6 +41,8 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
     private final ToLongFunction<String> worldEpochs;
     private final Supplier<FrozenDeclarations> declarationsInForce;
     private final RangeSettlementObligations obligations;
+    private final Map<Long, FrozenDeclarations> declaredByPlan = new HashMap<>();
+    private Predicate<PipelineBatchLedger.BatchId> retained = batch -> false;
     private long seals;
     private long refused;
     private long conflicts;
@@ -104,7 +108,8 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
                 // to publish: refusing here keeps the forming members from standing in for it.
                 return refuse();
             }
-            if (ledger.currentPlan() != batch.planSequence()) {
+            if (ledger.currentPlan() != batch.planSequence()
+                && !retained.test(batch)) {
                 return refuse();
             }
             if (ledger.ownerOrdinal(batch, id.cell()) != id.ordinal()) {
@@ -112,8 +117,9 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
                 // carries. A later task of the same cell never publishes a second seal.
                 return refuse();
             }
-            FrozenDeclarations declared =
-                declarationsInForce == null ? null : declarationsInForce.get();
+            FrozenDeclarations declared = ledger.currentPlan() == batch.planSequence()
+                ? (declarationsInForce == null ? null : declarationsInForce.get())
+                : declaredByPlan.get(batch.planSequence());
             if (declared == null || !declared.freeze().declared()) {
                 return refuse();
             }
@@ -208,6 +214,7 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
                 rejected++;
                 return 0;
             }
+            declaredByPlan.put(declared.planSequence(), declared);
             long plan = declared.planSequence();
             long lifecycle = plans.lifecycle();
             List<TickPlan.CommitStep> order = plans.orderIn(plan, lifecycle);
@@ -315,11 +322,34 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
         }
     }
 
+    /** Keeps the declaration table of a plan after a later freeze replaces the one in force: a
+     * retained claim's old window still reads its own plan's seats from it. */
+    public void rememberDeclarations(FrozenDeclarations declared) {
+        if (declared == null || !declared.freeze().declared()) {
+            return;
+        }
+        synchronized (table) {
+            declaredByPlan.put(declared.planSequence(), declared);
+        }
+    }
+
+    /** Names the claims whose old plan may still publish a late seal; an absent predicate keeps the
+     * old plan refusal exactly as it was. */
+    public void retained(Predicate<PipelineBatchLedger.BatchId> retained) {
+        this.retained = retained == null ? batch -> false : retained;
+    }
+
     /** Settles the obligations of the plans older than the given one: a settlement period that has
      * moved past them can no longer name their seals. */
     public void settleBefore(long planSequence) {
+        settleBefore(planSequence, Long.MAX_VALUE);
+    }
+
+    /** The same sweep with a floor a still-held claim names: the obligation of that plan, and of
+     * every plan at or above it, stays readable until the claim releases it. */
+    public void settleBefore(long planSequence, long retainedFloor) {
         if (obligations != null) {
-            obligations.settleBefore(planSequence);
+            obligations.settleBefore(Math.min(planSequence, retainedFloor));
         }
     }
 
