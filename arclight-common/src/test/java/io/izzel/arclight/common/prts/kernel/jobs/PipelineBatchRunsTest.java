@@ -121,9 +121,9 @@ class PipelineBatchRunsTest {
         run.handOff();
         run.runBody();
 
-        assertEquals(List.of(Verdict.CAPTURED, Verdict.DEFAULT_PATH, Verdict.CAPTURED),
+        assertEquals(List.of(Verdict.CAPTURED, Verdict.REJECTED, Verdict.CAPTURED),
             run.verdicts(),
-            "the range of the second batch covers its own cell and not the cell of the first");
+            "the retained first range still covers its cell and fails closed on the other plan");
     }
 
     @Test
@@ -138,8 +138,8 @@ class PipelineBatchRunsTest {
         run.handOff();
         run.runBody();
 
-        assertEquals(List.of(Verdict.DEFAULT_PATH), run.verdicts(),
-            "a task of a superseded batch does not write under the new plan");
+        assertEquals(List.of(Verdict.REJECTED), run.verdicts(),
+            "a task of a superseded batch fails closed under the new plan");
         assertEquals(1L, run.ledger.lateRunCount());
         assertSame(old, late.task().batch());
         assertInstanceOf(PipelineBatchLedger.Done.class, run.ledger.stateOf(late.task()));
@@ -172,13 +172,13 @@ class PipelineBatchRunsTest {
 
         run.handOff();
         run.runBody();
-        assertEquals(List.of(Verdict.DEFAULT_PATH), run.verdicts(),
-            "the identity of the task, not the cell, decides whether the window opens");
+        assertEquals(List.of(Verdict.REJECTED), run.verdicts(),
+            "the retained old range fails closed rather than opening the new task's window");
         assertEquals(0, run.capturedCount());
 
         run.runBody();
-        assertEquals(List.of(Verdict.DEFAULT_PATH, Verdict.CAPTURED), run.verdicts(),
-            "the task of the replacing batch writes under it");
+        assertEquals(List.of(Verdict.REJECTED, Verdict.REJECTED), run.verdicts(),
+            "the retained and replacing ranges cover the same cell and stay ambiguous");
         assertSame(replacement, second.task().batch());
     }
 
@@ -286,7 +286,7 @@ class PipelineBatchRunsTest {
         List<PipelineWriteClaims.Report> reported = new ArrayList<>();
         assertEquals(1, settle(run.claims, run.graphOf(PLAN), reported::add));
         assertEquals(1L, run.claims.reportedBatchCount());
-        assertEquals(NODE_KEY, reported.get(0).nodeKey());
+        assertEquals(NODE_KEY + "#1", reported.get(0).nodeKey());
         assertEquals(1, reported.get(0).rows());
         assertEquals(0L, run.claims.landedWithoutNodeCount());
         assertSame(batch, run.ledger.tasksOf(batch).get(0).batch());
@@ -322,7 +322,7 @@ class PipelineBatchRunsTest {
         List<PipelineWriteClaims.Report> reported = new ArrayList<>();
         assertEquals(1, settle(run.claims, next, reported::add));
         assertEquals(1L, run.claims.reportedBatchCount());
-        assertEquals(NODE_KEY, reported.get(0).nodeKey());
+        assertEquals(NODE_KEY + "#1", reported.get(0).nodeKey());
         assertEquals(1, reported.get(0).rows());
         assertEquals(0L, run.claims.landedWithoutNodeCount(),
             "the landing is not degraded to a landing without a node");
@@ -372,9 +372,9 @@ class PipelineBatchRunsTest {
         latest.beginTick(TICK);
         assertTrue(latest.reach(run.batchOf(report)).logged());
         CommitLog.Replay misattributed = latest.closeTick();
-        assertEquals(PLAN + 1, misattributed.steps().get(0).planSequence(),
-            "the latest lookup would attribute the same report to the plan that reused the key");
-        assertEquals(1, misattributed.steps().get(0).position());
+        assertEquals(PLAN, misattributed.steps().get(0).planSequence(),
+            "the batch key keeps the report on the plan that declared it");
+        assertEquals(0, misattributed.steps().get(0).position());
 
         run.reach(report);
 
@@ -475,6 +475,7 @@ class PipelineBatchRunsTest {
             slots.refresh(true);
             grants.refresh(true);
             claims.table(slots);
+            claims.ledger(ledger);
             claims.writeSpaces(KernelWriteRanges.reader());
             claims.refresh(true);
             PrtsPipelineRows.installOwnerTap(claims);
@@ -655,7 +656,8 @@ class PipelineBatchRunsTest {
                 JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef(WORLD, DOMAIN, 0);
                 JobDeclaration.OwnerDemand demand = new JobDeclaration.OwnerDemand(WORLD,
                     WriteLevel.REGION, DOMAIN, HolderKind.REGISTERED, HOLDER, 40);
-                declarations.add(new JobDeclaration(NODE_KEY, 1L, WORLD, DOMAIN, 0, List.of(), 0,
+                declarations.add(new JobDeclaration(PipelineRoundJobs.batchKeyOf(batch), 1L,
+                    WORLD, DOMAIN, 0, List.of(), 0,
                     MAILBOX, "world:" + WORLD, List.of(ref), List.of(ref), ShareClass.OTHER,
                     JobDeclaration.SiteClass.PARALLEL, 0, ledger.tasksOf(batch).size(),
                     List.of(demand), new JobDeclaration.WriteRange(

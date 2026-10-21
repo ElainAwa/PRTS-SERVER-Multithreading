@@ -422,6 +422,7 @@ class EffectRowContractTest {
             slots.refresh(true);
             grants.refresh(true);
             claims.table(slots);
+            claims.ledger(batches);
             claims.writeSpaces(node -> SPACE);
             claims.refresh(true);
             epoch = guard.worldEpochs().epochOf(WORLD);

@@ -114,6 +114,7 @@ class GrantedGenerationProbeTest {
             epochs.observe(List.of(WORLD));
             tables.refresh(true);
             claims.table(tables);
+            claims.ledger(batches);
             claims.writeSpaces(node -> SPACE);
             claims.refresh(true);
         }

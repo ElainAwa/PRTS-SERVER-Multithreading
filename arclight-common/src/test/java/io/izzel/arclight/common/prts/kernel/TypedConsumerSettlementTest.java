@@ -339,6 +339,7 @@ class TypedConsumerSettlementTest {
             slots.refresh(true);
             grants.refresh(true);
             claims.table(slots);
+            claims.ledger(batches);
             claims.writeSpaces(node -> SPACE);
             claims.refresh(true);
         }

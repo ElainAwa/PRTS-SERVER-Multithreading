@@ -832,6 +832,60 @@ class PipelineWriteClaimsTest {
     }
 
     @Test
+    void aRetainedClaimSurvivesALaterPlanGrantAndLazilySeats() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        PipelineWriteClaims.Claim claim = scratch.claims.claims().get(0);
+        Map<OwnershipDomain, Long> grants = new HashMap<>();
+        grants.put(new OwnershipDomain(WORLD, WriteLevel.REGION, DOMAIN),
+            claim.expectedVersion());
+        scratch.versions.noteGranted(PLAN_SEQUENCE + 1L, grants);
+
+        scratch.claims.declare(null, PLAN_SEQUENCE + 1L, TICK + 1L, 1L);
+
+        assertEquals(1, scratch.claims.active(),
+            "the claim survives a plan that no longer owns the grant record");
+        assertEquals(1, scratch.claims.seatDeclared());
+        assertEquals(Verdict.CAPTURED, scratch.judge(WritePath.BLOCK_WRITE.key()),
+            "the retained owner evidence lazily seats the covering write");
+    }
+
+    @Test
+    void aClaimSurvivesABindingTrimmedAfterItsTaskEnded() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        PipelineWriteClaims.Claim claim = scratch.claims.claims().get(0);
+        for (var task : scratch.batches.tasksOf(claim.batch())) {
+            scratch.batches.runStart(task);
+            scratch.batches.runEnd(task);
+        }
+        for (long index = 0; index < 70L; index++) {
+            var task = scratch.batches.mint(new Object(), WORLD, MAILBOX,
+                net.minecraft.world.level.ChunkPos.asLong((int) index + 2, 0), TICK);
+            scratch.batches.enqueued(task);
+            scratch.batches.freezeAll(PLAN_SEQUENCE + 1L + index, TICK + 1L);
+        }
+        assertFalse(scratch.batches.bindingPublished(claim.batch()),
+            "the old binding is trimmed once its task ended");
+
+        scratch.claims.declare(null, PLAN_SEQUENCE + 71L, TICK + 1L, 1L);
+
+        assertEquals(1, scratch.claims.active(),
+            "the declaration-time owner evidence outlives the binding history");
+        assertEquals(1, scratch.claims.seatDeclared());
+        assertEquals(Verdict.CAPTURED, scratch.judge(WritePath.BLOCK_WRITE.key()));
+    }
+
+    @Test
+    void aClaimWithoutAPublishedBatchBindingIsNeverDeclared() {
+        Scratch scratch = new Scratch();
+        scratch.declareWithoutBatch();
+
+        assertEquals(0, scratch.claims.active(), "no batch evidence means no claim");
+        assertEquals(1L, scratch.claims.emptyWriteSetCount());
+    }
+
+    @Test
     void aDeclarationIsRetainedUntilItsHoldExpires() {
         Scratch scratch = new Scratch();
         scratch.claims.ledger(scratch.batches);
@@ -904,17 +958,17 @@ class PipelineWriteClaimsTest {
     }
 
     @Test
-    void theNextPlanReplacesTheSeatAndTheOldPlanLeavesNoSlot() {
+    void theNextPlanKeepsTheOldSeatAndAddsItsOwn() {
         Scratch scratch = new Scratch();
         scratch.declare(ROUNDS);
         assertEquals(1, scratch.claims.seatDeclared());
         scratch.declareNext(PLAN_SEQUENCE + 1);
 
-        assertEquals(1, scratch.claims.seatDeclared());
-        assertEquals(1, scratch.slots.slots(), "the old plan's seat is retired, the new one kept");
-        assertEquals(Verdict.CAPTURED, scratch.judge(WritePath.BLOCK_WRITE.key()));
-        assertEquals(PLAN_SEQUENCE + 1, scratch.slots.lastDecision().planSequence(),
-            "the write is judged against the plan that declared it");
+        assertEquals(2, scratch.claims.seatDeclared(), "the retained plan keeps its seat");
+        assertEquals(2, scratch.slots.slots(), "the new plan adds a seat beside the old one");
+        assertEquals(Verdict.REJECTED, scratch.judge(WritePath.BLOCK_WRITE.key()),
+            "two live ranges covering the same write are ambiguous");
+        assertEquals("owner", scratch.slots.lastRefusal().reason());
     }
 
     @Test
@@ -1119,6 +1173,7 @@ class PipelineWriteClaimsTest {
             slots.refresh(true);
             grants.refresh(true);
             claims.table(slots);
+            claims.ledger(batches);
             claims.writeSpaces(node -> SPACE);
             claims.refresh(true);
         }
@@ -1136,6 +1191,19 @@ class PipelineWriteClaimsTest {
 
         private Verdict judge(String domainKey) {
             return slots.judge(LEVEL, domainKey, WITNESS, tick).verdict();
+        }
+
+        private JobGraph declareWithoutBatch() {
+            String nodeKey = NODE_KEY + "#999";
+            JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef(WORLD, DOMAIN, 0);
+            JobDeclaration declaration = new JobDeclaration(nodeKey, 1L, WORLD, DOMAIN, 0, List.of(),
+                0, MAILBOX, "world:" + WORLD, List.of(ref), List.of(ref), ShareClass.OTHER,
+                JobDeclaration.SiteClass.PARALLEL, 0, (int) ROUNDS,
+                List.of(new JobDeclaration.OwnerDemand(WORLD, WriteLevel.REGION, DOMAIN,
+                    HolderKind.REGISTERED, HOLDER, 40)),
+                new JobDeclaration.WriteRange(JobDeclaration.RangeGranularity.SECTION,
+                    new long[] {SectionPos.asLong(0, 4, 0)}));
+            return freeze(List.of(declaration));
         }
 
         private JobGraph declareWorld(String worldId) {
@@ -1169,9 +1237,18 @@ class PipelineWriteClaimsTest {
         /** The round job of the pipeline declared with the range a producer that read one would hand
          * in: the mailbox face names a world and a mailbox and no cell, so this declaration stands for
          * the shape a range source has to produce, and the fixture freezes it verbatim. */
+        private String batchKeyFor(String worldId, String mailbox, long planSequence) {
+            var task = batches.mint(mailbox, worldId, mailbox, CELL, TICK);
+            batches.enqueued(task);
+            List<PipelineBatchLedger.BatchId> frozen = batches.freezeAll(planSequence, TICK);
+            assertFalse(frozen.isEmpty(), "the fixture batch is frozen");
+            return PipelineRoundJobs.batchKeyOf(frozen.get(0));
+        }
+
         private JobGraph declareCarryingRange() {
+            String nodeKey = batchKeyFor(WORLD, MAILBOX, PLAN_SEQUENCE);
             JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef(WORLD, DOMAIN, 0);
-            JobDeclaration declaration = new JobDeclaration(NODE_KEY, 1L, WORLD, DOMAIN, 0, List.of(),
+            JobDeclaration declaration = new JobDeclaration(nodeKey, 1L, WORLD, DOMAIN, 0, List.of(),
                 0, MAILBOX, "world:" + WORLD, List.of(ref), List.of(ref), ShareClass.OTHER,
                 JobDeclaration.SiteClass.PARALLEL, 0, (int) ROUNDS,
                 List.of(new JobDeclaration.OwnerDemand(WORLD, WriteLevel.REGION, DOMAIN,
@@ -1201,9 +1278,10 @@ class PipelineWriteClaimsTest {
         /** The same shape, declared straight into the claim point: a graph no planner would freeze,
          * so the claim face is driven with it to show what it refuses on its own. */
         private JobGraph declarePastItsOwnJobByHand() {
+            String nodeKey = batchKeyFor(WORLD, MAILBOX, PLAN_SEQUENCE);
             JobDeclaration.DomainRef mine = new JobDeclaration.DomainRef(WORLD, DOMAIN, 0);
             JobDeclaration.DomainRef other = new JobDeclaration.DomainRef(OTHER_WORLD, DOMAIN, 0);
-            JobGraph.Node node = new JobGraph.Node(1L, NODE_KEY, 1L, WORLD, DOMAIN, 0, List.of(),
+            JobGraph.Node node = new JobGraph.Node(1L, nodeKey, 1L, WORLD, DOMAIN, 0, List.of(),
                 List.of(), 0, "world:" + WORLD, "world:" + WORLD, List.of(mine),
                 List.of(mine, other), declarationPastItsOwnJob().ownerDemands(), ShareClass.OTHER,
                 JobDeclaration.SiteClass.PARALLEL, 0, 4, false, 0);
@@ -1242,8 +1320,9 @@ class PipelineWriteClaimsTest {
 
         /** A next plan over the same declaration, as the next freeze would publish it. */
         private JobGraph declareNext(long planSequence) {
+            String nodeKey = batchKeyFor(WORLD, MAILBOX, planSequence);
             JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef(WORLD, DOMAIN, 0);
-            JobDeclaration declaration = new JobDeclaration(NODE_KEY, 1L, WORLD, DOMAIN, 0, List.of(),
+            JobDeclaration declaration = new JobDeclaration(nodeKey, 1L, WORLD, DOMAIN, 0, List.of(),
                 0, MAILBOX, "world:" + WORLD, List.of(ref), List.of(ref), ShareClass.OTHER,
                 JobDeclaration.SiteClass.PARALLEL, 0, (int) ROUNDS,
                 List.of(new JobDeclaration.OwnerDemand(WORLD, WriteLevel.REGION, DOMAIN,

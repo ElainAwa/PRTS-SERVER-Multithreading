@@ -215,14 +215,23 @@ public final class WriteControlledSlots {
     public record Slot(SlotKey key, Object levelRef, String planNodeKey, int position,
                        long expectedVersion, long slotGeneration, long worldEpoch, long expireTick,
                        HolderKind holderKind, String holderSiteId, Set<String> writeSet,
-                       WriteSpace space) {
+                       WriteSpace space, boolean declarationHeld) {
+
+        /** A slot with no declaration-time owner evidence: manual fixtures stay fail-closed. */
+        public Slot(SlotKey key, Object levelRef, String planNodeKey, int position,
+                    long expectedVersion, long slotGeneration, long worldEpoch, long expireTick,
+                    HolderKind holderKind, String holderSiteId, Set<String> writeSet,
+                    WriteSpace space) {
+            this(key, levelRef, planNodeKey, position, expectedVersion, slotGeneration, worldEpoch,
+                expireTick, holderKind, holderSiteId, writeSet, space, false);
+        }
 
         /** A slot that names no spatial range: it is refused when declared, never covering a write. */
         public Slot(SlotKey key, Object levelRef, String planNodeKey, int position,
                     long expectedVersion, long slotGeneration, long worldEpoch, long expireTick,
                     HolderKind holderKind, String holderSiteId, Set<String> writeSet) {
             this(key, levelRef, planNodeKey, position, expectedVersion, slotGeneration, worldEpoch,
-                expireTick, holderKind, holderSiteId, writeSet, WriteSpace.NONE);
+                expireTick, holderKind, holderSiteId, writeSet, WriteSpace.NONE, false);
         }
 
         public Slot {
@@ -546,7 +555,9 @@ public final class WriteControlledSlots {
         // The generation the row wears has to be the one its own plan's grant answered: a plan
         // that granted nothing here, and a row that names a generation of its own, are both a
         // version this row does not carry, and the drift of the live slot is read the same way.
-        if (granted == null || granted != slot.expectedVersion()
+        boolean grantMismatch = granted != null && granted != slot.expectedVersion();
+        boolean missingGrant = granted == null && !slot.declarationHeld();
+        if (grantMismatch || missingGrant
             || carried <= WriteVersionSlots.NOT_CARRIED || carried != slot.expectedVersion()
             || token.expectedVersion() != slot.expectedVersion()) {
             return refusal(slot, "version", carried, tickIndex, covering);
