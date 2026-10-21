@@ -603,6 +603,7 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
                 }
                 if (!retained.test(held.batch)) {
                     evict = held.task;
+                    fallback = false;
                     break;
                 }
                 if (evict == null) {
