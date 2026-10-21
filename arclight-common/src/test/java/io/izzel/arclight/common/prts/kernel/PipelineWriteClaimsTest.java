@@ -892,6 +892,23 @@ class PipelineWriteClaimsTest {
     }
 
     @Test
+    void ownerEvidenceIsPrunedAtExpiryAndRetire() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        assertEquals(1, scratch.claims.ownerEvidenceCountForTest());
+
+        scratch.claims.declare(null, PLAN_SEQUENCE + 1L, TICK + PipelineWriteClaims.HOLD_TICKS, 1L);
+        assertEquals(0, scratch.claims.ownerEvidenceCountForTest(),
+            "an expired claim drops its owner evidence");
+
+        Scratch retired = new Scratch();
+        retired.declare(ROUNDS);
+        retired.claims.refresh(false);
+        assertEquals(0, retired.claims.ownerEvidenceCountForTest(),
+            "retiring the declaration drops its owner evidence");
+    }
+
+    @Test
     void aClaimWithoutAPublishedBatchBindingIsNeverDeclared() {
         Scratch scratch = new Scratch();
         scratch.declareWithoutBatch();

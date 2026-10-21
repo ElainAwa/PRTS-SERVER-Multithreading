@@ -275,6 +275,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
             }
         }
         merged.putAll(next);
+        ownerEvidence.keySet().retainAll(new java.util.HashSet<>(merged.values()));
         Map<String, List<Claim>> byMailboxNext = new ConcurrentHashMap<>();
         for (Claim claim : merged.values()) {
             byMailboxNext.computeIfAbsent(claim.mailbox(), key -> new ArrayList<>()).add(claim);
@@ -385,7 +386,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         List<WriteControlledSlots.SlotKey> keys = new ArrayList<>(candidates.size());
         for (Claim claim : candidates) {
             WriteControlledSlots.Slot slot = slotOf(claim, ++generations);
-            if (table.register(slot) != WriteControlledSlots.Refusal.NONE) {
+            if (table.register(slot, true) != WriteControlledSlots.Refusal.NONE) {
                 refused++;
                 continue;
             }
@@ -470,7 +471,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         List<WriteControlledSlots.SlotKey> keys = new ArrayList<>(claimed.size());
         for (Claim claim : claimed) {
             WriteControlledSlots.Slot slot = slotOf(claim, ++generations);
-            if (table.register(slot) != WriteControlledSlots.Refusal.NONE) {
+            if (table.register(slot, true) != WriteControlledSlots.Refusal.NONE) {
                 for (WriteControlledSlots.SlotKey key : keys) {
                     table.retire(key);
                 }
@@ -494,8 +495,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
                 claim.planSequence()),
             claim.levelRef(), claim.nodeKey(), claim.position(), claim.expectedVersion(),
             generation, claim.worldEpoch(), claim.expireTick(), claim.holderKind(),
-            claim.holderSiteId(), claim.writeSet(), claim.space(),
-            !ownerEvidence.getOrDefault(claim, Map.of()).isEmpty());
+            claim.holderSiteId(), claim.writeSet(), claim.space());
     }
 
     /** One tick of the kernel: a window that was left open across the tick boundary is retired, so a
@@ -737,6 +737,10 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         return mismatchedEnds;
     }
 
+    int ownerEvidenceCountForTest() {
+        return ownerEvidence.size();
+    }
+
     public long landedWriteCount() {
         return landedWrites;
     }
@@ -834,6 +838,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         for (WriteControlledSlots.SlotKey key : held) {
             table.retire(key);
         }
+        ownerEvidence.clear();
         authorizations = List.of();
         authorizing = null;
     }
@@ -900,7 +905,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
                 continue;
             }
             WriteControlledSlots.Slot slot = slotOf(claim, ++generations);
-            if (table.register(slot) != WriteControlledSlots.Refusal.NONE) {
+            if (table.register(slot, true) != WriteControlledSlots.Refusal.NONE) {
                 continue;
             }
             if (!keys.contains(slot.key())) {

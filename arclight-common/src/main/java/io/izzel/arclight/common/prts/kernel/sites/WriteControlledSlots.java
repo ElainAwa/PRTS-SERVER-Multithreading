@@ -215,23 +215,14 @@ public final class WriteControlledSlots {
     public record Slot(SlotKey key, Object levelRef, String planNodeKey, int position,
                        long expectedVersion, long slotGeneration, long worldEpoch, long expireTick,
                        HolderKind holderKind, String holderSiteId, Set<String> writeSet,
-                       WriteSpace space, boolean declarationHeld) {
-
-        /** A slot with no declaration-time owner evidence: manual fixtures stay fail-closed. */
-        public Slot(SlotKey key, Object levelRef, String planNodeKey, int position,
-                    long expectedVersion, long slotGeneration, long worldEpoch, long expireTick,
-                    HolderKind holderKind, String holderSiteId, Set<String> writeSet,
-                    WriteSpace space) {
-            this(key, levelRef, planNodeKey, position, expectedVersion, slotGeneration, worldEpoch,
-                expireTick, holderKind, holderSiteId, writeSet, space, false);
-        }
+                       WriteSpace space) {
 
         /** A slot that names no spatial range: it is refused when declared, never covering a write. */
         public Slot(SlotKey key, Object levelRef, String planNodeKey, int position,
                     long expectedVersion, long slotGeneration, long worldEpoch, long expireTick,
                     HolderKind holderKind, String holderSiteId, Set<String> writeSet) {
             this(key, levelRef, planNodeKey, position, expectedVersion, slotGeneration, worldEpoch,
-                expireTick, holderKind, holderSiteId, writeSet, WriteSpace.NONE, false);
+                expireTick, holderKind, holderSiteId, writeSet, WriteSpace.NONE);
         }
 
         public Slot {
@@ -335,6 +326,7 @@ public final class WriteControlledSlots {
     private final Source source;
     private volatile LazySeat lazySeat = (level, domain, position, tick) -> 0;
     private final Map<SlotKey, Slot> slots = new ConcurrentHashMap<>();
+    private final Set<SlotKey> declarationHeld = ConcurrentHashMap.newKeySet();
     private final Map<SlotKey, Long> generations = new ConcurrentHashMap<>();
     private final AtomicLong registered = new AtomicLong();
     private final AtomicLong renewed = new AtomicLong();
@@ -378,6 +370,12 @@ public final class WriteControlledSlots {
     /** Declares one slot. A slot that names no usable range, or whose key does not spell the range
      * it carries, is refused here and not repaired when a write arrives. */
     public Refusal register(Slot slot) {
+        return register(slot, false);
+    }
+
+    /** Registers one slot and records that its range came from a declared claim with owner evidence.
+     * A manual slot keeps the fail-closed default; the marker is internal to this table. */
+    public Refusal register(Slot slot, boolean fromDeclaration) {
         Refusal refusal = refusalOf(slot);
         if (refusal != Refusal.NONE) {
             noteRefusal(refusal);
@@ -394,6 +392,11 @@ public final class WriteControlledSlots {
         }
         slots.put(key, slot);
         generations.put(key, slot.slotGeneration());
+        if (fromDeclaration) {
+            declarationHeld.add(key);
+        } else {
+            declarationHeld.remove(key);
+        }
         registered.incrementAndGet();
         return Refusal.NONE;
     }
@@ -401,6 +404,7 @@ public final class WriteControlledSlots {
     /** Retires the slot of one key: the writes it covered fall back to the default path. */
     public boolean retire(SlotKey key) {
         generations.remove(key);
+        declarationHeld.remove(key);
         return slots.remove(key) != null;
     }
 
@@ -556,7 +560,7 @@ public final class WriteControlledSlots {
         // that granted nothing here, and a row that names a generation of its own, are both a
         // version this row does not carry, and the drift of the live slot is read the same way.
         boolean grantMismatch = granted != null && granted != slot.expectedVersion();
-        boolean missingGrant = granted == null && !slot.declarationHeld();
+        boolean missingGrant = granted == null && !declarationHeld.contains(slot.key());
         if (grantMismatch || missingGrant
             || carried <= WriteVersionSlots.NOT_CARRIED || carried != slot.expectedVersion()
             || token.expectedVersion() != slot.expectedVersion()) {
@@ -694,6 +698,7 @@ public final class WriteControlledSlots {
     public void reset() {
         slots.clear();
         generations.clear();
+        declarationHeld.clear();
         registered.set(0L);
         renewed.set(0L);
         advanced.set(0L);
