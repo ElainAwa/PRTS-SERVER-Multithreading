@@ -880,9 +880,16 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
             return 0;
         }
         int seated = 0;
+        String world = worldOf(levelRef);
+        if (world.isEmpty()) {
+            world = LiveLevels.worldOf(levelRef);
+        }
+        boolean ambiguous = LiveLevels.ambiguous(world);
         List<WriteControlledSlots.SlotKey> keys = new ArrayList<>(declaredSeats);
         for (Claim claim : claims()) {
-            if (claim.levelRef() != levelRef || !claim.writeSet().contains(domainKey)
+            boolean sameLevel = claim.levelRef() == levelRef;
+            boolean sameWorld = !ambiguous && !world.isEmpty() && claim.worldId().equals(world);
+            if ((!sameLevel && !sameWorld) || !claim.writeSet().contains(domainKey)
                 || !claim.space().covers(position) || !stillHeld(claim, tick)) {
                 continue;
             }

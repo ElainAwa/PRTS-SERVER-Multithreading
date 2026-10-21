@@ -499,6 +499,7 @@ public final class KernelModule {
     /** Advances the kernel by one tick. */
     public void serverTick(List<String> worldIds) {
         if (!KernelSettings.enabled()) {
+            LiveLevels.clear();
             guard.refresh(false, false, false, tickIndex);
             versionSlots.refresh(false);
             ownerGrants.refresh(false);
@@ -1302,7 +1303,11 @@ public final class KernelModule {
 
         @Override
         public String worldOf(Object levelRef) {
-            return claims.worldOf(levelRef);
+            String world = claims.worldOf(levelRef);
+            if (world.isEmpty()) {
+                world = LiveLevels.worldOf(levelRef);
+            }
+            return LiveLevels.ambiguous(world) ? "" : world;
         }
 
         @Override
