@@ -27,6 +27,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
@@ -55,6 +56,9 @@ class DemandShadowCandidatesTest {
 
     private static final String WORLD = "minecraft:overworld";
     private static final String OTHER_WORLD = "minecraft:the_nether";
+    private static final String MAILBOX = "worldgen";
+    private static final String MAILBOX2 = "worldgen2";
+    private static final String MAILBOX3 = "worldgen3";
     private static final String STATUS = "full";
     private static final long EPOCH = 11L;
     private static final FrozenDeclarations.FreezeKey KEY =
@@ -373,6 +377,102 @@ class DemandShadowCandidatesTest {
             assertFalse(name.startsWith("org.bukkit."), name + " is a platform type");
             assertFalse(name.startsWith("java.util.concurrent."), name + " is a task type");
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<PipelineBatchLedger.TrackedTask, Object> statusesOf(
+        DemandShadowCandidates candidates) throws ReflectiveOperationException {
+        Field field = DemandShadowCandidates.class.getDeclaredField("statuses");
+        field.setAccessible(true);
+        return (Map<PipelineBatchLedger.TrackedTask, Object>) field.get(candidates);
+    }
+
+    private static Object statusEntry(PipelineBatchLedger.TrackedTask task,
+                                      PipelineBatchLedger.BatchId batch, long token, String status)
+        throws ReflectiveOperationException {
+        Class<?> type = Class.forName(DemandShadowCandidates.class.getName() + "$StatusEntry");
+        var constructor = type.getDeclaredConstructor(PipelineBatchLedger.TrackedTask.class,
+            PipelineBatchLedger.BatchId.class, DemandShadowCandidates.TaskStamp.class, String.class);
+        constructor.setAccessible(true);
+        PipelineBatchLedger.TaskId id = task.id();
+        DemandShadowCandidates.TaskStamp stamp = new DemandShadowCandidates.TaskStamp(id.ordinal(),
+            id.worldId(), id.mailbox(), id.cell(), id.mintTick(), batch.freezeOrdinal(),
+            batch.planSequence(), token);
+        return constructor.newInstance(task, batch, stamp, status);
+    }
+
+    private static void remember(DemandShadowCandidates candidates,
+                                 PipelineBatchLedger.TrackedTask task, String status, long token)
+        throws ReflectiveOperationException {
+        var method = DemandShadowCandidates.class.getDeclaredMethod("rememberStatus", Object.class,
+            String.class, long.class);
+        method.setAccessible(true);
+        method.invoke(candidates, task, status, token);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void setState(PipelineBatchLedger.TrackedTask task,
+                                 PipelineBatchLedger.TaskState state) throws ReflectiveOperationException {
+        Field field = PipelineBatchLedger.TrackedTask.class.getDeclaredField("state");
+        field.setAccessible(true);
+        ((java.util.concurrent.atomic.AtomicReference<PipelineBatchLedger.TaskState>) field.get(task))
+            .set(state);
+    }
+
+    @Test
+    void aFullStatusRegisterEvictsTheUnretainedDoneEntry() throws Exception {
+        DemandShadowCandidates small = new DemandShadowCandidates(2);
+        PipelineBatchLedger ledger = new PipelineBatchLedger();
+        PipelineBatchLedger.TrackedTask retainedTask = ledger.mint(new Object(), WORLD, MAILBOX, 1L, 1L);
+        PipelineBatchLedger.TrackedTask otherTask = ledger.mint(new Object(), WORLD, MAILBOX2, 2L, 2L);
+        PipelineBatchLedger.BatchId retainedBatch = ledger.freeze(WORLD, MAILBOX, 1L, 1L);
+        PipelineBatchLedger.BatchId otherBatch = ledger.freeze(WORLD, MAILBOX2, 2L, 1L);
+        assertNotNull(retainedBatch);
+        assertNotNull(otherBatch);
+        setState(retainedTask, new PipelineBatchLedger.Done(retainedBatch));
+        setState(otherTask, new PipelineBatchLedger.Done(otherBatch));
+        small.retained(batch -> batch.equals(retainedBatch));
+        Map<PipelineBatchLedger.TrackedTask, Object> statuses = statusesOf(small);
+        statuses.put(retainedTask, statusEntry(retainedTask, retainedBatch, 1L, "full"));
+        statuses.put(otherTask, statusEntry(otherTask, otherBatch, 2L, "full"));
+
+        PipelineBatchLedger.TrackedTask newcomer = ledger.mint(new Object(), WORLD, MAILBOX3, 3L, 3L);
+        PipelineBatchLedger.BatchId newcomerBatch = ledger.freeze(WORLD, MAILBOX3, 3L, 1L);
+        assertNotNull(newcomerBatch);
+        setState(newcomer, new PipelineBatchLedger.Running(newcomerBatch));
+        remember(small, newcomer, "full", 3L);
+
+        assertEquals(2, statuses.size());
+        assertTrue(statuses.containsKey(retainedTask), "the retained status is not evicted");
+        assertFalse(statuses.containsKey(otherTask), "the unretained done status is evicted");
+        assertEquals(0L, small.retainedFallbackEvictions());
+    }
+
+    @Test
+    void anAllRetainedRegisterFallsBackAndIsStillBounded() throws Exception {
+        DemandShadowCandidates small = new DemandShadowCandidates(2);
+        PipelineBatchLedger ledger = new PipelineBatchLedger();
+        PipelineBatchLedger.TrackedTask first = ledger.mint(new Object(), WORLD, MAILBOX, 1L, 1L);
+        PipelineBatchLedger.TrackedTask second = ledger.mint(new Object(), WORLD, MAILBOX2, 2L, 2L);
+        PipelineBatchLedger.BatchId firstBatch = ledger.freeze(WORLD, MAILBOX, 1L, 1L);
+        PipelineBatchLedger.BatchId secondBatch = ledger.freeze(WORLD, MAILBOX2, 2L, 1L);
+        assertNotNull(firstBatch);
+        assertNotNull(secondBatch);
+        setState(first, new PipelineBatchLedger.Done(firstBatch));
+        setState(second, new PipelineBatchLedger.Done(secondBatch));
+        small.retained(batch -> true);
+        Map<PipelineBatchLedger.TrackedTask, Object> statuses = statusesOf(small);
+        statuses.put(first, statusEntry(first, firstBatch, 1L, "full"));
+        statuses.put(second, statusEntry(second, secondBatch, 2L, "full"));
+
+        PipelineBatchLedger.TrackedTask newcomer = ledger.mint(new Object(), WORLD, MAILBOX3, 3L, 3L);
+        PipelineBatchLedger.BatchId newcomerBatch = ledger.freeze(WORLD, MAILBOX3, 3L, 1L);
+        assertNotNull(newcomerBatch);
+        setState(newcomer, new PipelineBatchLedger.Running(newcomerBatch));
+        remember(small, newcomer, "full", 3L);
+
+        assertEquals(2, statuses.size(), "the register stays bounded");
+        assertEquals(1L, small.retainedFallbackEvictions(), "only the fallback path took a retained entry");
     }
 
     @Test
