@@ -2,6 +2,8 @@
 package io.izzel.arclight.common.prts.kernel;
 
 import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
+import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
+import io.izzel.arclight.common.prts.kernel.auth.OwnerToken;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLevel;
 import io.izzel.arclight.common.prts.kernel.auth.WriteVersionSlots;
 import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
@@ -148,10 +150,14 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
      * seats until its declarations expire. */
     private volatile List<Authorization> authorizations = List.of();
     private final Map<String, LongAdder> landedByNode = new ConcurrentHashMap<>();
-    /** The owner ordinals each claim carried when it was declared; internal, not a public shape. */
-    private final Map<Claim, Map<Long, Long>> ownerEvidence = new ConcurrentHashMap<>();
+    /** The owner facts each claim carried when it was declared; internal, not a public shape. */
+    private final Map<Claim, HeldEvidence> ownerEvidence = new ConcurrentHashMap<>();
+    private volatile OwnerRegistry owners;
     private final Consumer<Attributed> settlement;
     private volatile PipelineBatchLedger ledger;
+
+    private record HeldEvidence(Map<Long, Long> ownerOrdinals, OwnerToken owner) {
+    }
 
     private volatile WriteControlledSlots table = WriteControlledSlots.NOTHING;
     private volatile Function<JobGraph.Node, WriteControlledSlots.WriteSpace> writeSpaces =
@@ -203,6 +209,12 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         this.judgeThread = judgeThread;
         this.levelOf = levelOf;
         this.settlement = settlement;
+    }
+
+    /** Names the registry the declaration reads the owner token from; absent, no owner fact is
+     * captured and the older fail-closed path remains. */
+    public void owners(OwnerRegistry owners) {
+        this.owners = owners;
     }
 
     /** Names the ledger the declared-slot attribution reads the published binding and its owner
@@ -386,7 +398,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         List<WriteControlledSlots.SlotKey> keys = new ArrayList<>(candidates.size());
         for (Claim claim : candidates) {
             WriteControlledSlots.Slot slot = slotOf(claim, ++generations);
-            if (table.register(slot, true) != WriteControlledSlots.Refusal.NONE) {
+            if (registerClaim(claim, slot) != WriteControlledSlots.Refusal.NONE) {
                 refused++;
                 continue;
             }
@@ -471,7 +483,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         List<WriteControlledSlots.SlotKey> keys = new ArrayList<>(claimed.size());
         for (Claim claim : claimed) {
             WriteControlledSlots.Slot slot = slotOf(claim, ++generations);
-            if (table.register(slot, true) != WriteControlledSlots.Refusal.NONE) {
+            if (registerClaim(claim, slot) != WriteControlledSlots.Refusal.NONE) {
                 for (WriteControlledSlots.SlotKey key : keys) {
                     table.retire(key);
                 }
@@ -486,6 +498,14 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         }
         declaredSeats = List.copyOf(keys);
         return keys.size();
+    }
+
+    private WriteControlledSlots.Refusal registerClaim(Claim claim, WriteControlledSlots.Slot slot) {
+        HeldEvidence evidence = ownerEvidence.get(claim);
+        if (evidence != null && evidence.owner() != null) {
+            return table.register(slot, evidence.owner());
+        }
+        return table.register(slot, true);
     }
 
     private WriteControlledSlots.Slot slotOf(Claim claim, long generation) {
@@ -614,7 +634,8 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
             landed.unattributed = true;
             return;
         }
-        long ordinal = ownerEvidence.getOrDefault(claim, Map.of()).getOrDefault(found, -1L);
+        HeldEvidence evidence = ownerEvidence.get(claim);
+        long ordinal = evidence == null ? -1L : evidence.ownerOrdinals().getOrDefault(found, -1L);
         if (ordinal < 0L) {
             landed.unattributed = true;
             return;
@@ -905,7 +926,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
                 continue;
             }
             WriteControlledSlots.Slot slot = slotOf(claim, ++generations);
-            if (table.register(slot, true) != WriteControlledSlots.Refusal.NONE) {
+            if (registerClaim(claim, slot) != WriteControlledSlots.Refusal.NONE) {
                 continue;
             }
             if (!keys.contains(slot.key())) {
@@ -921,13 +942,18 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
 
     private boolean stillHeld(Claim claim, long tick) {
         if (claim.expireTick() <= tick || !claim.space().wellFormed()
-            || claim.worldEpoch() != epochs.epochOf(claim.worldId())
-            || !versions.enabled()
-            || ownerEvidence.getOrDefault(claim, Map.of()).isEmpty()) {
+            || claim.worldEpoch() != epochs.epochOf(claim.worldId()) || !versions.enabled()) {
             return false;
         }
         // The plan grant record only holds the newest plan; the slot's current version is the
         // lifecycle fact that survives later plans, and advancing or dropping it still refuses.
+        HeldEvidence evidence = ownerEvidence.get(claim);
+        if (evidence == null || evidence.ownerOrdinals().isEmpty()) {
+            return false;
+        }
+        if (owners != null && (evidence.owner() == null || evidence.owner().expiredAt(tick))) {
+            return false;
+        }
         long current = versions.peek(claim.worldId(), WriteLevel.REGION, claim.domainId());
         return current != WriteVersionSlots.NOT_CARRIED && current == claim.expectedVersion();
     }
@@ -1017,12 +1043,23 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
             noWorld++;
             return null;
         }
+        OwnerToken owner = null;
+        if (owners != null) {
+            owner = owners.lookup(node.worldId(), WriteLevel.REGION, node.domainId()).orElse(null);
+            if (owner == null || owner.expiredAt(tick)
+                || owner.holderKind() != demand.holderKind()
+                || !owner.holderSiteId().equals(demand.holderSiteId())
+                || owner.expectedVersion() != version) {
+                emptyWriteSet++;
+                return null;
+            }
+        }
         levelWorlds.put(level, node.worldId());
         int hold = Math.max(1, demand.holdTicks());
         Claim claim = new Claim(node.key(), node.worldId(), mailbox, node.domainId(), planSequence,
             node.position(), version, epoch, tick + hold, demand.holderKind(), demand.holderSiteId(),
             Set.copyOf(paths), level, space, batch);
-        ownerEvidence.put(claim, Map.copyOf(ownerOrdinals));
+        ownerEvidence.put(claim, new HeldEvidence(Map.copyOf(ownerOrdinals), owner));
         return claim;
     }
 

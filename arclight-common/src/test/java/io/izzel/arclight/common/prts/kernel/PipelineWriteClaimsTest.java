@@ -48,6 +48,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** The claim a declared write set becomes, and the write it covers.
@@ -918,6 +919,38 @@ class PipelineWriteClaimsTest {
     }
 
     @Test
+    void aRetainedClaimKeepsItsDeclarationOwnerAfterTheLiveTokenIsReleased() {
+        Scratch scratch = new Scratch();
+        scratch.claims.owners(scratch.owners);
+        scratch.declare(ROUNDS);
+        PipelineWriteClaims.Claim claim = scratch.claims.claims().get(0);
+        assertEquals(1, scratch.claims.active());
+
+        JobGraph empty = JobGraphBuilder.freeze(List.of(), TICK + 1, PLAN_SEQUENCE + 1L, 1L, 16).graph();
+        scratch.grants.apply(empty, TICK + 1);
+        assertFalse(scratch.owners.lookup(WORLD, WriteLevel.REGION, DOMAIN).isPresent(),
+            "the live token is released when the declaring job leaves the newest plan");
+
+        scratch.claims.declare(null, PLAN_SEQUENCE + 1L, TICK + 1L, 1L);
+        assertEquals(1, scratch.claims.active(),
+            "the retained claim keeps its declaration owner fact");
+        assertEquals(1, scratch.claims.seatDeclared());
+        assertEquals(Verdict.CAPTURED, scratch.judge(WritePath.BLOCK_WRITE.key()),
+            "the declaration owner fact passes the owner gate after the live token is gone");
+        assertSame(claim, scratch.claims.claims().get(0));
+    }
+
+    @Test
+    void aDeclarationWithoutAnOwnerTokenIsNeverClaimed() {
+        Scratch scratch = new Scratch();
+        scratch.claims.owners(scratch.owners);
+        scratch.declareWithoutOwner();
+
+        assertEquals(0, scratch.claims.active(), "a declaration with no owner token makes no claim");
+        assertEquals(1L, scratch.claims.emptyWriteSetCount());
+    }
+
+    @Test
     void aClaimWithAnEmptyBatchCellSetIsNeverDeclared() throws Exception {
         Scratch scratch = new Scratch();
         scratch.claims.ledger(scratch.batches);
@@ -1286,6 +1319,26 @@ class PipelineWriteClaimsTest {
 
         private Verdict judge(String domainKey) {
             return slots.judge(LEVEL, domainKey, WITNESS, tick).verdict();
+        }
+
+        private JobGraph declareWithoutOwner() {
+            String nodeKey = batchKeyFor(WORLD, MAILBOX, PLAN_SEQUENCE);
+            JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef(WORLD, DOMAIN, 0);
+            JobDeclaration declaration = new JobDeclaration(nodeKey, 1L, WORLD, DOMAIN, 0, List.of(),
+                0, MAILBOX, "world:" + WORLD, List.of(ref), List.of(ref), ShareClass.OTHER,
+                JobDeclaration.SiteClass.PARALLEL, 0, (int) ROUNDS,
+                List.of(new JobDeclaration.OwnerDemand(WORLD, WriteLevel.REGION, DOMAIN,
+                    HolderKind.REGISTERED, HOLDER, 40)),
+                new JobDeclaration.WriteRange(JobDeclaration.RangeGranularity.SECTION,
+                    new long[] {SectionPos.asLong(0, 4, 0)}));
+            JobGraph graph = JobGraphBuilder.freeze(List.of(declaration), TICK, PLAN_SEQUENCE, 1L, 16)
+                .graph();
+            Map<OwnershipDomain, Long> granted = new HashMap<>();
+            granted.put(new OwnershipDomain(WORLD, WriteLevel.REGION, DOMAIN),
+                versions.grant(WORLD, WriteLevel.REGION, DOMAIN));
+            versions.noteGranted(PLAN_SEQUENCE, granted);
+            claims.declare(graph, PLAN_SEQUENCE, TICK);
+            return graph;
         }
 
         private JobGraph declareWithoutBatch() {

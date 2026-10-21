@@ -327,6 +327,7 @@ public final class WriteControlledSlots {
     private volatile LazySeat lazySeat = (level, domain, position, tick) -> 0;
     private final Map<SlotKey, Slot> slots = new ConcurrentHashMap<>();
     private final Set<SlotKey> declarationHeld = ConcurrentHashMap.newKeySet();
+    private final Map<SlotKey, OwnerToken> declarationOwners = new ConcurrentHashMap<>();
     private final Map<SlotKey, Long> generations = new ConcurrentHashMap<>();
     private final AtomicLong registered = new AtomicLong();
     private final AtomicLong renewed = new AtomicLong();
@@ -370,12 +371,21 @@ public final class WriteControlledSlots {
     /** Declares one slot. A slot that names no usable range, or whose key does not spell the range
      * it carries, is refused here and not repaired when a write arrives. */
     public Refusal register(Slot slot) {
-        return register(slot, false);
+        return registerInternal(slot, false, null);
     }
 
-    /** Registers one slot and records that its range came from a declared claim with owner evidence.
-     * A manual slot keeps the fail-closed default; the marker is internal to this table. */
+    /** Registers one declaration-held slot without a frozen owner token. */
     public Refusal register(Slot slot, boolean fromDeclaration) {
+        return registerInternal(slot, fromDeclaration, null);
+    }
+
+    /** Registers one declaration-held slot with the owner token it carried at declaration. The
+     * token is an internal marker; a manual slot still takes the live owner lookup. */
+    public Refusal register(Slot slot, OwnerToken declarationOwner) {
+        return registerInternal(slot, true, declarationOwner);
+    }
+
+    private Refusal registerInternal(Slot slot, boolean fromDeclaration, OwnerToken declarationOwner) {
         Refusal refusal = refusalOf(slot);
         if (refusal != Refusal.NONE) {
             noteRefusal(refusal);
@@ -394,8 +404,12 @@ public final class WriteControlledSlots {
         generations.put(key, slot.slotGeneration());
         if (fromDeclaration) {
             declarationHeld.add(key);
+            if (declarationOwner != null) {
+                declarationOwners.put(key, declarationOwner);
+            }
         } else {
             declarationHeld.remove(key);
+            declarationOwners.remove(key);
         }
         registered.incrementAndGet();
         return Refusal.NONE;
@@ -405,6 +419,7 @@ public final class WriteControlledSlots {
     public boolean retire(SlotKey key) {
         generations.remove(key);
         declarationHeld.remove(key);
+        declarationOwners.remove(key);
         return slots.remove(key) != null;
     }
 
@@ -548,7 +563,10 @@ public final class WriteControlledSlots {
         if (world.isEmpty() || !world.equals(key.worldId())) {
             return refusal(slot, "world", carried, tickIndex, covering);
         }
-        OwnerToken token = owners.lookup(key.worldId(), key.level(), key.domainId()).orElse(null);
+        OwnerToken token = declarationOwners.get(key);
+        if (token == null) {
+            token = owners.lookup(key.worldId(), key.level(), key.domainId()).orElse(null);
+        }
         if (token == null || token.holderKind() != slot.holderKind()
             || !token.holderSiteId().equals(slot.holderSiteId())) {
             return refusal(slot, "owner", carried, tickIndex, covering);
@@ -699,6 +717,7 @@ public final class WriteControlledSlots {
         slots.clear();
         generations.clear();
         declarationHeld.clear();
+        declarationOwners.clear();
         registered.set(0L);
         renewed.set(0L);
         advanced.set(0L);

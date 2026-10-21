@@ -460,6 +460,7 @@ public final class KernelModule {
         guard.controlledSlots(controlledSlots);
         // The claim point seats a declared job's slot and reports the batches that landed.
         claims.table(controlledSlots);
+        claims.owners(owners);
         claims.writeSpaces(KernelWriteRanges.reader());
         guard.claimLandedTap((slot, worldId, tick, row) -> claims.noteLanded(slot, worldId, row));
         pipelineJobs.bind(pipelineBatches);
