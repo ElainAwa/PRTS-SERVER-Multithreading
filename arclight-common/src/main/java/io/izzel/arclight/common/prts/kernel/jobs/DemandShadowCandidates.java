@@ -601,7 +601,7 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
                     && !(heldState instanceof PipelineBatchLedger.DoneUnclaimed)) {
                     continue;
                 }
-                if (!retained.test(held.batch)) {
+                if (!retainable(held)) {
                     evict = held.task;
                     fallback = false;
                     break;
@@ -644,11 +644,20 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         statusConflicts++;
     }
 
+    /** A retained batch's own status: the only kind that survives a lifecycle removal path. */
+    private boolean retainable(StatusEntry entry) {
+        return entry != null && retained.test(entry.batch) && !entry.conflicted
+            && !entry.status.isEmpty();
+    }
+
     private void reclaimStatuses() {
         Iterator<Map.Entry<PipelineBatchLedger.TrackedTask, StatusEntry>> walk =
             statuses.entrySet().iterator();
         while (walk.hasNext()) {
             StatusEntry entry = walk.next().getValue();
+            if (retainable(entry)) {
+                continue;
+            }
             PipelineBatchLedger.TaskState state = entry.task.state();
             if (!entry.task.live() || !(state instanceof PipelineBatchLedger.Running
                 || state instanceof PipelineBatchLedger.Done
@@ -670,25 +679,35 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
             return new TaskStatus("", null);
         }
         if (entry.task != task) {
-            statuses.remove(task);
+            if (!retainable(entry)) {
+                statuses.remove(task);
+            }
             return new TaskStatus("", null);
         }
         if (!task.live()) {
-            statuses.remove(task);
+            if (!retainable(entry)) {
+                statuses.remove(task);
+            }
             return new TaskStatus("", null);
         }
         PipelineBatchLedger.TaskState state = task.state();
         if (!(state instanceof PipelineBatchLedger.Running running)) {
-            statuses.remove(task);
+            if (!retainable(entry)) {
+                statuses.remove(task);
+            }
             return new TaskStatus("", null);
         }
         PipelineBatchLedger.TaskId id = task.id();
         if (!sameTask(entry.stamp, id)) {
-            statuses.remove(task);
+            if (!retainable(entry)) {
+                statuses.remove(task);
+            }
             return new TaskStatus("", null);
         }
         if (!sameBatch(entry.stamp, running.batch(), id)) {
-            statuses.remove(task);
+            if (!retainable(entry)) {
+                statuses.remove(task);
+            }
             return new TaskStatus("", null);
         }
         if (entry.conflicted || entry.status.isEmpty()) {
@@ -706,6 +725,13 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         for (Map.Entry<PipelineBatchLedger.TrackedTask, StatusEntry> held : statuses.entrySet()) {
             StatusEntry entry = held.getValue();
             PipelineBatchLedger.TrackedTask task = held.getKey();
+            if (retainable(entry)) {
+                if (sameTask(entry.stamp, task.id())
+                    && sameBatch(entry.stamp, entry.batch, task.id())) {
+                    retained.add(new TaskStatus(entry.status, entry.stamp));
+                }
+                continue;
+            }
             PipelineBatchLedger.TaskState state = task.state();
             if (!task.live() || entry.conflicted || entry.status.isEmpty()) {
                 continue;
@@ -735,7 +761,7 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
             statuses.entrySet().iterator();
         while (walk.hasNext()) {
             StatusEntry entry = walk.next().getValue();
-            if (entry.batch.equals(batch)) {
+            if (entry.batch.equals(batch) && !retainable(entry)) {
                 walk.remove();
                 released++;
                 statusReclaimed++;
@@ -763,7 +789,7 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
             if (entry.stamp.planSequence() >= planSequence) {
                 continue;
             }
-            if (retained != null && retained.test(entry.batch)) {
+            if (retainable(entry) || (retained != null && retained.test(entry.batch))) {
                 continue;
             }
             walk.remove();

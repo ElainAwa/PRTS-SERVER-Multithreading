@@ -547,11 +547,14 @@ class PipelineRangeSealsTest {
             ? List.of(new TickPlan.CommitStep(0, WORLD, DOMAIN,
                 PipelineRoundJobs.batchKeyOf(batch), 1L, 0, 1, false))
             : null);
+        candidates.retained(held -> held.equals(batch));
         runBody(task, () -> demand(task, "full"));
         assertEquals(0, candidates.releaseBefore(PLAN + 1L, held -> held.equals(batch)),
             "the retained window keeps its status through the sweep");
+        assertFalse(candidates.statusFor(task).present(),
+            "a done task no longer answers its live status");
         assertEquals(1, candidates.retainedStatuses().size(),
-            "the retained status remains readable for the seal");
+            "the retainable entry survives the statusFor removal path");
         List<DemandShadowCandidates.TaskStatus> retained = candidates.retainedStatuses();
         assertEquals(1, retained.size());
 
