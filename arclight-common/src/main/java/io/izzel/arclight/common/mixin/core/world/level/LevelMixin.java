@@ -9,6 +9,7 @@ import io.izzel.arclight.common.mod.mixins.annotation.TransformAccess;
 import io.izzel.arclight.common.mod.server.world.ArclightWorldConfig;
 import io.izzel.arclight.common.mod.util.ArclightCaptures;
 import io.izzel.arclight.common.mod.util.DistValidate;
+import io.izzel.arclight.common.prts.support.PrtsSyntheticLevelWorld;
 import it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
@@ -238,10 +239,7 @@ public abstract class LevelMixin implements WorldBridge, LevelAccessor, LevelWri
     }
 
     public CraftWorld getWorld() {
-        if (this.world == null) {
-            throw new UnsupportedOperationException(String.format("World %s does not have a CraftWorld. This method should not be invoked on this world for any reason.", dimension().location()));
-        }
-        return this.world;
+        return PrtsSyntheticLevelWorld.require(this.world, String.valueOf(dimension().location()));
     }
 
     public BlockEntity getBlockEntity(BlockPos pos, boolean validate) {
@@ -261,6 +259,11 @@ public abstract class LevelMixin implements WorldBridge, LevelAccessor, LevelWri
     @Override
     public CraftWorld bridge$getWorld() {
         return this.getWorld();
+    }
+
+    @Override
+    public CraftWorld bridge$getWorldOrNull() {
+        return PrtsSyntheticLevelWorld.orNull(this.world);
     }
 
     @Override

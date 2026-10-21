@@ -37,6 +37,11 @@ public abstract class WorldGenRegionMixin implements WorldBridge {
     }
 
     @Override
+    public CraftWorld bridge$getWorldOrNull() {
+        return ((WorldBridge) this.level).bridge$getWorldOrNull();
+    }
+
+    @Override
     public CreatureSpawnEvent.SpawnReason bridge$getAddEntityReason() {
         return CreatureSpawnEvent.SpawnReason.DEFAULT;
     }

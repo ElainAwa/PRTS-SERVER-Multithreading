@@ -30,6 +30,8 @@ public interface WorldBridge extends IWorldWriterBridge, LevelAccessorBridge, In
 
     CraftWorld bridge$getWorld();
 
+    CraftWorld bridge$getWorldOrNull();
+
     boolean bridge$isPvpMode();
 
     boolean bridge$isPopulating();
