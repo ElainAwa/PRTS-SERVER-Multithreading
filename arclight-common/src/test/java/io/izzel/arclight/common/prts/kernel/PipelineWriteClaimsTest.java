@@ -117,6 +117,43 @@ class PipelineWriteClaimsTest {
     }
 
     @Test
+    void anAmbiguousWorldIdentityNeverAliasesASeat() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        scratch.claims.seatDeclared();
+        scratch.source.knownLevels.add(OTHER_LEVEL);
+        scratch.source.ambiguousWorlds.add(WORLD);
+
+        assertEquals(Verdict.DEFAULT_PATH, scratch.slots.judge(OTHER_LEVEL,
+            WritePath.BLOCK_WRITE.key(), WITNESS, TICK).verdict(),
+            "an ambiguous alias does not match a different level by world id");
+    }
+
+    @Test
+    void aRetainedSyntheticClaimSeatsALiveAliasLazily() {
+        Object original = new Object();
+        Object live = new Object();
+        LiveLevels.installForTest(Map.of(SYNTHETIC_WORLD, original));
+        try {
+            Scratch scratch = new Scratch(LiveLevels::level);
+            scratch.claims.ledger(scratch.batches);
+            scratch.source.knownLevels.add(original);
+            scratch.guard.noteLiveWorlds(List.of(WORLD, OTHER_WORLD, SYNTHETIC_WORLD));
+            scratch.declareWorld(SYNTHETIC_WORLD);
+            scratch.batches.freezeAll(PLAN_SEQUENCE, TICK);
+            LiveLevels.installForTest(Map.of(SYNTHETIC_WORLD, live));
+            scratch.source.knownLevels.add(live);
+
+            assertEquals(0, scratch.slots.slots(), "the retained claim starts without a seat");
+            assertEquals(Verdict.CAPTURED, scratch.slots.judge(live, WritePath.BLOCK_WRITE.key(),
+                WITNESS, TICK).verdict(), () -> "claims=" + scratch.claims.claims()
+                + " noWorld=" + scratch.claims.noWorldCount() + " slots=" + scratch.slots.slots());
+        } finally {
+            LiveLevels.clear();
+        }
+    }
+
+    @Test
     void duplicateLiveLevelIdentitiesAreAmbiguousAndNeverResolved() {
         Object second = new Object();
         try {
@@ -1103,7 +1140,12 @@ class PipelineWriteClaimsTest {
 
         private JobGraph declareWorld(String worldId) {
             source.world = worldId;
-            String nodeKey = DOMAIN + "/" + worldId + "/" + MAILBOX;
+            PipelineBatchLedger.TrackedTask task =
+                batches.mint(MAILBOX, worldId, MAILBOX, CELL, TICK);
+            batches.enqueued(task);
+            List<PipelineBatchLedger.BatchId> frozen = batches.freezeAll(PLAN_SEQUENCE, TICK);
+            PipelineBatchLedger.BatchId batch = frozen.isEmpty() ? null : frozen.get(0);
+            String nodeKey = PipelineRoundJobs.batchKeyOf(batch);
             JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef(worldId, DOMAIN, 0);
             JobDeclaration declaration = new JobDeclaration(nodeKey, 1L, worldId, DOMAIN, 0, List.of(),
                 0, MAILBOX, "world:" + worldId, List.of(ref), List.of(ref), ShareClass.OTHER,
@@ -1247,12 +1289,16 @@ class PipelineWriteClaimsTest {
             private String world = WORLD;
             private final java.util.Set<Object> knownLevels =
                 new java.util.HashSet<>(java.util.Set.of(LEVEL));
+            private final java.util.Set<String> ambiguousWorlds = new java.util.HashSet<>();
             private boolean planHolds = true;
             private Step step = null;
 
             @Override
             public String worldOf(Object levelRef) {
-                return knownLevels.contains(levelRef) ? world : "";
+                if (!knownLevels.contains(levelRef) || ambiguousWorlds.contains(world)) {
+                    return "";
+                }
+                return world;
             }
 
             @Override
