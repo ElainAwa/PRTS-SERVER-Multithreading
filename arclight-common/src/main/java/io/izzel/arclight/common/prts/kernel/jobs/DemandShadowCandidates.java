@@ -39,6 +39,12 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
     /** A deferred demand is dropped after this many ticks; one freeze cycle is the bound. */
     public static final int PENDING_TTL_TICKS = 3;
 
+    /** How many plans a deferred demand may wait before it is too old to bind: a freshness bound
+     * on the deferred register, not a retention claim about plan history. Binding rebuilds the
+     * stamp from the consuming window's batch, so the demand's own plan is never read back and no
+     * wall clock is used. */
+    public static final long PENDING_PLAN_TTL = 64L;
+
     /** Deferred demands are a fraction of the ledger's task bound, never the whole register. */
     public static final int PENDING_CAPACITY_DIVISOR = 8;
 
@@ -369,9 +375,9 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         while (walk.hasNext()) {
             PendingDemand held = walk.next().getValue();
             long age = now - held.createdTick();
-            boolean planMoved = plan != 0L && held.planSequence() != 0L
-                && held.planSequence() != plan;
-            if (planMoved || age > PENDING_TTL_TICKS || age < 0L) {
+            boolean tooFar = plan != 0L && held.planSequence() != 0L
+                && plan - held.planSequence() > PENDING_PLAN_TTL;
+            if (age > PENDING_TTL_TICKS || age < 0L || tooFar) {
                 walk.remove();
                 statusRefused++;
             }
@@ -408,31 +414,32 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
             return 0;
         }
         purgePending(PrtsPipelineBatches.tick());
-        int bound = 0;
-        String boundStatus = null;
-        Iterator<Map.Entry<Long, PendingDemand>> walk = pending.entrySet().iterator();
-        while (walk.hasNext()) {
-            PendingDemand held = walk.next().getValue();
-            // The target TaskId is the explicit owner: the caller's mailbox is not the target
-            // window's mailbox in a cross-world future, so the window's own id is authoritative.
-            // A zero demand plan is the early unfrozen plan: TTL is its only freshness bound;
-            // the explicit target TaskId remains the owner. A non-zero plan must match.
-            if (!held.world().equals(id.worldId()) || held.cell() != id.cell()
-                || (held.planSequence() != 0L
-                    && held.planSequence() != batch.planSequence())) {
+        // One window takes one status per cell. When several demands of the cell are still
+        // pending, the newest one (largest plan, then largest token) is the demand the window
+        // consumed last; older ones stay for a later owner or the TTL.
+        Map.Entry<Long, PendingDemand> chosen = null;
+        for (Map.Entry<Long, PendingDemand> entry : pending.entrySet()) {
+            PendingDemand held = entry.getValue();
+            boolean matchWorld = held.world().equals(id.worldId());
+            boolean matchCell = held.cell() == id.cell();
+            boolean matchPlan = held.planSequence() == 0L
+                || held.planSequence() <= batch.planSequence();
+            if (!matchWorld || !matchCell || !matchPlan) {
                 continue;
             }
-            // One window takes one status per cell. A different-status pending stays for a later
-            // window or the TTL; binding it here would turn the window into a conflict.
-            if (boundStatus != null && !boundStatus.equals(held.status())) {
-                continue;
+            if (chosen == null
+                || held.planSequence() > chosen.getValue().planSequence()
+                || (held.planSequence() == chosen.getValue().planSequence()
+                    && held.token() > chosen.getKey())) {
+                chosen = entry;
             }
-            walk.remove();
-            rememberStatus(task, held.status(), held.token());
-            boundStatus = held.status();
-            bound++;
         }
-        return bound;
+        if (chosen == null) {
+            return 0;
+        }
+        pending.remove(chosen.getKey());
+        rememberStatus(task, chosen.getValue().status(), chosen.getKey());
+        return 1;
     }
 
     /** Number of demands waiting for a claimed target window, for tests and diagnostics. */

@@ -532,19 +532,17 @@ class DemandShadowCandidatesTest {
     }
 
     @Test
-    void pendingOldPlanIsDroppedWhenThePlanMoves() throws Exception {
-        DemandShadowCandidates candidates = new DemandShadowCandidates(4, () -> 87L);
+    void oldPlanPendingBeyondPlanDistanceIsPurged() throws Exception {
+        DemandShadowCandidates candidates = new DemandShadowCandidates(4, () -> 200L);
         Map<Long, Object> pending = pendingOf(candidates);
         pending.put(1L, pendingEntry(1L, "full", 1L, 2L, 0L));
         pending.put(2L, pendingEntry(2L, "full", 2L, 0L, 0L));
-        pending.put(3L, pendingEntry(3L, "full", 3L, 87L, 0L));
+        pending.put(3L, pendingEntry(3L, "full", 3L, 200L, 0L));
 
         purge(candidates, 0L);
-
-        assertFalse(pending.containsKey(1L), "an old plan pending cannot bind and is dropped");
-        assertTrue(pending.containsKey(2L), "the early zero-plan pending stays for its TTL");
+        assertFalse(pending.containsKey(1L), "a too-far old plan pending is purged");
+        assertTrue(pending.containsKey(2L), "the early zero-plan pending stays for its tick TTL");
         assertTrue(pending.containsKey(3L), "the current plan pending is untouched");
-        assertEquals(2, pending.size());
     }
 
     @Test

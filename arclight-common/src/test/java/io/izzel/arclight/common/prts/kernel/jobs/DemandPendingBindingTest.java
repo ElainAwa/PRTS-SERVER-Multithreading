@@ -125,7 +125,7 @@ class DemandPendingBindingTest {
     }
 
     @Test
-    void anOldPendingIsNotConsumedByAnotherPlansWindow() {
+    void aDeferredDemandIsConsumedByALaterPlansOwnerWindow() {
         long cell = ChunkPos.asLong(2812, 2812);
         Fixture fixture = new Fixture(cell);
         DemandShadowCandidates candidates = candidates();
@@ -135,9 +135,35 @@ class DemandPendingBindingTest {
         assertNotNull(nextBatch);
         assertTrue(fixture.ledger.runStart(next));
 
-        assertEquals(0, candidates.bindPending(next, fixture.ledger));
-        assertFalse(candidates.statusFor(next).present());
+        assertEquals(1, candidates.bindPending(next, fixture.ledger),
+            "a later owner window takes the deferred demand from its earlier plan");
+        assertTrue(candidates.statusFor(next).present());
+        assertEquals(0, candidates.pendingCount());
+    }
+
+    @Test
+    void aFuturePlanPendingIsNeverBound() {
+        Fixture fixture = new Fixture(ChunkPos.asLong(2812, 2812));
+        DemandShadowCandidates candidates = new DemandShadowCandidates(64, () -> PLAN + 50L);
+        demand(candidates, 2812, 2812, 19L, "biomes", fixture.caller);
+
+        assertEquals(0, candidates.bindPending(fixture.target, fixture.ledger),
+            "a pending from a later plan is not this window's demand");
+        assertFalse(candidates.statusFor(fixture.target).present());
         assertEquals(1, candidates.pendingCount());
+    }
+
+    @Test
+    void sameCellMultiplePendingOnlyTheStatusMatchingOneIsConsumed() {
+        Fixture fixture = new Fixture(ChunkPos.asLong(2812, 2812));
+        DemandShadowCandidates candidates = candidates();
+        demand(candidates, 2812, 2812, 19L, "biomes", fixture.caller);
+        demand(candidates, 2812, 2812, 20L, "full", fixture.caller);
+
+        assertEquals(1, candidates.bindPending(fixture.target, fixture.ledger),
+            "one window takes one status per cell");
+        assertEquals(1, candidates.pendingCount(), "the other status stays for a later window");
+        assertTrue(candidates.statusFor(fixture.target).present());
     }
 
     @Test
@@ -240,9 +266,9 @@ class DemandPendingBindingTest {
 
         assertEquals(1, candidates.bindPending(fixture.target, fixture.ledger));
         DemandShadowCandidates.TaskStatus chosen = candidates.statusFor(fixture.target);
-        assertTrue(chosen.present(), "the first status wins, not a conflict");
-        assertEquals("biomes", chosen.status());
-        assertEquals(1, candidates.pendingCount(), "the different status remains pending");
+        assertTrue(chosen.present(), "the newest status wins, not a conflict");
+        assertEquals("full", chosen.status());
+        assertEquals(1, candidates.pendingCount(), "the older status remains pending");
     }
 
     @Test
@@ -251,19 +277,20 @@ class DemandPendingBindingTest {
         DemandShadowCandidates duplicate = candidates();
         demand(duplicate, 2812, 2812, 19L, "biomes", fixture.caller);
         demand(duplicate, 2812, 2812, 20L, "biomes", fixture.caller);
-        assertEquals(2, duplicate.bindPending(fixture.target, fixture.ledger));
-        assertTrue(duplicate.statusFor(fixture.target).present(), "the same status is a duplicate");
+        assertEquals(1, duplicate.bindPending(fixture.target, fixture.ledger));
+        assertTrue(duplicate.statusFor(fixture.target).present(), "the newest duplicate is taken");
+        assertEquals(1, duplicate.pendingCount(), "the older duplicate stays for a later window");
 
         Fixture conflictFixture = new Fixture(ChunkPos.asLong(2813, 2813));
         DemandShadowCandidates conflict = candidates();
         demand(conflict, 2813, 2813, 30L, "biomes", conflictFixture.caller);
         demand(conflict, 2813, 2813, 31L, "full", conflictFixture.caller);
         assertEquals(1, conflict.bindPending(conflictFixture.target, conflictFixture.ledger),
-            "one window takes only the earliest status");
+            "one window takes only the newest status");
         DemandShadowCandidates.TaskStatus chosen = conflict.statusFor(conflictFixture.target);
-        assertTrue(chosen.present(), "the first status is accepted, not conflicted");
-        assertEquals("biomes", chosen.status());
-        assertEquals(1, conflict.pendingCount(), "the full pending waits for a later window");
+        assertTrue(chosen.present(), "the newest status is accepted, not conflicted");
+        assertEquals("full", chosen.status());
+        assertEquals(1, conflict.pendingCount(), "the older status waits for a later window");
     }
 
     @Test

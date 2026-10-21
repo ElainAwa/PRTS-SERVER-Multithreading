@@ -115,8 +115,8 @@ class DemandPendingEndToEndTest {
 
         List<DemandShadowCandidates.TaskStatus> retained = shadows.retainedStatuses();
         assertTrue(retained.stream().anyMatch(status -> status.present()
-            && "biomes".equals(status.status())));
-        assertEquals(1, shadows.pendingCount(), "the different status waits for a later window");
+            && "full".equals(status.status())));
+        assertEquals(1, shadows.pendingCount(), "the older status waits for a later window");
     }
 
     @Test
