@@ -80,7 +80,6 @@ import io.izzel.arclight.common.prts.kernel.observe.RegionIdentityObserver;
 import io.izzel.arclight.common.prts.kernel.observe.SaveIdentityObserver;
 import io.izzel.arclight.common.prts.kernel.observe.StallAttributionObserver;
 import io.izzel.arclight.common.prts.kernel.observe.TickDigestObserver;
-import io.izzel.arclight.common.prts.kernel.domain.entity.LiveEntityAccess;
 import io.izzel.arclight.common.prts.kernel.meter.SelfCostTap;
 import io.izzel.arclight.common.prts.support.PrtsChunkDemand;
 import io.izzel.arclight.common.prts.support.PrtsChunkMaterialization;
@@ -223,7 +222,7 @@ public final class KernelModule {
     private final DemandShadowCandidates demandShadows =
         new DemandShadowCandidates(pipelineBatches.pendingLimit(), pipelineBatches::currentPlan);
     private final PipelineWriteClaims claims = new PipelineWriteClaims(versionSlots,
-        guard.worldEpochs(), guard::onServerThread, LiveEntityAccess::level,
+        guard.worldEpochs(), guard::onServerThread, LiveLevels::level,
         this::noteTypedSettlement);
     private final ShareMeterPoint jobMeter = new ShareMeterPoint();
     private final TickPlanStore plans = new TickPlanStore(KernelSettings.planHistoryCap());
@@ -368,6 +367,8 @@ public final class KernelModule {
     /** The generation holder of a chain this module adopts: the module is its lifecycle owner. */
     private final CommitNamespaces.ResetEpochs commitChainEpochs = new CommitNamespaces.ResetEpochs();
     private long tickIndex;
+    /** The server whose live levels the claim point resolves; the host names it before the tick. */
+    private volatile net.minecraft.server.MinecraftServer liveServer;
     private int waitCrossStreak;
     private boolean waitSiteTapInstalled;
     private boolean pipelineRowTapInstalled;
@@ -511,6 +512,7 @@ public final class KernelModule {
         }
         long startedAt = System.nanoTime();
         tickIndex++;
+        LiveLevels.refresh(liveServer);
         loadThread.noteTick(tickIndex);
         chunkMaterialization.noteTick(tickIndex);
         if (!started) {
@@ -626,6 +628,8 @@ public final class KernelModule {
     /** Remembers the server the tick source is, so the save identity and the partition can be named
      * at a read. */
     public void noteTickSource(net.minecraft.server.MinecraftServer server) {
+        liveServer = server;
+        LiveLevels.refresh(server);
         saveIdentity.source(server);
         regionIdentity.source(server);
         tickDigest.source(server);
