@@ -203,6 +203,51 @@ class WriteControlledSlotsTest {
     }
 
     @Test
+    void aDeclarationHeldSlotDoesNotNeedTheLivePlanStep() {
+        Scratch scratch = new Scratch();
+        long version = scratch.version();
+        scratch.slots.refresh(true);
+        OwnerToken token = new OwnerToken(WORLD, WriteLevel.REGION, DOMAIN, GENERATION, version, 0L,
+            TICK + 40L, HolderKind.REGISTERED, SITE);
+        scratch.owners.acquire(token);
+        Slot slot = scratch.syntheticSlot(version, TICK + 40L, NODE_KEY);
+        assertEquals(Refusal.NONE, scratch.slots.register(slot, token));
+        scratch.source.planHolds = false;
+
+        assertEquals(Verdict.CAPTURED, scratch.slots.judge(LEVEL, DOMAIN, IN_A, TICK).verdict());
+        assertEquals(PLAN_SEQUENCE, scratch.slots.lastDecision().planSequence(),
+            "the decision uses the declared plan identity when the live step is absent");
+    }
+
+    @Test
+    void aManualSlotStillRefusesAMissingLivePlanStep() {
+        Scratch scratch = new Scratch();
+        long version = scratch.version();
+        Slot slot = scratch.syntheticSlot(version, TICK + 40L, NODE_KEY);
+        scratch.seat(slot);
+        scratch.source.planHolds = false;
+
+        assertEquals(Verdict.REJECTED, scratch.slots.judge(LEVEL, DOMAIN, IN_A, TICK).verdict());
+        assertEquals("plan", scratch.slots.lastRefusal().reason());
+    }
+
+    @Test
+    void aDeclarationHeldSlotStillRefusesAStepOfAnotherPlan() {
+        Scratch scratch = new Scratch();
+        long version = scratch.version();
+        scratch.slots.refresh(true);
+        OwnerToken token = new OwnerToken(WORLD, WriteLevel.REGION, DOMAIN, GENERATION, version, 0L,
+            TICK + 40L, HolderKind.REGISTERED, SITE);
+        scratch.owners.acquire(token);
+        Slot slot = scratch.syntheticSlot(version, TICK + 40L, NODE_KEY);
+        assertEquals(Refusal.NONE, scratch.slots.register(slot, token));
+        scratch.source.step = new WriteControlledSlots.Source.Step(PLAN_SEQUENCE + 1L, POSITION);
+
+        assertEquals(Verdict.REJECTED, scratch.slots.judge(LEVEL, DOMAIN, IN_A, TICK).verdict());
+        assertEquals("plan_sequence", scratch.slots.lastRefusal().reason());
+    }
+
+    @Test
     void noSlotAtAllIsTheDefaultPathAndNotARefusal() {
         Scratch scratch = new Scratch();
 

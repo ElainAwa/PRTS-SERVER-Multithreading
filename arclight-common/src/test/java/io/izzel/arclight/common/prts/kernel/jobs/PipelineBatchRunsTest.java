@@ -121,9 +121,9 @@ class PipelineBatchRunsTest {
         run.handOff();
         run.runBody();
 
-        assertEquals(List.of(Verdict.CAPTURED, Verdict.REJECTED, Verdict.CAPTURED),
+        assertEquals(List.of(Verdict.CAPTURED, Verdict.CAPTURED, Verdict.CAPTURED),
             run.verdicts(),
-            "the retained first range still covers its cell and fails closed on the other plan");
+            "the retained first range covers both writes from its declared plan");
     }
 
     @Test
@@ -138,8 +138,8 @@ class PipelineBatchRunsTest {
         run.handOff();
         run.runBody();
 
-        assertEquals(List.of(Verdict.REJECTED), run.verdicts(),
-            "a task of a superseded batch fails closed under the new plan");
+        assertEquals(List.of(Verdict.CAPTURED), run.verdicts(),
+            "the retained claim covers the task after the newer plan has no step");
         assertEquals(1L, run.ledger.lateRunCount());
         assertSame(old, late.task().batch());
         assertInstanceOf(PipelineBatchLedger.Done.class, run.ledger.stateOf(late.task()));

@@ -459,7 +459,6 @@ class PipelineWriteClaimsTest {
             scratch.tick = TICK + 41L;
         }));
         assertEquals("world", scratchOf(scratch -> scratch.source.world = OTHER_WORLD));
-        assertEquals("plan", scratchOf(scratch -> scratch.source.planHolds = false));
         assertEquals("plan_sequence", scratchOf(scratch -> scratch.source.step =
             new WriteControlledSlots.Source.Step(PLAN_SEQUENCE + 1L, 0)));
     }

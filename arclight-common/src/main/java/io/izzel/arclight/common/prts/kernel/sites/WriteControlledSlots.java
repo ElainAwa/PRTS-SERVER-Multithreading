@@ -488,6 +488,9 @@ public final class WriteControlledSlots {
         String world = source.worldOf(levelRef);
         Source.Step step = source.stepOf(slot.key().worldId(), slot.key().domainId(),
             slot.planNodeKey());
+        if (step == null && declarationHeld.contains(slot.key())) {
+            step = new Source.Step(slot.key().planSequence(), slot.position());
+        }
         WriteRefusal refusal = inspect(slot, world, step, tickIndex, covering.size());
         if (refusal != null) {
             rejected.incrementAndGet();
@@ -604,10 +607,13 @@ public final class WriteControlledSlots {
         if (live <= 0L || live != slot.worldEpoch()) {
             return refusal(slot, "world_epoch", carried, tickIndex, covering);
         }
-        if (slot.planNodeKey().isEmpty() || step == null) {
+        if (slot.planNodeKey().isEmpty()) {
             return refusal(slot, "plan", carried, tickIndex, covering);
         }
-        if (step.planSequence() != key.planSequence()) {
+        if (step == null && !declarationHeld.contains(key)) {
+            return refusal(slot, "plan", carried, tickIndex, covering);
+        }
+        if (step != null && step.planSequence() != key.planSequence()) {
             return refusal(slot, "plan_sequence", carried, tickIndex, covering);
         }
         return null;
