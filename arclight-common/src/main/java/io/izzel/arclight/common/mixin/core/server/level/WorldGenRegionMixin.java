@@ -1,6 +1,7 @@
 package io.izzel.arclight.common.mixin.core.server.level;
 
 import io.izzel.arclight.common.bridge.core.world.level.WorldBridge;
+import io.izzel.arclight.common.bridge.inject.InjectLevelBridge;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.WorldGenRegion;
 import net.minecraft.world.entity.Entity;
@@ -34,6 +35,11 @@ public abstract class WorldGenRegionMixin implements WorldBridge {
     @Override
     public CraftWorld bridge$getWorld() {
         return ((WorldBridge) this.level).bridge$getWorld();
+    }
+
+    @Override
+    public CraftWorld bridge$getWorldOrNull() {
+        return ((InjectLevelBridge) this.level).bridge$getWorldOrNull();
     }
 
     @Override
