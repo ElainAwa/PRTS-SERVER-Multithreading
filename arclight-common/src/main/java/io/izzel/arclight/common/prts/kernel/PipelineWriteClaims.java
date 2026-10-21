@@ -53,12 +53,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
                         long expireTick, HolderKind holderKind, String holderSiteId,
                         Set<String> writeSet, Object levelRef,
                         WriteControlledSlots.WriteSpace space,
-                        PipelineBatchLedger.BatchId batch,
-                        Map<Long, Long> ownerOrdinals) {
-
-        public Claim {
-            ownerOrdinals = ownerOrdinals == null ? Map.of() : Map.copyOf(ownerOrdinals);
-        }
+                        PipelineBatchLedger.BatchId batch) {
     }
 
     /** One batch a claim landed, named the way the commit log identifies a batch, with the plan, seat
@@ -153,6 +148,8 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
      * seats until its declarations expire. */
     private volatile List<Authorization> authorizations = List.of();
     private final Map<String, LongAdder> landedByNode = new ConcurrentHashMap<>();
+    /** The owner ordinals each claim carried when it was declared; internal, not a public shape. */
+    private final Map<Claim, Map<Long, Long>> ownerEvidence = new ConcurrentHashMap<>();
     private final Consumer<Attributed> settlement;
     private volatile PipelineBatchLedger ledger;
 
@@ -290,7 +287,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         if (current != null) {
             List<Authorization> kept = new ArrayList<>();
             for (Authorization previous : authorizations) {
-                if (hasRetainedClaim(previous, merged) && currentCarries(current, previous)) {
+                if (hasRetainedClaim(previous, merged)) {
                     kept.add(previous);
                 }
             }
@@ -305,12 +302,12 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
      * its node. The plan read here is the one {@link #declare} saved, never the plan that just
      * froze; a landing the saved plan did not seat is counted as a landing without a node. */
     public int reportLanded(Consumer<Report> sink) {
-        Authorization held = authorizing;
-        if (held == null || sink == null) {
+        List<Authorization> held = authorizations;
+        if (held.isEmpty() || sink == null) {
             return 0;
         }
         int reported = 0;
-        for (Authorization authorization : List.of(held)) {
+        for (Authorization authorization : held) {
             for (Seat seat : authorization.seats()) {
                 Landed landed = landings.remove(new Landing(authorization.planSequence(),
                     seat.position(), seat.nodeKey()));
@@ -490,14 +487,15 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         return keys.size();
     }
 
-    private static WriteControlledSlots.Slot slotOf(Claim claim, long generation) {
+    private WriteControlledSlots.Slot slotOf(Claim claim, long generation) {
         return new WriteControlledSlots.Slot(
             new WriteControlledSlots.SlotKey(claim.worldId(), claim.domainId(),
                 WriteLevel.REGION, WriteControlledSlots.SlotKey.segmentOf(claim.space()),
                 claim.planSequence()),
             claim.levelRef(), claim.nodeKey(), claim.position(), claim.expectedVersion(),
             generation, claim.worldEpoch(), claim.expireTick(), claim.holderKind(),
-            claim.holderSiteId(), claim.writeSet(), claim.space(), !claim.ownerOrdinals().isEmpty());
+            claim.holderSiteId(), claim.writeSet(), claim.space(),
+            !ownerEvidence.getOrDefault(claim, Map.of()).isEmpty());
     }
 
     /** One tick of the kernel: a window that was left open across the tick boundary is retired, so a
@@ -616,7 +614,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
             landed.unattributed = true;
             return;
         }
-        long ordinal = claim.ownerOrdinals().getOrDefault(found, -1L);
+        long ordinal = ownerEvidence.getOrDefault(claim, Map.of()).getOrDefault(found, -1L);
         if (ordinal < 0L) {
             landed.unattributed = true;
             return;
@@ -790,6 +788,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         levelWorlds.clear();
         landings.clear();
         landedByNode.clear();
+        ownerEvidence.clear();
         authorizing = null;
         authorizations = List.of();
         declarations = Map.of();
@@ -918,24 +917,14 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
     private boolean stillHeld(Claim claim, long tick) {
         if (claim.expireTick() <= tick || !claim.space().wellFormed()
             || claim.worldEpoch() != epochs.epochOf(claim.worldId())
-            || claim.ownerOrdinals().isEmpty()) {
+            || !versions.enabled()
+            || ownerEvidence.getOrDefault(claim, Map.of()).isEmpty()) {
             return false;
         }
         // The plan grant record only holds the newest plan; the slot's current version is the
         // lifecycle fact that survives later plans, and advancing or dropping it still refuses.
         long current = versions.peek(claim.worldId(), WriteLevel.REGION, claim.domainId());
         return current != WriteVersionSlots.NOT_CARRIED && current == claim.expectedVersion();
-    }
-
-    private static boolean currentCarries(Authorization current, Authorization previous) {
-        for (Seat previousSeat : previous.seats()) {
-            for (Seat currentSeat : current.seats()) {
-                if (currentSeat.nodeKey().equals(previousSeat.nodeKey())) {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 
     private static boolean hasRetainedClaim(Authorization authorization,
@@ -980,14 +969,23 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
             emptyWriteSet++;
             return null;
         }
+        long[] batchCells = ledger.cellsOf(batch);
+        if (batchCells.length == 0) {
+            emptyWriteSet++;
+            return null;
+        }
         Map<Long, Long> ownerOrdinals = new LinkedHashMap<>();
-        for (long cell : ledger.cellsOf(batch)) {
+        for (long cell : batchCells) {
             long ordinal = ledger.ownerOrdinal(batch, cell);
             if (ordinal < 0L) {
                 emptyWriteSet++;
                 return null;
             }
             ownerOrdinals.put(cell, ordinal);
+        }
+        if (ownerOrdinals.isEmpty()) {
+            emptyWriteSet++;
+            return null;
         }
         JobDeclaration.OwnerDemand demand = demandOf(node);
         if (demand == null) {
@@ -1016,9 +1014,11 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         }
         levelWorlds.put(level, node.worldId());
         int hold = Math.max(1, demand.holdTicks());
-        return new Claim(node.key(), node.worldId(), mailbox, node.domainId(), planSequence,
+        Claim claim = new Claim(node.key(), node.worldId(), mailbox, node.domainId(), planSequence,
             node.position(), version, epoch, tick + hold, demand.holderKind(), demand.holderSiteId(),
-            Set.copyOf(paths), level, space, batch, ownerOrdinals);
+            Set.copyOf(paths), level, space, batch);
+        ownerEvidence.put(claim, Map.copyOf(ownerOrdinals));
+        return claim;
     }
 
     private static JobDeclaration.OwnerDemand demandOf(JobGraph.Node node) {

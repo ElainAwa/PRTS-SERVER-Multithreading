@@ -549,9 +549,11 @@ class PipelineWriteClaimsTest {
         scratch.claims.declare(next, PLAN_SEQUENCE + 1L, TICK);
         List<PipelineWriteClaims.Report> reports = new ArrayList<>();
 
-        assertEquals(0, scratch.claims.reportLanded(reports::add));
-        assertTrue(reports.isEmpty());
-        assertEquals(1L, scratch.claims.landedWithoutNodeCount());
+        assertEquals(1, scratch.claims.reportLanded(reports::add),
+            "the retained plan still reports its landing");
+        assertEquals(1, reports.size());
+        assertEquals(PLAN_SEQUENCE, reports.get(0).planSequence());
+        assertEquals(0L, scratch.claims.landedWithoutNodeCount());
         assertEquals(1L, scratch.claims.landedWriteCount());
     }
 
@@ -582,11 +584,12 @@ class PipelineWriteClaimsTest {
         scratch.claims.declare(scratch.graph, PLAN_SEQUENCE + 1L, TICK + 1);
         List<PipelineWriteClaims.Report> reports = new ArrayList<>();
 
-        assertEquals(0, scratch.claims.reportLanded(reports::add),
-            "the next plan carries the same node key but did not authorize the landing");
-        assertTrue(reports.isEmpty());
-        assertEquals(1L, scratch.claims.landedWithoutNodeCount(),
-            "the landing stays uncarried instead of being put on the newer plan");
+        assertEquals(1, scratch.claims.reportLanded(reports::add),
+            "the retained plan still reports its landing under its own plan");
+        assertEquals(1, reports.size());
+        assertEquals(PLAN_SEQUENCE, reports.get(0).planSequence());
+        assertEquals(0L, scratch.claims.landedWithoutNodeCount(),
+            "the landing is carried by its retained authorizing plan, not the newer plan");
     }
 
     @Test
@@ -877,11 +880,46 @@ class PipelineWriteClaimsTest {
     }
 
     @Test
+    void aDisabledVersionSourceDoesNotKeepARetainedClaim() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+
+        scratch.versions.refresh(false);
+        scratch.claims.declare(null, PLAN_SEQUENCE + 1L, TICK + 1L, 1L);
+
+        assertEquals(0, scratch.claims.active(),
+            "a disabled version source leaves the old slot unheld");
+    }
+
+    @Test
     void aClaimWithoutAPublishedBatchBindingIsNeverDeclared() {
         Scratch scratch = new Scratch();
         scratch.declareWithoutBatch();
 
         assertEquals(0, scratch.claims.active(), "no batch evidence means no claim");
+        assertEquals(1L, scratch.claims.emptyWriteSetCount());
+    }
+
+    @Test
+    void aClaimWithAnEmptyBatchCellSetIsNeverDeclared() throws Exception {
+        Scratch scratch = new Scratch();
+        scratch.claims.ledger(scratch.batches);
+        PipelineBatchLedger.BatchId batch = new PipelineBatchLedger.BatchId(WORLD, MAILBOX, 999L,
+            PLAN_SEQUENCE);
+        Class<?> bindingClass = Class.forName(
+            "io.izzel.arclight.common.prts.kernel.jobs.PipelineBatchLedger$BatchBinding");
+        var constructor = bindingClass.getDeclaredConstructors()[0];
+        constructor.setAccessible(true);
+        Object binding = constructor.newInstance(batch, List.of(), new long[0]);
+        var field = PipelineBatchLedger.class.getDeclaredField("batches");
+        field.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Map<Long, Object> held = (Map<Long, Object>) field.get(scratch.batches);
+        held.put(999L, binding);
+
+        scratch.declareWithoutBatch();
+
+        assertEquals(0, scratch.claims.active(), "an empty batch cell set has no owner evidence");
         assertEquals(1L, scratch.claims.emptyWriteSetCount());
     }
 
@@ -1089,6 +1127,46 @@ class PipelineWriteClaimsTest {
         assertEquals(1, cell.rows());
         assertTrue(WorldWriteGuard.LandedRow.rowIdentity(cell.rowContent().get(0)),
             "the row keeps the identity of the write path");
+    }
+
+    @Test
+    void aLaterPlanStillReportsAndAttributesTheRetainedClaim() {
+        Scratch scratch = new Scratch();
+        scratch.claims.ledger(scratch.batches);
+        scratch.claims.writeSpaces(node -> WriteSpace.of(CellKind.CHUNK, CELL));
+        scratch.declare(ROUNDS);
+        List<PipelineWriteClaims.Attributed> settled = new ArrayList<>();
+        PipelineWriteClaims sink = new PipelineWriteClaims(scratch.versions,
+            scratch.guard.worldEpochs(), () -> true, world -> LEVEL, settled::add);
+        sink.table(scratch.slots);
+        sink.writeSpaces(node -> WriteSpace.of(CellKind.CHUNK, CELL));
+        sink.ledger(scratch.batches);
+        sink.refresh(true);
+        sink.declare(scratch.graph, PLAN_SEQUENCE, TICK);
+        assertEquals(1, sink.seatDeclared());
+        assertEquals(Verdict.CAPTURED, scratch.slots.judge(LEVEL, WritePath.BLOCK_WRITE.key(),
+            WITNESS, TICK).verdict());
+        WriteControlledSlots.Slot slot = scratch.slots.lastCoveredSlot();
+        assertNotNull(slot);
+        WorldWriteGuard.LandedRow row = new WorldWriteGuard.LandedRow(WORLD, DOMAIN,
+            slot.planNodeKey(), PLAN_SEQUENCE, slot.position(), slot.expectedVersion(),
+            slot.worldEpoch(), TICK, 8, 64, 8);
+        sink.noteLanded(slot, WORLD, row);
+
+        Map<OwnershipDomain, Long> grants = new HashMap<>();
+        grants.put(new OwnershipDomain(WORLD, WriteLevel.REGION, DOMAIN),
+            slot.expectedVersion());
+        scratch.versions.noteGranted(PLAN_SEQUENCE + 1L, grants);
+        sink.declare(null, PLAN_SEQUENCE + 1L, TICK + 1L, 1L);
+
+        List<PipelineWriteClaims.Report> reports = new ArrayList<>();
+        assertEquals(1, sink.reportLanded(reports::add),
+            "the later plan still reports the retained claim's landing");
+        assertEquals(PLAN_SEQUENCE, reports.get(0).planSequence());
+        assertEquals(1, settled.size());
+        assertTrue(settled.get(0).attributed(),
+            "the declaration-time owner evidence keeps the typed attribution");
+        assertEquals(CELL, settled.get(0).cells().get(0).cell());
     }
 
     @Test
