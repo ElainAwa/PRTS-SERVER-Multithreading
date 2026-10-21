@@ -79,9 +79,18 @@ public final class WriteAuthority {
             return WriteVerdict.deny(RejectCode.VERSION_MISMATCH, ConflictClass.REJECT,
                 "a write without an expected version does not exist");
         }
-        OwnerToken token = owners.lookup(attempt.worldId(), attempt.level(), attempt.domainId())
-            .orElse(null);
-        if (token == null || !token.holderSiteId().equals(attempt.holderSiteId())) {
+        OwnerToken token = attempt.declaredOwner();
+        if (token == null) {
+            token = owners.lookup(attempt.worldId(), attempt.level(), attempt.domainId())
+                .orElse(null);
+            if (token == null || !token.holderSiteId().equals(attempt.holderSiteId())) {
+                return WriteVerdict.deny(RejectCode.WRITE_DENIED_NOT_OWNER, ConflictClass.DEGRADE,
+                    RejectTrigger.OWNER_MISMATCH.description());
+            }
+        } else if (!token.worldId().equals(attempt.worldId())
+            || token.level() != attempt.level() || !token.domainId().equals(attempt.domainId())
+            || token.holderKind() != attempt.holderKind()
+            || !token.holderSiteId().equals(attempt.holderSiteId())) {
             return WriteVerdict.deny(RejectCode.WRITE_DENIED_NOT_OWNER, ConflictClass.DEGRADE,
                 RejectTrigger.OWNER_MISMATCH.description());
         }

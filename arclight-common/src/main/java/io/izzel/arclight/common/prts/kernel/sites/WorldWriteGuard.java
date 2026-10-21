@@ -477,6 +477,7 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
             .version(claim.expectedVersion(), tickIndex, claim.key().planSequence())
             .worldEpoch(claim.worldEpoch())
             .declaredWorld(claim.key().worldId())
+            .declaredOwner(controlled.declarationOwnerOf(claim.key()))
             .admitted(true)
             .build();
     }

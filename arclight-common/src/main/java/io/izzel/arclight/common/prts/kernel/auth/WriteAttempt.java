@@ -11,7 +11,7 @@ public record WriteAttempt(long attemptId, HolderKind holderKind, String holderS
                            WriteOp op, Set<String> declaredDomains, Set<String> observedDomains,
                            long expectedVersion, long worldEpoch, long tickIndex, long planOrder,
                            boolean siteAdmitted, boolean lifecycleChange, boolean lifecycleOwner,
-                           boolean wallClockRead) {
+                           boolean wallClockRead, OwnerToken declaredOwner) {
 
     public WriteAttempt {
         declaredDomains = declaredDomains == null ? Set.of() : Set.copyOf(declaredDomains);
@@ -48,6 +48,7 @@ public record WriteAttempt(long attemptId, HolderKind holderKind, String holderS
         builder.lifecycleChange = lifecycleChange;
         builder.lifecycleOwner = lifecycleOwner;
         builder.wallClockRead = wallClockRead;
+        builder.declaredOwner = declaredOwner;
         return builder;
     }
 
@@ -73,6 +74,7 @@ public record WriteAttempt(long attemptId, HolderKind holderKind, String holderS
         private boolean lifecycleChange;
         private boolean lifecycleOwner;
         private boolean wallClockRead;
+        private OwnerToken declaredOwner;
 
         private Builder(long attemptId, String worldId, String holderSiteId) {
             this.attemptId = attemptId;
@@ -142,11 +144,18 @@ public record WriteAttempt(long attemptId, HolderKind holderKind, String holderS
             return this;
         }
 
+        /** Internal friend extension: the owner token the declaration carried, or null for a
+         * manual attempt that takes the live lookup. */
+        public Builder declaredOwner(OwnerToken declaredOwner) {
+            this.declaredOwner = declaredOwner;
+            return this;
+        }
+
         public WriteAttempt build() {
             return new WriteAttempt(attemptId, holderKind, holderSiteId, threadRef, worldId,
                 declaredWorldId, level, domainId, op, declaredDomains, observedDomains,
                 expectedVersion, worldEpoch, tickIndex, planOrder, siteAdmitted, lifecycleChange,
-                lifecycleOwner, wallClockRead);
+                lifecycleOwner, wallClockRead, declaredOwner);
         }
     }
 

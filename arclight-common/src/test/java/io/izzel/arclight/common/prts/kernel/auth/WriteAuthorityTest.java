@@ -82,6 +82,56 @@ class WriteAuthorityTest {
     }
 
     @Test
+    void aDeclarationOwnerTokenAuthorizesWithoutALiveToken() {
+        Scratch scratch = new Scratch(false, 8);
+        OwnerToken declared = new OwnerToken("world", WriteLevel.REGION, "region-1", 1L, 7L, TICK,
+            TICK + 50L, HolderKind.REGISTERED, "site:a");
+
+        WriteVerdict verdict = scratch.authority.authorize(attempt(1L, "site:a", "world", "world",
+            WriteLevel.REGION, "region-1", HolderKind.REGISTERED, true, 7L)
+            .declaredOwner(declared).build());
+
+        assertEquals(WriteDisposition.GRANT, verdict.disposition());
+        assertFalse(scratch.owners.lookup("world", WriteLevel.REGION, "region-1").isPresent(),
+            "the declaration token carries the right after the live token is gone");
+    }
+
+    @Test
+    void aDeclarationOwnerTokenMustAgreeWithTheAttempt() {
+        Scratch scratch = new Scratch(false, 8);
+        OwnerToken declared = new OwnerToken("world", WriteLevel.REGION, "region-1", 1L, 7L, TICK,
+            TICK + 50L, HolderKind.REGISTERED, "site:a");
+
+        WriteVerdict wrongSite = scratch.authority.authorize(attempt(1L, "site:b", "world", "world",
+            WriteLevel.REGION, "region-1", HolderKind.REGISTERED, true, 7L)
+            .declaredOwner(declared).build());
+        WriteVerdict wrongVersion = scratch.authority.authorize(attempt(2L, "site:a", "world",
+            "world", WriteLevel.REGION, "region-1", HolderKind.REGISTERED, true, 6L)
+            .declaredOwner(declared).build());
+        WriteVerdict wrongWorld = scratch.authority.authorize(attempt(3L, "site:a", "other",
+            "other", WriteLevel.REGION, "region-1", HolderKind.REGISTERED, true, 7L)
+            .declaredOwner(declared).build());
+
+        assertEquals(RejectCode.WRITE_DENIED_NOT_OWNER, wrongSite.code());
+        assertEquals(RejectCode.VERSION_MISMATCH, wrongVersion.code());
+        assertEquals(RejectCode.WRITE_DENIED_NOT_OWNER, wrongWorld.code());
+    }
+
+    @Test
+    void aDeclarationOwnerTokenExpiryIsRefused() {
+        Scratch scratch = new Scratch(false, 8);
+        OwnerToken declared = new OwnerToken("world", WriteLevel.REGION, "region-1", 1L, 7L, TICK,
+            TICK + 5L, HolderKind.REGISTERED, "site:a");
+
+        WriteVerdict verdict = scratch.authority.authorize(attempt(1L, "site:a", "world", "world",
+            WriteLevel.REGION, "region-1", HolderKind.REGISTERED, true, 7L)
+            .declaredOwner(declared).tick(TICK + 6L).build());
+
+        assertEquals(WriteDisposition.DENY, verdict.disposition());
+        assertEquals(RejectCode.VERSION_MISMATCH, verdict.code());
+    }
+
+    @Test
     void anExpiredTokenIsReclaimedAndRefused() {
         Scratch scratch = new Scratch(false, 8);
         scratch.owners.acquire(new OwnerToken("world", WriteLevel.REGION, "region-1", 1L, 7L, TICK,

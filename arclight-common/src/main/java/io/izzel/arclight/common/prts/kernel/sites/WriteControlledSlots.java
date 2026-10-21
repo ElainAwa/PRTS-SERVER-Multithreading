@@ -417,6 +417,12 @@ public final class WriteControlledSlots {
         return Refusal.NONE;
     }
 
+    /** The owner token a declaration-held slot carried when it was registered, or null for a
+     * manual slot. The write path uses it ahead of the live registry lookup. */
+    OwnerToken declarationOwnerOf(SlotKey key) {
+        return key == null ? null : declarationOwners.get(key);
+    }
+
     /** Retires the slot of one key: the writes it covered fall back to the default path. */
     public boolean retire(SlotKey key) {
         generations.remove(key);

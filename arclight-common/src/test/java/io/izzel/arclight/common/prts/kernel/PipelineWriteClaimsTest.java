@@ -1000,6 +1000,27 @@ class PipelineWriteClaimsTest {
     }
 
     @Test
+    void aDeclarationOwnerCarriesTheCapturedWritePastTheLiveRelease() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        scratch.claims.ownerTaskBegin(WORLD, MAILBOX);
+        assertEquals(1, scratch.guard.classifyBlockWrite(LEVEL, 8, 64, 8),
+            "the captured write seats the declared slot");
+        assertNotNull(scratch.slots.lastCoveredSlot());
+
+        JobGraph empty = JobGraphBuilder.freeze(List.of(), TICK + 1, PLAN_SEQUENCE + 1L, 1L, 16)
+            .graph();
+        scratch.grants.apply(empty, TICK + 1);
+        assertFalse(scratch.owners.lookup(WORLD, WriteLevel.REGION, DOMAIN).isPresent(),
+            "the live token is released before the authorization layer runs");
+
+        assertTrue(scratch.guard.admitBlockWrite(LEVEL, WORLD, null),
+            "the declaration owner fact authorizes the captured write");
+        assertEquals(WriteDisposition.GRANT, scratch.guard.lastDecision().disposition());
+        assertEquals(1L, scratch.claims.landedWriteCount(), "the granted write lands");
+    }
+
+    @Test
     void aClaimWithAnEmptyBatchCellSetIsNeverDeclared() throws Exception {
         Scratch scratch = new Scratch();
         scratch.claims.ledger(scratch.batches);
