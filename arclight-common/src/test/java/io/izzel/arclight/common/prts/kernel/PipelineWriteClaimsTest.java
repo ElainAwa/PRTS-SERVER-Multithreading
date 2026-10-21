@@ -897,7 +897,7 @@ class PipelineWriteClaimsTest {
         versionStale.declare(ROUNDS);
         PipelineWriteClaims.Claim claim = versionStale.claims.claims().get(0);
         assertTrue(versionStale.claims.retainsBatch(claim.batch()));
-        versionStale.versions.refresh(false);
+        versionStale.versions.advance(WORLD, WriteLevel.REGION, DOMAIN);
         assertFalse(versionStale.claims.retainsBatch(claim.batch()));
         assertEquals(Long.MAX_VALUE, versionStale.claims.retainedPlanFloor());
 
