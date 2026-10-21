@@ -116,6 +116,32 @@ class CommitLogTypedSchemaTest {
     }
 
     @Test
+    void aRetainedPlainReportSurvivesTheLivePlanEviction() {
+        EffectStore effects = store();
+        CommitLog.OrderSource evicted = new CommitLog.OrderSource() {
+            @Override
+            public CommitLog.Resolved resolve(String worldId, String domainId, String nodeKey) {
+                return null;
+            }
+
+            @Override
+            public CommitLog.Resolved resolveAt(long planSequence, long lifecycle, String worldId,
+                                                String domainId, String nodeKey) {
+                return planSequence == 1L && lifecycle == LIFETIME
+                    ? new CommitLog.Resolved(1L, 0, false) : null;
+            }
+        };
+        CommitLog log = new CommitLog(() -> 8, evicted, effects, declared(order(1L)));
+        log.beginTick(10L);
+
+        CommitLog.Verdict verdict = log.reach(batch("a/0", 11L), 1L, 0, LIFETIME);
+
+        assertTrue(verdict.logged(), "the exact report survives the live order being gone");
+        assertEquals(CommitLog.Entry.Disposition.ACCEPTED, verdict.disposition());
+        assertEquals(1L, head(log).planSequence());
+    }
+
+    @Test
     void aVersionedLineCarriesTheDeclaredColumnsAndTheRecordItPointsAt() {
         EffectStore effects = store();
         CommitLog log = log(effects);
