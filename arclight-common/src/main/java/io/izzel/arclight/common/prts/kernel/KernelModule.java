@@ -3011,6 +3011,7 @@ public final class KernelModule {
         pipelineJobs.reset();
         pipelineBatches.reset();
         rangeSeals.reset();
+        rangeSealFactory.reset();
         rangeSealFactory.resetObligations();
         demandShadows.resetStatuses();
         claims.reset();

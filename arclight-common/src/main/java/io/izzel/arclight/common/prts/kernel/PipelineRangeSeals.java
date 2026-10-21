@@ -324,7 +324,7 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
 
     /** Keeps the declaration table of a plan after a later freeze replaces the one in force: a
      * retained claim's old window still reads its own plan's seats from it. */
-    public void rememberDeclarations(FrozenDeclarations declared) {
+    void rememberDeclarations(FrozenDeclarations declared) {
         if (declared == null || !declared.freeze().declared()) {
             return;
         }
@@ -335,7 +335,7 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
 
     /** Names the claims whose old plan may still publish a late seal; an absent predicate keeps the
      * old plan refusal exactly as it was. */
-    public void retained(Predicate<PipelineBatchLedger.BatchId> retained) {
+    void retained(Predicate<PipelineBatchLedger.BatchId> retained) {
         this.retained = retained == null ? batch -> false : retained;
     }
 
@@ -347,9 +347,27 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
 
     /** The same sweep with a floor a still-held claim names: the obligation of that plan, and of
      * every plan at or above it, stays readable until the claim releases it. */
-    public void settleBefore(long planSequence, long retainedFloor) {
+    void settleBefore(long planSequence, long retainedFloor) {
+        long effective = Math.min(planSequence, retainedFloor);
+        synchronized (table) {
+            declaredByPlan.keySet().removeIf(plan -> plan < effective);
+        }
         if (obligations != null) {
-            obligations.settleBefore(Math.min(planSequence, retainedFloor));
+            obligations.settleBefore(effective);
+        }
+    }
+
+    /** The number of plan declaration tables still retained for a late seal. */
+    int declaredPlanCount() {
+        synchronized (table) {
+            return declaredByPlan.size();
+        }
+    }
+
+    /** Drops the declaration cache with the range table it belongs to. */
+    void reset() {
+        synchronized (table) {
+            declaredByPlan.clear();
         }
     }
 

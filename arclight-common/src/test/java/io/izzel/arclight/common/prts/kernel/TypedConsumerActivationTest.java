@@ -153,6 +153,20 @@ class TypedConsumerActivationTest {
     }
 
     @Test
+    void theDeclarationCacheDropsPlansBelowTheRetainedFloor() {
+        Drive drive = new Drive();
+        for (long plan = 1L; plan <= 15L; plan++) {
+            drive.factory.rememberDeclarations(FrozenDeclarations.of(
+                new FrozenDeclarations.FreezeKey("host/1/0", 1L), plan, List.of()).declarations());
+        }
+        assertEquals(15, drive.factory.declaredPlanCount(), "one table per remembered plan");
+
+        drive.factory.settleBefore(16L, Long.MAX_VALUE);
+
+        assertEquals(0, drive.factory.declaredPlanCount(), "the cache drops with the swept plans");
+    }
+
+    @Test
     void theReadinessRecordReadsBothStatesOfTheBuild() {
         assertTrue(KernelModule.TypedConsumerReadiness.SETTLEMENT_WIRED);
         KernelModule.TypedConsumerReadiness bound =

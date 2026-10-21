@@ -892,6 +892,31 @@ class PipelineWriteClaimsTest {
     }
 
     @Test
+    void aStaleClaimKeepsNoPlanOrBatch() {
+        Scratch versionStale = new Scratch();
+        versionStale.declare(ROUNDS);
+        PipelineWriteClaims.Claim claim = versionStale.claims.claims().get(0);
+        assertTrue(versionStale.claims.retainsBatch(claim.batch()));
+        versionStale.versions.refresh(false);
+        assertFalse(versionStale.claims.retainsBatch(claim.batch()));
+        assertEquals(Long.MAX_VALUE, versionStale.claims.retainedPlanFloor());
+
+        Scratch epochStale = new Scratch();
+        epochStale.declare(ROUNDS);
+        PipelineWriteClaims.Claim epochClaim = epochStale.claims.claims().get(0);
+        epochStale.guard.noteLiveWorlds(List.of(OTHER_WORLD));
+        assertFalse(epochStale.claims.retainsBatch(epochClaim.batch()));
+        assertEquals(Long.MAX_VALUE, epochStale.claims.retainedPlanFloor());
+
+        Scratch expired = new Scratch();
+        expired.declare(ROUNDS);
+        PipelineWriteClaims.Claim expiring = expired.claims.claims().get(0);
+        expired.claims.noteTick(TICK + PipelineWriteClaims.HOLD_TICKS);
+        assertFalse(expired.claims.retainsBatch(expiring.batch()));
+        assertEquals(Long.MAX_VALUE, expired.claims.retainedPlanFloor());
+    }
+
+    @Test
     void aRetainedClaimNamesThePlanAFloorKeeps() {
         Scratch scratch = new Scratch();
         scratch.declare(ROUNDS);

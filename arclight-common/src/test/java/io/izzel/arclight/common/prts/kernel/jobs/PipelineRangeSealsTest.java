@@ -92,6 +92,29 @@ class PipelineRangeSealsTest {
         return ledger.freeze(WORLD, MAILBOX, plan, TICK);
     }
 
+    private static void remember(PipelineRangeSeals factory, FrozenDeclarations declarations) {
+        try {
+            java.lang.reflect.Method method = PipelineRangeSeals.class.getDeclaredMethod(
+                "rememberDeclarations", FrozenDeclarations.class);
+            method.setAccessible(true);
+            method.invoke(factory, declarations);
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+        }
+    }
+
+    private static void retain(PipelineRangeSeals factory,
+                               java.util.function.Predicate<PipelineBatchLedger.BatchId> retained) {
+        try {
+            java.lang.reflect.Method method = PipelineRangeSeals.class.getDeclaredMethod("retained",
+                java.util.function.Predicate.class);
+            method.setAccessible(true);
+            method.invoke(factory, retained);
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+        }
+    }
+
     private static TickPlan plan(long planSequence, String... nodeKeys) {
         List<TickPlan.CommitStep> steps = new ArrayList<>();
         for (int index = 0; index < nodeKeys.length; index++) {
@@ -449,8 +472,8 @@ class PipelineRangeSealsTest {
         PipelineBatchLedger.TrackedTask task = submit(CELL);
         PipelineBatchLedger.BatchId batch = freeze(PLAN);
         publishPlan(batch);
-        factory.rememberDeclarations(declarations);
-        factory.retained(retained -> retained.equals(batch));
+        remember(factory, declarations);
+        retain(factory, retained -> retained.equals(batch));
         AtomicReference<FrozenDeclarations.RangeSeal> seen = new AtomicReference<>();
 
         runBody(task, () -> {

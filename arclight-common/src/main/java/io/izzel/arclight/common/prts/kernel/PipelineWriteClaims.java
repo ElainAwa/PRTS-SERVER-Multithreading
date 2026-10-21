@@ -693,7 +693,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
             return false;
         }
         for (Claim claim : declarations.values()) {
-            if (claim.expireTick() > tickIndex && batch.equals(claim.batch())) {
+            if (batch.equals(claim.batch()) && stillHeld(claim, tickIndex)) {
                 return true;
             }
         }
@@ -705,7 +705,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
     long retainedPlanFloor() {
         long floor = Long.MAX_VALUE;
         for (Claim claim : declarations.values()) {
-            if (claim.expireTick() > tickIndex) {
+            if (stillHeld(claim, tickIndex)) {
                 floor = Math.min(floor, claim.planSequence());
             }
         }
