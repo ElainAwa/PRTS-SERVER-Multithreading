@@ -142,6 +142,61 @@ class CommitLogTypedSchemaTest {
     }
 
     @Test
+    void aRetainedTypedBatchSurvivesTheLivePlanEviction() {
+        EffectStore effects = store();
+        CommitLog.OrderSource evicted = new CommitLog.OrderSource() {
+            @Override
+            public CommitLog.Resolved resolve(String worldId, String domainId, String nodeKey) {
+                return null;
+            }
+
+            @Override
+            public CommitLog.Resolved resolveAt(long planSequence, long lifecycle, String worldId,
+                                                String domainId, String nodeKey) {
+                return planSequence == 1L && lifecycle == LIFETIME
+                    ? new CommitLog.Resolved(1L, 0, false) : null;
+            }
+        };
+        CommitLog log = new CommitLog(() -> 8, evicted, effects, declared(order(1L)));
+        log.beginTick(10L);
+        CommitLog.TypedBatch legacy = typed("a/0", 100L, LIFETIME, "chunk=64", "state=full");
+        CommitLog.TypedBatch retained = new CommitLog.TypedBatch(legacy.batch(), legacy.identity(),
+            legacy.effect(), 1L, LIFETIME);
+
+        CommitLog.Verdict verdict = log.reachTyped(retained);
+
+        assertTrue(verdict.logged(), "the exact plan survives the live order being gone");
+        assertEquals(CommitLog.Entry.Disposition.ACCEPTED, verdict.disposition());
+    }
+
+    @Test
+    void anExactPlanMissingFromTheLiveOrderIsStillRefused() {
+        EffectStore effects = store();
+        CommitLog.OrderSource evicted = new CommitLog.OrderSource() {
+            @Override
+            public CommitLog.Resolved resolve(String worldId, String domainId, String nodeKey) {
+                return null;
+            }
+
+            @Override
+            public CommitLog.Resolved resolveAt(long planSequence, long lifecycle, String worldId,
+                                                String domainId, String nodeKey) {
+                return null;
+            }
+        };
+        CommitLog log = new CommitLog(() -> 8, evicted, effects, declared(order(1L)));
+        log.beginTick(10L);
+        CommitLog.TypedBatch legacy = typed("a/0", 100L, LIFETIME, "chunk=64", "state=full");
+        CommitLog.TypedBatch retained = new CommitLog.TypedBatch(legacy.batch(), legacy.identity(),
+            legacy.effect(), 1L, LIFETIME);
+
+        CommitLog.Verdict verdict = log.reachTyped(retained);
+
+        assertFalse(verdict.logged());
+        assertEquals(RejectCode.COMMIT_ORDER_VIOLATION, verdict.code());
+    }
+
+    @Test
     void aVersionedLineCarriesTheDeclaredColumnsAndTheRecordItPointsAt() {
         EffectStore effects = store();
         CommitLog log = log(effects);

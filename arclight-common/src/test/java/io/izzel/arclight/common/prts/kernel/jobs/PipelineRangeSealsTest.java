@@ -524,6 +524,25 @@ class PipelineRangeSealsTest {
     }
 
     @Test
+    void aDeclaredSealUsesTheRetainedOrderWhenTheLiveOrderIsGone() {
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        orders(factory, (plan, life) -> plan == PLAN
+            ? List.of(new TickPlan.CommitStep(0, WORLD, DOMAIN,
+                PipelineRoundJobs.batchKeyOf(batch), 1L, 0, 1, false))
+            : null);
+        runBody(task, () -> demand(task, "full"));
+        List<DemandShadowCandidates.TaskStatus> retained = candidates.retainedStatuses();
+        assertEquals(1, retained.size());
+
+        int published = factory.publishDeclaredDeclared(declarations, retained,
+            factory.generation());
+
+        assertEquals(1, published, "the retained order supplies the missing live order");
+        assertNotNull(table.locate(new FrozenDeclarations.Seat(WORLD, DOMAIN, PLAN, 0), CELL));
+    }
+
+    @Test
     void aTableResetInsideTheWindowSealsNothing() {
         PipelineBatchLedger.TrackedTask task = submit(CELL);
         PipelineBatchLedger.BatchId batch = freeze(PLAN);
