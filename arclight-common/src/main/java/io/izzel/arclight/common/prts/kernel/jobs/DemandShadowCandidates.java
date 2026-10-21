@@ -195,6 +195,8 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
     private final Slot[] ring = new Slot[CAP];
     private int head;
     private int size;
+    private java.util.function.Predicate<PipelineBatchLedger.BatchId> retained = batch -> false;
+    private long retainedFallbackEvictions;
     /** Captures that arrived named but not yet confirmed: they are held here, never in the ring,
      * and a window cannot read them. Bounded by the same capacity as the ring, oldest first. */
     private final Slot[] staged = new Slot[CAP];
@@ -560,6 +562,13 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
     /** Records the one status a live running task named. A second different value conflicts, a value
      * after the read is late, and a full register refuses the new task instead of dropping an old
      * one; the demand itself is never delayed or refused. */
+    /** Names the batches whose status must outlive the plan sweep; an absent predicate keeps the
+     * previous eviction order. */
+    public synchronized void retained(java.util.function.Predicate<PipelineBatchLedger.BatchId>
+                                          retained) {
+        this.retained = retained == null ? batch -> false : retained;
+    }
+
     private synchronized void rememberStatus(Object taskToken, String status, long token) {
         if (status == null || status.isEmpty() || token == PrtsChunkDemand.NO_TOKEN
             || !(taskToken instanceof PipelineBatchLedger.TrackedTask task)) {
@@ -585,12 +594,20 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         reclaimStatuses();
         while (statuses.size() >= statusCapacity) {
             PipelineBatchLedger.TrackedTask evict = null;
+            boolean fallback = false;
             for (StatusEntry held : statuses.values()) {
                 PipelineBatchLedger.TaskState heldState = held.task.state();
-                if (heldState instanceof PipelineBatchLedger.Done
-                    || heldState instanceof PipelineBatchLedger.DoneUnclaimed) {
+                if (!(heldState instanceof PipelineBatchLedger.Done)
+                    && !(heldState instanceof PipelineBatchLedger.DoneUnclaimed)) {
+                    continue;
+                }
+                if (!retained.test(held.batch)) {
                     evict = held.task;
                     break;
+                }
+                if (evict == null) {
+                    evict = held.task;
+                    fallback = true;
                 }
             }
             if (evict == null) {
@@ -598,6 +615,9 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
             }
             statuses.remove(evict);
             statusReclaimed++;
+            if (fallback) {
+                retainedFallbackEvictions++;
+            }
         }
         if (statuses.size() >= statusCapacity) {
             statusOverflows++;
@@ -757,6 +777,11 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         statusReclaimed += statuses.size();
         statuses.clear();
         pending.clear();
+    }
+
+    /** How many capacity evictions had no non-retained entry to take; a bounded fallback. */
+    long retainedFallbackEvictions() {
+        return retainedFallbackEvictions;
     }
 
     /** How many status entries are retained for a settlement. */

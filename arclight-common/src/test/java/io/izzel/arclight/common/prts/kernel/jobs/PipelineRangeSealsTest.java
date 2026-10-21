@@ -548,6 +548,10 @@ class PipelineRangeSealsTest {
                 PipelineRoundJobs.batchKeyOf(batch), 1L, 0, 1, false))
             : null);
         runBody(task, () -> demand(task, "full"));
+        assertEquals(0, candidates.releaseBefore(PLAN + 1L, held -> held.equals(batch)),
+            "the retained window keeps its status through the sweep");
+        assertEquals(1, candidates.retainedStatuses().size(),
+            "the retained status remains readable for the seal");
         List<DemandShadowCandidates.TaskStatus> retained = candidates.retainedStatuses();
         assertEquals(1, retained.size());
 

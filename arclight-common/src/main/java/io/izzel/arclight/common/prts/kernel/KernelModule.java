@@ -472,6 +472,7 @@ public final class KernelModule {
         claims.ledger(pipelineBatches);
         // A seal of an older plan stays readable while a retained claim still names its batch.
         rangeSealFactory.retained(claims::retainsBatch);
+        demandShadows.retained(claims::retainsBatch);
         rangeSealFactory.retainedOrders(this::retainedOrder);
         // The progress side of the two rows whose producer already exists: the intent channel depth
         // and the world epoch change count are the same counters the readout publishes, so a signal

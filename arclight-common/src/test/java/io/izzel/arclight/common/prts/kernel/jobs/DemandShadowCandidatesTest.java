@@ -361,7 +361,7 @@ class DemandShadowCandidatesTest {
 
         assertEquals(new TreeSet<>(List.of("[L" + DemandShadowCandidates.class.getName() + "$Slot;",
             "boolean", "int", "long", "java.lang.Object", "java.util.List", "java.util.Map",
-            "java.lang.String",
+            "java.util.function.Predicate", "java.lang.String",
             FrozenDeclarations.DeclaredChunk.class.getName(),
             FrozenDeclarations.FreezeKey.class.getName(),
             DemandShadowCandidates.DemandDescriptor.class.getName(),
