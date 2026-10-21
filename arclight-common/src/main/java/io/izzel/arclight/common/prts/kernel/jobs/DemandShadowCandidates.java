@@ -725,16 +725,29 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
 
     /** Releases every retained status of a plan the settlement has moved past. */
     public synchronized int releaseBefore(long planSequence) {
+        return releaseBefore(planSequence, null);
+    }
+
+    /** Releases the statuses of a plan the settlement has moved past, except those whose batch a
+     * still-retained declaration names: that window's seat must stay publishable until its claim
+     * expires or the floor releases it. */
+    public synchronized int releaseBefore(long planSequence,
+                                          java.util.function.Predicate<PipelineBatchLedger.BatchId>
+                                              retained) {
         int released = 0;
         Iterator<Map.Entry<PipelineBatchLedger.TrackedTask, StatusEntry>> walk =
             statuses.entrySet().iterator();
         while (walk.hasNext()) {
             StatusEntry entry = walk.next().getValue();
-            if (entry.stamp.planSequence() < planSequence) {
-                walk.remove();
-                released++;
-                statusReclaimed++;
+            if (entry.stamp.planSequence() >= planSequence) {
+                continue;
             }
+            if (retained != null && retained.test(entry.batch)) {
+                continue;
+            }
+            walk.remove();
+            released++;
+            statusReclaimed++;
         }
         return released;
     }

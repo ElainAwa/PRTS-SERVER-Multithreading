@@ -906,7 +906,8 @@ public final class KernelModule {
             if (!retainedStatuses.isEmpty()) {
                 rangeSealFactory.publishDeclaredDeclared(settledDeclarations, retainedStatuses,
                     rangeSeals.generation());
-                demandShadows.releaseBefore(result.plan().planSequence());
+                demandShadows.releaseBefore(result.plan().planSequence(),
+                    claimsEnabled() ? claims::retainsBatch : null);
             }
             // Sealed against this plan's own commit order and bound before the plan is published:
             // the interval authorizes nothing because the pair is told apart by the plan sequence.

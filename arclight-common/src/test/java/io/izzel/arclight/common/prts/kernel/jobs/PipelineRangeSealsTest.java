@@ -524,6 +524,22 @@ class PipelineRangeSealsTest {
     }
 
     @Test
+    void aRetainedBatchStatusSurvivesThePlanSweep() {
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        publishPlan(batch);
+        runBody(task, () -> demand(task, "full"));
+        assertEquals(1, candidates.retainedStatuses().size());
+
+        assertEquals(0, candidates.releaseBefore(PLAN + 1L, held -> held.equals(batch)),
+            "a retained batch keeps its status");
+        assertEquals(1, candidates.retainedStatuses().size());
+
+        assertEquals(1, candidates.releaseBefore(PLAN + 1L, held -> false));
+        assertTrue(candidates.retainedStatuses().isEmpty());
+    }
+
+    @Test
     void aDeclaredSealUsesTheRetainedOrderWhenTheLiveOrderIsGone() {
         PipelineBatchLedger.TrackedTask task = submit(CELL);
         PipelineBatchLedger.BatchId batch = freeze(PLAN);
