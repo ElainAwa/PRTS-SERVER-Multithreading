@@ -1,5 +1,6 @@
 package io.izzel.arclight.common.mixin.core.world.level.gameevent;
 
+import io.izzel.arclight.common.bridge.inject.InjectLevelBridge;
 import io.izzel.arclight.mixin.Decorate;
 import io.izzel.arclight.mixin.DecorationOps;
 import io.izzel.arclight.mixin.Local;
@@ -25,8 +26,13 @@ public class GameEventDispatcherMixin {
     @Decorate(method = "post", inject = true, at = @At(value = "INVOKE", target = "Lnet/minecraft/core/BlockPos;containing(Lnet/minecraft/core/Position;)Lnet/minecraft/core/BlockPos;"))
     private void arclight$gameEvent(Holder<GameEvent> holder, Vec3 vec3, GameEvent.Context context, @Local(ordinal = 0) int i) throws Throwable {
         var entity = context.sourceEntity();
+        var craftWorld = ((InjectLevelBridge) this.level).bridge$getWorldOrNull();
+        if (craftWorld == null) {
+            DecorationOps.blackhole().invoke(i);
+            return;
+        }
         GenericGameEvent event = new GenericGameEvent(CraftGameEvent.minecraftToBukkit(holder.value()),
-            new Location(this.level.bridge$getWorld(), vec3.x(), vec3.y(), vec3.z()), (entity == null) ? null : entity.bridge$getBukkitEntity(), i, !Bukkit.isPrimaryThread());
+            new Location(craftWorld, vec3.x(), vec3.y(), vec3.z()), (entity == null) ? null : entity.bridge$getBukkitEntity(), i, !Bukkit.isPrimaryThread());
         Bukkit.getPluginManager().callEvent(event);
         if (event.isCancelled()) {
             DecorationOps.cancel().invoke();
