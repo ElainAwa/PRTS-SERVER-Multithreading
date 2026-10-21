@@ -687,6 +687,17 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         return cell == null ? 0L : cell.sum();
     }
 
+    /** Whether any still-held claim names this plan; a plan with no such claim has no retained
+     * order and must not answer from the snapshot. */
+    boolean holdsPlan(long planSequence) {
+        for (Claim claim : declarations.values()) {
+            if (claim.planSequence() == planSequence && stillHeld(claim, tickIndex)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Whether a retained claim still names this batch, so a seal of an older plan may be read. */
     boolean retainsBatch(PipelineBatchLedger.BatchId batch) {
         if (batch == null) {

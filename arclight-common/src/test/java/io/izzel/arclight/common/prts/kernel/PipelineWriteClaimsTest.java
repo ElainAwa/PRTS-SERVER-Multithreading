@@ -892,6 +892,18 @@ class PipelineWriteClaimsTest {
     }
 
     @Test
+    void aReleasedClaimStopsBackingItsPlanSnapshot() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        assertTrue(scratch.claims.holdsPlan(PLAN_SEQUENCE));
+
+        scratch.versions.refresh(false);
+
+        assertFalse(scratch.claims.holdsPlan(PLAN_SEQUENCE),
+            "a plan with no still-held claim must not answer from the retained order");
+    }
+
+    @Test
     void aStaleClaimKeepsNoPlanOrBatch() {
         Scratch versionStale = new Scratch();
         versionStale.declare(ROUNDS);

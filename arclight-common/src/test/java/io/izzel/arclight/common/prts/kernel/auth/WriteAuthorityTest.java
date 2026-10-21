@@ -132,6 +132,19 @@ class WriteAuthorityTest {
     }
 
     @Test
+    void aDifferentOwnershipEpochAndWorldEpochStillGrantOnTheSameVersion() {
+        Scratch scratch = new Scratch(false, 8);
+        OwnerToken declared = new OwnerToken("world", WriteLevel.REGION, "region-1", 99L, 7L, TICK,
+            TICK + 50L, HolderKind.REGISTERED, "site:a");
+
+        WriteVerdict verdict = scratch.authority.authorize(attempt(1L, "site:a", "world", "world",
+            WriteLevel.REGION, "region-1", HolderKind.REGISTERED, true, 7L)
+            .worldEpoch(123L).declaredOwner(declared).build());
+
+        assertEquals(WriteDisposition.GRANT, verdict.disposition());
+    }
+
+    @Test
     void aLiveSecondHolderOverridesAReleasedDeclarationToken() {
         Scratch scratch = new Scratch(false, 8);
         OwnerToken declared = new OwnerToken("world", WriteLevel.REGION, "region-1", 1L, 7L, TICK,

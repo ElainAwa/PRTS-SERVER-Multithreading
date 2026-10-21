@@ -1349,6 +1349,9 @@ public final class KernelModule {
         TickPlanStore.StepRef ref = plans.resolveIn(planSequence, lifecycle, worldId, domainId,
             nodeKey);
         if (ref == null) {
+            if (!claimsEnabled() || !claims.holdsPlan(planSequence)) {
+                return null;
+            }
             return retainedOrderAt(planSequence, lifecycle, worldId, domainId, nodeKey);
         }
         return new CommitLog.Resolved(ref.planSequence(), ref.position(), ref.intent());
