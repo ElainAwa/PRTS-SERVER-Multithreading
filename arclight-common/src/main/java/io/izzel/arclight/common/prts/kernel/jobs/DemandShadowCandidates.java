@@ -364,11 +364,14 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
     }
 
     private void purgePending(long now) {
+        long plan = demandPlan();
         Iterator<Map.Entry<Long, PendingDemand>> walk = pending.entrySet().iterator();
         while (walk.hasNext()) {
             PendingDemand held = walk.next().getValue();
             long age = now - held.createdTick();
-            if (age > PENDING_TTL_TICKS || age < 0L) {
+            boolean planMoved = plan != 0L && held.planSequence() != 0L
+                && held.planSequence() != plan;
+            if (planMoved || age > PENDING_TTL_TICKS || age < 0L) {
                 walk.remove();
                 statusRefused++;
             }
