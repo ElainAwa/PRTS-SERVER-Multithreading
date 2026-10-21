@@ -5,7 +5,9 @@ import java.util.Set;
 
 /** One attempt to touch world state, described before it is judged. The attempt is counted the
  * moment it enters the decision point, before any judgement, so an exception behind the decision
- * point cannot erase the fact that the attempt happened. */
+ * point cannot erase the fact that the attempt happened. The last component is an internal friend
+ * extension: it carries the owner token a declaration registered for a claimed write and is not a
+ * product key, seam or configuration value. */
 public record WriteAttempt(long attemptId, HolderKind holderKind, String holderSiteId, String threadRef,
                            String worldId, String declaredWorldId, WriteLevel level, String domainId,
                            WriteOp op, Set<String> declaredDomains, Set<String> observedDomains,

@@ -115,6 +115,19 @@ class PipelineRangeSealsTest {
         }
     }
 
+    private static void orders(PipelineRangeSeals factory,
+                               java.util.function.BiFunction<Long, Long,
+                                   List<TickPlan.CommitStep>> orders) {
+        try {
+            java.lang.reflect.Method method = PipelineRangeSeals.class.getDeclaredMethod(
+                "retainedOrders", java.util.function.BiFunction.class);
+            method.setAccessible(true);
+            method.invoke(factory, orders);
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+        }
+    }
+
     private static TickPlan plan(long planSequence, String... nodeKeys) {
         List<TickPlan.CommitStep> steps = new ArrayList<>();
         for (int index = 0; index < nodeKeys.length; index++) {
@@ -486,6 +499,28 @@ class PipelineRangeSealsTest {
         assertNotNull(seen.get(), "a retained claim keeps its old plan's seal path");
         assertEquals(PLAN, seen.get().planSequence());
         assertEquals(1, factory.seals());
+    }
+
+    @Test
+    void aRetainedOrderSnapshotSealsAfterTheLiveOrderIsGone() {
+        PipelineBatchLedger.TrackedTask task = submit(CELL);
+        PipelineBatchLedger.BatchId batch = freeze(PLAN);
+        remember(factory, declarations);
+        retain(factory, retained -> retained.equals(batch));
+        orders(factory, (plan, life) -> plan == PLAN
+            ? List.of(new TickPlan.CommitStep(0, WORLD, DOMAIN,
+                PipelineRoundJobs.batchKeyOf(batch), 1L, 0, 1, false))
+            : null);
+        AtomicReference<FrozenDeclarations.RangeSeal> seen = new AtomicReference<>();
+
+        runBody(task, () -> {
+            demand(task, "full");
+            PipelineRunSeal.current().status();
+            seen.set(PipelineRunSeal.current().range());
+        });
+
+        assertNotNull(seen.get(), "the retained order snapshot supplies the missing live order");
+        assertEquals(PLAN, seen.get().planSequence());
     }
 
     @Test

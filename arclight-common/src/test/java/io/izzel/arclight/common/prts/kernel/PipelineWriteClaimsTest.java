@@ -1021,6 +1021,28 @@ class PipelineWriteClaimsTest {
     }
 
     @Test
+    void aLiveSecondHolderRefusesTheReleasedDeclarationOwner() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        scratch.claims.ownerTaskBegin(WORLD, MAILBOX);
+        assertEquals(1, scratch.guard.classifyBlockWrite(LEVEL, 8, 64, 8));
+        long version = scratch.versions.carried(WORLD, WriteLevel.REGION, DOMAIN);
+
+        JobGraph empty = JobGraphBuilder.freeze(List.of(), TICK + 1, PLAN_SEQUENCE + 1L, 1L, 16)
+            .graph();
+        scratch.grants.apply(empty, TICK + 1);
+        assertTrue(scratch.owners.acquire(new OwnerToken(WORLD, WriteLevel.REGION, DOMAIN, 2L,
+            version, 0L, TICK + 40L, HolderKind.REGISTERED, OTHER_HOLDER)));
+        scratch.guard.refresh(true, true, false, TICK);
+
+        assertFalse(scratch.guard.admitBlockWrite(LEVEL, WORLD, null),
+            "a live second holder keeps its domain against the released declaration token");
+        assertEquals(WriteDisposition.DENY, scratch.guard.lastDecision().disposition());
+        assertEquals(RejectCode.WRITE_DENIED_NOT_OWNER, scratch.guard.lastDecision().code());
+        assertEquals(0L, scratch.claims.landedWriteCount());
+    }
+
+    @Test
     void aClaimWithAnEmptyBatchCellSetIsNeverDeclared() throws Exception {
         Scratch scratch = new Scratch();
         scratch.claims.ledger(scratch.batches);

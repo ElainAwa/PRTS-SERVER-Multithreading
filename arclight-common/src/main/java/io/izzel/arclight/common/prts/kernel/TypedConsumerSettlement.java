@@ -155,7 +155,8 @@ public final class TypedConsumerSettlement {
             line.content());
         lines++;
         CommitLog.Verdict verdict =
-            target.reachTyped(new CommitLog.TypedBatch(batch, identity, effect));
+            target.reachTyped(new CommitLog.TypedBatch(batch, identity, effect,
+                report.planSequence(), report.lifecycle()));
         if (verdict.logged()) {
             written++;
         } else {

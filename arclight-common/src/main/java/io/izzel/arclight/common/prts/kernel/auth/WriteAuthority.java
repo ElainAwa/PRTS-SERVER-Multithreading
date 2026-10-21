@@ -79,21 +79,42 @@ public final class WriteAuthority {
             return WriteVerdict.deny(RejectCode.VERSION_MISMATCH, ConflictClass.REJECT,
                 "a write without an expected version does not exist");
         }
-        OwnerToken token = attempt.declaredOwner();
-        if (token == null) {
-            token = owners.lookup(attempt.worldId(), attempt.level(), attempt.domainId())
-                .orElse(null);
-            if (token == null || !token.holderSiteId().equals(attempt.holderSiteId())) {
+        OwnerToken declared = attempt.declaredOwner();
+        OwnerToken token = declared;
+        OwnerToken live = owners.lookup(attempt.worldId(), attempt.level(), attempt.domainId())
+            .orElse(null);
+        if (declared != null) {
+            if (!declared.worldId().equals(attempt.worldId())
+                || declared.level() != attempt.level()
+                || !declared.domainId().equals(attempt.domainId())
+                || declared.holderKind() != attempt.holderKind()
+                || !declared.holderSiteId().equals(attempt.holderSiteId())) {
                 return WriteVerdict.deny(RejectCode.WRITE_DENIED_NOT_OWNER, ConflictClass.DEGRADE,
                     RejectTrigger.OWNER_MISMATCH.description());
             }
-        } else if (!token.worldId().equals(attempt.worldId())
-            || token.level() != attempt.level() || !token.domainId().equals(attempt.domainId())
-            || token.holderKind() != attempt.holderKind()
-            || !token.holderSiteId().equals(attempt.holderSiteId())) {
+            if (live != null && (live.holderKind() != declared.holderKind()
+                || !live.holderSiteId().equals(declared.holderSiteId()))) {
+                return WriteVerdict.deny(RejectCode.WRITE_DENIED_NOT_OWNER, ConflictClass.DEGRADE,
+                    RejectTrigger.OWNER_MISMATCH.description());
+            }
+            if (live != null && live.expectedVersion() != attempt.expectedVersion()) {
+                return WriteVerdict.deny(RejectCode.VERSION_MISMATCH, ConflictClass.REJECT,
+                    RejectTrigger.VERSION_SLOT_MISMATCH.description());
+            }
+        } else {
+            if (live == null || !live.holderSiteId().equals(attempt.holderSiteId())) {
+                return WriteVerdict.deny(RejectCode.WRITE_DENIED_NOT_OWNER, ConflictClass.DEGRADE,
+                    RejectTrigger.OWNER_MISMATCH.description());
+            }
+            token = live;
+        }
+        if (token == null) {
             return WriteVerdict.deny(RejectCode.WRITE_DENIED_NOT_OWNER, ConflictClass.DEGRADE,
                 RejectTrigger.OWNER_MISMATCH.description());
         }
+        // OwnerToken.epoch is the ownership generation, while attempt.worldEpoch is the world
+        // lifecycle; they are different clocks, so the declaration branch does not compare them.
+        // The ownership generation is carried by the registry lifecycle and by expectedVersion.
         if (token.expiredAt(attempt.tickIndex())) {
             owners.reclaimExpired(attempt.tickIndex());
             return WriteVerdict.deny(RejectCode.VERSION_MISMATCH, ConflictClass.REJECT,

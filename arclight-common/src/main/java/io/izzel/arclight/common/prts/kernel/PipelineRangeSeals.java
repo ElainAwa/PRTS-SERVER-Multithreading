@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiFunction;
 import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -43,6 +44,7 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
     private final RangeSettlementObligations obligations;
     private final Map<Long, FrozenDeclarations> declaredByPlan = new HashMap<>();
     private Predicate<PipelineBatchLedger.BatchId> retained = batch -> false;
+    private BiFunction<Long, Long, List<TickPlan.CommitStep>> retainedOrders = (plan, life) -> null;
     private long seals;
     private long refused;
     private long conflicts;
@@ -134,7 +136,7 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
                 return refuse();
             }
             long lifecycle = plans.lifecycle();
-            List<TickPlan.CommitStep> order = plans.orderIn(batch.planSequence(), lifecycle);
+            List<TickPlan.CommitStep> order = orderIn(batch.planSequence(), lifecycle);
             if (order == null) {
                 return refuse();
             }
@@ -217,7 +219,7 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
             declaredByPlan.put(declared.planSequence(), declared);
             long plan = declared.planSequence();
             long lifecycle = plans.lifecycle();
-            List<TickPlan.CommitStep> order = plans.orderIn(plan, lifecycle);
+            List<TickPlan.CommitStep> order = orderIn(plan, lifecycle);
             if (order == null) {
                 return 0;
             }
@@ -337,6 +339,16 @@ public final class PipelineRangeSeals implements PipelineRunSeal.RangeSink {
      * old plan refusal exactly as it was. */
     void retained(Predicate<PipelineBatchLedger.BatchId> retained) {
         this.retained = retained == null ? batch -> false : retained;
+    }
+
+    /** Names the exact order a retained plan keeps after the live plan store has dropped it. */
+    void retainedOrders(BiFunction<Long, Long, List<TickPlan.CommitStep>> retainedOrders) {
+        this.retainedOrders = retainedOrders == null ? (plan, life) -> null : retainedOrders;
+    }
+
+    private List<TickPlan.CommitStep> orderIn(long plan, long lifecycle) {
+        List<TickPlan.CommitStep> live = plans == null ? null : plans.orderIn(plan, lifecycle);
+        return live != null ? live : retainedOrders.apply(plan, lifecycle);
     }
 
     /** Settles the obligations of the plans older than the given one: a settlement period that has

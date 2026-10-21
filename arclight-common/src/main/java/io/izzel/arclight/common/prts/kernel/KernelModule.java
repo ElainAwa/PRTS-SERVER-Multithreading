@@ -93,6 +93,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.Deque;
 import java.util.EnumMap;
 import java.util.HashMap;
@@ -224,6 +225,10 @@ public final class KernelModule {
     private final PipelineWriteClaims claims = new PipelineWriteClaims(versionSlots,
         guard.worldEpochs(), guard::onServerThread, LiveLevels::level,
         this::noteTypedSettlement);
+    /** A bounded exact order for a plan a retained claim still names; cleared with the claim floor. */
+    private final Map<Long, RetainedOrder> retainedOrders = new ConcurrentHashMap<>();
+    private record RetainedOrder(long lifecycle, List<TickPlan.CommitStep> order) {
+    }
     private final ShareMeterPoint jobMeter = new ShareMeterPoint();
     private final TickPlanStore plans = new TickPlanStore(KernelSettings.planHistoryCap());
     private final SafetyNet safety = new SafetyNet(KernelSettings::safetyDegrade,
@@ -467,6 +472,7 @@ public final class KernelModule {
         claims.ledger(pipelineBatches);
         // A seal of an older plan stays readable while a retained claim still names its batch.
         rangeSealFactory.retained(claims::retainsBatch);
+        rangeSealFactory.retainedOrders(this::retainedOrder);
         // The progress side of the two rows whose producer already exists: the intent channel depth
         // and the world epoch change count are the same counters the readout publishes, so a signal
         // reading and its control-plane value can never disagree.
@@ -918,6 +924,7 @@ public final class KernelModule {
                 // seat comes from the declaration itself, so a span whose jobs run no task body still
                 // covers the writes its own range names until the next freeze replaces the set.
                 claims.seatDeclared();
+                retainOrder(result.plan());
             }
             if (KernelSettings.pipelineJobs() && KernelSettings.tickPlan()) {
                 // A seal whose plan the settlement has moved past can no longer be named by it: the
@@ -926,6 +933,7 @@ public final class KernelModule {
                 // settlement that has not reached it yet.
                 long retainedFloor = claimsEnabled() ? claims.retainedPlanFloor() : Long.MAX_VALUE;
                 rangeSealFactory.settleBefore(result.plan().planSequence(), retainedFloor);
+                trimRetainedOrders(Math.min(result.plan().planSequence(), retainedFloor));
             }
             if (KernelSettings.pipelineJobs() && KernelSettings.tickPlan()) {
                 dispatchFrozen(result.plan());
@@ -1341,9 +1349,44 @@ public final class KernelModule {
         TickPlanStore.StepRef ref = plans.resolveIn(planSequence, lifecycle, worldId, domainId,
             nodeKey);
         if (ref == null) {
-            return null;
+            return retainedOrderAt(planSequence, lifecycle, worldId, domainId, nodeKey);
         }
         return new CommitLog.Resolved(ref.planSequence(), ref.position(), ref.intent());
+    }
+
+    /** The exact seat of one retained plan when the bounded plan history no longer carries it. */
+    private CommitLog.Resolved retainedOrderAt(long planSequence, long lifecycle, String worldId,
+                                               String domainId, String nodeKey) {
+        RetainedOrder held = retainedOrders.get(planSequence);
+        if (held == null || held.lifecycle() != lifecycle) {
+            return null;
+        }
+        for (TickPlan.CommitStep step : held.order()) {
+            if (step.worldId().equals(worldId) && step.domainId().equals(domainId)
+                && step.nodeKey().equals(nodeKey)) {
+                return new CommitLog.Resolved(planSequence, step.position(), step.intent());
+            }
+        }
+        return null;
+    }
+
+    /** The order of one plan a retained claim still names, or null when nothing retained it. */
+    List<TickPlan.CommitStep> retainedOrder(long planSequence, long lifecycle) {
+        RetainedOrder held = retainedOrders.get(planSequence);
+        return held == null || held.lifecycle() != lifecycle ? null : held.order();
+    }
+
+    private void retainOrder(TickPlan plan) {
+        if (!claimsEnabled()) {
+            return;
+        }
+        retainedOrders.put(plan.planSequence(),
+            new RetainedOrder(plans.lifecycle(), List.copyOf(plan.commitOrder())));
+        trimRetainedOrders(claims.retainedPlanFloor());
+    }
+
+    private void trimRetainedOrders(long floor) {
+        retainedOrders.keySet().removeIf(sequence -> sequence < floor);
     }
 
     /** The state the control plane publishes: the phase, and the rung the ladder stands on when it
@@ -3011,6 +3054,7 @@ public final class KernelModule {
         pipelineJobs.reset();
         pipelineBatches.reset();
         rangeSeals.reset();
+        retainedOrders.clear();
         rangeSealFactory.reset();
         rangeSealFactory.resetObligations();
         demandShadows.resetStatuses();

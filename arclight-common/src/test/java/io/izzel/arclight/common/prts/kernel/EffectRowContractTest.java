@@ -430,9 +430,19 @@ class EffectRowContractTest {
         }
 
         private CommitLog.OrderSource orderSource() {
-            return (worldId, domainId, nodeKey) -> sealNodeKey.isEmpty()
-                || !nodeKey.equals(sealNodeKey) ? null
-                : new CommitLog.Resolved(PLAN_SEQUENCE, sealPosition, false);
+            return new CommitLog.OrderSource() {
+                @Override
+                public CommitLog.Resolved resolve(String worldId, String domainId, String nodeKey) {
+                    return sealNodeKey.isEmpty() || !nodeKey.equals(sealNodeKey) ? null
+                        : new CommitLog.Resolved(PLAN_SEQUENCE, sealPosition, false);
+                }
+
+                @Override
+                public CommitLog.Resolved resolveAt(long planSequence, long lifecycle, String worldId,
+                                                    String domainId, String nodeKey) {
+                    return planSequence == PLAN_SEQUENCE ? resolve(worldId, domainId, nodeKey) : null;
+                }
+            };
         }
 
         private PipelineBatchLedger.TrackedTask token(long cell) {

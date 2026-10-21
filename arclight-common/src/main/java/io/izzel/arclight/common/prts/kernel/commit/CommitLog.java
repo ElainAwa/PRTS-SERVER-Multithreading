@@ -122,7 +122,13 @@ public final class CommitLog {
     }
 
     /** One versioned report: the plain report, the columns it declares and the effect it points at. */
-    public record TypedBatch(Batch batch, Identity identity, EffectStore.Effect effect) {
+    public record TypedBatch(Batch batch, Identity identity, EffectStore.Effect effect,
+                             long planSequence, long lifecycle) {
+
+        /** A batch that names no plan takes the legacy newest-first path. */
+        public TypedBatch(Batch batch, Identity identity, EffectStore.Effect effect) {
+            this(batch, identity, effect, 0L, 0L);
+        }
     }
 
     /** One step of the versioned projection: the plain step, the typed columns of the line, the
@@ -607,7 +613,10 @@ public final class CommitLog {
             return typedRefusal(RejectCode.VERSION_MISMATCH, -1);
         }
         Resolved resolved = source == null ? null
-            : source.resolve(batch.worldId(), batch.domainId(), batch.nodeKey());
+            : typed.planSequence() > 0L
+                ? source.resolveAt(typed.planSequence(), typed.lifecycle(), batch.worldId(),
+                    batch.domainId(), batch.nodeKey())
+                : source.resolve(batch.worldId(), batch.domainId(), batch.nodeKey());
         if (resolved == null) {
             return typedRefusal(RejectCode.COMMIT_ORDER_VIOLATION, -1);
         }
