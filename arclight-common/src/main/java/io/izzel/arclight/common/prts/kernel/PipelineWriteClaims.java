@@ -1043,16 +1043,17 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
             noWorld++;
             return null;
         }
-        OwnerToken owner = null;
-        if (owners != null) {
-            owner = owners.lookup(node.worldId(), WriteLevel.REGION, node.domainId()).orElse(null);
-            if (owner == null || owner.expiredAt(tick)
-                || owner.holderKind() != demand.holderKind()
-                || !owner.holderSiteId().equals(demand.holderSiteId())
-                || owner.expectedVersion() != version) {
-                emptyWriteSet++;
-                return null;
-            }
+        if (owners == null) {
+            emptyWriteSet++;
+            return null;
+        }
+        OwnerToken owner = owners.lookup(node.worldId(), WriteLevel.REGION, node.domainId()).orElse(null);
+        if (owner == null || owner.expiredAt(tick)
+            || owner.holderKind() != demand.holderKind()
+            || !owner.holderSiteId().equals(demand.holderSiteId())
+            || owner.expectedVersion() != version) {
+            emptyWriteSet++;
+            return null;
         }
         levelWorlds.put(level, node.worldId());
         int hold = Math.max(1, demand.holdTicks());

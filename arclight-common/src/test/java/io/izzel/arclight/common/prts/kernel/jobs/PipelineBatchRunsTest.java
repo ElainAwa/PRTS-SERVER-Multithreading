@@ -475,6 +475,7 @@ class PipelineBatchRunsTest {
             slots.refresh(true);
             grants.refresh(true);
             claims.table(slots);
+            claims.owners(owners);
             claims.ledger(ledger);
             claims.writeSpaces(KernelWriteRanges.reader());
             claims.refresh(true);

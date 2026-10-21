@@ -941,6 +941,16 @@ class PipelineWriteClaimsTest {
     }
 
     @Test
+    void anUnwiredOwnerRegistryNeverCreatesAClaim() {
+        Scratch scratch = new Scratch();
+        scratch.claims.owners(null);
+        scratch.declare(ROUNDS);
+
+        assertEquals(0, scratch.claims.active(), "an unwired owner registry cannot authorize a claim");
+        assertEquals(1L, scratch.claims.emptyWriteSetCount());
+    }
+
+    @Test
     void aDeclarationWithoutAnOwnerTokenIsNeverClaimed() {
         Scratch scratch = new Scratch();
         scratch.claims.owners(scratch.owners);
@@ -1149,6 +1159,7 @@ class PipelineWriteClaimsTest {
         PipelineWriteClaims sink = new PipelineWriteClaims(scratch.versions,
             scratch.guard.worldEpochs(), () -> true, world -> LEVEL, settled::add);
         sink.table(scratch.slots);
+        sink.owners(scratch.owners);
         sink.writeSpaces(node -> WriteSpace.of(CellKind.CHUNK, CELL));
         sink.ledger(scratch.batches);
         sink.refresh(true);
@@ -1189,6 +1200,7 @@ class PipelineWriteClaimsTest {
         PipelineWriteClaims sink = new PipelineWriteClaims(scratch.versions,
             scratch.guard.worldEpochs(), () -> true, world -> LEVEL, settled::add);
         sink.table(scratch.slots);
+        sink.owners(scratch.owners);
         sink.writeSpaces(node -> WriteSpace.of(CellKind.CHUNK, CELL));
         sink.ledger(scratch.batches);
         sink.refresh(true);
@@ -1229,6 +1241,7 @@ class PipelineWriteClaimsTest {
         PipelineWriteClaims sink = new PipelineWriteClaims(scratch.versions,
             scratch.guard.worldEpochs(), () -> true, world -> LEVEL, settled::add);
         sink.table(scratch.slots);
+        sink.owners(scratch.owners);
         sink.writeSpaces(node -> WriteSpace.of(CellKind.CHUNK, CELL));
         sink.ledger(scratch.batches);
         sink.refresh(true);
@@ -1301,6 +1314,7 @@ class PipelineWriteClaimsTest {
             slots.refresh(true);
             grants.refresh(true);
             claims.table(slots);
+            claims.owners(owners);
             claims.ledger(batches);
             claims.writeSpaces(node -> SPACE);
             claims.refresh(true);

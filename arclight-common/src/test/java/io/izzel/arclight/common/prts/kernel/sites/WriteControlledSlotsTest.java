@@ -145,6 +145,64 @@ class WriteControlledSlotsTest {
     }
 
     @Test
+    void aDeclarationOwnerTokenOfAnotherWorldIsRefusedWithoutLiveFallback() {
+        Scratch scratch = new Scratch();
+        long version = scratch.version();
+        scratch.slots.refresh(true);
+        OwnerToken live = new OwnerToken(WORLD, WriteLevel.REGION, DOMAIN, GENERATION, version, 0L,
+            TICK + 40L, HolderKind.REGISTERED, SITE);
+        scratch.owners.acquire(live);
+        OwnerToken wrong = new OwnerToken(OTHER_WORLD, WriteLevel.REGION, DOMAIN, GENERATION, version,
+            0L, TICK + 40L, HolderKind.REGISTERED, SITE);
+        Slot slot = scratch.syntheticSlot(version, TICK + 40L, NODE_KEY);
+        assertEquals(Refusal.NONE, scratch.slots.register(slot, wrong));
+
+        assertEquals(Verdict.REJECTED, scratch.slots.judge(LEVEL, DOMAIN, IN_A, TICK).verdict());
+        assertEquals("owner", scratch.slots.lastRefusal().reason(),
+            "a mismatched declaration token cannot fall back to the live token");
+    }
+
+    @Test
+    void aStaleDeclarationTokenIsRemovedWhenTheSameKeyIsRedeclaredWithoutOne() {
+        Scratch scratch = new Scratch();
+        long version = scratch.version();
+        scratch.slots.refresh(true);
+        OwnerToken live = new OwnerToken(WORLD, WriteLevel.REGION, DOMAIN, GENERATION, version, 0L,
+            TICK + 40L, HolderKind.REGISTERED, SITE);
+        scratch.owners.acquire(live);
+        OwnerToken stale = new OwnerToken(WORLD, WriteLevel.REGION, DOMAIN, GENERATION, version, 0L,
+            TICK + 40L, HolderKind.REGISTERED, OTHER_SITE);
+        Slot first = scratch.syntheticSlot(version, TICK + 40L, NODE_KEY);
+        assertEquals(Refusal.NONE, scratch.slots.register(first, stale));
+        Slot second = new Slot(first.key(), LEVEL, NODE_KEY, POSITION, version, GENERATION + 1L,
+            first.worldEpoch(), TICK + 40L, HolderKind.REGISTERED, SITE, Set.of(DOMAIN), SPACE);
+        assertEquals(Refusal.NONE, scratch.slots.register(second, true));
+
+        assertEquals(Verdict.CAPTURED, scratch.slots.judge(LEVEL, DOMAIN, IN_A, TICK).verdict(),
+            "the re-registration without a token uses the live token, not the stale one");
+    }
+
+    @Test
+    void aDeclarationTokenExpiryIsCheckedAtTheBoundary() {
+        Scratch scratch = new Scratch();
+        long version = scratch.version();
+        scratch.slots.refresh(true);
+        OwnerToken live = new OwnerToken(WORLD, WriteLevel.REGION, DOMAIN, GENERATION, version, 0L,
+            TICK + 40L, HolderKind.REGISTERED, SITE);
+        scratch.owners.acquire(live);
+        OwnerToken shortLived = new OwnerToken(WORLD, WriteLevel.REGION, DOMAIN, GENERATION, version,
+            0L, TICK + 1L, HolderKind.REGISTERED, SITE);
+        Slot slot = scratch.syntheticSlot(version, TICK + 40L, NODE_KEY);
+        assertEquals(Refusal.NONE, scratch.slots.register(slot, shortLived));
+
+        assertEquals(Verdict.CAPTURED, scratch.slots.judge(LEVEL, DOMAIN, IN_A, TICK).verdict(),
+            "the declaration token is still alive before its expiry");
+        assertEquals(Verdict.REJECTED, scratch.slots.judge(LEVEL, DOMAIN, IN_A, TICK + 1L).verdict(),
+            "the declaration token expires at the boundary");
+        assertEquals("expiry", scratch.slots.lastRefusal().reason());
+    }
+
+    @Test
     void noSlotAtAllIsTheDefaultPathAndNotARefusal() {
         Scratch scratch = new Scratch();
 

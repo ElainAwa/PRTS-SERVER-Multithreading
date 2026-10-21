@@ -406,6 +406,8 @@ public final class WriteControlledSlots {
             declarationHeld.add(key);
             if (declarationOwner != null) {
                 declarationOwners.put(key, declarationOwner);
+            } else {
+                declarationOwners.remove(key);
             }
         } else {
             declarationHeld.remove(key);
@@ -564,8 +566,18 @@ public final class WriteControlledSlots {
             return refusal(slot, "world", carried, tickIndex, covering);
         }
         OwnerToken token = declarationOwners.get(key);
-        if (token == null) {
-            token = owners.lookup(key.worldId(), key.level(), key.domainId()).orElse(null);
+        if (token != null && (!token.worldId().equals(key.worldId())
+            || token.level() != key.level() || !token.domainId().equals(key.domainId()))) {
+            return refusal(slot, "owner", carried, tickIndex, covering);
+        }
+        OwnerToken liveToken = owners.lookup(key.worldId(), key.level(), key.domainId()).orElse(null);
+        if (token != null) {
+            if (liveToken != null && (liveToken.holderKind() != token.holderKind()
+                || !liveToken.holderSiteId().equals(token.holderSiteId()))) {
+                return refusal(slot, "owner", carried, tickIndex, covering);
+            }
+        } else {
+            token = liveToken;
         }
         if (token == null || token.holderKind() != slot.holderKind()
             || !token.holderSiteId().equals(slot.holderSiteId())) {

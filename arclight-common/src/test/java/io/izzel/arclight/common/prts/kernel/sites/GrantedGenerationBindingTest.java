@@ -218,6 +218,7 @@ class GrantedGenerationBindingTest {
             rights.refresh(true);
             tables.refresh(true);
             claims.table(tables);
+            claims.owners(owners);
             claims.ledger(batches);
             claims.writeSpaces(node -> SPACE);
             claims.refresh(true);
