@@ -42,6 +42,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -58,6 +59,7 @@ class PipelineWriteClaimsTest {
 
     private static final String WORLD = "minecraft:overworld";
     private static final String OTHER_WORLD = "minecraft:the_nether";
+    private static final String SYNTHETIC_WORLD = "tanglr:minecraft_overworld";
     private static final String DOMAIN = WriteClaimTable.CHUNK_PIPELINE;
     private static final String MAILBOX = "sorter";
     private static final String NODE_KEY = DOMAIN + "/" + WORLD + "/" + MAILBOX;
@@ -77,6 +79,58 @@ class PipelineWriteClaimsTest {
     private static final WriteSpace SPACE =
         WriteSpace.of(CellKind.SECTION, SectionPos.asLong(0, 4, 0));
     private static final WritePosition WITNESS = WritePosition.at(8, 64, 8);
+
+    @Test
+    void aLiveLevelResolvesASyntheticWorldClaimAndCoversItsWrite() {
+        Object synthetic = new Object();
+        LiveLevels.installForTest(Map.of(SYNTHETIC_WORLD, synthetic));
+        try {
+            Scratch scratch = new Scratch(LiveLevels::level);
+            scratch.source.knownLevels.add(synthetic);
+            scratch.guard.noteLiveWorlds(List.of(WORLD, OTHER_WORLD, SYNTHETIC_WORLD));
+            scratch.declareWorld(SYNTHETIC_WORLD);
+
+            assertEquals(1, scratch.claims.active(), "the synthetic world produces a claim");
+            assertEquals(1, scratch.claims.seatDeclared(), "the claim is seated against its level");
+            assertEquals(Verdict.CAPTURED, scratch.slots.judge(synthetic, WritePath.BLOCK_WRITE.key(),
+                WITNESS, TICK).verdict(), "the synthetic level identity matches its seated slot");
+            assertTrue(scratch.slots.lastDecision().spaceDigest().length() > 0);
+        } finally {
+            LiveLevels.clear();
+        }
+    }
+
+    @Test
+    void aWorldIdentityMatchesAnAliasWithoutCrossWorldLeak() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        scratch.claims.seatDeclared();
+        scratch.source.knownLevels.add(OTHER_LEVEL);
+
+        assertEquals(Verdict.CAPTURED, scratch.slots.judge(OTHER_LEVEL, WritePath.BLOCK_WRITE.key(),
+            WITNESS, TICK).verdict(), "an alias resolves through its world identity");
+        scratch.source.world = OTHER_WORLD;
+        long captured = scratch.slots.capturedCount();
+        assertEquals(Verdict.DEFAULT_PATH, scratch.slots.judge(OTHER_LEVEL, WritePath.BLOCK_WRITE.key(),
+            WITNESS, TICK).verdict(), "a different world id does not match the slot");
+        assertEquals(captured, scratch.slots.capturedCount());
+    }
+
+    @Test
+    void duplicateLiveLevelIdentitiesAreAmbiguousAndNeverResolved() {
+        Object second = new Object();
+        try {
+            LiveLevels.installForTest(Map.of(SYNTHETIC_WORLD, second),
+                java.util.Set.of(SYNTHETIC_WORLD));
+            assertNull(LiveLevels.level(SYNTHETIC_WORLD), "a duplicate world id is never picked");
+            assertTrue(LiveLevels.ambiguous(SYNTHETIC_WORLD));
+            LiveLevels.installForTest(Map.of(SYNTHETIC_WORLD, second));
+            assertEquals(second, LiveLevels.level(SYNTHETIC_WORLD));
+        } finally {
+            LiveLevels.clear();
+        }
+        assertNull(LiveLevels.level(SYNTHETIC_WORLD));
+    }
 
     @Test
     void aDeclaredJobOfAClaimedDomainClaimsTheWritePathKeyOfItsOwnWriteSet() {
@@ -1005,13 +1059,18 @@ class PipelineWriteClaimsTest {
         private final FixtureSource source = new FixtureSource();
         private final WriteControlledSlots slots =
             new WriteControlledSlots(owners, versions, guard.worldEpochs(), source);
-        private final PipelineWriteClaims claims = new PipelineWriteClaims(versions,
-            guard.worldEpochs(), () -> judge, world -> levelPresent ? LEVEL : null);
+        private final PipelineWriteClaims claims;
         private final JobIntake intake = new JobIntake(() -> 16);
         private final PipelineBatchLedger batches = new PipelineBatchLedger();
         private final PipelineRoundJobs jobs = new PipelineRoundJobs();
 
         private Scratch() {
+            this(null);
+        }
+
+        private Scratch(Function<String, Object> levelOf) {
+            claims = new PipelineWriteClaims(versions, guard.worldEpochs(), () -> judge,
+                levelOf == null ? world -> levelPresent ? LEVEL : null : levelOf);
             intents.bindPayload(guard);
             guard.bindServerThread(Thread.currentThread(), SITE);
             guard.versionSlots(versions);
@@ -1040,6 +1099,20 @@ class PipelineWriteClaimsTest {
 
         private Verdict judge(String domainKey) {
             return slots.judge(LEVEL, domainKey, WITNESS, tick).verdict();
+        }
+
+        private JobGraph declareWorld(String worldId) {
+            source.world = worldId;
+            String nodeKey = DOMAIN + "/" + worldId + "/" + MAILBOX;
+            JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef(worldId, DOMAIN, 0);
+            JobDeclaration declaration = new JobDeclaration(nodeKey, 1L, worldId, DOMAIN, 0, List.of(),
+                0, MAILBOX, "world:" + worldId, List.of(ref), List.of(ref), ShareClass.OTHER,
+                JobDeclaration.SiteClass.PARALLEL, 0, (int) ROUNDS,
+                List.of(new JobDeclaration.OwnerDemand(worldId, WriteLevel.REGION, DOMAIN,
+                    HolderKind.REGISTERED, HOLDER, 40)),
+                new JobDeclaration.WriteRange(JobDeclaration.RangeGranularity.SECTION,
+                    new long[] {SectionPos.asLong(0, 4, 0)}));
+            return freeze(List.of(declaration));
         }
 
         private JobGraph declare(long tasks) {
@@ -1172,17 +1245,19 @@ class PipelineWriteClaimsTest {
         private static final class FixtureSource implements WriteControlledSlots.Source {
 
             private String world = WORLD;
+            private final java.util.Set<Object> knownLevels =
+                new java.util.HashSet<>(java.util.Set.of(LEVEL));
             private boolean planHolds = true;
             private Step step = null;
 
             @Override
             public String worldOf(Object levelRef) {
-                return levelRef == LEVEL ? world : "";
+                return knownLevels.contains(levelRef) ? world : "";
             }
 
             @Override
             public Step stepOf(String worldId, String domainId, String nodeKey) {
-                return planHolds && nodeKey.startsWith(NODE_KEY) ? step : null;
+                return planHolds && nodeKey.startsWith(DOMAIN + "/" + world + "/") ? step : null;
             }
         }
     }

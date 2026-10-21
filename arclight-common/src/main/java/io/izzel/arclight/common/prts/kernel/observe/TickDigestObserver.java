@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.observe;
 
+import io.izzel.arclight.common.prts.kernel.LiveLevels;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
 import io.izzel.arclight.common.prts.kernel.diff.DomainHash;
 import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
@@ -426,6 +427,7 @@ public final class TickDigestObserver implements PrtsPipelineRows.MailboxOwnerTa
      */
     private void refreshPlacement() {
         MinecraftServer server = source;
+        LiveLevels.refresh(server);
         if (server == null) {
             return;
         }

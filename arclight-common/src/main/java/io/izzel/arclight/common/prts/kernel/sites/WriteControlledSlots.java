@@ -490,8 +490,11 @@ public final class WriteControlledSlots {
 
     private List<Slot> candidates(Object levelRef, String domainKey) {
         List<Slot> found = new ArrayList<>();
+        String world = levelRef == null ? "" : source.worldOf(levelRef);
         for (Slot slot : slots.values()) {
-            if (slot.levelRef() == levelRef && slot.writeSet().contains(domainKey)
+            boolean sameLevel = slot.levelRef() == levelRef;
+            boolean sameWorld = !world.isEmpty() && slot.key().worldId().equals(world);
+            if ((sameLevel || sameWorld) && slot.writeSet().contains(domainKey)
                 && slot.space().wellFormed()) {
                 found.add(slot);
             }
