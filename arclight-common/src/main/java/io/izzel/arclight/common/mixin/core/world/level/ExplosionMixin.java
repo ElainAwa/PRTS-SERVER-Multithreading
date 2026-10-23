@@ -4,6 +4,7 @@ import com.mojang.datafixers.util.Pair;
 import io.izzel.arclight.common.bridge.core.entity.EntityBridge;
 import io.izzel.arclight.common.bridge.core.world.damagesource.DamageSourceBridge;
 import io.izzel.arclight.common.bridge.core.world.level.ExplosionBridge;
+import io.izzel.arclight.common.bridge.inject.InjectLevelBridge;
 import io.izzel.arclight.mixin.Decorate;
 import io.izzel.arclight.mixin.DecorationOps;
 import io.izzel.arclight.mixin.Local;
@@ -181,7 +182,10 @@ public abstract class ExplosionMixin implements ExplosionBridge {
     private boolean arclight$callBlockExplodeEvent() {
         boolean wasCancelled;
 
-        org.bukkit.World world = this.level.bridge$getWorld();
+        org.bukkit.World world = ((InjectLevelBridge) this.level).bridge$getWorldOrNull();
+        if (world == null) {
+            return false;
+        }
         Location location = new Location(world, this.x, this.y, this.z);
         List<org.bukkit.block.Block> blockList = new ObjectArrayList<>();
         for (int i = this.toBlow.size() - 1; i >= 0; i--) {

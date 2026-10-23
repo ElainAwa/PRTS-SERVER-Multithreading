@@ -1,7 +1,7 @@
 package io.izzel.arclight.common.mixin.core.world.level.block;
 
 import io.izzel.arclight.common.bridge.core.entity.EntityBridge;
-import io.izzel.arclight.common.bridge.core.world.level.WorldBridge;
+import io.izzel.arclight.common.bridge.inject.InjectLevelBridge;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySelector;
@@ -56,19 +56,21 @@ public abstract class PressurePlateBlockMixin extends BasePressurePlateBlockMixi
         // CraftBukkit start - Call interact event when turning on a pressure plate
         for (Entity entity : getEntities(world, TOUCH_AABB.move(blockposition), oclass)) {
             if (this.getSignalForState(world.getBlockState(blockposition)) == 0) {
-                org.bukkit.World bworld = ((WorldBridge) world).bridge$getWorld();
-                org.bukkit.plugin.PluginManager manager = Bukkit.getPluginManager();
-                org.bukkit.event.Cancellable cancellable;
+                org.bukkit.World bworld = ((InjectLevelBridge) world).bridge$getWorldOrNull();
+                if (bworld != null) {
+                    org.bukkit.plugin.PluginManager manager = Bukkit.getPluginManager();
+                    org.bukkit.event.Cancellable cancellable;
 
-                if (entity instanceof Player) {
-                    cancellable = CraftEventFactory.callPlayerInteractEvent((Player) entity, Action.PHYSICAL, blockposition, null, null, null);
-                } else {
-                    cancellable = new EntityInteractEvent(((EntityBridge) entity).bridge$getBukkitEntity(), bworld.getBlockAt(blockposition.getX(), blockposition.getY(), blockposition.getZ()));
-                    manager.callEvent((EntityInteractEvent) cancellable);
-                }
-                // We only want to block turning the plate on if all events are cancelled
-                if (cancellable.isCancelled()) {
-                    continue;
+                    if (entity instanceof Player) {
+                        cancellable = CraftEventFactory.callPlayerInteractEvent((Player) entity, Action.PHYSICAL, blockposition, null, null, null);
+                    } else {
+                        cancellable = new EntityInteractEvent(((EntityBridge) entity).bridge$getBukkitEntity(), bworld.getBlockAt(blockposition.getX(), blockposition.getY(), blockposition.getZ()));
+                        manager.callEvent((EntityInteractEvent) cancellable);
+                    }
+                    // We only want to block turning the plate on if all events are cancelled
+                    if (cancellable.isCancelled()) {
+                        continue;
+                    }
                 }
             }
 
