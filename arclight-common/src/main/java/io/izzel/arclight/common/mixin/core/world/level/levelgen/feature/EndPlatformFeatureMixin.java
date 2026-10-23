@@ -1,5 +1,6 @@
 package io.izzel.arclight.common.mixin.core.world.level.levelgen.feature;
 
+import io.izzel.arclight.common.bridge.inject.InjectLevelBridge;
 import io.izzel.arclight.common.mod.util.ArclightCaptures;
 import io.izzel.arclight.mixin.Decorate;
 import io.izzel.arclight.mixin.DecorationOps;
@@ -49,7 +50,11 @@ public class EndPlatformFeatureMixin {
                                               @Local(allocate = "blockList") BlockStateListPopulator blockList,
                                               @Local(allocate = "entity") Entity entity) {
         if (entity != null) {
-            var bworld = serverLevelAccessor.getLevel().bridge$getWorld();
+            var bworld = ((InjectLevelBridge) serverLevelAccessor.getLevel()).bridge$getWorldOrNull();
+            if (bworld == null) {
+                blockList.updateList();
+                return;
+            }
             PortalCreateEvent portalEvent = new PortalCreateEvent((List<org.bukkit.block.BlockState>) (List) blockList.getList(), bworld, entity.bridge$getBukkitEntity(), org.bukkit.event.world.PortalCreateEvent.CreateReason.END_PLATFORM);
 
             Bukkit.getPluginManager().callEvent(portalEvent);
