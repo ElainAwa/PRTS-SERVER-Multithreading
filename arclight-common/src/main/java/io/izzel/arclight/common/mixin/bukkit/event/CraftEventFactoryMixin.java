@@ -5,6 +5,7 @@ import io.izzel.arclight.common.bridge.core.world.entity.LivingEntityBridge;
 import io.izzel.arclight.common.bridge.core.server.level.ServerPlayerBridge;
 import io.izzel.arclight.common.bridge.core.world.damagesource.DamageSourceBridge;
 import io.izzel.arclight.common.bridge.core.world.level.WorldBridge;
+import io.izzel.arclight.common.bridge.inject.InjectLevelBridge;
 import io.izzel.arclight.common.mod.server.event.ArclightEventFactory;
 import io.izzel.arclight.common.mod.util.ArclightCaptures;
 import io.izzel.arclight.common.mod.util.DistValidate;
@@ -156,7 +157,12 @@ public abstract class CraftEventFactoryMixin {
             world.setBlock(pos, newData, flag);
             return true;
         }
-        Block block = world.bridge$getWorld().getBlockAt(pos.getX(), pos.getY(), pos.getZ());
+        org.bukkit.World bukkitWorld = ((InjectLevelBridge) world).bridge$getWorldOrNull();
+        if (bukkitWorld == null) {
+            world.setBlock(pos, newData, flag);
+            return true;
+        }
+        Block block = bukkitWorld.getBlockAt(pos.getX(), pos.getY(), pos.getZ());
         CraftBlockState state = (CraftBlockState) block.getState();
         state.setData(newData);
 
