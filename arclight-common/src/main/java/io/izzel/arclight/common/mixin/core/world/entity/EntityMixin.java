@@ -8,6 +8,7 @@ import io.izzel.arclight.common.bridge.core.server.level.ServerPlayerBridge;
 import io.izzel.arclight.common.bridge.core.network.syncher.SynchedEntityDataBridge;
 import io.izzel.arclight.common.bridge.core.world.damagesource.DamageSourceBridge;
 import io.izzel.arclight.common.bridge.core.world.level.WorldBridge;
+import io.izzel.arclight.common.bridge.inject.InjectLevelBridge;
 import io.izzel.arclight.common.bridge.core.world.level.portal.DimensionTransitionBridge;
 import io.izzel.arclight.common.mod.server.BukkitRegistry;
 import io.izzel.arclight.common.mod.server.entity.ArclightSpawnReason;
@@ -569,7 +570,12 @@ public abstract class EntityMixin implements InternalEntityBridge, EntityBridge,
         slice = @Slice(from = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/block/Block;updateEntityAfterFallOn(Lnet/minecraft/world/level/BlockGetter;Lnet/minecraft/world/entity/Entity;)V")))
     private void arclight$move$blockCollide(MoverType typeIn, Vec3 pos, CallbackInfo ci) {
         if (horizontalCollision && this.bridge$getBukkitEntity() instanceof Vehicle vehicle) {
-            org.bukkit.block.Block block = this.level().bridge$getWorld().getBlockAt(Mth.floor(this.getX()), Mth.floor(this.getY()), Mth.floor(this.getZ()));
+            var bworld = ((InjectLevelBridge) this.level()).bridge$getWorldOrNull();
+            if (bworld == null) {
+                return;
+            }
+            org.bukkit.block.Block block = bworld.getBlockAt(
+                Mth.floor(this.getX()), Mth.floor(this.getY()), Mth.floor(this.getZ()));
             Vec3 vec3d = this.collide(pos);
             if (pos.x > vec3d.x) {
                 block = block.getRelative(BlockFace.EAST);
@@ -933,7 +939,17 @@ public abstract class EntityMixin implements InternalEntityBridge, EntityBridge,
     @Decorate(method = "changeDimension", inject = true, at = @At("HEAD"))
     private void arclight$changeDim(DimensionTransition dimensionTransition) throws Throwable {
         if (this.level() instanceof ServerLevel && !this.isRemoved()) {
-            Location to = new Location(dimensionTransition.newLevel().bridge$getWorld(), dimensionTransition.pos().x, dimensionTransition.pos().y, dimensionTransition.pos().z, dimensionTransition.yRot(), dimensionTransition.xRot());
+            var toWorld = ((InjectLevelBridge) dimensionTransition.newLevel()).bridge$getWorldOrNull();
+            if (toWorld == null) {
+                return;
+            }
+            Location to = new Location(
+                toWorld,
+                dimensionTransition.pos().x,
+                dimensionTransition.pos().y,
+                dimensionTransition.pos().z,
+                dimensionTransition.yRot(),
+                dimensionTransition.xRot());
             EntityTeleportEvent teleEvent = CraftEventFactory.callEntityTeleportEvent((Entity) (Object) this, to);
             if (teleEvent.isCancelled()) {
                 DecorationOps.cancel().invoke((Entity) null);

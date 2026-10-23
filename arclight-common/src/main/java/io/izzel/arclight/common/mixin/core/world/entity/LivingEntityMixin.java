@@ -5,6 +5,7 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.mojang.datafixers.util.Either;
 import io.izzel.arclight.common.bridge.core.world.entity.LivingEntityBridge;
+import io.izzel.arclight.common.bridge.inject.InjectLevelBridge;
 import io.izzel.arclight.common.bridge.core.server.level.ServerPlayerBridge;
 import io.izzel.arclight.common.bridge.core.server.network.ServerGamePacketListenerImplBridge;
 import io.izzel.arclight.common.bridge.core.world.level.LevelAccessorBridge;
@@ -710,21 +711,26 @@ public abstract class LivingEntityMixin extends EntityMixin implements LivingEnt
                 return;
             }
         } else {
-            EntityTeleportEvent event = new EntityTeleportEvent(getBukkitEntity(), new Location(this.level().bridge$getWorld(), this.getX(), this.getY(), this.getZ()),
-                new Location(this.level().bridge$getWorld(), x, y, z));
-            Bukkit.getPluginManager().callEvent(event);
-            if (!event.isCancelled()) {
-                x = event.getTo().getX();
-                y = event.getTo().getY();
-                z = event.getTo().getZ();
-            } else {
-                x = this.getX();
-                y = this.getY();
-                z = this.getZ();
-            }
-            if (event.isCancelled()) {
-                DecorationOps.cancel().invoke(false);
-                return;
+            var bworld = ((InjectLevelBridge) this.level()).bridge$getWorldOrNull();
+            if (bworld != null) {
+                EntityTeleportEvent event = new EntityTeleportEvent(
+                    getBukkitEntity(),
+                    new Location(bworld, this.getX(), this.getY(), this.getZ()),
+                    new Location(bworld, x, y, z));
+                Bukkit.getPluginManager().callEvent(event);
+                if (!event.isCancelled()) {
+                    x = event.getTo().getX();
+                    y = event.getTo().getY();
+                    z = event.getTo().getZ();
+                } else {
+                    x = this.getX();
+                    y = this.getY();
+                    z = this.getZ();
+                }
+                if (event.isCancelled()) {
+                    DecorationOps.cancel().invoke(false);
+                    return;
+                }
             }
             DecorationOps.callsite().invoke(entity, x, y, z);
         }
