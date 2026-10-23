@@ -1,6 +1,7 @@
 package io.izzel.arclight.common.mixin.core.world.level.portal;
 
 import io.izzel.arclight.common.bridge.core.world.level.portal.PortalForcerBridge;
+import io.izzel.arclight.common.bridge.inject.InjectLevelBridge;
 import net.minecraft.BlockUtil;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -9,7 +10,6 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.portal.PortalForcer;
 import org.bukkit.Bukkit;
-import org.bukkit.craftbukkit.v.CraftWorld;
 import org.bukkit.craftbukkit.v.util.BlockStateListPopulator;
 import org.bukkit.event.world.PortalCreateEvent;
 import org.spongepowered.asm.mixin.Final;
@@ -70,7 +70,13 @@ public abstract class PortalForcerMixin implements PortalForcerBridge {
     @SuppressWarnings({"unchecked", "rawtypes"})
     @Inject(method = "createPortal", cancellable = true, at = @At("RETURN"))
     private void arclight$portalCreate(BlockPos pos, Direction.Axis axis, CallbackInfoReturnable<Optional<BlockUtil.FoundRectangle>> cir) {
-        CraftWorld craftWorld = this.level.bridge$getWorld();
+        org.bukkit.World craftWorld = ((InjectLevelBridge) this.level).bridge$getWorldOrNull();
+        if (craftWorld == null) {
+            if (this.arclight$populator != null) {
+                this.arclight$populator.updateList();
+            }
+            return;
+        }
         List<org.bukkit.block.BlockState> blockStates;
         if (this.arclight$populator == null) {
             blockStates = new ArrayList<>();
