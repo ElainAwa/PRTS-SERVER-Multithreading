@@ -4,6 +4,7 @@ import io.izzel.arclight.common.bridge.core.entity.EntityBridge;
 import io.izzel.arclight.common.bridge.core.world.entity.EntityTypeBridge;
 import io.izzel.arclight.common.bridge.core.world.level.portal.PortalForcerBridge;
 import io.izzel.arclight.common.bridge.core.world.level.portal.DimensionTransitionBridge;
+import io.izzel.arclight.common.bridge.inject.InjectLevelBridge;
 import io.izzel.arclight.mixin.Decorate;
 import io.izzel.arclight.mixin.DecorationOps;
 import net.minecraft.BlockUtil;
@@ -43,14 +44,28 @@ public class NetherPortalBlockMixin {
 
     @Inject(method = "entityInside", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/Entity;setAsInsidePortal(Lnet/minecraft/world/level/block/Portal;Lnet/minecraft/core/BlockPos;)V"))
     public void arclight$portalEnter(BlockState state, Level worldIn, BlockPos pos, Entity entityIn, CallbackInfo ci) {
+        var bworld = ((InjectLevelBridge) worldIn).bridge$getWorldOrNull();
+        if (bworld == null) {
+            return;
+        }
         EntityPortalEnterEvent event = new EntityPortalEnterEvent(entityIn.bridge$getBukkitEntity(),
-            new Location(worldIn.bridge$getWorld(), pos.getX(), pos.getY(), pos.getZ()));
+            new Location(bworld, pos.getX(), pos.getY(), pos.getZ()));
         Bukkit.getPluginManager().callEvent(event);
     }
 
     @Decorate(method = "getPortalDestination", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/block/NetherPortalBlock;getExitPortal(Lnet/minecraft/server/level/ServerLevel;Lnet/minecraft/world/entity/Entity;Lnet/minecraft/core/BlockPos;Lnet/minecraft/core/BlockPos;ZLnet/minecraft/world/level/border/WorldBorder;)Lnet/minecraft/world/level/portal/DimensionTransition;"))
     private DimensionTransition arclight$createPortalEvent(NetherPortalBlock instance, ServerLevel serverLevel, Entity entity, BlockPos blockPos, BlockPos blockPos2, boolean bl, WorldBorder worldBorder) throws Throwable {
-        var event = ((EntityBridge) entity).bridge$callPortalEvent(entity, CraftLocation.toBukkit(blockPos2, serverLevel.bridge$getWorld()), PlayerTeleportEvent.TeleportCause.NETHER_PORTAL, bl ? 16 : 128, 16);
+        var toWorld = ((InjectLevelBridge) serverLevel).bridge$getWorldOrNull();
+        if (toWorld == null) {
+            return (DimensionTransition) DecorationOps.callsite()
+                .invoke(instance, serverLevel, entity, blockPos, blockPos2, bl, worldBorder);
+        }
+        var event = ((EntityBridge) entity).bridge$callPortalEvent(
+            entity,
+            CraftLocation.toBukkit(blockPos2, toWorld),
+            PlayerTeleportEvent.TeleportCause.NETHER_PORTAL,
+            bl ? 16 : 128,
+            16);
         if (event == null) {
             return null;
         }
