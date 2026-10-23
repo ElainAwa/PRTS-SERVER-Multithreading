@@ -57,6 +57,7 @@ public abstract class PressurePlateBlockMixin extends BasePressurePlateBlockMixi
         for (Entity entity : getEntities(world, TOUCH_AABB.move(blockposition), oclass)) {
             if (this.getSignalForState(world.getBlockState(blockposition)) == 0) {
                 org.bukkit.World bworld = ((InjectLevelBridge) world).bridge$getWorldOrNull();
+                // No Bukkit world can host the interact event, so the step is not treated as cancelled.
                 if (bworld != null) {
                     org.bukkit.plugin.PluginManager manager = Bukkit.getPluginManager();
                     org.bukkit.event.Cancellable cancellable;

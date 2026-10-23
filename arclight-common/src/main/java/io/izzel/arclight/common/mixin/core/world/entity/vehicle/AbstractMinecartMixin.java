@@ -79,6 +79,7 @@ public abstract class AbstractMinecartMixin extends VehicleEntityMixin implement
     @Inject(method = "tick", at = @At(value = "INVOKE", shift = At.Shift.AFTER, target = "Lnet/minecraft/world/entity/vehicle/AbstractMinecart;setRot(FF)V"))
     private void arclight$vehicleUpdateEvent(CallbackInfo ci) {
         org.bukkit.World bworld = ((InjectLevelBridge) this.level()).bridge$getWorldOrNull();
+        // No Bukkit world can host the vehicle events, so the tick still runs.
         if (bworld == null) {
             return;
         }

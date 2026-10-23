@@ -51,6 +51,7 @@ public class EndPlatformFeatureMixin {
                                               @Local(allocate = "entity") Entity entity) {
         if (entity != null) {
             var bworld = ((InjectLevelBridge) serverLevelAccessor.getLevel()).bridge$getWorldOrNull();
+            // No Bukkit world can host the portal event, so the captured blocks still apply.
             if (bworld == null) {
                 blockList.updateList();
                 return;

@@ -53,6 +53,7 @@ public abstract class NaturalSpawnerMixin {
             if (CraftSpawnCategory.isValidForLimits(spawnCategory)) {
                 spawnThisTick = ((WorldBridge) world).bridge$ticksPerSpawnCategory().getLong(spawnCategory) != 0 && worldInfo.getGameTime() % ((WorldBridge) world).bridge$ticksPerSpawnCategory().getLong(spawnCategory) == 0;
                 var bukkitWorld = ((InjectLevelBridge) world).bridge$getWorldOrNull();
+                // No Bukkit world can supply a spawn cap, so the vanilla per-chunk cap already assigned stays.
                 if (bukkitWorld != null) {
                     limit = bukkitWorld.getSpawnLimit(spawnCategory);
                 }

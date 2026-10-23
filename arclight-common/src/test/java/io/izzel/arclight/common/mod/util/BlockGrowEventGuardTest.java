@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+// Source-text guard: reads the mixin source and does not run the mixin.
 class BlockGrowEventGuardTest {
 
     @Test
@@ -22,7 +23,7 @@ class BlockGrowEventGuardTest {
     }
 
     @Test
-    void missingWorldPlacesTheBlockAndSkipsTheEvent() throws Exception {
+    void missingWorldPlacesTheBlockBeforeTheEvent() throws Exception {
         String body = methodBody();
         int guard = body.indexOf("bukkitWorld == null");
         int place = body.indexOf("world.setBlock(pos, newData, flag);", guard);
@@ -30,31 +31,6 @@ class BlockGrowEventGuardTest {
         int event = body.indexOf("new BlockGrowEvent");
         assertTrue(guard >= 0 && place > guard && done > place && event > done,
             "a missing world places the block and returns the existing success value");
-        boolean[] placed = {false};
-        boolean[] fired = {false};
-        boolean result = grow(null, placed, fired);
-        assertTrue(result);
-        assertTrue(placed[0]);
-        assertFalse(fired[0]);
-    }
-
-    @Test
-    void presentWorldFiresTheEventAndDoesNotShortCircuit() {
-        boolean[] placed = {false};
-        boolean[] fired = {false};
-        boolean result = grow(new Object(), placed, fired);
-        assertFalse(result);
-        assertFalse(placed[0]);
-        assertTrue(fired[0]);
-    }
-
-    private static boolean grow(Object bukkitWorld, boolean[] placed, boolean[] fired) {
-        if (bukkitWorld == null) {
-            placed[0] = true;
-            return true;
-        }
-        fired[0] = true;
-        return false;
     }
 
     private static String methodBody() throws Exception {

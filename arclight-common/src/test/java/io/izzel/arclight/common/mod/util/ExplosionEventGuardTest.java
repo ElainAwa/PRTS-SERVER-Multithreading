@@ -5,13 +5,11 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+// Source-text guard: reads the mixin source and does not run the mixin.
 class ExplosionEventGuardTest {
 
     @Test
@@ -24,7 +22,7 @@ class ExplosionEventGuardTest {
     }
 
     @Test
-    void missingWorldLeavesTheBlastListAndReportsNotCancelled() throws Exception {
+    void missingWorldReturnsBeforeTheBlastListIsReplaced() throws Exception {
         String body = methodBody();
         int guard = body.indexOf("world == null");
         int uncancelled = body.indexOf("return false;");
@@ -32,18 +30,6 @@ class ExplosionEventGuardTest {
         int event = body.indexOf("callEntityExplodeEvent");
         assertTrue(guard >= 0 && uncancelled > guard && clear > uncancelled && event > uncancelled,
             "a missing world returns before the blast list is replaced");
-        List<String> toBlow = new ArrayList<>(List.of("origin"));
-        boolean cancelled = explode(null, toBlow);
-        assertFalse(cancelled);
-        assertEquals(List.of("origin"), toBlow);
-    }
-
-    private static boolean explode(Object world, List<String> toBlow) {
-        if (world == null) {
-            return false;
-        }
-        toBlow.clear();
-        return true;
     }
 
     private static String methodBody() throws Exception {

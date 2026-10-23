@@ -571,6 +571,7 @@ public abstract class EntityMixin implements InternalEntityBridge, EntityBridge,
     private void arclight$move$blockCollide(MoverType typeIn, Vec3 pos, CallbackInfo ci) {
         if (horizontalCollision && this.bridge$getBukkitEntity() instanceof Vehicle vehicle) {
             var bworld = ((InjectLevelBridge) this.level()).bridge$getWorldOrNull();
+            // No Bukkit world can host the collision event, so movement still runs.
             if (bworld == null) {
                 return;
             }
@@ -940,6 +941,7 @@ public abstract class EntityMixin implements InternalEntityBridge, EntityBridge,
     private void arclight$changeDim(DimensionTransition dimensionTransition) throws Throwable {
         if (this.level() instanceof ServerLevel && !this.isRemoved()) {
             var toWorld = ((InjectLevelBridge) dimensionTransition.newLevel()).bridge$getWorldOrNull();
+            // No Bukkit world can host the teleport event, so the original transition stays.
             if (toWorld == null) {
                 return;
             }

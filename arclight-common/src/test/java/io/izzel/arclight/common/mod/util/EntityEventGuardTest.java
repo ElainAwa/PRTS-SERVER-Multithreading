@@ -6,9 +6,9 @@ import org.junit.jupiter.api.Test;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+// Source-text guard: reads the mixin source and does not run the mixin.
 class EntityEventGuardTest {
 
     @Test
@@ -23,34 +23,6 @@ class EntityEventGuardTest {
         assertTrue(text.contains("WorldUUIDLeast"));
         int uuid = text.indexOf("WorldUUIDLeast");
         assertTrue(text.indexOf("bridge$getWorld()", uuid) > uuid, "world identity on save still uses the strict accessor");
-    }
-
-    @Test
-    void missingWorldSkipsCollisionAndDimensionEvents() {
-        boolean[] collisionFired = {false};
-        boolean[] dimensionFired = {false};
-        assertTrue(collide(null, collisionFired));
-        assertFalse(collisionFired[0]);
-        String kept = "origin";
-        String result = change(null, kept, dimensionFired);
-        assertFalse(dimensionFired[0]);
-        assertTrue(result.equals(kept));
-    }
-
-    private static boolean collide(Object bworld, boolean[] fired) {
-        if (bworld == null) {
-            return true;
-        }
-        fired[0] = true;
-        return true;
-    }
-
-    private static String change(Object toWorld, String transition, boolean[] fired) {
-        if (toWorld == null) {
-            return transition;
-        }
-        fired[0] = true;
-        return "rewritten";
     }
 
     private static String between(String text, String startToken, String endToken) {

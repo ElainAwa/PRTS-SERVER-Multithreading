@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+// Source-text guard: reads the mixin source and does not run the mixin.
 class NetherPortalEventGuardTest {
 
     @Test
@@ -22,29 +23,13 @@ class NetherPortalEventGuardTest {
     }
 
     @Test
-    void missingWorldSkipsBothEventsAndKeepsVanillaTravel() throws Exception {
+    void missingDestinationCallsVanillaBeforeThePortalEvent() throws Exception {
         String exit = source().substring(source().indexOf("DimensionTransition arclight$createPortalEvent"));
         int guard = exit.indexOf("toWorld == null");
         int vanilla = exit.indexOf("DecorationOps.callsite()");
         int event = exit.indexOf("bridge$callPortalEvent");
         assertTrue(guard >= 0 && vanilla > guard && event > vanilla,
             "a missing destination world calls the vanilla exit before any portal event");
-        boolean[] entered = {false};
-        boolean[] exited = {false};
-        boolean[] vanillaRan = {false};
-        travel(null, entered, exited, vanillaRan);
-        assertFalse(entered[0]);
-        assertFalse(exited[0]);
-        assertTrue(vanillaRan[0]);
-    }
-
-    private static void travel(Object world, boolean[] entered, boolean[] exited, boolean[] vanillaRan) {
-        if (world == null) {
-            vanillaRan[0] = true;
-            return;
-        }
-        entered[0] = true;
-        exited[0] = true;
     }
 
     private static String between(String text, String startToken, String endToken) {

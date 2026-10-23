@@ -45,6 +45,7 @@ public class NetherPortalBlockMixin {
     @Inject(method = "entityInside", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/Entity;setAsInsidePortal(Lnet/minecraft/world/level/block/Portal;Lnet/minecraft/core/BlockPos;)V"))
     public void arclight$portalEnter(BlockState state, Level worldIn, BlockPos pos, Entity entityIn, CallbackInfo ci) {
         var bworld = ((InjectLevelBridge) worldIn).bridge$getWorldOrNull();
+        // No Bukkit world can host the enter event, so the vanilla portal step still runs.
         if (bworld == null) {
             return;
         }
@@ -56,6 +57,7 @@ public class NetherPortalBlockMixin {
     @Decorate(method = "getPortalDestination", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/block/NetherPortalBlock;getExitPortal(Lnet/minecraft/server/level/ServerLevel;Lnet/minecraft/world/entity/Entity;Lnet/minecraft/core/BlockPos;Lnet/minecraft/core/BlockPos;ZLnet/minecraft/world/level/border/WorldBorder;)Lnet/minecraft/world/level/portal/DimensionTransition;"))
     private DimensionTransition arclight$createPortalEvent(NetherPortalBlock instance, ServerLevel serverLevel, Entity entity, BlockPos blockPos, BlockPos blockPos2, boolean bl, WorldBorder worldBorder) throws Throwable {
         var toWorld = ((InjectLevelBridge) serverLevel).bridge$getWorldOrNull();
+        // No Bukkit world can host the teleport event, so the vanilla exit still runs.
         if (toWorld == null) {
             return (DimensionTransition) DecorationOps.callsite()
                 .invoke(instance, serverLevel, entity, blockPos, blockPos2, bl, worldBorder);
