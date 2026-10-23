@@ -207,6 +207,10 @@ public abstract class CraftEventFactoryMixin {
         if (!(world instanceof Level) || !DistValidate.isValid(world)) {
             return new BlockFadeEvent(CraftBlock.at(world, pos), null);
         }
+        // A level without a Bukkit world keeps the event constructed but must not dispatch it.
+        if (((InjectLevelBridge) world).bridge$getWorldOrNull() == null) {
+            return new BlockFadeEvent(CraftBlock.at(world, pos), null);
+        }
         CraftBlockState state = CraftBlockStates.getBlockState(world, pos);
         state.setData(newBlock);
 
@@ -244,6 +248,10 @@ public abstract class CraftEventFactoryMixin {
      */
     @Overwrite
     public static boolean callEntityChangeBlockEvent(Entity entity, BlockPos position, net.minecraft.world.level.block.state.BlockState newBlock, boolean cancelled) {
+        // Nothing can observe the event without a Bukkit world, so its cancellation flag is the answer.
+        if (((InjectLevelBridge) entity.level()).bridge$getWorldOrNull() == null) {
+            return !cancelled;
+        }
         Block block = CraftBlock.at(entity.level(), position);
         EntityChangeBlockEvent event = new EntityChangeBlockEvent(entity.bridge$getBukkitEntity(), block, CraftBlockData.fromData(newBlock));
         event.setCancelled(cancelled);
@@ -261,8 +269,8 @@ public abstract class CraftEventFactoryMixin {
     @Overwrite
     public static BlockRedstoneEvent callRedstoneChange(Level world, BlockPos pos, int oldCurrent, int newCurrent) {
         BlockRedstoneEvent event = new BlockRedstoneEvent(CraftBlock.at(world, pos), oldCurrent, newCurrent);
-        // Suppress during worldgen
-        if (DistValidate.isValid(world)) {
+        // Suppress during worldgen and on levels without a Bukkit world.
+        if (DistValidate.isValid(world) && ((InjectLevelBridge) world).bridge$getWorldOrNull() != null) {
             Bukkit.getPluginManager().callEvent(event);
         }
         return event;
@@ -275,8 +283,8 @@ public abstract class CraftEventFactoryMixin {
     @Overwrite
     public static NotePlayEvent callNotePlayEvent(Level world, BlockPos pos, NoteBlockInstrument instrument, int note) {
         NotePlayEvent event = new NotePlayEvent(CraftBlock.at(world, pos), org.bukkit.Instrument.getByType((byte) instrument.ordinal()), new org.bukkit.Note(note));
-        // Suppress during worldgen
-        if (DistValidate.isValid(world)) {
+        // Suppress during worldgen and on levels without a Bukkit world.
+        if (DistValidate.isValid(world) && ((InjectLevelBridge) world).bridge$getWorldOrNull() != null) {
             Bukkit.getPluginManager().callEvent(event);
         }
         return event;
