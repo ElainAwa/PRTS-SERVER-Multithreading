@@ -2,6 +2,7 @@ package io.izzel.arclight.common.mixin.core.world.level;
 
 import io.izzel.arclight.common.bridge.core.world.level.IWorldWriterBridge;
 import io.izzel.arclight.common.bridge.core.world.level.WorldBridge;
+import io.izzel.arclight.common.bridge.inject.InjectLevelBridge;
 import io.izzel.arclight.common.bridge.core.world.spawner.WorldEntitySpawnerBridge;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
@@ -51,7 +52,10 @@ public abstract class NaturalSpawnerMixin {
             SpawnCategory spawnCategory = CraftSpawnCategory.toBukkit(classification);
             if (CraftSpawnCategory.isValidForLimits(spawnCategory)) {
                 spawnThisTick = ((WorldBridge) world).bridge$ticksPerSpawnCategory().getLong(spawnCategory) != 0 && worldInfo.getGameTime() % ((WorldBridge) world).bridge$ticksPerSpawnCategory().getLong(spawnCategory) == 0;
-                limit = world.bridge$getWorld().getSpawnLimit(spawnCategory);
+                var bukkitWorld = ((InjectLevelBridge) world).bridge$getWorldOrNull();
+                if (bukkitWorld != null) {
+                    limit = bukkitWorld.getSpawnLimit(spawnCategory);
+                }
             }
             if (spawnThisTick) {
                 if (limit != 0) {
