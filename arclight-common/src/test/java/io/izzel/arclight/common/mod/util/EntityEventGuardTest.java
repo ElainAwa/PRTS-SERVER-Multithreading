@@ -18,8 +18,11 @@ class EntityEventGuardTest {
         String change = between(text, "void arclight$changeDim", "void arclight$skipTeleportIfNotInWorld");
         assertTrue(collision.contains("bridge$getWorldOrNull()"));
         assertTrue(collision.indexOf("bworld == null") < collision.indexOf("getBlockAt"));
+        assertTrue(collision.contains("pos.x < vec3d.x"), "a blocked westward move reads the western neighbour");
+        assertTrue(collision.contains("pos.z < vec3d.z"), "a blocked northward move reads the northern neighbour");
         assertTrue(change.contains("bridge$getWorldOrNull()"));
         assertTrue(change.indexOf("toWorld == null") < change.indexOf("new Location"));
+        assertTrue(change.indexOf("to == null") > change.indexOf("getTo()"), "a cleared event destination keeps the vanilla transition");
         assertTrue(text.contains("WorldUUIDLeast"));
         int uuid = text.indexOf("WorldUUIDLeast");
         assertTrue(text.indexOf("bridge$getWorld()", uuid) > uuid, "world identity on save still uses the strict accessor");

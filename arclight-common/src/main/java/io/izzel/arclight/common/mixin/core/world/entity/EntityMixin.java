@@ -580,7 +580,7 @@ public abstract class EntityMixin implements InternalEntityBridge, EntityBridge,
             Vec3 vec3d = this.collide(pos);
             if (pos.x > vec3d.x) {
                 block = block.getRelative(BlockFace.EAST);
-            } else if (vec3d.x < vec3d.x) {
+            } else if (pos.x < vec3d.x) {
                 block = block.getRelative(BlockFace.WEST);
             } else if (pos.z > vec3d.z) {
                 block = block.getRelative(BlockFace.SOUTH);
@@ -958,6 +958,9 @@ public abstract class EntityMixin implements InternalEntityBridge, EntityBridge,
                 return;
             }
             to = teleEvent.getTo();
+            if (to == null) {
+                return;
+            }
             var cause = ((DimensionTransitionBridge) (Object) dimensionTransition).bridge$getTeleportCause();
             dimensionTransition = new DimensionTransition(((CraftWorld) to.getWorld()).getHandle(), CraftLocation.toVec3D(to), dimensionTransition.speed(), to.getYaw(), to.getPitch(), dimensionTransition.missingRespawnBlock(), dimensionTransition.postDimensionTransition());
             ((DimensionTransitionBridge) (Object) dimensionTransition).bridge$setTeleportCause(cause);
