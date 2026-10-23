@@ -712,6 +712,7 @@ public abstract class LivingEntityMixin extends EntityMixin implements LivingEnt
             }
         } else {
             var bworld = ((InjectLevelBridge) this.level()).bridge$getWorldOrNull();
+            // No Bukkit world can host either location of this teleport, so the vanilla teleport still runs.
             if (bworld != null) {
                 EntityTeleportEvent event = new EntityTeleportEvent(
                     getBukkitEntity(),

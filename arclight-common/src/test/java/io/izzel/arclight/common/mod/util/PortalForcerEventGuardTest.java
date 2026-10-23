@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+// Source-text guard: reads the mixin source and does not run the mixin.
 class PortalForcerEventGuardTest {
 
     @Test
@@ -21,7 +22,7 @@ class PortalForcerEventGuardTest {
     }
 
     @Test
-    void missingWorldAppliesCapturedBlocksAndKeepsThePortal() throws Exception {
+    void missingWorldAppliesCapturedBlocksBeforeTheEvent() throws Exception {
         String body = methodBody();
         int guard = body.indexOf("craftWorld == null");
         int apply = body.indexOf("this.arclight$populator.updateList()");
@@ -29,25 +30,6 @@ class PortalForcerEventGuardTest {
         int cleared = body.indexOf("Optional.empty()");
         assertTrue(guard >= 0 && apply > guard && event > apply && cleared > event,
             "a missing world applies captured blocks and does not clear the portal");
-        boolean[] applied = {false};
-        boolean[] fired = {false};
-        boolean kept = force(null, true, applied, fired);
-        assertTrue(kept);
-        assertTrue(applied[0]);
-        assertFalse(fired[0]);
-        boolean keptWithoutCapture = force(null, false, applied, fired);
-        assertTrue(keptWithoutCapture);
-    }
-
-    private static boolean force(Object craftWorld, boolean captured, boolean[] applied, boolean[] fired) {
-        if (craftWorld == null) {
-            if (captured) {
-                applied[0] = true;
-            }
-            return true;
-        }
-        fired[0] = true;
-        return false;
     }
 
     private static String methodBody() throws Exception {

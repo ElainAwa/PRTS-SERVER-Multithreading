@@ -23,6 +23,7 @@ public abstract class ShulkerMixin extends PathfinderMobMixin {
     @Decorate(method = "teleportSomewhere", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/monster/Shulker;unRide()V"))
     private void arclight$teleportEvent(Shulker instance, @Local(ordinal = -1) BlockPos pos) throws Throwable {
         var bworld = ((InjectLevelBridge) this.level()).bridge$getWorldOrNull();
+        // No Bukkit world can host the teleport event, so the vanilla teleport still runs.
         if (bworld != null) {
             EntityTeleportEvent teleport = new EntityTeleportEvent(
                 this.getBukkitEntity(),

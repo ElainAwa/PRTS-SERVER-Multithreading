@@ -71,6 +71,7 @@ public abstract class PortalForcerMixin implements PortalForcerBridge {
     @Inject(method = "createPortal", cancellable = true, at = @At("RETURN"))
     private void arclight$portalCreate(BlockPos pos, Direction.Axis axis, CallbackInfoReturnable<Optional<BlockUtil.FoundRectangle>> cir) {
         org.bukkit.World craftWorld = ((InjectLevelBridge) this.level).bridge$getWorldOrNull();
+        // No Bukkit world can host the portal event, so the captured block changes still apply.
         if (craftWorld == null) {
             if (this.arclight$populator != null) {
                 this.arclight$populator.updateList();

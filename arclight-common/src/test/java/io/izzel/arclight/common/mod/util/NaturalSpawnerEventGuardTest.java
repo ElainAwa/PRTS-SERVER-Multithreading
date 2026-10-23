@@ -6,10 +6,10 @@ import org.junit.jupiter.api.Test;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+// Source-text guard: reads the mixin source and does not run the mixin.
 class NaturalSpawnerEventGuardTest {
 
     @Test
@@ -22,23 +22,13 @@ class NaturalSpawnerEventGuardTest {
     }
 
     @Test
-    void missingWorldKeepsTheVanillaSpawnLimit() throws Exception {
+    void missingWorldKeepsTheVanillaCapInSourceOrder() throws Exception {
         String body = methodBody();
         int vanilla = body.indexOf("classification.getMaxInstancesPerChunk()");
         int guard = body.indexOf("bukkitWorld != null");
         int limitCall = body.indexOf("getSpawnLimit");
         assertTrue(vanilla >= 0 && guard > vanilla && limitCall > guard,
             "the vanilla limit is assigned before the bukkit override");
-        assertEquals(8, limit(null, 8));
-        assertEquals(3, limit(new Object(), 8));
-    }
-
-    private static int limit(Object bukkitWorld, int vanillaLimit) {
-        int limit = vanillaLimit;
-        if (bukkitWorld != null) {
-            limit = 3;
-        }
-        return limit;
     }
 
     private static String methodBody() throws Exception {
@@ -49,7 +39,7 @@ class NaturalSpawnerEventGuardTest {
         String text = Files.readString(path);
         int start = text.indexOf("void spawnForChunk");
         assertTrue(start >= 0);
-        int next = text.indexOf("private ", start + 1);
+        int next = text.indexOf("@Inject", start);
         if (next < 0) {
             next = text.length();
         }

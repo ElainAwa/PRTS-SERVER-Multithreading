@@ -82,6 +82,7 @@ public abstract class PortalShapeMixin implements PortalShapeBridge {
     private void arclight$buildPortal(CallbackInfo ci) {
         if (LevelAccessorBridge.from(this.level) instanceof LevelAccessorBridge bridge) {
             World world = ((InjectLevelBridge) bridge.bridge$getMinecraftWorld()).bridge$getWorldOrNull();
+            // No Bukkit world can host the portal event, so vanilla placement still runs.
             if (world == null) {
                 this.arclight$ret = true;
                 return;

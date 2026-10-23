@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+// Source-text guard: reads the mixin source and does not run the mixin.
 class EndPlatformFeatureEventGuardTest {
 
     @Test
@@ -22,23 +23,13 @@ class EndPlatformFeatureEventGuardTest {
     }
 
     @Test
-    void missingWorldUpdatesBlocksAndSkipsThePortalEvent() throws Exception {
+    void missingWorldUpdatesBlocksBeforeThePortalEvent() throws Exception {
         String body = methodBody("void arclight$portalCreate");
         int guard = body.indexOf("bworld == null");
         int update = body.indexOf("blockList.updateList()");
         int event = body.indexOf("new PortalCreateEvent");
         assertTrue(guard >= 0 && update > guard && event > update,
             "a missing world applies the captured blocks before any portal event");
-        boolean updated = false;
-        boolean fired = false;
-        Object bworld = null;
-        if (bworld == null) {
-            updated = true;
-        } else {
-            fired = true;
-        }
-        assertTrue(updated);
-        assertFalse(fired);
     }
 
     private static String methodBody(String signature) throws Exception {

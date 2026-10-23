@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+// Source-text guard: reads the mixin source and does not run the mixin.
 class EndPortalEventGuardTest {
 
     @Test
@@ -23,7 +24,7 @@ class EndPortalEventGuardTest {
     }
 
     @Test
-    void missingWorldSkipsTheTeleportEventAndKeepsTheTransition() throws Exception {
+    void missingWorldReturnsBeforeTheTeleportEvent() throws Exception {
         String exit = source().substring(source().indexOf("void arclight$fireEvent"));
         int guard = exit.indexOf("toWorld == null");
         int leave = exit.indexOf("return;");
@@ -31,15 +32,6 @@ class EndPortalEventGuardTest {
         int clear = exit.indexOf("setReturnValue(null)");
         assertTrue(guard >= 0 && leave > guard && event > leave && clear > event,
             "a missing destination world returns the vanilla transition");
-        String kept = "vanilla";
-        boolean fired = false;
-        Object toWorld = null;
-        if (toWorld != null) {
-            fired = true;
-            kept = null;
-        }
-        assertFalse(fired);
-        assertTrue(kept != null);
     }
 
     private static String between(String text, String startToken, String endToken) {

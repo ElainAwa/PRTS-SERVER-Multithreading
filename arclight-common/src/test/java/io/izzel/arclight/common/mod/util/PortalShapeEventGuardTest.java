@@ -5,13 +5,11 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+// Source-text guard: reads the mixin source and does not run the mixin.
 class PortalShapeEventGuardTest {
 
     @Test
@@ -24,7 +22,7 @@ class PortalShapeEventGuardTest {
     }
 
     @Test
-    void missingWorldKeepsCapturedBlocksAndDoesNotCancel() throws Exception {
+    void missingWorldReportsCreatedBeforeAnyCancel() throws Exception {
         String body = methodBody();
         int guard = body.indexOf("world == null");
         int created = body.indexOf("this.arclight$ret = true;");
@@ -32,23 +30,6 @@ class PortalShapeEventGuardTest {
         int cancel = body.indexOf("ci.cancel()");
         assertTrue(guard >= 0 && created > guard && event > created && cancel > event,
             "a missing world reports the portal created and does not cancel vanilla placement");
-        List<String> captured = new ArrayList<>(List.of("frame"));
-        Result result = place(null, captured);
-        assertTrue(result.created);
-        assertFalse(result.cancelled);
-        assertFalse(result.fired);
-        assertEquals(List.of("frame"), captured);
-    }
-
-    private static Result place(Object world, List<String> captured) {
-        if (world == null) {
-            return new Result(true, false, false);
-        }
-        captured.clear();
-        return new Result(false, true, true);
-    }
-
-    private record Result(boolean created, boolean cancelled, boolean fired) {
     }
 
     private static String methodBody() throws Exception {

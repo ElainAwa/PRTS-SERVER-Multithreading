@@ -158,6 +158,7 @@ public abstract class CraftEventFactoryMixin {
             return true;
         }
         org.bukkit.World bukkitWorld = ((InjectLevelBridge) world).bridge$getWorldOrNull();
+        // No Bukkit world can host the grow event, so the block is still placed.
         if (bukkitWorld == null) {
             world.setBlock(pos, newData, flag);
             return true;

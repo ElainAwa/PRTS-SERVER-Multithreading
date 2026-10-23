@@ -183,6 +183,7 @@ public abstract class ExplosionMixin implements ExplosionBridge {
         boolean wasCancelled;
 
         org.bukkit.World world = ((InjectLevelBridge) this.level).bridge$getWorldOrNull();
+        // No Bukkit world can host the explode event, so the blast list stays and nothing is cancelled.
         if (world == null) {
             return false;
         }

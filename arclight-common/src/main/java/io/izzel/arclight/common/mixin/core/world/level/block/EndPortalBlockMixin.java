@@ -32,6 +32,7 @@ public class EndPortalBlockMixin {
     @Inject(method = "entityInside", at = @At(value = "FIELD", target = "Lnet/minecraft/world/level/Level;isClientSide:Z"))
     public void arclight$enterPortal(BlockState blockState, Level level, BlockPos pos, Entity entity, CallbackInfo ci) {
         var bworld = ((InjectLevelBridge) level).bridge$getWorldOrNull();
+        // No Bukkit world can host the enter event, so the vanilla portal step still runs.
         if (bworld == null) {
             return;
         }
@@ -55,6 +56,7 @@ public class EndPortalBlockMixin {
     private void arclight$fireEvent(ServerLevel serverLevel, Entity entity, BlockPos blockPos, CallbackInfoReturnable<DimensionTransition> cir) {
         var dt = cir.getReturnValue();
         var toWorld = ((InjectLevelBridge) dt.newLevel()).bridge$getWorldOrNull();
+        // No Bukkit world can host the teleport event, so the original transition stays.
         if (toWorld == null) {
             return;
         }
