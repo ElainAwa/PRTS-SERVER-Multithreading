@@ -578,6 +578,8 @@ public abstract class EntityMixin implements InternalEntityBridge, EntityBridge,
             org.bukkit.block.Block block = bworld.getBlockAt(
                 Mth.floor(this.getX()), Mth.floor(this.getY()), Mth.floor(this.getZ()));
             Vec3 vec3d = this.collide(pos);
+            // The blocked side is decided by the intended offset against the resolved collision;
+            // the west branch used to compare the collision vector with itself and never ran.
             if (pos.x > vec3d.x) {
                 block = block.getRelative(BlockFace.EAST);
             } else if (pos.x < vec3d.x) {
@@ -958,6 +960,10 @@ public abstract class EntityMixin implements InternalEntityBridge, EntityBridge,
                 return;
             }
             to = teleEvent.getTo();
+            // A plugin may clear the destination; keep the vanilla transition instead of dereferencing null.
+            if (to == null) {
+                return;
+            }
             if (to == null) {
                 return;
             }
