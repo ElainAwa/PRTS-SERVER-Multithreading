@@ -4,10 +4,21 @@ package io.izzel.arclight.common.prts.support;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
-/** Records which dimension ids are loaded. A refusal leaves the set unchanged and does not throw. */
+/** Records dimension ids. Only the server thread that inserts and removes levels may retain a snapshot. */
 public final class PrtsLevelLifecycle {
 
-    /** The result of one load or unload report. */
+    private static final PrtsLevelLifecycle SERVER = new PrtsLevelLifecycle();
+
+    private static final Snapshot EMPTY = new Snapshot(Mark.UNLOADED, Refusal.NONE, Set.of());
+
+    private volatile Snapshot published = EMPTY;
+
+    /** Returns the record owned by the server thread that inserts and removes levels. */
+    public static PrtsLevelLifecycle server() {
+        return SERVER;
+    }
+
+    /** Describes one retained load or unload. */
     public enum Mark {
         LOADED,
         RELOADED,
@@ -15,58 +26,58 @@ public final class PrtsLevelLifecycle {
         REFUSED
     }
 
-    /** Why the last report was refused, or none when the last report changed the set. */
+    /** Why a retained report was refused, or none when the report changed the set. */
     public enum Refusal {
         NONE,
         MISSING_ID,
         NOT_LOADED
     }
 
-    private static final Set<String> LOADED = new LinkedHashSet<>();
+    /** One published view. The id set does not change after publication. */
+    public static final class Snapshot {
 
-    private static Refusal lastRefusal = Refusal.NONE;
+        public final Mark mark;
+        public final Refusal refusal;
+        public final Set<String> loadedIds;
 
-    private PrtsLevelLifecycle() {
+        private Snapshot(Mark mark, Refusal refusal, Set<String> loadedIds) {
+            this.mark = mark;
+            this.refusal = refusal;
+            this.loadedIds = loadedIds;
+        }
     }
 
-    /** Records a load. A blank id is refused. An id that is already loaded is a reload. */
-    public static Mark loaded(String worldId) {
+    /** Builds the next snapshot for a load without publishing it. A blank id is refused. */
+    public Snapshot load(String worldId) {
+        Set<String> ids = new LinkedHashSet<>(published.loadedIds);
         if (worldId == null || worldId.isEmpty()) {
-            lastRefusal = Refusal.MISSING_ID;
-            return Mark.REFUSED;
+            return new Snapshot(Mark.REFUSED, Refusal.MISSING_ID, Set.copyOf(ids));
         }
-        if (!LOADED.add(worldId)) {
-            lastRefusal = Refusal.NONE;
-            return Mark.RELOADED;
+        if (!ids.add(worldId)) {
+            return new Snapshot(Mark.RELOADED, Refusal.NONE, Set.copyOf(ids));
         }
-        lastRefusal = Refusal.NONE;
-        return Mark.LOADED;
+        return new Snapshot(Mark.LOADED, Refusal.NONE, Set.copyOf(ids));
     }
 
-    /** Records an unload. A blank id, or an id that is not loaded, is refused. */
-    public static Mark unloaded(String worldId) {
+    /** Builds the next snapshot for an unload without publishing it. */
+    public Snapshot unload(String worldId) {
+        Set<String> ids = new LinkedHashSet<>(published.loadedIds);
         if (worldId == null || worldId.isEmpty()) {
-            lastRefusal = Refusal.MISSING_ID;
-            return Mark.REFUSED;
+            return new Snapshot(Mark.REFUSED, Refusal.MISSING_ID, Set.copyOf(ids));
         }
-        if (!LOADED.remove(worldId)) {
-            lastRefusal = Refusal.NOT_LOADED;
-            return Mark.REFUSED;
+        if (!ids.remove(worldId)) {
+            return new Snapshot(Mark.REFUSED, Refusal.NOT_LOADED, Set.copyOf(ids));
         }
-        lastRefusal = Refusal.NONE;
-        return Mark.UNLOADED;
+        return new Snapshot(Mark.UNLOADED, Refusal.NONE, Set.copyOf(ids));
     }
 
-    static boolean isLoaded(String worldId) {
-        return LOADED.contains(worldId);
+    /** Publishes a snapshot built by {@link #load(String)} or {@link #unload(String)}. */
+    public void retain(Snapshot snapshot) {
+        published = snapshot;
     }
 
-    static Refusal lastRefusal() {
-        return lastRefusal;
-    }
-
-    static void resetForTests() {
-        LOADED.clear();
-        lastRefusal = Refusal.NONE;
+    /** Returns the last published snapshot. A reader may see this snapshot or the one before it. */
+    public Snapshot current() {
+        return published;
     }
 }

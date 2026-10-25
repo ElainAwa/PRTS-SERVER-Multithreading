@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.support;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -10,39 +9,51 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PrtsLevelLifecycleTest {
 
-    @AfterEach
-    void reset() {
-        PrtsLevelLifecycle.resetForTests();
-    }
-
     @Test
     void aBlankIdIsRefusedAndTheSetStaysEmpty() {
-        assertEquals(PrtsLevelLifecycle.Mark.REFUSED, PrtsLevelLifecycle.loaded(null));
-        assertEquals(PrtsLevelLifecycle.Refusal.MISSING_ID, PrtsLevelLifecycle.lastRefusal());
-        assertEquals(PrtsLevelLifecycle.Mark.REFUSED, PrtsLevelLifecycle.loaded(""));
-        assertEquals(PrtsLevelLifecycle.Mark.REFUSED, PrtsLevelLifecycle.unloaded(null));
-        assertFalse(PrtsLevelLifecycle.isLoaded("minecraft:overworld"));
+        PrtsLevelLifecycle lifecycle = new PrtsLevelLifecycle();
+        lifecycle.retain(lifecycle.load(null));
+        assertEquals(PrtsLevelLifecycle.Mark.REFUSED, lifecycle.current().mark);
+        assertEquals(PrtsLevelLifecycle.Refusal.MISSING_ID, lifecycle.current().refusal);
+        lifecycle.retain(lifecycle.load(""));
+        lifecycle.retain(lifecycle.unload(null));
+        assertFalse(lifecycle.current().loadedIds.contains("minecraft:overworld"));
     }
 
     @Test
     void theFirstLoadIsKeptAndASecondLoadIsAReload() {
-        assertEquals(PrtsLevelLifecycle.Mark.LOADED, PrtsLevelLifecycle.loaded("minecraft:overworld"));
-        assertEquals(PrtsLevelLifecycle.Refusal.NONE, PrtsLevelLifecycle.lastRefusal());
-        assertTrue(PrtsLevelLifecycle.isLoaded("minecraft:overworld"));
-        assertEquals(PrtsLevelLifecycle.Mark.RELOADED, PrtsLevelLifecycle.loaded("minecraft:overworld"));
-        assertTrue(PrtsLevelLifecycle.isLoaded("minecraft:overworld"));
-        assertEquals(PrtsLevelLifecycle.Refusal.NONE, PrtsLevelLifecycle.lastRefusal());
+        PrtsLevelLifecycle lifecycle = new PrtsLevelLifecycle();
+        lifecycle.retain(lifecycle.load("minecraft:overworld"));
+        assertEquals(PrtsLevelLifecycle.Mark.LOADED, lifecycle.current().mark);
+        assertEquals(PrtsLevelLifecycle.Refusal.NONE, lifecycle.current().refusal);
+        assertTrue(lifecycle.current().loadedIds.contains("minecraft:overworld"));
+        lifecycle.retain(lifecycle.load("minecraft:overworld"));
+        assertEquals(PrtsLevelLifecycle.Mark.RELOADED, lifecycle.current().mark);
+        assertTrue(lifecycle.current().loadedIds.contains("minecraft:overworld"));
     }
 
     @Test
     void unloadRemovesOnlyALoadedId() {
-        PrtsLevelLifecycle.loaded("dim:a");
-        assertEquals(PrtsLevelLifecycle.Mark.UNLOADED, PrtsLevelLifecycle.unloaded("dim:a"));
-        assertFalse(PrtsLevelLifecycle.isLoaded("dim:a"));
-        assertEquals(PrtsLevelLifecycle.Mark.REFUSED, PrtsLevelLifecycle.unloaded("dim:a"));
-        assertEquals(PrtsLevelLifecycle.Refusal.NOT_LOADED, PrtsLevelLifecycle.lastRefusal());
-        assertFalse(PrtsLevelLifecycle.isLoaded("dim:b"));
-        PrtsLevelLifecycle.loaded("dim:b");
-        assertTrue(PrtsLevelLifecycle.isLoaded("dim:b"));
+        PrtsLevelLifecycle lifecycle = new PrtsLevelLifecycle();
+        lifecycle.retain(lifecycle.load("dim:a"));
+        lifecycle.retain(lifecycle.unload("dim:a"));
+        assertEquals(PrtsLevelLifecycle.Mark.UNLOADED, lifecycle.current().mark);
+        assertFalse(lifecycle.current().loadedIds.contains("dim:a"));
+        lifecycle.retain(lifecycle.unload("dim:a"));
+        assertEquals(PrtsLevelLifecycle.Mark.REFUSED, lifecycle.current().mark);
+        assertEquals(PrtsLevelLifecycle.Refusal.NOT_LOADED, lifecycle.current().refusal);
+        lifecycle.retain(lifecycle.load("dim:b"));
+        assertTrue(lifecycle.current().loadedIds.contains("dim:b"));
+        assertFalse(lifecycle.current().loadedIds.contains("dim:a"));
+    }
+
+    @Test
+    void anUnretainedLoadDoesNotBecomeVisible() {
+        PrtsLevelLifecycle lifecycle = new PrtsLevelLifecycle();
+        PrtsLevelLifecycle.Snapshot next = lifecycle.load("dim:held");
+        assertEquals(PrtsLevelLifecycle.Mark.LOADED, next.mark);
+        assertFalse(lifecycle.current().loadedIds.contains("dim:held"));
+        lifecycle.retain(next);
+        assertTrue(lifecycle.current().loadedIds.contains("dim:held"));
     }
 }
