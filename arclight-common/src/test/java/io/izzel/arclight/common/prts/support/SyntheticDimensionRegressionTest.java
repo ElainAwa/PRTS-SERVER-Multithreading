@@ -84,9 +84,10 @@ class SyntheticDimensionRegressionTest {
         assertStillStrict("io/izzel/arclight/common/mixin/core/server/commands/TimeCommandMixin.java",
             "new TimeSkipEvent(((ServerLevelBridge) serverWorld).bridge$getWorld()",
             "time commands are not a synthetic-dimension path");
-        assertStillStrict("io/izzel/arclight/common/mixin/bukkit/CraftServerMixin.java",
-            "world.bridge$getWorld().getName()",
-            "removing a bukkit world by name stays strict");
+        // Removing a level from the Bukkit world map during shutdown was previously listed as
+        // strict; the real stop path proved otherwise (a dynamic level leaves the server without
+        // a CraftWorld). It now reads the nullable accessor and skips the removal; the dedicated
+        // guard lives in LifecycleUnloadGuardTest.
         assertStillStrict("io/izzel/arclight/common/mixin/bukkit/CraftServerMixin.java",
             "CraftWorld bukkit = internal.bridge$getWorld()",
             "the server keeps its own bukkit world through the strict accessor");

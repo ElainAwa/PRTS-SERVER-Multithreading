@@ -11,6 +11,7 @@ import io.izzel.arclight.common.bridge.core.server.dedicated.DedicatedServerBrid
 import io.izzel.arclight.common.bridge.core.world.level.GameRules_ValueBridge;
 import io.izzel.arclight.common.bridge.core.world.level.storage.LevelStorageSourceBridge;
 import io.izzel.arclight.common.bridge.core.world.level.storage.PrimaryLevelDataBridge;
+import io.izzel.arclight.common.bridge.inject.InjectLevelBridge;
 import io.izzel.arclight.i18n.ArclightConfig;
 import jline.console.ConsoleReader;
 import net.minecraft.core.Registry;
@@ -180,7 +181,13 @@ public abstract class CraftServerMixin implements CraftServerBridge {
         if (world == null) {
             return;
         }
-        this.worlds.remove(world.bridge$getWorld().getName().toLowerCase(Locale.ROOT));
+        // A level the server registers without a CraftWorld has no entry in the Bukkit world
+        // map; reading the strict accessor here would throw while the level is already leaving.
+        CraftWorld craftWorld = ((InjectLevelBridge) world).bridge$getWorldOrNull();
+        if (craftWorld == null) {
+            return;
+        }
+        this.worlds.remove(craftWorld.getName().toLowerCase(Locale.ROOT));
     }
 
     /**
