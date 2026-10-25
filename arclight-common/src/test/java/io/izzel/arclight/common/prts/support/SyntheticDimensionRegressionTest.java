@@ -61,11 +61,23 @@ class SyntheticDimensionRegressionTest {
             "fromWorld.bridge$getWorld()",
             "player world changes stay on the strict accessor");
         assertStillStrict("io/izzel/arclight/common/mixin/core/server/network/ServerGamePacketListenerImplMixin.java",
+            "new Location(this.player.level().bridge$getWorld(), d0, d2, d3, f1, f2)",
+            "the location of one player ray stays on the strict accessor");
+        assertStillStrict("io/izzel/arclight/common/mixin/core/server/network/ServerGamePacketListenerImplMixin.java",
             "this.player.level().bridge$getWorld().rayTrace",
-            "the two reads of one player ray stay together and strict");
+            "the trace of that same player ray stays on the strict accessor");
         assertStillStrict("io/izzel/arclight/common/mixin/core/server/level/ServerPlayerMixin.java",
             "new PlayerChangedWorldEvent(this.getBukkitEntity(), oldLevel.bridge$getWorld())",
             "a player changing worlds stays on the strict accessor");
+        assertStillStrict("io/izzel/arclight/common/mixin/core/server/level/ServerPlayerMixin.java",
+            "dimensionTransition.newLevel().bridge$getWorld()",
+            "a player dimension teleport stays on the strict accessor");
+        assertStillStrict("io/izzel/arclight/common/mixin/core/server/level/ServerPlayerMixin.java",
+            "new Location(world.bridge$getWorld(), x, y, z, yaw, pitch)",
+            "a player teleport stays on the strict accessor");
+        assertStillStrict("io/izzel/arclight/common/mixin/core/server/level/ServerPlayerMixin.java",
+            "newWorld.bridge$getWorld()",
+            "a player spawn point stays on the strict accessor");
         assertStillStrict("io/izzel/arclight/common/mixin/core/server/commands/TeleportCommandMixin.java",
             "((ServerLevelBridge) level).bridge$getWorld()",
             "teleport commands are a player path");
@@ -75,6 +87,9 @@ class SyntheticDimensionRegressionTest {
         assertStillStrict("io/izzel/arclight/common/mixin/bukkit/CraftServerMixin.java",
             "world.bridge$getWorld().getName()",
             "removing a bukkit world by name stays strict");
+        assertStillStrict("io/izzel/arclight/common/mixin/bukkit/CraftServerMixin.java",
+            "CraftWorld bukkit = internal.bridge$getWorld()",
+            "the server keeps its own bukkit world through the strict accessor");
         assertStillStrict("io/izzel/arclight/common/bridge/core/world/inventory/ContainerLevelAccessBridge.java",
             "level == null ? null : ((WorldBridge) level).bridge$getWorld()",
             "a missing level already returns before the strict read");
