@@ -57,33 +57,35 @@ public class NetherPortalBlockMixin {
     @Decorate(method = "getPortalDestination", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/block/NetherPortalBlock;getExitPortal(Lnet/minecraft/server/level/ServerLevel;Lnet/minecraft/world/entity/Entity;Lnet/minecraft/core/BlockPos;Lnet/minecraft/core/BlockPos;ZLnet/minecraft/world/level/border/WorldBorder;)Lnet/minecraft/world/level/portal/DimensionTransition;"))
     private DimensionTransition arclight$createPortalEvent(NetherPortalBlock instance, ServerLevel serverLevel, Entity entity, BlockPos blockPos, BlockPos blockPos2, boolean bl, WorldBorder worldBorder) throws Throwable {
         var toWorld = ((InjectLevelBridge) serverLevel).bridge$getWorldOrNull();
-        // No Bukkit world can host the teleport event, so the vanilla exit still runs.
-        if (toWorld == null) {
-            return (DimensionTransition) DecorationOps.callsite()
-                .invoke(instance, serverLevel, entity, blockPos, blockPos2, bl, worldBorder);
+        PortalForcerBridge pushedForcer = null;
+        if (toWorld != null) {
+            var event = ((EntityBridge) entity).bridge$callPortalEvent(
+                entity,
+                CraftLocation.toBukkit(blockPos2, toWorld),
+                PlayerTeleportEvent.TeleportCause.NETHER_PORTAL,
+                bl ? 16 : 128,
+                16);
+            if (event == null) {
+                return null;
+            }
+            serverLevel = ((CraftWorld) event.getTo().getWorld()).getHandle();
+            worldBorder = serverLevel.getWorldBorder();
+            blockPos2 = worldBorder.clampToBounds(event.getTo().getX(), event.getTo().getY(), event.getTo().getZ());
+            pushedForcer = (PortalForcerBridge) serverLevel.getPortalForcer();
+            pushedForcer.bridge$pushSearchRadius(event.getSearchRadius());
+            pushedForcer.bridge$pushPortalCreate(entity, event.getCreationRadius());
         }
-        var event = ((EntityBridge) entity).bridge$callPortalEvent(
-            entity,
-            CraftLocation.toBukkit(blockPos2, toWorld),
-            PlayerTeleportEvent.TeleportCause.NETHER_PORTAL,
-            bl ? 16 : 128,
-            16);
-        if (event == null) {
-            return null;
-        }
-        serverLevel = ((CraftWorld) event.getTo().getWorld()).getHandle();
-        worldBorder = serverLevel.getWorldBorder();
-        blockPos2 = worldBorder.clampToBounds(event.getTo().getX(), event.getTo().getY(), event.getTo().getZ());
-        ((PortalForcerBridge) serverLevel.getPortalForcer()).bridge$pushSearchRadius(event.getSearchRadius());
-        ((PortalForcerBridge) serverLevel.getPortalForcer()).bridge$pushPortalCreate(entity, event.getCreationRadius());
-        final DimensionTransition result;
+        // Keep exactly one decoration callsite op in this handler: the mixin extras decorator
+        // resolves the decorated call by it, and a second branch-local op breaks class
+        // transformation at bootstrap. A missing Bukkit world only needs the vanilla exit.
         try {
-            result = (DimensionTransition) DecorationOps.callsite().invoke(instance, serverLevel, entity, blockPos, blockPos2, bl, worldBorder);
+            return (DimensionTransition) DecorationOps.callsite().invoke(instance, serverLevel, entity, blockPos, blockPos2, bl, worldBorder);
         } finally {
-            ((PortalForcerBridge) serverLevel.getPortalForcer()).bridge$pushSearchRadius(-1);
-            ((PortalForcerBridge) serverLevel.getPortalForcer()).bridge$pushPortalCreate(null, -1);
+            if (pushedForcer != null) {
+                pushedForcer.bridge$pushSearchRadius(-1);
+                pushedForcer.bridge$pushPortalCreate(null, -1);
+            }
         }
-        return result;
     }
 
     @Inject(method = "createDimensionTransition", at = @At("RETURN"))
