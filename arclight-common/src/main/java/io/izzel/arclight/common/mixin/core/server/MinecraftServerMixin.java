@@ -287,9 +287,6 @@ public abstract class MinecraftServerMixin extends ReentrantBlockableEventLoop<T
     @Decorate(method = "createLevels", at = @At(value = "INVOKE", remap = false, target = "Ljava/util/Map;put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))
     private Object arclight$worldInit(Map<Object, Object> instance, Object k, Object v, ChunkProgressListener chunkProgressListener) throws Throwable {
         if (v instanceof ServerLevel level) {
-            // createLevels inserts every dimension through this put. The retained snapshot is not the insert.
-            PrtsLevelLifecycle.server().retain(
-                PrtsLevelLifecycle.server().load(level.dimension().location().toString()));
             if (((CraftServer) Bukkit.getServer()).scoreboardManager == null) {
                 ((CraftServer) Bukkit.getServer()).scoreboardManager = new CraftScoreboardManager((MinecraftServer) (Object) this, level.getScoreboard());
             }
@@ -308,7 +305,13 @@ public abstract class MinecraftServerMixin extends ReentrantBlockableEventLoop<T
             // Arclight: since it seems that we can't apply multiple Decorators to a target on Forge...
             level.getWorldBorder().addListener(ArclightBorderChangeListener.typed());
         }
-        return DecorationOps.callsite().invoke(instance, k, v);
+        Object previous = DecorationOps.callsite().invoke(instance, k, v);
+        // A failed initializer or put must not publish a dimension that was never registered.
+        if (v instanceof ServerLevel level) {
+            PrtsLevelLifecycle.server().retain(
+                PrtsLevelLifecycle.server().load(level.dimension().location().toString()));
+        }
+        return previous;
     }
 
     /**
@@ -455,10 +458,10 @@ public abstract class MinecraftServerMixin extends ReentrantBlockableEventLoop<T
 
     // bukkit callbacks
     public void addLevel(ServerLevel level) {
-        // This path inserts a level without going through the createLevels put.
+        this.levels.put(level.dimension(), level);
+        // Publish after registration succeeds so load callbacks see the same registered dimensions.
         PrtsLevelLifecycle.server().retain(
             PrtsLevelLifecycle.server().load(level.dimension().location().toString()));
-        this.levels.put(level.dimension(), level);
         this.arclight$onServerLoad(level);
         this.bridge$forge$markLevelsDirty();
     }

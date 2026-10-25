@@ -8,9 +8,9 @@ import java.util.Set;
  * Replace this record when the kernel takes over inserting and removing levels. */
 public final class PrtsLevelLifecycle {
 
-    private static final PrtsLevelLifecycle SERVER = new PrtsLevelLifecycle();
-
     private static final Snapshot EMPTY = new Snapshot(Mark.UNLOADED, Refusal.NONE, Set.of());
+
+    private static final PrtsLevelLifecycle SERVER = new PrtsLevelLifecycle();
 
     private volatile Snapshot published = EMPTY;
 
