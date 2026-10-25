@@ -4,7 +4,8 @@ package io.izzel.arclight.common.prts.support;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
-/** Records dimension ids. Only the server thread that inserts and removes levels may retain a snapshot. */
+/** Records dimension ids. Only the server thread that inserts and removes levels may retain a snapshot.
+ * Replace this record when the kernel takes over inserting and removing levels. */
 public final class PrtsLevelLifecycle {
 
     private static final PrtsLevelLifecycle SERVER = new PrtsLevelLifecycle();
