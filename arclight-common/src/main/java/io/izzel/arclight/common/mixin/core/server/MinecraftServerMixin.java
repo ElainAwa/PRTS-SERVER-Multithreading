@@ -287,8 +287,9 @@ public abstract class MinecraftServerMixin extends ReentrantBlockableEventLoop<T
     @Decorate(method = "createLevels", at = @At(value = "INVOKE", remap = false, target = "Ljava/util/Map;put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))
     private Object arclight$worldInit(Map<Object, Object> instance, Object k, Object v, ChunkProgressListener chunkProgressListener) throws Throwable {
         if (v instanceof ServerLevel level) {
-            // The record does not decide whether the level is inserted.
-            PrtsLevelLifecycle.loaded(level.dimension().location().toString());
+            // createLevels inserts every dimension through this put. The retained snapshot is not the insert.
+            PrtsLevelLifecycle.server().retain(
+                PrtsLevelLifecycle.server().load(level.dimension().location().toString()));
             if (((CraftServer) Bukkit.getServer()).scoreboardManager == null) {
                 ((CraftServer) Bukkit.getServer()).scoreboardManager = new CraftScoreboardManager((MinecraftServer) (Object) this, level.getScoreboard());
             }
@@ -454,8 +455,9 @@ public abstract class MinecraftServerMixin extends ReentrantBlockableEventLoop<T
 
     // bukkit callbacks
     public void addLevel(ServerLevel level) {
-        // The record does not decide whether the level is inserted.
-        PrtsLevelLifecycle.loaded(level.dimension().location().toString());
+        // This path inserts a level without going through the createLevels put.
+        PrtsLevelLifecycle.server().retain(
+            PrtsLevelLifecycle.server().load(level.dimension().location().toString()));
         this.levels.put(level.dimension(), level);
         this.arclight$onServerLoad(level);
         this.bridge$forge$markLevelsDirty();
@@ -463,8 +465,9 @@ public abstract class MinecraftServerMixin extends ReentrantBlockableEventLoop<T
 
     public void removeLevel(ServerLevel level) {
         this.levels.remove(level.dimension());
-        // A refused id does not put the level back.
-        PrtsLevelLifecycle.unloaded(level.dimension().location().toString());
+        // This path removes one level. A refused id does not put that level back.
+        PrtsLevelLifecycle.server().retain(
+            PrtsLevelLifecycle.server().unload(level.dimension().location().toString()));
         this.arclight$onServerUnload(level);
         this.bridge$forge$markLevelsDirty();
         ((CraftServerBridge) Bukkit.getServer()).bridge$removeWorld(level);
@@ -480,8 +483,9 @@ public abstract class MinecraftServerMixin extends ReentrantBlockableEventLoop<T
     @Inject(method = "stopServer", at = @At(value = "INVOKE", shift = At.Shift.AFTER, target = "Lnet/minecraft/server/MinecraftServer;saveAllChunks(ZZZ)Z"))
     private void arclight$unloadLevel(CallbackInfo ci) {
         for (var serverLevel : this.getAllLevels()) {
-            // A refused id does not put the level back.
-            PrtsLevelLifecycle.unloaded(serverLevel.dimension().location().toString());
+            // Shutdown drops worlds here and does not call removeLevel. A refused id does not restore one.
+            PrtsLevelLifecycle.server().retain(
+                PrtsLevelLifecycle.server().unload(serverLevel.dimension().location().toString()));
             ((CraftServerBridge) Bukkit.getServer()).bridge$removeWorld(serverLevel);
         }
     }
