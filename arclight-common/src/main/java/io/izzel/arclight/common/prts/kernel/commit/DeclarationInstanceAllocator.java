@@ -21,9 +21,8 @@ public final class DeclarationInstanceAllocator {
     }
 
     /** Copies the declarations with the next numbers of this source, joined to the places the plan
-     * gave them. A declaration the plan gave no place, one that carries no entry artefact, or one
-     * whose world generation is not live is copied unchanged: nothing to number means nothing is
-     * spent. A range-only declaration names no chunk an entry could publish, so it is not numbered. */
+     * gave them. A declaration the plan gave no place, one that carries no artefact, or one whose
+     * world generation is not live is copied unchanged: nothing to number means nothing is spent. */
     public List<FrozenDeclarations.Candidate> mint(List<FrozenDeclarations.Candidate> candidates,
                                                    List<FrozenDeclarations.Assignment> places) {
         List<FrozenDeclarations.Candidate> declared = candidates == null ? List.of() : candidates;
@@ -49,7 +48,7 @@ public final class DeclarationInstanceAllocator {
                 continue;
             }
             FrozenDeclarations.Candidate candidate = declared.get(index);
-            if (numbers[index] != 0L || !candidate.entryDeclared()
+            if (numbers[index] != 0L || !candidate.artefactDeclared()
                 || !CommitLog.liveWorldEpoch(candidate.worldEpoch())) {
                 continue;
             }
@@ -67,8 +66,8 @@ public final class DeclarationInstanceAllocator {
     private static FrozenDeclarations.Candidate withInstance(FrozenDeclarations.Candidate candidate,
                                                              long number) {
         return new FrozenDeclarations.Candidate(candidate.worldId(), candidate.domainId(),
-            candidate.nodeKey(), candidate.chunk(), candidate.targetStatus(), candidate.range(),
-            number, candidate.worldEpoch());
+            candidate.nodeKey(), candidate.chunk(), candidate.targetStatus(), number,
+            candidate.worldEpoch());
     }
 
     private static FrozenDeclarations.NodeKey nodeOf(FrozenDeclarations.Candidate candidate) {

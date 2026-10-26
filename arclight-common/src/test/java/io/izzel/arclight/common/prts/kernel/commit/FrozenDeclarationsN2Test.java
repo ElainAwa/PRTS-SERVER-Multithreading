@@ -36,11 +36,6 @@ class FrozenDeclarationsN2Test {
             new FrozenDeclarations.DeclaredChunk(chunk), status, INSTANCE, EPOCH);
     }
 
-    private static FrozenDeclarations.Candidate rangeCandidate(String node, long... cells) {
-        return new FrozenDeclarations.Candidate(WORLD, DOMAIN, node, null, "",
-            new FrozenDeclarations.DeclaredRange(cells), INSTANCE, EPOCH);
-    }
-
     private static FrozenDeclarations.Assignment place(String node, int position) {
         return new FrozenDeclarations.Assignment(WORLD, DOMAIN, node, position);
     }
@@ -60,41 +55,6 @@ class FrozenDeclarationsN2Test {
             "a table with only empty-status declarations is not sealed");
         assertEquals(0, table.size());
         assertNull(table.entryAt(seat(0)), "no entry is written for a seat with no declared state");
-    }
-
-    @Test
-    void aRangeOnlyDeclarationIsAnArtefactButWritesNoEntry() {
-        String node = "chunk-pipeline/world-a/mailbox-range";
-        FrozenDeclarations.Candidate range = rangeCandidate(node, CHUNK, OTHER_CHUNK);
-        assertTrue(range.artefactDeclared());
-        assertTrue(range.rangeDeclared());
-        assertFalse(range.entryDeclared());
-
-        FrozenDeclarations.Sealed sealed = FrozenDeclarations.seal(freeze(), PLAN, List.of(range),
-            List.of(place(node, 0)));
-
-        assertTrue(sealed.sealed(), sealed.refusal());
-        assertEquals(FrozenDeclarations.NOT_WIRED, sealed.declarations().state(),
-            "a range is not the one chunk and one status an entry carries");
-        assertEquals(0, sealed.declarations().size());
-        assertNull(sealed.declarations().entryAt(seat(0)));
-    }
-
-    @Test
-    void aMalformedRangeDeclaresNoArtefact() {
-        long[] oversized = new long[17];
-        for (int index = 0; index < oversized.length; index++) {
-            oversized[index] = CHUNK + index;
-        }
-        FrozenDeclarations.Candidate over = rangeCandidate("chunk-pipeline/world-a/oversized",
-            oversized);
-        assertFalse(over.rangeDeclared(), "more than sixteen cells is not a declared range");
-        assertFalse(over.artefactDeclared(), "a malformed range is not an artefact");
-
-        FrozenDeclarations.Candidate unsorted = rangeCandidate(
-            "chunk-pipeline/world-a/unsorted", OTHER_CHUNK, CHUNK);
-        assertFalse(unsorted.rangeDeclared(), "a descending range is not declared");
-        assertFalse(unsorted.artefactDeclared(), "a descending range is not an artefact");
     }
 
     @Test

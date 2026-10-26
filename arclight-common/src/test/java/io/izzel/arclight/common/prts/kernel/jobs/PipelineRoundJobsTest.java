@@ -8,7 +8,6 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -103,7 +102,6 @@ class PipelineRoundJobsTest {
         assertEquals(0, jobs.declareInto(intake, PLAN, TICK));
         assertEquals(0, jobs.declareInto(intake, PLAN + 1L, TICK + 1L));
         assertTrue(intake.take().isEmpty());
-        assertTrue(jobs.candidateDeclarations().isEmpty(), "no batch means no artefact to carry");
         assertEquals(2L, jobs.windows());
         assertEquals(0L, jobs.declared());
         assertEquals(0L, jobs.lastRounds());
@@ -174,59 +172,24 @@ class PipelineRoundJobsTest {
     }
 
     @Test
-    void aBatchCandidateCarriesTheCellsItsPlanningRangeWasBuiltFrom() {
+    void aBatchCandidateCarriesNoArtefactSoTheSealStaysNotWired() {
         PipelineBatchLedger ledger = new PipelineBatchLedger();
         PipelineRoundJobs jobs = producer(ledger);
         JobIntake intake = intake();
-        long first = ChunkPos.asLong(0, 0);
-        long second = ChunkPos.asLong(1, 0);
-        mint(ledger, WORLD, MAILBOX, second);
-        mint(ledger, WORLD, MAILBOX, first);
+        mint(ledger, WORLD, MAILBOX, CELL);
         jobs.declareInto(intake, PLAN, TICK);
-
         List<FrozenDeclarations.Candidate> candidates = jobs.candidateDeclarations();
         assertEquals(1, candidates.size());
-        FrozenDeclarations.Candidate candidate = candidates.get(0);
-        assertTrue(candidate.artefactDeclared(),
-            "the cells a batch covers are the artefact the candidate carries");
-        assertTrue(candidate.rangeDeclared());
-        assertEquals("", candidate.targetStatus());
-        assertNull(candidate.chunk());
-
-        PipelineBatchLedger.BatchId batch = new PipelineBatchLedger.BatchId(WORLD, MAILBOX, 1L,
-            PLAN);
-        long[] cells = ledger.cellsOf(batch);
-        assertArrayEquals(new long[] {first, second}, cells);
-        assertArrayEquals(cells, candidate.range().cells(),
-            "the candidate reads the binding the planning range is built from");
-        assertArrayEquals(cells, intake.take().get(0).range().cells(),
-            "the planning range and the artefact range are one cut");
-
+        assertFalse(candidates.get(0).artefactDeclared(),
+            "a batch names no single chunk and no target state, so it declares no artefact");
+        assertEquals("", candidates.get(0).targetStatus());
         List<FrozenDeclarations.Assignment> places = List.of(new FrozenDeclarations.Assignment(
-            WORLD, PipelineRoundJobs.DOMAIN, candidate.nodeKey(), 0));
+            WORLD, PipelineRoundJobs.DOMAIN, candidates.get(0).nodeKey(), 0));
         FrozenDeclarations.Sealed sealed = FrozenDeclarations.seal(
             new FrozenDeclarations.FreezeKey("", 1L), PLAN, candidates, places);
         assertNotNull(sealed.declarations());
         assertEquals(FrozenDeclarations.NOT_WIRED, sealed.declarations().state(),
-            "an entry carries one chunk and one status, so the batch range writes no entry");
-        assertEquals(0, sealed.declarations().size());
-    }
-
-    @Test
-    void anEmptyBatchRangeDeclaresNoArtefactAndSealsNotWired() {
-        FrozenDeclarations.Candidate empty = new FrozenDeclarations.Candidate(WORLD,
-            PipelineRoundJobs.DOMAIN, PipelineRoundJobs.keyOf(WORLD, MAILBOX) + "#1", null, "",
-            new FrozenDeclarations.DeclaredRange(new long[0]), 1L, 7L);
-        assertFalse(empty.artefactDeclared(), "an empty range declares no artefact");
-        assertFalse(empty.rangeDeclared());
-        assertFalse(empty.entryDeclared());
-        List<FrozenDeclarations.Assignment> places = List.of(new FrozenDeclarations.Assignment(
-            WORLD, PipelineRoundJobs.DOMAIN, empty.nodeKey(), 0));
-        FrozenDeclarations.Sealed sealed = FrozenDeclarations.seal(
-            new FrozenDeclarations.FreezeKey("", 1L), PLAN, List.of(empty), places);
-        assertNotNull(sealed.declarations());
-        assertEquals(FrozenDeclarations.NOT_WIRED, sealed.declarations().state());
-        assertEquals(0, sealed.declarations().size());
+            "the seal skips a candidate that carries no artefact, so the table is not wired");
     }
 
     @Test

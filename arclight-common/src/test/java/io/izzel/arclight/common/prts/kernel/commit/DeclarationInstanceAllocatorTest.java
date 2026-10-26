@@ -213,20 +213,6 @@ class DeclarationInstanceAllocatorTest {
     }
 
     @Test
-    void aRangeOnlyDeclarationIsNotNumbered() {
-        DeclarationInstanceAllocator source = new DeclarationInstanceAllocator();
-        FrozenDeclarations.Candidate rangeOnly = new FrozenDeclarations.Candidate(WORLD, DOMAIN,
-            NODE, null, "", new FrozenDeclarations.DeclaredRange(new long[] {CHUNK}), 0L, EPOCH);
-
-        List<FrozenDeclarations.Candidate> numbered = source.mint(List.of(rangeOnly),
-            commitOrder(NODE));
-
-        assertEquals(0L, numbered.get(0).instanceId(),
-            "a range-only declaration has no entry for a number to identify");
-        assertTrue(numbered.get(0).rangeDeclared(), "the range survives the copy unchanged");
-    }
-
-    @Test
     void theSameDeclarationsNumberedAgainAreNeverHandedANumberTwice() {
         DeclarationInstanceAllocator source = new DeclarationInstanceAllocator();
         List<FrozenDeclarations.Candidate> handedIn = List.of(
