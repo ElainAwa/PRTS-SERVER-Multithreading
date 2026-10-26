@@ -253,6 +253,23 @@ class PipelineBatchLedgerTest {
     }
 
     @Test
+    void hostAndOwnedRowCountersFollowMintClaimAndReset() {
+        PipelineBatchLedger ledger = new PipelineBatchLedger(64, 100);
+        assertEquals(0L, ledger.mintedCount(), "an empty ledger has hosted no row");
+        assertEquals(0L, ledger.claimedTaskCount(), "an empty ledger has owned no row");
+        for (int index = 0; index < 3; index++) {
+            ledger.mint(PROCESSOR, WORLD, MAILBOX, index, TICK);
+        }
+        assertEquals(3L, ledger.mintedCount(), "each minted submit is one host-entered row");
+        PipelineBatchLedger.BatchId batch = ledger.freeze(WORLD, MAILBOX, PLAN, TICK);
+        assertNotNull(batch);
+        assertEquals(3L, ledger.claimedTaskCount(), "each claimed task is one owned row");
+        ledger.reset();
+        assertEquals(0L, ledger.mintedCount());
+        assertEquals(0L, ledger.claimedTaskCount());
+    }
+
+    @Test
     void aSecondFreezeDoesNotReclaimATaskOfTheFirst() {
         PipelineBatchLedger ledger = new PipelineBatchLedger();
         PipelineBatchLedger.TrackedTask task =
