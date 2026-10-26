@@ -31,6 +31,7 @@ public final class PrtsChunkSorterSubmit {
         if (PrtsPipelineRows.isNonTargetSorter(sorter)) {
             return task;
         }
+        PrtsPipelineBatches.hostTicked();
         if (!PrtsPipelineBatches.installed()) {
             return task;
         }

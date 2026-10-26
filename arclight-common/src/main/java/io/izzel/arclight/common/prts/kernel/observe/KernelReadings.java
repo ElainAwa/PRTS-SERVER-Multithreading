@@ -2107,10 +2107,11 @@ public final class KernelReadings {
         add(lines, "r02.last_declared", jobs.lastDeclared());
         add(lines, "r02.last_rounds", jobs.lastRounds());
         add(lines, "r02.dispatch_handed_out", module.lastDispatchHandedOut());
-        // Chunk-pipeline rows: every submit the kernel sink minted is one host-entered row;
-        // every task a freeze claimed into a batch is one row the domain now owns. Both reset
-        // with the pipeline ledger, so a window delta is the honest numerator/denominator pair.
-        add(lines, "host_ticked_rows", module.pipelineBatches().mintedCount());
+        // Chunk-pipeline rows: every submit at the sorter's host entry is one host-ticked row,
+        // whatever its placement; every task a freeze claimed into a batch is one owned row.
+        // Both reset with the readings, so a window delta is the numerator/denominator pair.
+        add(lines, "host_ticked_rows",
+            io.izzel.arclight.common.prts.support.PrtsPipelineBatches.hostTickedCount());
         add(lines, "owned_rows", module.pipelineBatches().claimedTaskCount());
         TickPlan plan = module.plans().latest();
         List<String> traced = new ArrayList<>();

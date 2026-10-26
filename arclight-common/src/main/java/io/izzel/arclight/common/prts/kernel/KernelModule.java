@@ -3058,6 +3058,7 @@ public final class KernelModule {
         scheduler.reset();
         pipelineJobs.reset();
         pipelineBatches.reset();
+        PrtsPipelineBatches.resetHostTicked();
         rangeSeals.reset();
         retainedOrders.clear();
         rangeSealFactory.reset();

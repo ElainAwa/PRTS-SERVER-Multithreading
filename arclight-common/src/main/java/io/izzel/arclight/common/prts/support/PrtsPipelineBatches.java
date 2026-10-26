@@ -5,6 +5,7 @@ package io.izzel.arclight.common.prts.support;
 import net.minecraft.util.Unit;
 import net.minecraft.util.thread.ProcessorHandle;
 
+import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 
@@ -37,6 +38,7 @@ public final class PrtsPipelineBatches {
 
     private static volatile TaskSink sink;
     private static volatile LongSupplier tick = () -> 0L;
+    private static final LongAdder HOST_TICKED = new LongAdder();
 
     private PrtsPipelineBatches() {
     }
@@ -57,6 +59,20 @@ public final class PrtsPipelineBatches {
 
     public static long tick() {
         return tick.getAsLong();
+    }
+
+    /** Records one submit that reached the sorter's host entry, whatever its placement. */
+    public static void hostTicked() {
+        HOST_TICKED.increment();
+    }
+
+    /** @return host entries counted since the last reset */
+    public static long hostTickedCount() {
+        return HOST_TICKED.sum();
+    }
+
+    public static void resetHostTicked() {
+        HOST_TICKED.reset();
     }
 
     /** The task the calling thread is running a body of, or null while no sink is installed. */
