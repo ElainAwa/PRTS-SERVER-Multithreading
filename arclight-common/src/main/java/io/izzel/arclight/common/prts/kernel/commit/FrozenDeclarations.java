@@ -75,15 +75,68 @@ public final class FrozenDeclarations {
         }
     }
 
+    /** The cells a batch declaration covers, in the order its ledger cut them. The array is copied
+     * in and out, so a range is immutable; an empty, oversized or non-ascending list declares no
+     * range and is never repaired into one. */
+    public record DeclaredRange(long[] cells) {
+
+        public static final DeclaredRange NONE = new DeclaredRange(new long[0]);
+
+        public DeclaredRange {
+            cells = cells == null ? new long[0] : cells.clone();
+        }
+
+        @Override
+        public long[] cells() {
+            return cells.clone();
+        }
+
+        /** Whether this is a range a declaration may name: at least one cell, at most the declared
+         * bound and strictly ascending. */
+        public boolean declared() {
+            return RangeDigests.wellFormed(cells);
+        }
+
+        public int size() {
+            return cells.length;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof DeclaredRange range && Arrays.equals(cells, range.cells);
+        }
+
+        @Override
+        public int hashCode() {
+            return Arrays.hashCode(cells);
+        }
+
+        @Override
+        public String toString() {
+            return "DeclaredRange" + Arrays.toString(cells);
+        }
+    }
+
     /** What a domain hands in before the plan is frozen: the logical node it declares, the artefact
      * that node would publish and the mapping its own handle mints this run's identity from. It
      * carries no position, which is the frozen plan's to give. */
     public record Candidate(String worldId, String domainId, String nodeKey, DeclaredChunk chunk,
-                            String targetStatus, long instanceId, long worldEpoch) {
+                            String targetStatus, DeclaredRange range, long instanceId,
+                            long worldEpoch) {
 
         public Candidate(String worldId, String domainId, String nodeKey, DeclaredChunk chunk,
                          String targetStatus) {
-            this(worldId, domainId, nodeKey, chunk, targetStatus, 0L, 0L);
+            this(worldId, domainId, nodeKey, chunk, targetStatus, null, 0L, 0L);
+        }
+
+        public Candidate(String worldId, String domainId, String nodeKey, DeclaredChunk chunk,
+                         String targetStatus, long instanceId, long worldEpoch) {
+            this(worldId, domainId, nodeKey, chunk, targetStatus, null, instanceId, worldEpoch);
+        }
+
+        public Candidate(String worldId, String domainId, String nodeKey, DeclaredChunk chunk,
+                         String targetStatus, DeclaredRange range) {
+            this(worldId, domainId, nodeKey, chunk, targetStatus, range, 0L, 0L);
         }
 
         public Candidate {
@@ -91,12 +144,27 @@ public final class FrozenDeclarations {
             domainId = domainId == null ? "" : domainId;
             nodeKey = nodeKey == null ? "" : nodeKey;
             targetStatus = targetStatus == null ? "" : targetStatus;
+            range = range == null ? DeclaredRange.NONE : range;
         }
 
-        /** Whether the artefact half of the declaration is there. */
+        /** Whether an artefact half of the declaration is there: the one chunk and target status an
+         * entry publishes, or the range a batch covers. A range alone is declared for the run-start
+         * seal; the entry table carries one chunk and one status and writes no entry for it. */
         public boolean artefactDeclared() {
+            return entryDeclared() || rangeDeclared();
+        }
+
+        /** Whether this declaration carries the single chunk and target status an entry publishes. */
+        public boolean entryDeclared() {
             return !worldId.isEmpty() && !domainId.isEmpty() && !nodeKey.isEmpty() && chunk != null
                 && !targetStatus.isEmpty();
+        }
+
+        /** Whether this declaration names the cells of its batch: non-empty, at most the declared
+         * bound and strictly ascending. */
+        public boolean rangeDeclared() {
+            return !worldId.isEmpty() && !domainId.isEmpty() && !nodeKey.isEmpty()
+                && range.declared();
         }
 
         /** Whether the handle also carries the mapping a line is identified by: the instance this
@@ -267,8 +335,10 @@ public final class FrozenDeclarations {
     }
 
     /** Joins the declarations a domain handed in with the places the frozen plan's own commit order
-     * gave them. A node the plan carried without a declaration, or with one carrying no artefact or
-     * no frozen mapping, takes no entry: a seat nothing can be identified at is not a seat. */
+     * gave them. A node the plan carried without a declaration, or with one carrying no entry
+     * artefact or no frozen mapping, takes no entry: a seat nothing can be identified at is not a
+     * seat. A range-only declaration is an artefact for the run-start seal, but an entry carries one
+     * chunk and one status, and writing either from a range would invent one. */
     public static Sealed seal(FreezeKey freeze, long planSequence, List<Candidate> candidates,
                               List<Assignment> assignments) {
         if (freeze == null || !freeze.declared()) {
@@ -294,7 +364,7 @@ public final class FrozenDeclarations {
         for (Assignment place : places) {
             NodeKey node = keyOf(place.worldId(), place.domainId(), place.nodeKey());
             Candidate candidate = byNode.get(node);
-            if (candidate == null || !candidate.artefactDeclared() || !candidate.bindingDeclared()) {
+            if (candidate == null || !candidate.entryDeclared() || !candidate.bindingDeclared()) {
                 continue;
             }
             Seat seat = new Seat(place.worldId(), place.domainId(), planSequence, place.position());

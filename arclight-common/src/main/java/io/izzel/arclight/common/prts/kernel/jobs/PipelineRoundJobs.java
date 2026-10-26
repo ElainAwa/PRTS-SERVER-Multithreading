@@ -103,7 +103,11 @@ public final class PipelineRoundJobs implements PrtsPipelineRows.MailboxOwnerTap
         PipelineBatchLedger source = ledger;
         List<PipelineBatchLedger.BatchId> batches = source == null
             ? List.of() : source.freezeAll(planSequence, tick);
-        candidates = candidatesOf(batches);
+        Map<PipelineBatchLedger.BatchId, long[]> cells = new LinkedHashMap<>();
+        for (PipelineBatchLedger.BatchId batch : batches) {
+            cells.put(batch, source.cellsOf(batch));
+        }
+        candidates = candidatesOf(batches, cells);
         Map<String, Trace> traces = new LinkedHashMap<>();
         long covered = 0L;
         long declaredNow = 0L;
@@ -113,7 +117,7 @@ public final class PipelineRoundJobs implements PrtsPipelineRows.MailboxOwnerTap
                 continue;
             }
             long handle = ++handles;
-            JobDeclaration declaration = declarationOf(batch, handle, tasks, source.cellsOf(batch));
+            JobDeclaration declaration = declarationOf(batch, handle, tasks, cells.get(batch));
             if (intake.submit(declaration).accepted()) {
                 declared++;
                 declaredNow++;
@@ -131,14 +135,18 @@ public final class PipelineRoundJobs implements PrtsPipelineRows.MailboxOwnerTap
         return batches.size();
     }
 
-    /** One candidate per batch. The artefact is left out: a batch names up to sixteen cells and the
-     * submit carries no target state, so neither a single chunk nor a status can stand for it. */
-    private List<FrozenDeclarations.Candidate> candidatesOf(List<PipelineBatchLedger.BatchId> batches) {
+    /** One candidate per batch. Its artefact is the cells the batch was cut over, read from the same
+     * ledger binding the planning range is built from. The batch names no single chunk and the submit
+     * carries no target state, so the entry table still writes no entry for it. */
+    private List<FrozenDeclarations.Candidate> candidatesOf(
+            List<PipelineBatchLedger.BatchId> batches,
+            Map<PipelineBatchLedger.BatchId, long[]> cells) {
         List<FrozenDeclarations.Candidate> declared = new ArrayList<>();
         long missing = 0L;
         for (PipelineBatchLedger.BatchId batch : batches) {
             FrozenDeclarations.Candidate candidate = new FrozenDeclarations.Candidate(batch.worldId(),
-                DOMAIN, batchKeyOf(batch), null, "");
+                DOMAIN, batchKeyOf(batch), null, "",
+                new FrozenDeclarations.DeclaredRange(cells.get(batch)));
             if (!candidate.artefactDeclared()) {
                 missing++;
             }

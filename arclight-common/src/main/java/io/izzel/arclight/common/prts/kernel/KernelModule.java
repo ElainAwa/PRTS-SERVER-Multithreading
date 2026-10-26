@@ -992,7 +992,7 @@ public final class KernelModule {
         declarationsSealed++;
     }
 
-    /** The named refusal of the first declaration that carries its artefact and whose world
+    /** The named refusal of the first declaration that carries its entry artefact and whose world
      * generation is not live, and the empty text when every one of them names a live world. What such
      * a declaration gets is no number and no seat, so what is left to say about it is why. */
     private static String declarationEpochRefusal(List<FrozenDeclarations.Candidate> candidates) {
@@ -1000,7 +1000,7 @@ public final class KernelModule {
             return "";
         }
         for (FrozenDeclarations.Candidate candidate : candidates) {
-            if (candidate == null || !candidate.artefactDeclared()) {
+            if (candidate == null || !candidate.entryDeclared()) {
                 continue;
             }
             String refusal = CommitLog.worldEpochRefusal(candidate.worldEpoch());
