@@ -86,6 +86,8 @@ class CommitRingPermissionTest {
         assertFalse(full.logged());
         assertEquals(RejectCode.QUEUE_CAP_EXCEEDED, full.code());
         assertEquals(1L, log.refusedFull());
+        assertEquals(1L, ringOf(log, WORLD, DOMAIN).refusedFull(),
+            "the refusal is visible on the ring that had no room");
         assertEquals(1, log.ringDepth(), "the ring still carries the one entry it admitted");
         assertEquals(1, log.ringCapacity());
     }

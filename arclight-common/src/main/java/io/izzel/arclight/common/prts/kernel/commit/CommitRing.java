@@ -162,6 +162,10 @@ public final class CommitRing {
         return refusedFull;
     }
 
+    void noteRefusedFull() {
+        refusedFull++;
+    }
+
     /** Fills, reads or clearings this ring refused because the permission was not one of its own. */
     public long permissionRefusals() {
         return permissionRefusals;

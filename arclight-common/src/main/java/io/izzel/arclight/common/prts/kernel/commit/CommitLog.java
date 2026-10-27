@@ -487,6 +487,7 @@ public final class CommitLog {
             // a plain report never takes a slot a versioned commit is holding. With no slot held the
             // answer is the one the ring itself gives, refusal code and counters included.
             refusedFull++;
+            ring.noteRefusedFull();
             dropped++;
             return new Verdict(false, Entry.Disposition.DROPPED, RejectCode.QUEUE_CAP_EXCEEDED,
                 sequence, (int) position);
