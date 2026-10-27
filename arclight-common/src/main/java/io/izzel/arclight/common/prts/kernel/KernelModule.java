@@ -233,6 +233,11 @@ public final class KernelModule {
     private final TickPlanStore plans = new TickPlanStore(KernelSettings.planHistoryCap());
     private final SafetyNet safety = new SafetyNet(KernelSettings::safetyDegrade,
         KernelSettings::safetyCascadeCap);
+    /** The reports the newest safety review filed, replaced whenever the net runs. This is an input
+     * of the readout and not a reading of its own; the readout also keeps the last declared domain a
+     * cumulative site row was filed under, so a quiet review does not erase that evidence. It is
+     * written on the owner thread and read by the readout, so it is published whole. */
+    private volatile List<SafetyNet.ViolationReport> lastSafetyReports = List.of();
     private final ZeroEffectDetector zeroEffect = new ZeroEffectDetector();
     private final DualExits exits = new DualExits(KernelSettings.exitWindowTicks());
     /** The one plan authority of this module. A chain is adopted only when the log it carries asks
@@ -1278,7 +1283,7 @@ public final class KernelModule {
             installed.add(domain.id());
         }
         safety.declareDomains(installed);
-        safety.review(sources, tickIndex);
+        lastSafetyReports = List.copyOf(safety.review(sources, tickIndex));
         reviewZeroEffect();
     }
 
@@ -1695,6 +1700,14 @@ public final class KernelModule {
     /** The safety net: the violations it counted and the escalation candidates it published. */
     public SafetyNet safety() {
         return safety;
+    }
+
+    /** The reports the newest safety review filed, in the order the net reported them. A review that
+     * filed nothing leaves this list empty rather than carrying the reports of the tick before; the
+     * readout's attribution of a cumulative site row is kept separately by the safety net, so an empty
+     * list does not erase a domain the row was already filed under. */
+    public List<SafetyNet.ViolationReport> safetyReports() {
+        return lastSafetyReports;
     }
 
     /** The detector that asks whether a rung that claims an effect moved what it acted on. */
@@ -3126,6 +3139,7 @@ public final class KernelModule {
         declarationRefusal = "";
         commits.reset();
         safety.reset();
+        lastSafetyReports = List.of();
         zeroEffect.reset();
         exits.reset();
     }

@@ -360,4 +360,27 @@ class SafetyNetTest {
             pool.shutdownNow();
         }
     }
+
+    @Test
+    void aSuppliedDomainStaysWithTheSiteAfterAQuietReview() {
+        SafetyNet net = new SafetyNet(() -> false, () -> 8);
+        net.declareDomains(List.of("entity"));
+        SafetyNet.Point point = new SafetyNet.Point("world-a", "commit:ring|entity");
+        Map<SafetyNet.Point, Long> refusals = points("world-a", "commit:ring|entity", 1L);
+
+        net.review(new SafetyNet.TickSources(Map.of(), refusals, Map.of(), 0L, 0L, 0L, 0L,
+            Map.of(point, "entity")), 1L);
+        assertEquals("entity", net.siteDomain(SafetyNet.ViolationKind.VERSION_CONFLICT,
+            "commit:ring|entity"));
+
+        List<SafetyNet.ViolationReport> quiet = net.review(new SafetyNet.TickSources(
+            Map.of(), refusals, Map.of(), 0L, 0L, 0L, 0L), 2L);
+        assertTrue(quiet.isEmpty());
+        assertEquals("entity", net.siteDomain(SafetyNet.ViolationKind.VERSION_CONFLICT,
+            "commit:ring|entity"), "a quiet review does not erase the cumulative row's domain");
+
+        net.reset();
+        assertEquals(SafetyNet.KERNEL_ORIGIN, net.siteDomain(SafetyNet.ViolationKind.VERSION_CONFLICT,
+            "commit:ring|entity"), "reset clears the kept attribution");
+    }
 }

@@ -1973,6 +1973,7 @@ public final class KernelReadings {
         SafetyNet net = module.safety();
         ZeroEffectDetector zeroEffect = module.zeroEffect();
         SafetyNet.Cascade cascade = net.cascade();
+        List<SafetyNet.ViolationReport> reports = module.safetyReports();
         add(lines, "safety.observation_only", 1);
         add(lines, "safety.enabled", KernelSettings.safetyNet() ? 1 : 0);
         add(lines, "safety.kinds", SafetyNet.ViolationKind.kindCount());
@@ -1995,18 +1996,18 @@ public final class KernelReadings {
             add(lines, prefix + "escalated", counts.escalated());
             // The two dimensions are read on the union of the sites and the worlds seen in this
             // run, so a kind with nothing on a column still gets the column and reads zero there.
-            // The family of a site key is its attribution: the kernel's own, or the name of a
-            // domain, and only the second makes the row evidence about that domain.
+            // A row is attributed to the last declared domain filed at it, and to the family of its
+            // site key when none was; only a declared domain makes the row evidence about that
+            // domain. The kept attribution is reset with the net, not with a quiet review.
             List<SafetyNet.Cell> siteCells = net.readSite(kind);
             List<SafetyNet.Cell> worldCells = net.readWorld(kind);
             int attributed = 0;
             int siteZeros = 0;
             for (SafetyNet.Cell cell : siteCells) {
+                String attribution = attributionOf(net, reports, kind, cell.key());
                 add(lines, prefix + "site." + safe(cell.key()), cell.count());
-                add(lines, prefix + "site." + safe(cell.key()) + ".domain",
-                    SafetyNet.domainOf(cell.key()));
-                attributed = attributed
-                    + (net.isDomain(SafetyNet.domainOf(cell.key())) ? 1 : 0);
+                add(lines, prefix + "site." + safe(cell.key()) + ".domain", attribution);
+                attributed = attributed + (net.isDomain(attribution) ? 1 : 0);
                 siteZeros = siteZeros + (cell.count() == 0L ? 1 : 0);
             }
             int worldZeros = 0;
@@ -2043,6 +2044,26 @@ public final class KernelReadings {
         add(lines, "safety.zero_effect.last_states", join(zeroEffect.lastStates()));
         add(lines, "safety.zero_effect.criterion",
             "zero_effect := entered>0 and effective>0 and metric(window)-metric(entry)==0");
+    }
+
+    /** The attribution of one site row: the last declared domain filed at this site of this kind,
+     * the domain the newest review names, or the family its site key carries. Only a declared domain
+     * is ever read as one; a quiet review does not erase the evidence the cumulative row retains. */
+    static String attributionOf(SafetyNet net, List<SafetyNet.ViolationReport> reports,
+                                SafetyNet.ViolationKind kind, String siteId) {
+        String kept = net.siteDomain(kind, siteId);
+        if (net.isDomain(kept)) {
+            return kept;
+        }
+        // A caller that only has this tick's reports still gets a domain from them; production needs
+        // no second lookup because the kept site attribution above already answers.
+        for (SafetyNet.ViolationReport report : reports) {
+            if (report.kind() == kind && siteId.equals(report.siteId())
+                && net.isDomain(report.domainKey())) {
+                return report.domainKey();
+            }
+        }
+        return SafetyNet.domainOf(siteId);
     }
 
     /** The two exits: the frame each published last, the fields they share and the two guards that

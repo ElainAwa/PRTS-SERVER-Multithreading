@@ -207,6 +207,7 @@ public final class SafetyNet {
     private final Map<String, LongAdder> escalatedByKind = new LinkedHashMap<>();
     private final Map<String, Integer> window = new LinkedHashMap<>();
     private final Set<String> domains = new LinkedHashSet<>();
+    private final Map<String, String> siteDomains = new LinkedHashMap<>();
     private final LongAdder evidenceEmpty = new LongAdder();
     private final LongAdder escalated = new LongAdder();
     private final LongAdder cascadeSteps = new LongAdder();
@@ -279,6 +280,7 @@ public final class SafetyNet {
             evidenceEmpty.increment();
             return report;
         }
+        rememberDomain(report);
         byKind.computeIfAbsent(kind.key(), key -> new LongAdder()).add(count);
         byKindSite.computeIfAbsent(kind.key() + "|" + report.siteId(), key -> new LongAdder())
             .add(count);
@@ -408,6 +410,7 @@ public final class SafetyNet {
         escalatedByKind.clear();
         window.clear();
         domains.clear();
+        siteDomains.clear();
         evidenceEmpty.reset();
         escalated.reset();
         cascadeSteps.reset();
@@ -472,6 +475,26 @@ public final class SafetyNet {
         return supplied != null && isDomain(supplied) ? supplied : KERNEL_ORIGIN;
     }
 
+    /** Keeps the last declared domain a site row was filed under, so a later quiet review does not
+     * forget the evidence the cumulative counter still carries. Last write wins for one site; the
+     * production site key names its own domain after the ring separator, so two declared domains can
+     * share a site only when the producer builds one that way. */
+    private void rememberDomain(ViolationReport report) {
+        if (report.kind() != null && !report.siteId().isEmpty() && isDomain(report.domain())) {
+            siteDomains.put(report.kind().key() + "|" + report.siteId(), report.domain());
+        }
+    }
+
+    /** The last declared domain filed at one site of one kind, or no attribution when none was. A
+     * site family token is never a domain: only names declared for this run can be kept or returned. */
+    public synchronized String siteDomain(ViolationKind kind, String siteId) {
+        if (kind == null || siteId == null || siteId.isEmpty()) {
+            return KERNEL_ORIGIN;
+        }
+        String domain = siteDomains.get(kind.key() + "|" + siteId);
+        return isDomain(domain) ? domain : KERNEL_ORIGIN;
+    }
+
     /** Reads one tick's worth of counters and files them under the domain that produced them. The
      * review itself is unchanged; the attribution rides along and is reported on the readout. */
     public synchronized List<ViolationReport> review(TickSources sources, long tickIndex,
@@ -480,9 +503,11 @@ public final class SafetyNet {
         String attributed = isDomain(domain) ? domain : KERNEL_ORIGIN;
         for (int index = 0; index < reports.size(); index++) {
             ViolationReport report = reports.get(index);
-            reports.set(index, new ViolationReport(report.kind(), report.worldId(), report.siteId(),
-                report.tickIndex(), report.code(), report.evidence(), report.disposition(),
-                report.cascade(), attributed));
+            ViolationReport attributedReport = new ViolationReport(report.kind(), report.worldId(),
+                report.siteId(), report.tickIndex(), report.code(), report.evidence(),
+                report.disposition(), report.cascade(), attributed);
+            reports.set(index, attributedReport);
+            rememberDomain(attributedReport);
         }
         return reports;
     }
