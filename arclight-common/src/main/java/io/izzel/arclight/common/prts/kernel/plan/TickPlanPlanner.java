@@ -37,9 +37,27 @@ public final class TickPlanPlanner {
         }
     }
 
+    /** Deterministic structural counts of one build. They are not a clock and not a cost: they only
+     * say how much of the plan's structure each declared domain contributed. */
+    public record ModeCounts(Map<String, Long> nodesByDomain, Map<String, Long> modesByDomain) {
+
+        public ModeCounts {
+            nodesByDomain = Map.copyOf(nodesByDomain == null ? Map.of() : nodesByDomain);
+            modesByDomain = Map.copyOf(modesByDomain == null ? Map.of() : modesByDomain);
+        }
+
+        public static ModeCounts empty() {
+            return new ModeCounts(Map.of(), Map.of());
+        }
+    }
+
     /** What one build produced. A refused build carries the code and names the item; it publishes no
      * partial plan. */
-    public record Result(TickPlan plan, RejectCode code, String item) {
+    public record Result(TickPlan plan, RejectCode code, String item, ModeCounts counts) {
+
+        public Result(TickPlan plan, RejectCode code, String item) {
+            this(plan, code, item, ModeCounts.empty());
+        }
 
         public boolean ok() {
             return plan != null;
@@ -125,11 +143,20 @@ public final class TickPlanPlanner {
         }
 
         List<TickPlan.DomainMode> modes = modes(input, graph, unknownSites, feedback);
+        Map<String, Long> nodesByDomain = new TreeMap<>();
+        for (JobGraph.Node node : graph.nodes()) {
+            nodesByDomain.merge(node.domainId(), 1L, Long::sum);
+        }
+        Map<String, Long> modesByDomain = new TreeMap<>();
+        for (TickPlan.DomainMode mode : modes) {
+            modesByDomain.merge(mode.domainId(), 1L, Long::sum);
+        }
+        ModeCounts counts = new ModeCounts(nodesByDomain, modesByDomain);
         long hash = contentHash(input, graph, commitOrder, modes, unknownSites, feedback);
         TickPlan plan = new TickPlan(input.tickIndex(), input.planSequence(),
             input.worldSetGeneration(), input.worlds(), graph, topologicalOrder, commitOrder,
             input.shareTable(), modes, unknownSites, graph.splitIntents(), hash, feedback);
-        return new Result(plan, null, "");
+        return new Result(plan, null, "", counts);
     }
 
     /** Worlds in the order the world set gave them, then any world only a declaration named. */

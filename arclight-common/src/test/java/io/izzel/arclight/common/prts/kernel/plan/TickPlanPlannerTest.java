@@ -72,6 +72,8 @@ class TickPlanPlannerTest {
         assertEquals(TickPlan.Mode.ACTIVE, plan.modeOf(WORLD, "entity").mode());
         assertEquals(TickPlan.Reason.NONE, plan.modeOf(WORLD, "entity").reason());
         assertEquals(0, plan.unknownSites());
+        assertEquals(Map.of("entity", 2L), result.counts().nodesByDomain());
+        assertEquals(Map.of("entity", 1L), result.counts().modesByDomain());
     }
 
     @Test
