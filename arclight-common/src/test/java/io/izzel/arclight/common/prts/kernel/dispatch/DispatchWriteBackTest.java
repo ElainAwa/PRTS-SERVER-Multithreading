@@ -2,6 +2,7 @@
 package io.izzel.arclight.common.prts.kernel.dispatch;
 
 import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
+import io.izzel.arclight.common.prts.kernel.commit.CommitLog;
 import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
 import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
 import io.izzel.arclight.common.prts.kernel.diff.StateHasher;
@@ -435,6 +436,33 @@ class DispatchWriteBackTest {
             pool.shutdown(true, true, 500L);
             arena.reset();
         }
+    }
+
+    @Test
+    void aBoundSinkSeesOneLandedTakeoverBatchAndNoRefusedOne() {
+        DispatchReadings readings = new DispatchReadings();
+        IntentQueue intents = new IntentQueue(() -> 1, () -> 1);
+        Map<String, PrtsWorldWriteTaps.DeferredWrite> store = new LinkedHashMap<>();
+        DispatchWriteBack writeBack = new DispatchWriteBack(intents,
+            (prefix, write) -> {
+                store.put(prefix + ":1", write);
+                return prefix + ":1";
+            }, store::remove, world -> 1L, readings, () -> true);
+        List<CommitLog.Batch> seen = new ArrayList<>();
+        writeBack.bindCommitSink(seen::add);
+
+        assertEquals(DispatchWriteBack.Settlement.ACCEPTED, writeBack.settle(batch(1L), rows(1L)));
+        assertEquals(1, seen.size(), "an accepted takeover batch must reach the sink once");
+        CommitLog.Batch reported = seen.get(0);
+        assertEquals(WORLD, reported.worldId());
+        assertEquals("entity", reported.domainId());
+        assertEquals(1, reported.rows());
+        assertTrue(reported.nodeKey().startsWith("entity/" + WORLD + "/"),
+            "the sink report key did not name the entity pair");
+
+        assertEquals(DispatchWriteBack.Settlement.REFUSED_QUEUE_CAP,
+            writeBack.settle(batch(2L), rows(2L)));
+        assertEquals(1, seen.size(), "a refused batch must not be reported as landed");
     }
 
     private static DispatchWriteBack takeoverLeg(DispatchReadings readings,

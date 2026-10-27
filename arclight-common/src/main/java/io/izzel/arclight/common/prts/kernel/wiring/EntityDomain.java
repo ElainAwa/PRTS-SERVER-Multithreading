@@ -80,6 +80,14 @@ public final class EntityDomain implements KernelDomain {
         this.writeBack = new DispatchWriteBack(module.intents(), module.payloads()::bind,
             module.payloads()::drop, module.guard().worldEpochs()::epochOf, readings,
             KernelSettings::dispatchTakeover);
+        // The entity domain owns one commit-ring producer: its landed takeover batch. Resolve the
+        // current log on every report; the commit-log gate keeps a log that never begins or closes a
+        // tick from being fed, so its rings cannot fill unseen.
+        this.writeBack.bindCommitSink(batch -> {
+            if (KernelSettings.commitLog()) {
+                module.commits().reach(batch);
+            }
+        });
     }
 
     @Override
