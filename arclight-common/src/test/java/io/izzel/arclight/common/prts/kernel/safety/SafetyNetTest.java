@@ -201,4 +201,24 @@ class SafetyNetTest {
             new SafetyNet.TickSources(declared, Map.of(), Map.of(), 0L, 0L, 0L, 0L), 4L);
         assertTrue(none.isEmpty());
     }
+
+    @Test
+    void aDeclaredDomainSuppliedForAPointRidesOnItsReport() {
+        SafetyNet.Point point = new SafetyNet.Point("world-a", "block_write|main|registered");
+        Map<SafetyNet.Point, Long> denied = points("world-a", "block_write|main|registered", 1L);
+        Map<SafetyNet.Point, String> supplied = Map.of(point, "entity");
+
+        SafetyNet undeclared = new SafetyNet(() -> false, () -> 8);
+        List<SafetyNet.ViolationReport> plain = undeclared.review(
+            new SafetyNet.TickSources(denied, Map.of(), Map.of(), 0L, 0L, 0L, 0L, supplied), 1L);
+        assertEquals(SafetyNet.KERNEL_ORIGIN, plain.get(0).domainKey(),
+            "a domain that was not declared is not a domain");
+
+        SafetyNet declared = new SafetyNet(() -> false, () -> 8);
+        declared.declareDomains(List.of("entity"));
+        List<SafetyNet.ViolationReport> attributed = declared.review(
+            new SafetyNet.TickSources(denied, Map.of(), Map.of(), 0L, 0L, 0L, 0L, supplied), 1L);
+        assertEquals("entity", attributed.get(0).domainKey());
+        assertTrue(attributed.get(0).attributed());
+    }
 }

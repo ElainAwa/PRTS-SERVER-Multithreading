@@ -161,12 +161,21 @@ public final class SafetyNet {
      * layer that saw it. */
     public record TickSources(Map<Point, Long> writeDenied, Map<Point, Long> commitViolations,
                               Map<Point, Long> waitOverruns, long versionMismatch,
-                              long unregisteredAccess, long rungEntered, long rungSkipped) {
+                              long unregisteredAccess, long rungEntered, long rungSkipped,
+                              Map<Point, String> domains) {
+
+        public TickSources(Map<Point, Long> writeDenied, Map<Point, Long> commitViolations,
+                           Map<Point, Long> waitOverruns, long versionMismatch,
+                           long unregisteredAccess, long rungEntered, long rungSkipped) {
+            this(writeDenied, commitViolations, waitOverruns, versionMismatch,
+                unregisteredAccess, rungEntered, rungSkipped, Map.of());
+        }
 
         public TickSources {
             writeDenied = copy(writeDenied);
             commitViolations = copy(commitViolations);
             waitOverruns = copy(waitOverruns);
+            domains = domains == null ? Map.of() : Map.copyOf(domains);
         }
 
         public static TickSources empty() {
@@ -206,6 +215,7 @@ public final class SafetyNet {
     private int windowDepth;
     private long lastWindowDepth;
     private TickSources previous = TickSources.empty();
+    private Map<Point, String> currentDomains = Map.of();
 
     public SafetyNet(BooleanSupplier degradeSwitch, IntSupplier cascadeCap) {
         this.degradeSwitch = degradeSwitch == null ? () -> false : degradeSwitch;
@@ -216,34 +226,39 @@ public final class SafetyNet {
      * closes the cascade window of the tick it ends. */
     public synchronized List<ViolationReport> review(TickSources sources, long tickIndex) {
         TickSources now = sources == null ? TickSources.empty() : sources;
-        List<ViolationReport> reports = new ArrayList<>();
-        diff(reports, ViolationKind.CROSS_OWNER_WRITE, now.writeDenied(), previous.writeDenied(),
-            tickIndex, "denied write");
-        diff(reports, ViolationKind.VERSION_CONFLICT, now.commitViolations(),
-            previous.commitViolations(), tickIndex, "commit out of plan order");
-        long mismatches = now.versionMismatch() - previous.versionMismatch();
-        if (mismatches > 0L) {
-            reports.add(record(ViolationKind.VERSION_CONFLICT, NO_WORLD,
-                "ledger:version", tickIndex, mismatches + " version mismatch(es)",
-                "counted; the refused write stays refused", mismatches));
+        currentDomains = now.domains();
+        try {
+            List<ViolationReport> reports = new ArrayList<>();
+            diff(reports, ViolationKind.CROSS_OWNER_WRITE, now.writeDenied(), previous.writeDenied(),
+                tickIndex, "denied write");
+            diff(reports, ViolationKind.VERSION_CONFLICT, now.commitViolations(),
+                previous.commitViolations(), tickIndex, "commit out of plan order");
+            long mismatches = now.versionMismatch() - previous.versionMismatch();
+            if (mismatches > 0L) {
+                reports.add(record(ViolationKind.VERSION_CONFLICT, NO_WORLD,
+                    "ledger:version", tickIndex, mismatches + " version mismatch(es)",
+                    "counted; the refused write stays refused", mismatches));
+            }
+            diff(reports, ViolationKind.HARD_TIMEOUT, now.waitOverruns(), previous.waitOverruns(),
+                tickIndex, "wait past its bound");
+            long unregistered = now.unregisteredAccess() - previous.unregisteredAccess();
+            if (unregistered > 0L) {
+                reports.add(record(ViolationKind.UNKNOWN_ACCESS, NO_WORLD,
+                    "wait:unregistered", tickIndex, unregistered + " undeclared access(es)",
+                    "counted; the site stays unregistered until it declares", unregistered));
+            }
+            long skipped = now.rungSkipped() - previous.rungSkipped();
+            if (skipped > 0L) {
+                reports.add(record(ViolationKind.ESCALATE_SERIAL, NO_WORLD,
+                    "ladder:order", tickIndex, skipped + " rung(s) skipped",
+                    "counted; the ladder walked the rungs it passed", skipped));
+            }
+            previous = now;
+            closeWindow();
+            return reports;
+        } finally {
+            currentDomains = Map.of();
         }
-        diff(reports, ViolationKind.HARD_TIMEOUT, now.waitOverruns(), previous.waitOverruns(),
-            tickIndex, "wait past its bound");
-        long unregistered = now.unregisteredAccess() - previous.unregisteredAccess();
-        if (unregistered > 0L) {
-            reports.add(record(ViolationKind.UNKNOWN_ACCESS, NO_WORLD,
-                "wait:unregistered", tickIndex, unregistered + " undeclared access(es)",
-                "counted; the site stays unregistered until it declares", unregistered));
-        }
-        long skipped = now.rungSkipped() - previous.rungSkipped();
-        if (skipped > 0L) {
-            reports.add(record(ViolationKind.ESCALATE_SERIAL, NO_WORLD,
-                "ladder:order", tickIndex, skipped + " rung(s) skipped",
-                "counted; the ladder walked the rungs it passed", skipped));
-        }
-        previous = now;
-        closeWindow();
-        return reports;
     }
 
     /** Records one violation seen at the moment it happened. A report without evidence is refused:
@@ -259,7 +274,7 @@ public final class SafetyNet {
                                                 long tickIndex, String evidence, String disposition,
                                                 long count) {
         ViolationReport report = new ViolationReport(kind, worldId, siteId, tickIndex,
-            kind == null ? null : kind.code(), evidence, disposition, 0, KERNEL_ORIGIN);
+            kind == null ? null : kind.code(), evidence, disposition, 0, attributionFor(worldId, siteId));
         if (kind == null || !report.evidencePresent()) {
             evidenceEmpty.increment();
             return report;
@@ -450,6 +465,11 @@ public final class SafetyNet {
     public synchronized String attributionOf(String siteId) {
         String domain = domainOf(siteId);
         return isDomain(domain) ? domain : KERNEL_ORIGIN;
+    }
+
+    private String attributionFor(String worldId, String siteId) {
+        String supplied = currentDomains.get(new Point(worldId, siteId));
+        return supplied != null && isDomain(supplied) ? supplied : KERNEL_ORIGIN;
     }
 
     /** Reads one tick's worth of counters and files them under the domain that produced them. The
