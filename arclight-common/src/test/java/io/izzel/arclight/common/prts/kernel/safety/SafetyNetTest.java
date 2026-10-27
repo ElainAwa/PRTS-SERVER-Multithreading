@@ -4,10 +4,17 @@ package io.izzel.arclight.common.prts.kernel.safety;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -220,5 +227,137 @@ class SafetyNetTest {
             new SafetyNet.TickSources(denied, Map.of(), Map.of(), 0L, 0L, 0L, 0L, supplied), 1L);
         assertEquals("entity", attributed.get(0).domainKey());
         assertTrue(attributed.get(0).attributed());
+    }
+
+    @Test
+    void aMixedReviewFilesOnlyTheSuppliedDeclaredDomains() {
+        SafetyNet.Point attributed = new SafetyNet.Point("world-a", "block_write|main|registered");
+        SafetyNet.Point undeclared = new SafetyNet.Point("world-b", "platform_write|worker|unregistered");
+        SafetyNet.Point empty = new SafetyNet.Point("world-c", "wait:chunk");
+        SafetyNet.Point absent = new SafetyNet.Point("world-d", "commit:order");
+        Map<SafetyNet.Point, Long> denied = new LinkedHashMap<>();
+        denied.put(attributed, 1L);
+        denied.put(undeclared, 1L);
+        denied.put(empty, 1L);
+        denied.put(absent, 1L);
+        Map<SafetyNet.Point, String> supplied = new LinkedHashMap<>();
+        supplied.put(attributed, "entity");
+        supplied.put(undeclared, "ghost");
+        supplied.put(empty, "");
+        Map<SafetyNet.Point, String> expected = Map.of(attributed, "entity",
+            undeclared, SafetyNet.KERNEL_ORIGIN, empty, SafetyNet.KERNEL_ORIGIN,
+            absent, SafetyNet.KERNEL_ORIGIN);
+
+        SafetyNet net = new SafetyNet(() -> false, () -> 8);
+        net.declareDomains(List.of("entity"));
+        List<SafetyNet.ViolationReport> reports = net.review(
+            new SafetyNet.TickSources(denied, Map.of(), Map.of(), 0L, 0L, 0L, 0L, supplied), 1L);
+        SafetyNet control = new SafetyNet(() -> false, () -> 8);
+        control.declareDomains(List.of("entity"));
+        List<SafetyNet.ViolationReport> plain = control.review(
+            new SafetyNet.TickSources(denied, Map.of(), Map.of(), 0L, 0L, 0L, 0L), 1L);
+
+        assertEquals(4, reports.size());
+        assertEquals(plain.size(), reports.size());
+        for (int index = 0; index < reports.size(); index++) {
+            SafetyNet.ViolationReport report = reports.get(index);
+            SafetyNet.ViolationReport bare = plain.get(index);
+            assertEquals(bare.kind(), report.kind());
+            assertEquals(bare.worldId(), report.worldId());
+            assertEquals(bare.siteId(), report.siteId());
+            assertEquals(bare.code(), report.code());
+            assertEquals(bare.cascade(), report.cascade());
+            assertEquals(expected.get(new SafetyNet.Point(report.worldId(), report.siteId())),
+                report.domainKey());
+        }
+        assertEquals(4L, net.total());
+        assertEquals(control.total(), net.total());
+        assertEquals(control.readSite(SafetyNet.ViolationKind.CROSS_OWNER_WRITE),
+            net.readSite(SafetyNet.ViolationKind.CROSS_OWNER_WRITE));
+        assertEquals(control.cascade(), net.cascade());
+        assertTrue(net.conservationHolds());
+    }
+
+    @Test
+    void aSuppliedDomainDoesNotLeakPastItsReview() {
+        SafetyNet net = new SafetyNet(() -> false, () -> 8);
+        net.declareDomains(List.of("entity"));
+        SafetyNet.Point point = new SafetyNet.Point("world-a", "commit:ring|entity");
+        Map<SafetyNet.Point, String> supplied = new HashMap<>();
+        supplied.put(point, "entity");
+        SafetyNet.TickSources firstSources = new SafetyNet.TickSources(
+            points("world-a", "commit:ring|entity", 1L), Map.of(), Map.of(), 0L, 0L, 0L, 0L, supplied);
+        supplied.clear();
+
+        List<SafetyNet.ViolationReport> first = net.review(firstSources, 1L);
+        assertEquals(1, first.size());
+        assertEquals("entity", first.get(0).domainKey(),
+            "the sources keep their own copy of the supplied domains");
+
+        SafetyNet.ViolationReport outside = net.report(SafetyNet.ViolationKind.HARD_TIMEOUT,
+            "world-a", "commit:ring|entity", 2L, "one", "counted");
+        assertEquals(SafetyNet.KERNEL_ORIGIN, outside.domainKey(),
+            "a report outside the review has no supplied domain");
+
+        List<SafetyNet.ViolationReport> next = net.review(new SafetyNet.TickSources(
+            points("world-a", "commit:ring|entity", 2L), Map.of(), Map.of(), 0L, 0L, 0L, 0L), 3L);
+        assertEquals(1, next.size());
+        assertEquals(SafetyNet.KERNEL_ORIGIN, next.get(0).domainKey());
+    }
+
+    @Test
+    void anExplicitReviewDomainOverridesThePointsOwnDomain() {
+        SafetyNet net = new SafetyNet(() -> false, () -> 8);
+        net.declareDomains(List.of("entity", "other"));
+        SafetyNet.Point point = new SafetyNet.Point("world-a", "commit:ring|entity");
+        Map<SafetyNet.Point, String> supplied = Map.of(point, "entity");
+
+        List<SafetyNet.ViolationReport> reports = net.review(new SafetyNet.TickSources(
+            points("world-a", "commit:ring|entity", 1L), Map.of(), Map.of(), 0L, 0L, 0L, 0L, supplied),
+            1L, "other");
+        assertEquals(1, reports.size());
+        assertEquals("other", reports.get(0).domainKey());
+
+        List<SafetyNet.ViolationReport> undeclared = net.review(new SafetyNet.TickSources(
+            points("world-a", "commit:ring|entity", 2L), Map.of(), Map.of(), 0L, 0L, 0L, 0L, supplied),
+            2L, "ghost");
+        assertEquals(1, undeclared.size());
+        assertEquals(SafetyNet.KERNEL_ORIGIN, undeclared.get(0).domainKey(),
+            "an undeclared explicit domain falls back to the kernel origin");
+    }
+
+    @Test
+    void concurrentReviewsKeepTheirOwnSuppliedDomains() throws Exception {
+        int reviews = 4;
+        SafetyNet net = new SafetyNet(() -> false, () -> 8);
+        List<String> declared = new ArrayList<>(reviews);
+        for (int index = 0; index < reviews; index++) {
+            declared.add("entity-" + index);
+        }
+        net.declareDomains(declared);
+        ExecutorService pool = Executors.newFixedThreadPool(reviews);
+        try {
+            CyclicBarrier start = new CyclicBarrier(reviews);
+            List<Future<List<SafetyNet.ViolationReport>>> futures = new ArrayList<>(reviews);
+            for (int index = 0; index < reviews; index++) {
+                final int slot = index;
+                futures.add(pool.submit(() -> {
+                    start.await();
+                    SafetyNet.Point point = new SafetyNet.Point("world-" + slot,
+                        "commit:ring|entity-" + slot);
+                    return net.review(new SafetyNet.TickSources(Map.of(), Map.of(point, 1L), Map.of(),
+                        0L, 0L, 0L, 0L, Map.of(point, "entity-" + slot)), slot + 1L);
+                }));
+            }
+            for (int index = 0; index < reviews; index++) {
+                List<SafetyNet.ViolationReport> reports = futures.get(index).get(30L, TimeUnit.SECONDS);
+                assertEquals(1, reports.size());
+                assertEquals("world-" + index, reports.get(0).worldId());
+                assertEquals("entity-" + index, reports.get(0).domainKey());
+            }
+            assertEquals((long) reviews, net.total());
+        } finally {
+            pool.shutdownNow();
+        }
     }
 }

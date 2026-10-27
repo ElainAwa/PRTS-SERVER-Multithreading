@@ -1270,7 +1270,7 @@ public final class KernelModule {
         SafetyNet.TickSources sources = new SafetyNet.TickSources(denied, commitViolations,
             waitOverruns, ledger.codeCount(RejectCode.VERSION_MISMATCH),
             waitPoints.unregisteredCallSites(), ladder.enteredTotal(),
-            ladder.sign().skippedCount());
+            ladder.sign().skippedCount(), commitRingDomains(commits.rings()));
         // The domains installed in this run are declared here, once per tick, so a counter can be
         // read with the name of the domain it belongs to instead of an inferred one.
         List<String> installed = new java.util.ArrayList<>(domains.size());
@@ -1280,6 +1280,17 @@ public final class KernelModule {
         safety.declareDomains(installed);
         safety.review(sources, tickIndex);
         reviewZeroEffect();
+    }
+
+    // A commit ring is the one safety producer that names a domain; the aggregate counters above the
+    // rings and the write, wait and ladder counters name none.
+    static Map<SafetyNet.Point, String> commitRingDomains(List<CommitRing> rings) {
+        Map<SafetyNet.Point, String> domains = new java.util.LinkedHashMap<>();
+        for (CommitRing ring : rings) {
+            domains.put(new SafetyNet.Point(ring.worldId(), "commit:ring|" + ring.domainId()),
+                ring.domainId());
+        }
+        return domains;
     }
 
     /** Watches the metered value of the class each rung of the ladder stands for and asks, one
