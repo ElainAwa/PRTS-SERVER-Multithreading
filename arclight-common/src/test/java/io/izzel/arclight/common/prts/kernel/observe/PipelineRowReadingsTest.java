@@ -40,5 +40,7 @@ class PipelineRowReadingsTest {
             "the sink-minted pipeline submits are published as host-ticked rows");
         assertTrue(export.stream().anyMatch(line -> line.startsWith("owned_rows=")),
             "the tasks a freeze claims are published as owned rows");
+        assertTrue(export.stream().anyMatch(line -> line.startsWith("plan.c1.nanos_total=")),
+            "the chunk-pipeline declaration cost is published apart from the whole plan");
     }
 }

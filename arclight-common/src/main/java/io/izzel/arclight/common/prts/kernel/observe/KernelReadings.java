@@ -941,6 +941,14 @@ public final class KernelReadings {
         add(lines, "plan.nanos_builds", module.planNanosBuilds());
         add(lines, "plan.nanos_per_build", module.planNanosBuilds() == 0L ? 0L
             : module.planNanosTotal() / module.planNanosBuilds());
+        // The chunk-pipeline declaration step is timed apart from the whole plan build: it is the
+        // part of F the R02/C2 domain itself executes inside the freeze, not the shared planner.
+        add(lines, "plan.c1.nanos_last", module.planC1NanosLast());
+        add(lines, "plan.c1.nanos_total", module.planC1NanosTotal());
+        add(lines, "plan.c1.nanos_max", module.planC1NanosMax());
+        add(lines, "plan.c1.nanos_builds", module.planC1NanosBuilds());
+        add(lines, "plan.c1.nanos_per_build", module.planC1NanosBuilds() == 0L ? 0L
+            : module.planC1NanosTotal() / module.planC1NanosBuilds());
         add(lines, "plan.control_observed", control.observed() ? 1 : 0);
         add(lines, "plan.control_tick", control.tickIndex());
         add(lines, "plan.control_sequence", control.planSequence());

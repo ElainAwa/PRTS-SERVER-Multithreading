@@ -386,6 +386,10 @@ public final class KernelModule {
     private long planNanosTotal;
     private long planNanosMax;
     private long planNanosBuilds;
+    private long planC1NanosLast;
+    private long planC1NanosTotal;
+    private long planC1NanosMax;
+    private long planC1NanosBuilds;
     private long windowStartTick;
     private boolean started;
     private MeterWindow lastWindow;
@@ -867,7 +871,15 @@ public final class KernelModule {
         }
         planSequence++;
         if (KernelSettings.pipelineJobs() && KernelSettings.tickPlan()) {
+            long c1Started = System.nanoTime();
             noteJobDeclarations(pipelineJobs.declareInto(jobIntake, planSequence, tickIndex));
+            long c1Nanos = System.nanoTime() - c1Started;
+            planC1NanosLast = c1Nanos;
+            planC1NanosTotal += c1Nanos;
+            planC1NanosBuilds++;
+            if (c1Nanos > planC1NanosMax) {
+                planC1NanosMax = c1Nanos;
+            }
         }
         // The demands of this freeze are read once, before the plan is built, and the declarations of
         // that one window are handed to the same intake the plan takes from below: a capture the
@@ -1626,6 +1638,26 @@ public final class KernelModule {
     /** How many plan builds were timed. */
     public long planNanosBuilds() {
         return planNanosBuilds;
+    }
+
+    /** How long the last chunk-pipeline declaration step took, in nanoseconds. */
+    public long planC1NanosLast() {
+        return planC1NanosLast;
+    }
+
+    /** How long all chunk-pipeline declaration steps took together, in nanoseconds. */
+    public long planC1NanosTotal() {
+        return planC1NanosTotal;
+    }
+
+    /** The longest chunk-pipeline declaration step so far, in nanoseconds. */
+    public long planC1NanosMax() {
+        return planC1NanosMax;
+    }
+
+    /** How many chunk-pipeline declaration steps were timed. */
+    public long planC1NanosBuilds() {
+        return planC1NanosBuilds;
     }
 
     /** The bounded intake a domain hands its declarations to. */
@@ -3028,6 +3060,10 @@ public final class KernelModule {
         planNanosTotal = 0L;
         planNanosMax = 0L;
         planNanosBuilds = 0L;
+        planC1NanosLast = 0L;
+        planC1NanosTotal = 0L;
+        planC1NanosMax = 0L;
+        planC1NanosBuilds = 0L;
         arena.reset();
         passthrough.reset();
         arms.reset();
