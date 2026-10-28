@@ -16,6 +16,7 @@ public final class KernelCommandExtension implements PrtsCommandExtension {
     private static final String NAME = "kernel";
     private static final String SELFTEST = "selftest";
     private static final String RESET = "reset";
+    private static final String DRAIN = "drain";
     private static final String PREFIX = "[PRTS] kernel ";
 
     private KernelCommandExtension() {
@@ -32,7 +33,7 @@ public final class KernelCommandExtension implements PrtsCommandExtension {
 
     @Override
     public List<String> subcommands() {
-        return List.of(RESET, SELFTEST);
+        return List.of(DRAIN, RESET, SELFTEST);
     }
 
     @Override
@@ -46,13 +47,17 @@ public final class KernelCommandExtension implements PrtsCommandExtension {
         if (arguments.size() == 1 && SELFTEST.equalsIgnoreCase(arguments.get(0))) {
             return selftest();
         }
-        return List.of("[PRTS] kernel usage: /prts kernel [" + RESET + "|" + SELFTEST + "]");
+        if (arguments.size() == 1 && DRAIN.equalsIgnoreCase(arguments.get(0))) {
+            return drain();
+        }
+        return List.of("[PRTS] kernel usage: /prts kernel [" + DRAIN + "|" + RESET + "|"
+            + SELFTEST + "]");
     }
 
     @Override
     public List<String> complete(List<String> arguments) {
         if (arguments == null || arguments.isEmpty()) {
-            return List.of(RESET, SELFTEST);
+            return List.of(DRAIN, RESET, SELFTEST);
         }
         return List.of();
     }
@@ -85,6 +90,15 @@ public final class KernelCommandExtension implements PrtsCommandExtension {
             + request.carriedOut() + " handedOff=" + request.handedOff() + " reason="
             + request.reason() + " queueDepth=" + module.resetQueueDepth() + " trace="
             + module.commitResetTrace());
+    }
+
+    /** One session asks the kernel for its ordered end flush. It is not terminal: the next tick may
+     * still report and flush. When claims are disabled the module answers zero without touching a
+     * log, and a claim point with nothing buffered answers zero too. */
+    private static List<String> drain() {
+        int delivered = KernelModule.instance().drainClaimReports();
+        return List.of(PREFIX + "drain delivered=" + delivered
+            + " (end flush; non-terminal; 0 when claims are off or no reports are buffered)");
     }
 
     private static List<String> selftest() {
