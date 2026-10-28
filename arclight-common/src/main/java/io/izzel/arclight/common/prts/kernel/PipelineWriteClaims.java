@@ -17,14 +17,20 @@ import io.izzel.arclight.common.prts.kernel.sites.WorldEpochs;
 import io.izzel.arclight.common.prts.support.PrtsPipelineRows;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -39,14 +45,25 @@ import java.util.function.Function;
  *
  * <p>Nothing here decides a write: a write the seated slot covers is handed to the same judged path
  * the short path always had, and only a claim whose contract still holds is captured. The writes a
- * claim landed are reported once, at the freeze that closes the span, as the batches a real commit
- * log ordered - a span that landed nothing reports nothing.
+ * claim landed are buffered when the span closes and reach the commit log once the plan that ordered
+ * them has closed and no earlier plan is still open; a span that landed nothing reports nothing.
  */
 public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerTap {
 
     /** How many ticks a claim of one declared job covers; the declaration names the window and this
      * point never extends it. */
     public static final int HOLD_TICKS = 40;
+
+    /** The most reports the producer may hold before it has delivered them; past this the point
+     * fails closed instead of dropping a line. */
+    public static final int PENDING_REPORT_CAP = ReportBuffer.DEFAULT_REPORT_CAP;
+
+    /** The most plans one end-of-window drain may flush; past this the point fails closed. */
+    public static final int DRAIN_PLAN_CAP = ReportBuffer.DRAIN_PLAN_CAP;
+
+    /** A landing whose report pass cannot take its lock this many times in a row has a stuck
+     * writer; the point fails closed instead of starving the report. */
+    static final int MAX_DEFERRED_LANDING_PASSES = 64;
 
     /** One declared job that claims writes: the batch the plan ordered, the write set the claim table
      * translated out of its declaration and the contract a slot carries. */
@@ -90,15 +107,255 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         }
     }
 
+    /** The bounded, server-thread buffer between a landing and the commit log. A report is held
+     * until the plan that ordered it is closed and every earlier plan has already been delivered;
+     * the buffer sorts each plan by position and refuses to grow past its bounds instead of
+     * dropping a line. */
+    static final class ReportBuffer {
+
+        static final int DEFAULT_REPORT_CAP = 4096;
+        static final int DEFAULT_ROW_CAP = 1_000_000;
+        static final int DRAIN_PLAN_CAP = 45;
+
+        private record Pending(Report report, Attributed attributed) {
+        }
+
+        private record PlanRows(long plan, List<Pending> rows) {
+        }
+
+        private final int reportCap;
+        private final int rowCap;
+        private final Map<Long, List<Pending>> pending = new LinkedHashMap<>();
+        private final Map<String, long[]> lastDelivered = new HashMap<>();
+        private long pendingRows;
+        private boolean failed;
+
+        ReportBuffer(int reportCap, int rowCap) {
+            this.reportCap = Math.max(1, reportCap);
+            this.rowCap = Math.max(1, rowCap);
+        }
+
+        int pendingReports() {
+            int reports = 0;
+            for (List<Pending> plan : pending.values()) {
+                reports += plan.size();
+            }
+            return reports;
+        }
+
+        long pendingRows() {
+            return pendingRows;
+        }
+
+        int pendingPlans() {
+            return pending.size();
+        }
+
+        boolean failed() {
+            return failed;
+        }
+
+        void markFailed() {
+            failed = true;
+        }
+
+        void ensureOpen() {
+            if (failed) {
+                throw new IllegalStateException("claim report buffer already failed");
+            }
+        }
+
+        void checkCapacity(int reports, long rows) {
+            ensureOpen();
+            if (pendingReports() + reports > reportCap) {
+                failed = true;
+                throw new IllegalStateException("claim report buffer cap exceeded");
+            }
+            if (pendingRows + rows > rowCap) {
+                failed = true;
+                throw new IllegalStateException("claim report row cap exceeded");
+            }
+        }
+
+        int add(long planSequence, List<Report> reports, List<Attributed> attributed) {
+            if (reports == null || reports.isEmpty()) {
+                return 0;
+            }
+            long rows = 0L;
+            for (Report report : reports) {
+                rows += report.rows();
+            }
+            checkCapacity(reports.size(), rows);
+            addUnchecked(planSequence, reports, attributed);
+            return reports.size();
+        }
+
+        void addAll(Map<Long, List<Report>> reports, Map<Long, List<Attributed>> attributed) {
+            int count = 0;
+            long rows = 0L;
+            for (List<Report> plan : reports.values()) {
+                count += plan.size();
+                for (Report report : plan) {
+                    rows += report.rows();
+                }
+            }
+            if (count == 0) {
+                return;
+            }
+            checkCapacity(count, rows);
+            for (Map.Entry<Long, List<Report>> entry : reports.entrySet()) {
+                addUnchecked(entry.getKey(), entry.getValue(),
+                    attributed == null ? null : attributed.get(entry.getKey()));
+            }
+        }
+
+        private void addUnchecked(long planSequence, List<Report> reports,
+                                  List<Attributed> attributed) {
+            List<Pending> target = pending.computeIfAbsent(planSequence, key -> new ArrayList<>());
+            for (int i = 0; i < reports.size(); i++) {
+                Report report = reports.get(i);
+                Attributed payload = attributed == null || i >= attributed.size() ? null
+                    : attributed.get(i);
+                target.add(new Pending(report, payload));
+                pendingRows += report.rows();
+            }
+        }
+
+        int flushClosed(Collection<Long> openPlans, Consumer<Report> sink,
+                        Consumer<Attributed> settlement) {
+            if (sink == null) {
+                return 0;
+            }
+            ensureOpen();
+            if (pending.isEmpty()) {
+                return 0;
+            }
+            long barrier = Long.MAX_VALUE;
+            for (Long plan : openPlans) {
+                if (plan != null) {
+                    barrier = Math.min(barrier, plan);
+                }
+            }
+            List<Long> ready = new ArrayList<>();
+            for (Long plan : pending.keySet()) {
+                if (plan < barrier) {
+                    ready.add(plan);
+                }
+            }
+            ready.sort(Long::compareTo);
+            return deliver(ready, sink, settlement);
+        }
+
+        int flushAll(Consumer<Report> sink, Consumer<Attributed> settlement, int planCap) {
+            if (sink == null) {
+                return 0;
+            }
+            ensureOpen();
+            if (pending.size() > Math.max(1, planCap)) {
+                failed = true;
+                throw new IllegalStateException("claim report drain cap exceeded");
+            }
+            List<Long> all = new ArrayList<>(pending.keySet());
+            all.sort(Long::compareTo);
+            return deliver(all, sink, settlement);
+        }
+
+        /** End flush, not a terminal state: a later tick may still report and flush. */
+        int drain(Consumer<Report> sink, Consumer<Attributed> settlement, int planCap) {
+            return flushAll(sink, settlement, planCap);
+        }
+
+        private int deliver(List<Long> plans, Consumer<Report> sink,
+                            Consumer<Attributed> settlement) {
+            List<PlanRows> batches = new ArrayList<>();
+            for (Long plan : plans) {
+                List<Pending> rows = pending.get(plan);
+                if (rows == null) {
+                    continue;
+                }
+                rows.sort(Comparator.comparingInt((Pending row) -> row.report().position())
+                    .thenComparing(row -> row.report().nodeKey(),
+                        Comparator.nullsFirst(Comparator.naturalOrder())));
+                batches.add(new PlanRows(plan, rows));
+            }
+            // Validate the whole delivery against the order cursor before any sink or pending
+            // change. A regression is therefore all-or-nothing: no report is handed out and no
+            // buffered plan is lost.
+            Map<String, long[]> preview = new HashMap<>();
+            for (Map.Entry<String, long[]> entry : lastDelivered.entrySet()) {
+                preview.put(entry.getKey(), entry.getValue().clone());
+            }
+            for (PlanRows batch : batches) {
+                for (Pending row : batch.rows()) {
+                    Report report = row.report();
+                    String ring = report.worldId() + "/" + report.domainId();
+                    long[] last = preview.get(ring);
+                    if (last != null && (report.planSequence() < last[0]
+                        || (report.planSequence() == last[0] && report.position() < last[1]))) {
+                        failed = true;
+                        throw new IllegalStateException("claim report delivery order regressed");
+                    }
+                    preview.put(ring, new long[] {report.planSequence(), report.position()});
+                }
+            }
+            int delivered = 0;
+            try {
+                for (PlanRows batch : batches) {
+                    for (Pending row : batch.rows()) {
+                        Report report = row.report();
+                        sink.accept(report);
+                        if (settlement != null && row.attributed() != null) {
+                            settlement.accept(row.attributed());
+                        }
+                        delivered++;
+                    }
+                }
+            } catch (RuntimeException failure) {
+                failed = true;
+                throw failure;
+            }
+            // No pending row is removed and no cursor moves until every sink call succeeded. A
+            // sink failure stops the batch; the buffer remains intact and unusable for a retry.
+            for (PlanRows batch : batches) {
+                for (Pending row : batch.rows()) {
+                    Report report = row.report();
+                    pendingRows -= report.rows();
+                    lastDelivered.put(report.worldId() + "/" + report.domainId(),
+                        new long[] {report.planSequence(), report.position()});
+                }
+                pending.remove(batch.plan());
+            }
+            return delivered;
+        }
+
+        void clear() {
+            pending.clear();
+            lastDelivered.clear();
+            pendingRows = 0L;
+            failed = false;
+        }
+    }
+
     /** One open window: the slots it seated, the tick it was seated on and the token of the task it
      * covers. An unplaced mailbox seats every declared job of that mailbox, and the level decides. */
     private record Window(List<WriteControlledSlots.SlotKey> keys, long tickIndex, Object token) {
     }
 
+    /** One landing's unconsumed rows and the attribution cells that belong to exactly those rows.
+     * It is copied while the landing is locked, so the report and the attributed payload never see
+     * a later worker write. */
+    private record LandingSnapshot(Landing key, Landed landed, Report report, long rows,
+                                   Map<Long, Long> consumedCells, Attributed attributed) {
+    }
+
     private static final class Landed {
 
         private final WriteControlledSlots.Slot slot;
-        private final LongAdder rows = new LongAdder();
+        /** Worker-side short critical section; the server only tries this lock and defers when held. */
+        private final ReentrantLock lock = new ReentrantLock();
+        private final AtomicInteger deferredPasses = new AtomicInteger();
+        private long rows;
+        private long consumedRows;
         private final Map<Long, CellCount> cells = new LinkedHashMap<>();
         private boolean unattributed;
         private boolean rowsNamed = true;
@@ -109,11 +366,13 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
     }
 
     /** The writes one task window landed for one cell; a second task of the same cell makes the
-     * attribution ambiguous rather than naming one of them. */
+     * attribution ambiguous rather than naming one of them. Rows and content are advanced together
+     * under the owning landing's monitor. */
     private static final class CellCount {
 
         private final long ordinal;
-        private final LongAdder rows = new LongAdder();
+        private long rows;
+        private long consumedRows;
         private final List<String> content = new ArrayList<>();
 
         private CellCount(long ordinal) {
@@ -149,6 +408,9 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
     /** The authorizations whose claims are still retained; an old plan is reported from its own
      * seats until its declarations expire. */
     private volatile List<Authorization> authorizations = List.of();
+    /** Server-thread report buffer: a landing leaves the concurrent map only once its report is
+     * buffered, and reaches the sink only after the plan that ordered it has closed. */
+    private final ReportBuffer reportBuffer;
     private final Map<String, LongAdder> landedByNode = new ConcurrentHashMap<>();
     /** The owner facts each claim carried when it was declared; internal, not a public shape. */
     private final Map<Claim, HeldEvidence> ownerEvidence = new ConcurrentHashMap<>();
@@ -204,11 +466,20 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
     public PipelineWriteClaims(WriteVersionSlots versions, WorldEpochs epochs,
                                BooleanSupplier judgeThread, Function<String, Object> levelOf,
                                Consumer<Attributed> settlement) {
+        this(versions, epochs, judgeThread, levelOf, settlement, ReportBuffer.DEFAULT_REPORT_CAP,
+            ReportBuffer.DEFAULT_ROW_CAP);
+    }
+
+    /** The same buffer with explicit bounds, for a caller that pins a smaller budget. */
+    PipelineWriteClaims(WriteVersionSlots versions, WorldEpochs epochs,
+                        BooleanSupplier judgeThread, Function<String, Object> levelOf,
+                        Consumer<Attributed> settlement, int reportCap, int rowCap) {
         this.versions = versions;
         this.epochs = epochs;
         this.judgeThread = judgeThread;
         this.levelOf = levelOf;
         this.settlement = settlement;
+        this.reportBuffer = new ReportBuffer(reportCap, rowCap);
     }
 
     /** Names the registry the declaration reads the owner token from; absent, no owner fact is
@@ -244,6 +515,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         if (!enabled) {
             retireDeclared();
             closeAll();
+            reportBuffer.clear();
         }
     }
 
@@ -267,6 +539,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
     /** The same, with the lifecycle the plan store published the graph in. A span declared before a
      * reset keeps the lifecycle it was declared under, so the next lifecycle cannot adopt it. */
     public synchronized int declare(JobGraph graph, long planSequence, long tick, long lifecycle) {
+        reportBuffer.ensureOpen();
         Map<String, Claim> next = new LinkedHashMap<>();
         List<Seat> seats = new ArrayList<>();
         if (graph != null) {
@@ -311,43 +584,222 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         return next.size();
     }
 
-    /** Reports the batches the span that closed landed, each against the seat the saved plan gave
+    /** Buffers the batches the span that closed landed, each against the seat the saved plan gave
      * its node. The plan read here is the one {@link #declare} saved, never the plan that just
-     * froze; a landing the saved plan did not seat is counted as a landing without a node. */
+     * froze; a landing the saved plan did not seat is counted as a landing without a node. The
+     * supplied sink is not called here: an ordered delivery goes through
+     * {@link #flushClosedReports(Consumer)} or {@link #drainReports(Consumer)} once the plan has
+     * closed. */
     public int reportLanded(Consumer<Report> sink) {
-        List<Authorization> held = authorizations;
-        if (held.isEmpty() || sink == null) {
+        if (sink == null) {
             return 0;
         }
+        reportBuffer.ensureOpen();
+        List<Authorization> held = authorizations;
+        if (held.isEmpty()) {
+            return 0;
+        }
+        Set<Landing> matched = new HashSet<>();
+        Set<Landing> deferred = new HashSet<>();
+        // Only landings present when the pass begins may be dropped as unmatched. A worker that
+        // creates a landing while the pass runs keeps it for the next report instead of losing the
+        // row to a cleanup it raced.
+        Set<Landing> startingKeys = new HashSet<>(landings.keySet());
         int reported = 0;
         for (Authorization authorization : held) {
             for (Seat seat : authorization.seats()) {
-                Landed landed = landings.remove(new Landing(authorization.planSequence(),
-                    seat.position(), seat.nodeKey()));
-                long rows = landed == null ? 0L : landed.rows.sum();
-                if (rows <= 0L) {
+                Landing key = new Landing(authorization.planSequence(), seat.position(),
+                    seat.nodeKey());
+                Landed landed = landings.get(key);
+                if (landed == null) {
                     continue;
                 }
-                WriteControlledSlots.Slot slot = landed.slot;
-                Report report = new Report(seat.worldId(), seat.domainId(), seat.nodeKey(),
-                    authorization.planSequence(), seat.position(), authorization.lifecycle(),
-                    slot.expectedVersion(), WriteControlledSlots.foldValue(slot.writeSet()),
-                    (int) Math.min(Integer.MAX_VALUE, rows));
-                sink.accept(report);
-                Consumer<Attributed> armed = settlement;
-                if (armed != null) {
-                    armed.accept(attributedOf(report, landed));
+                // The report never waits for a writer: a landing whose monitor is held is deferred
+                // whole to the next freeze/control point. The worker's lock is the only short
+                // critical section; the server takes it only when it is free.
+                if (!landed.lock.tryLock()) {
+                    if (landed.deferredPasses.incrementAndGet() > MAX_DEFERRED_LANDING_PASSES) {
+                        reportBuffer.markFailed();
+                        throw new IllegalStateException("claim landing report starvation");
+                    }
+                    deferred.add(key);
+                    continue;
                 }
-                reported++;
+                try {
+                    if (landings.get(key) != landed) {
+                        continue;
+                    }
+                    if (landed.rows == landed.consumedRows) {
+                        landings.remove(key, landed);
+                        continue;
+                    }
+                    landed.deferredPasses.set(0);
+                    LandingSnapshot snapshot = snapshotLanded(key, landed, seat, authorization);
+                    // The capacity check, the buffer insert and the consume watermark all happen
+                    // under the same free lock: if any part fails, the snapshot has not been
+                    // consumed and the landing is retried by the next pass.
+                    reportBuffer.checkCapacity(1, snapshot.rows());
+                    reportBuffer.add(snapshot.report().planSequence(), List.of(snapshot.report()),
+                        settlement == null ? null : List.of(snapshot.attributed()));
+                    landed.consumedRows += snapshot.rows();
+                    for (Map.Entry<Long, Long> entry : snapshot.consumedCells().entrySet()) {
+                        CellCount held = landed.cells.get(entry.getKey());
+                        if (held != null) {
+                            held.consumedRows += entry.getValue();
+                        }
+                    }
+                    if (landed.rows == landed.consumedRows) {
+                        landings.remove(key, landed);
+                    }
+                    matched.add(key);
+                    reported++;
+                } finally {
+                    landed.lock.unlock();
+                }
             }
         }
-        for (Landing key : new ArrayList<>(landings.keySet())) {
-            if (landings.remove(key) != null) {
-                landedWithoutNode++;
-            }
-        }
-        reportedBatches += reported;
+        dropUnmatchedLandings(matched, deferred, startingKeys);
         return reported;
+    }
+
+    /** Copies exactly the rows a landing has produced but not yet reported, with the attribution
+     * cells belonging to those rows. Called only by the report while it holds the free landing
+     * lock. */
+    private static LandingSnapshot snapshotLanded(Landing key, Landed landed, Seat seat,
+                                                  Authorization authorization) {
+        long rows = landed.rows - landed.consumedRows;
+        WriteControlledSlots.Slot slot = landed.slot;
+        Report report = new Report(seat.worldId(), seat.domainId(), seat.nodeKey(),
+            authorization.planSequence(), seat.position(), authorization.lifecycle(),
+            slot.expectedVersion(), WriteControlledSlots.foldValue(slot.writeSet()),
+            (int) Math.min(Integer.MAX_VALUE, rows));
+        Map<Long, Long> consumedCells = new LinkedHashMap<>();
+        List<CellRows> cells = new ArrayList<>();
+        List<Long> cellKeys = new ArrayList<>(landed.cells.keySet());
+        cellKeys.sort(Long::compareTo);
+        for (Long cell : cellKeys) {
+            CellCount held = landed.cells.get(cell);
+            long unconsumed = held.rows - held.consumedRows;
+            if (unconsumed <= 0L) {
+                continue;
+            }
+            consumedCells.put(cell, unconsumed);
+            if (!landed.unattributed) {
+                int from = (int) Math.min(held.consumedRows, (long) held.content.size());
+                List<String> content = new ArrayList<>(held.content.subList(from,
+                    held.content.size()));
+                cells.add(new CellRows(cell, held.ordinal,
+                    (int) Math.min(Integer.MAX_VALUE, unconsumed), content));
+            }
+        }
+        Attributed attributed = landed.unattributed || cells.isEmpty()
+            ? new Attributed(report, List.of(), false, false)
+            : new Attributed(report, cells, true, landed.rowsNamed);
+        return new LandingSnapshot(key, landed, report, rows, consumedCells, attributed);
+    }
+
+    /** Removes landings that match no saved seat and counts their rows as landed without a node.
+     * It also only tries the landing lock: the report path never waits for a writer. */
+    private void dropUnmatchedLandings(Set<Landing> matched, Set<Landing> deferred,
+                                       Set<Landing> startingKeys) {
+        for (Landing key : startingKeys) {
+            if (matched.contains(key) || deferred.contains(key)) {
+                continue;
+            }
+            Landed landed = landings.get(key);
+            if (landed == null) {
+                continue;
+            }
+            if (!landed.lock.tryLock()) {
+                continue;
+            }
+            try {
+                if (landings.get(key) != landed) {
+                    continue;
+                }
+                if (landed.rows == landed.consumedRows) {
+                    landings.remove(key, landed);
+                    continue;
+                }
+                landings.remove(key, landed);
+                landedWithoutNode++;
+            } finally {
+                landed.lock.unlock();
+            }
+        }
+    }
+
+    /** Test seam: the lock of one existing landing, so a fixture can hold it and observe that the
+     * report path defers instead of waiting. */
+    ReentrantLock landingLockForTest(long planSequence, int position, String nodeKey) {
+        Landed landed = landings.get(new Landing(planSequence, position, nodeKey));
+        return landed == null ? null : landed.lock;
+    }
+
+    /** The plans whose claims are still retained and whose reports therefore cannot be delivered
+     * yet: a later plan may not pass an earlier plan that is still open. Sorted ascending. */
+    public List<Long> openPlanSequences() {
+        TreeSet<Long> open = new TreeSet<>();
+        for (Authorization authorization : authorizations) {
+            open.add(authorization.planSequence());
+        }
+        return List.copyOf(open);
+    }
+
+    /** Delivers buffered reports of every plan earlier than the earliest still-open plan, in plan
+     * order and then position order. A closed plan later than an open one waits for it; this is the
+     * barrier that keeps an old plan from arriving after a newer one. */
+    public int flushClosedReports(Consumer<Report> sink) {
+        if (sink == null) {
+            return 0;
+        }
+        int delivered = reportBuffer.flushClosed(openPlanSequences(), sink, settlement);
+        reportedBatches += delivered;
+        return delivered;
+    }
+
+    /** End-of-window control point: delivers every buffered report, including the plans still open,
+     * because no later plan can follow it in this window. It is bounded by the drain plan cap and
+     * fails closed instead of losing a report when the bound is exceeded. */
+    public int drainReports(Consumer<Report> sink) {
+        return drainReports(sink, ReportBuffer.DRAIN_PLAN_CAP);
+    }
+
+    int drainReports(Consumer<Report> sink, int planCap) {
+        if (sink == null) {
+            return 0;
+        }
+        int delivered = reportBuffer.drain(sink, settlement, planCap);
+        reportedBatches += delivered;
+        return delivered;
+    }
+
+    /** Delivers every buffered report without ending the window. It is the same bounded delivery
+     * the end drain uses, exposed as a control point for a caller that must flush before the
+     * window closes; it can be called again from a later tick. */
+    public int flushAllReports(Consumer<Report> sink) {
+        if (sink == null) {
+            return 0;
+        }
+        int delivered = reportBuffer.flushAll(sink, settlement, ReportBuffer.DRAIN_PLAN_CAP);
+        reportedBatches += delivered;
+        return delivered;
+    }
+
+    int pendingReportCount() {
+        return reportBuffer.pendingReports();
+    }
+
+    long pendingReportRows() {
+        return reportBuffer.pendingRows();
+    }
+
+    int pendingPlanCount() {
+        return reportBuffer.pendingPlans();
+    }
+
+    boolean reportBufferFailed() {
+        return reportBuffer.failed();
     }
 
     /** The world one level reference belongs to, as the claim that seated the slot named it. */
@@ -550,10 +1002,23 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
             return;
         }
         Landing seat = new Landing(slot.key().planSequence(), slot.position(), slot.planNodeKey());
-        Landed landed = landings.computeIfAbsent(seat, key -> new Landed(slot));
-        landed.rows.increment();
-        if (settlement != null) {
-            attribute(landed, row);
+        while (true) {
+            Landed landed = landings.computeIfAbsent(seat, key -> new Landed(slot));
+            landed.lock.lock();
+            try {
+                if (landings.get(seat) != landed) {
+                    // The server consumed and removed this landing between the lookup and the
+                    // lock; a fresh one carries this row.
+                    continue;
+                }
+                landed.rows++;
+                if (settlement != null) {
+                    attribute(landed, row);
+                }
+                break;
+            } finally {
+                landed.lock.unlock();
+            }
         }
         landedByNode.computeIfAbsent(slot.planNodeKey(), key -> new LongAdder()).increment();
         landedWrites++;
@@ -578,7 +1043,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
                 // Two tasks of one cell cannot both be the writer this attribution names.
                 landed.unattributed = true;
             }
-            held.rows.increment();
+            held.rows++;
             if (row == null) {
                 landed.rowsNamed = false;
                 return;
@@ -648,25 +1113,8 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
             landed.unattributed = true;
             return;
         }
-        held.rows.increment();
+        held.rows++;
         held.content.add(row.text(found, ordinal));
-    }
-
-    /** The per-cell form of one report: empty and marked unattributed when a landing of the batch
-     * was made outside a task window, so a consumer can only take the plain path for it. */
-    private static Attributed attributedOf(Report report, Landed landed) {
-        if (landed == null || landed.unattributed || landed.cells.isEmpty()) {
-            return new Attributed(report, List.of(), false, false);
-        }
-        List<Long> ordered = new ArrayList<>(landed.cells.keySet());
-        ordered.sort(Long::compareTo);
-        List<CellRows> cells = new ArrayList<>(ordered.size());
-        for (Long cell : ordered) {
-            CellCount held = landed.cells.get(cell);
-            cells.add(new CellRows(cell, held.ordinal,
-                (int) Math.min(Integer.MAX_VALUE, held.rows.sum()), held.content));
-        }
-        return new Attributed(report, cells, true, landed.rowsNamed);
     }
 
     /** The claims the newest plan declared, in a fixed order. */
@@ -854,6 +1302,7 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         authorizations = List.of();
         declarations = Map.of();
         byMailbox = new ConcurrentHashMap<>();
+        reportBuffer.clear();
         declared = 0L;
         generations = 0L;
         seated = 0L;

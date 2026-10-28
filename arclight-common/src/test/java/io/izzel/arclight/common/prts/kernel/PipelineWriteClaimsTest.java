@@ -39,9 +39,11 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.time.Duration;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -49,6 +51,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** The claim a declared write set becomes, and the write it covers.
@@ -521,6 +524,7 @@ class PipelineWriteClaimsTest {
         scratch.claims.noteLanded(scratch.capture(), WORLD);
         scratch.claims.ownerTaskEnd(WORLD, MAILBOX);
         assertEquals(1, scratch.claims.reportLanded(reports::add));
+        assertEquals(1, scratch.claims.flushAllReports(reports::add));
         PipelineWriteClaims.Report report = reports.get(0);
         assertEquals(WORLD, report.worldId());
         assertEquals(DOMAIN, report.domainId());
@@ -550,7 +554,8 @@ class PipelineWriteClaimsTest {
         List<PipelineWriteClaims.Report> reports = new ArrayList<>();
 
         assertEquals(1, scratch.claims.reportLanded(reports::add),
-            "the retained plan still reports its landing");
+            "the retained plan still buffers its landing");
+        assertEquals(1, scratch.claims.flushAllReports(reports::add));
         assertEquals(1, reports.size());
         assertEquals(PLAN_SEQUENCE, reports.get(0).planSequence());
         assertEquals(0L, scratch.claims.landedWithoutNodeCount());
@@ -568,6 +573,7 @@ class PipelineWriteClaimsTest {
         List<PipelineWriteClaims.Report> reports = new ArrayList<>();
 
         assertEquals(1, scratch.claims.reportLanded(reports::add));
+        assertEquals(1, scratch.claims.flushAllReports(reports::add));
         assertTrue(reports.get(0).nodeKey().startsWith(NODE_KEY + "#"));
         assertEquals(1, reports.get(0).rows());
         assertEquals(0L, scratch.claims.landedWithoutNodeCount());
@@ -585,7 +591,8 @@ class PipelineWriteClaimsTest {
         List<PipelineWriteClaims.Report> reports = new ArrayList<>();
 
         assertEquals(1, scratch.claims.reportLanded(reports::add),
-            "the retained plan still reports its landing under its own plan");
+            "the retained plan still buffers its landing under its own plan");
+        assertEquals(1, scratch.claims.flushAllReports(reports::add));
         assertEquals(1, reports.size());
         assertEquals(PLAN_SEQUENCE, reports.get(0).planSequence());
         assertEquals(0L, scratch.claims.landedWithoutNodeCount(),
@@ -1270,6 +1277,7 @@ class PipelineWriteClaimsTest {
         sink.noteLanded(slot, WORLD, row);
         List<PipelineWriteClaims.Report> reports = new ArrayList<>();
         assertEquals(1, sink.reportLanded(reports::add));
+        assertEquals(1, sink.flushAllReports(reports::add));
         assertEquals(1, settled.size(), "the attributed payload reaches the settlement sink");
         PipelineWriteClaims.Attributed payload = settled.get(0);
         assertTrue(payload.attributed(), "a seated declaration and a real row name the batch");
@@ -1317,7 +1325,8 @@ class PipelineWriteClaimsTest {
 
         List<PipelineWriteClaims.Report> reports = new ArrayList<>();
         assertEquals(1, sink.reportLanded(reports::add),
-            "the later plan still reports the retained claim's landing");
+            "the later plan still buffers the retained claim's landing");
+        assertEquals(1, sink.flushAllReports(reports::add));
         assertEquals(PLAN_SEQUENCE, reports.get(0).planSequence());
         assertEquals(1, settled.size());
         assertTrue(settled.get(0).attributed(),
@@ -1351,15 +1360,156 @@ class PipelineWriteClaimsTest {
             slot.worldEpoch(), TICK, 200, 64, 200);
         sink.noteLanded(slot, WORLD, outside);
         sink.reportLanded(report -> { });
+        sink.flushAllReports(report -> { });
         assertEquals(1, settled.size());
         assertFalse(settled.get(0).attributed(), "a write outside the declared range is refused");
         assertTrue(settled.get(0).cells().isEmpty(), "no cell is guessed for it");
 
         sink.noteLanded(slot, WORLD, null);
         sink.reportLanded(report -> { });
+        sink.flushAllReports(report -> { });
         assertEquals(2, settled.size(), "the second landing is reported too");
         assertTrue(settled.get(1).cells().isEmpty(), "a row without identity names no cell");
         assertFalse(settled.get(1).rowsNamed(), "and the rows are not named");
+    }
+
+    @Test
+    void aRealProducerLandingIsBufferedAndFoldedByTheCommitLogInOrder() {
+        Scratch scratch = new Scratch();
+        scratch.declare(ROUNDS);
+        scratch.claims.ownerTaskBegin(WORLD, MAILBOX);
+        scratch.claims.noteLanded(scratch.capture(), WORLD);
+        scratch.claims.ownerTaskEnd(WORLD, MAILBOX);
+
+        List<PipelineWriteClaims.Report> buffered = new ArrayList<>();
+        assertEquals(1, scratch.claims.reportLanded(buffered::add),
+            "the real landing is buffered, not handed to the supplied sink");
+        assertTrue(buffered.isEmpty());
+        assertEquals(1, scratch.claims.pendingReportCount());
+
+        Map<String, io.izzel.arclight.common.prts.kernel.commit.CommitLog.Resolved> seats =
+            new HashMap<>();
+        io.izzel.arclight.common.prts.kernel.commit.CommitLog log =
+            new io.izzel.arclight.common.prts.kernel.commit.CommitLog(() -> 64,
+                new io.izzel.arclight.common.prts.kernel.commit.CommitLog.OrderSource() {
+
+                    @Override
+                    public io.izzel.arclight.common.prts.kernel.commit.CommitLog.Resolved resolve(
+                        String worldId, String domainId, String nodeKey) {
+                        return seats.get(nodeKey);
+                    }
+
+                    @Override
+                    public io.izzel.arclight.common.prts.kernel.commit.CommitLog.Resolved resolveAt(
+                        long planSequence, long lifecycle, String worldId, String domainId,
+                        String nodeKey) {
+                        return seats.get(nodeKey);
+                    }
+                });
+        log.beginTick(TICK);
+        List<PipelineWriteClaims.Report> delivered = new ArrayList<>();
+        assertEquals(1, scratch.claims.flushAllReports(report -> {
+            seats.put(report.nodeKey(),
+                new io.izzel.arclight.common.prts.kernel.commit.CommitLog.Resolved(
+                    report.planSequence(), report.position(), false));
+            io.izzel.arclight.common.prts.kernel.commit.CommitLog.Verdict verdict =
+                log.reach(new io.izzel.arclight.common.prts.kernel.commit.CommitLog.Batch(
+                    report.worldId(), report.domainId(), report.nodeKey(),
+                    io.izzel.arclight.common.prts.kernel.commit.CommitLog.Batch.Kind.APPLY,
+                    1L, 1L, report.rows()), report.planSequence(), report.position(),
+                    report.lifecycle());
+            assertEquals(io.izzel.arclight.common.prts.kernel.commit.CommitLog.Entry.Disposition
+                .ACCEPTED, verdict.disposition());
+            delivered.add(report);
+        }));
+
+        assertEquals(1, delivered.size());
+        assertEquals(scratch.graph.nodes().get(0).position(), delivered.get(0).position());
+        assertEquals(0, scratch.claims.pendingReportCount());
+        io.izzel.arclight.common.prts.kernel.commit.CommitLog.Replay replay = log.closeTick();
+        assertEquals(0, replay.orderViolations());
+        assertEquals(1, replay.loggedSteps());
+        assertEquals(1L, scratch.claims.reportedBatchCount());
+    }
+
+    @Test
+    void concurrentWorkersAndTheServerConserveRowsAndAttribution() {
+        assertTimeoutPreemptively(Duration.ofSeconds(20), () -> {
+            Scratch scratch = new Scratch();
+            scratch.claims.ledger(scratch.batches);
+            scratch.claims.writeSpaces(node -> WriteSpace.of(CellKind.CHUNK, CELL));
+            scratch.declare(ROUNDS);
+            List<PipelineWriteClaims.Attributed> settled = new ArrayList<>();
+            PipelineWriteClaims sink = new PipelineWriteClaims(scratch.versions,
+                scratch.guard.worldEpochs(), () -> true, world -> LEVEL, settled::add);
+            sink.table(scratch.slots);
+            sink.owners(scratch.owners);
+            sink.writeSpaces(node -> WriteSpace.of(CellKind.CHUNK, CELL));
+            sink.ledger(scratch.batches);
+            sink.refresh(true);
+            sink.declare(scratch.graph, PLAN_SEQUENCE, TICK);
+            assertEquals(1, sink.seatDeclared());
+            assertEquals(Verdict.CAPTURED, scratch.slots.judge(LEVEL, WritePath.BLOCK_WRITE.key(),
+                WITNESS, TICK).verdict());
+            WriteControlledSlots.Slot slot = scratch.slots.lastCoveredSlot();
+            assertNotNull(slot);
+            WorldWriteGuard.LandedRow row = new WorldWriteGuard.LandedRow(WORLD, DOMAIN,
+                slot.planNodeKey(), PLAN_SEQUENCE, slot.position(), slot.expectedVersion(),
+                slot.worldEpoch(), TICK, 8, 64, 8);
+
+            int writers = 4;
+            int writesPerWriter = 300;
+            CountDownLatch start = new CountDownLatch(1);
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+            List<Thread> threads = new ArrayList<>();
+            for (int writer = 0; writer < writers; writer++) {
+                Thread thread = new Thread(() -> {
+                    try {
+                        start.await();
+                        for (int write = 0; write < writesPerWriter; write++) {
+                            sink.noteLanded(slot, WORLD, row);
+                        }
+                    } catch (Throwable error) {
+                        failure.compareAndSet(null, error);
+                    }
+                }, "claim-writer-" + writer);
+                threads.add(thread);
+                thread.start();
+            }
+            start.countDown();
+            List<PipelineWriteClaims.Report> reports = new ArrayList<>();
+            while (threads.stream().anyMatch(Thread::isAlive)) {
+                sink.reportLanded(report -> { });
+                sink.flushAllReports(reports::add);
+                Thread.yield();
+            }
+            for (Thread thread : threads) {
+                thread.join(30_000L);
+                assertFalse(thread.isAlive(), "a writer thread must not block");
+            }
+            sink.reportLanded(report -> { });
+            sink.flushAllReports(reports::add);
+            assertNull(failure.get(), () -> "writer failure: " + failure.get());
+            assertEquals(0, sink.pendingReportCount());
+
+            int written = writers * writesPerWriter;
+            assertEquals(written, reports.stream().mapToInt(PipelineWriteClaims.Report::rows).sum(),
+                "every landed row is reported exactly once");
+            assertEquals(written, settled.stream()
+                .mapToInt(payload -> payload.report().rows()).sum(),
+                "the attributed payload covers the same rows as the reports");
+            for (PipelineWriteClaims.Attributed payload : settled) {
+                assertTrue(payload.attributed());
+                assertTrue(payload.rowsNamed());
+                assertEquals(payload.report().rows(), payload.cells().stream()
+                    .mapToInt(PipelineWriteClaims.CellRows::rows).sum(),
+                    "the attributed cells carry exactly the report rows");
+                for (PipelineWriteClaims.CellRows cell : payload.cells()) {
+                    assertEquals(cell.rows(), cell.rowContent().size(),
+                        "a named cell carries one identity per row");
+                }
+            }
+        });
     }
 
     /** The write paths, the registries and the claim table of one process, wired the way the kernel

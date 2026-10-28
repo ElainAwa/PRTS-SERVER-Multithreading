@@ -378,6 +378,7 @@ class TypedConsumerSettlementTest {
         private List<PipelineWriteClaims.Report> report() {
             List<PipelineWriteClaims.Report> reports = new ArrayList<>();
             claims.reportLanded(reports::add);
+            claims.flushAllReports(reports::add);
             return reports;
         }
 

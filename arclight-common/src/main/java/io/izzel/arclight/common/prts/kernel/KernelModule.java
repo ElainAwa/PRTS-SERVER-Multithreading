@@ -939,6 +939,7 @@ public final class KernelModule {
                 claims.reportLanded(this::noteLandedBatch);
                 claims.declare(result.plan().graph(), result.plan().planSequence(), tickIndex,
                     plans.lifecycle());
+                claims.flushClosedReports(this::noteLandedBatch);
                 // A plan that declared a write set is its own writer for the span that follows: the
                 // seat comes from the declaration itself, so a span whose jobs run no task body still
                 // covers the writes its own range names until the next freeze replaces the set.
@@ -1536,6 +1537,15 @@ public final class KernelModule {
 
     public long tickIndex() {
         return tickIndex;
+    }
+
+    /** End-of-window control point for the ordered claim reports: flushes every buffered report,
+     * including the plans still open, because no later plan can follow it in this window. It is not
+     * terminal: a later tick may still buffer and flush, so a caller that runs another freeze after
+     * this point does not fail. The producer bounds the flush and fails closed rather than losing a
+     * report. */
+    public int drainClaimReports() {
+        return claimsEnabled() ? claims.drainReports(this::noteLandedBatch) : 0;
     }
 
     public boolean started() {

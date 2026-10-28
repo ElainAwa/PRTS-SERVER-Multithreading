@@ -653,6 +653,7 @@ class R02InputClosureChainTest {
                 slot.expectedVersion(), slot.worldEpoch(), TICK, 8, 64, 8));
             List<PipelineWriteClaims.Report> reports = new ArrayList<>();
             assertEquals(1, claims.reportLanded(reports::add));
+            assertEquals(1, claims.flushAllReports(reports::add));
             assertEquals(0L, claims.landedWithoutNodeCount());
             PipelineWriteClaims.Report report = reports.get(0);
 

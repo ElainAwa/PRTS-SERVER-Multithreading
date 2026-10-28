@@ -402,17 +402,20 @@ class PipelineBatchRunsTest {
      * evidence run against the previous blob takes the second path with the plan that just froze,
      * which is the defect this batch closes. */
     private static int settle(PipelineWriteClaims claims, JobGraph latest, Consumer<PipelineWriteClaims.Report> sink) {
+        int buffered;
         try {
             try {
-                return (int) PipelineWriteClaims.class.getMethod("reportLanded", Consumer.class)
+                buffered = (int) PipelineWriteClaims.class.getMethod("reportLanded", Consumer.class)
                     .invoke(claims, sink);
             } catch (NoSuchMethodException oldShape) {
-                return (int) PipelineWriteClaims.class.getMethod("reportLanded", JobGraph.class,
+                buffered = (int) PipelineWriteClaims.class.getMethod("reportLanded", JobGraph.class,
                     Consumer.class).invoke(claims, latest, sink);
             }
         } catch (ReflectiveOperationException failure) {
             throw new AssertionError("the claim point carries neither settlement shape", failure);
         }
+        claims.flushAllReports(sink);
+        return buffered;
     }
 
     /** The real sorter, the real claim point and the real commit log of one test; only the level a

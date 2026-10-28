@@ -469,7 +469,8 @@ class EffectRowContractTest {
 
         private void report() {
             log.beginTick(TICK);
-            assertEquals(1, claims.reportLanded(reports::add), "the span reports its one batch");
+            assertEquals(1, claims.reportLanded(reports::add), "the span buffers its one batch");
+            assertEquals(1, claims.flushAllReports(reports::add));
             assertFalse(reports.isEmpty());
         }
 
@@ -479,6 +480,7 @@ class EffectRowContractTest {
             try {
                 assertTrue(payloads.isEmpty(), "the case that drains a payload settles it itself");
                 assertEquals(1, claims.reportLanded(reports::add));
+                assertEquals(1, claims.flushAllReports(reports::add));
                 return payloads.get(0);
             } finally {
                 settleOnReport = true;
