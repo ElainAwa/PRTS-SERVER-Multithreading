@@ -27,10 +27,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -60,10 +58,6 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
 
     /** The most plans one end-of-window drain may flush; past this the point fails closed. */
     public static final int DRAIN_PLAN_CAP = ReportBuffer.DRAIN_PLAN_CAP;
-
-    /** A landing whose report pass cannot take its lock this many times in a row has a stuck
-     * writer; the point fails closed instead of starving the report. */
-    static final int MAX_DEFERRED_LANDING_PASSES = 64;
 
     /** One declared job that claims writes: the batch the plan ordered, the write set the claim table
      * translated out of its declaration and the contract a slot carries. */
@@ -153,10 +147,6 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
 
         boolean failed() {
             return failed;
-        }
-
-        void markFailed() {
-            failed = true;
         }
 
         void ensureOpen() {
@@ -351,9 +341,6 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
     private static final class Landed {
 
         private final WriteControlledSlots.Slot slot;
-        /** Worker-side short critical section; the server only tries this lock and defers when held. */
-        private final ReentrantLock lock = new ReentrantLock();
-        private final AtomicInteger deferredPasses = new AtomicInteger();
         private long rows;
         private long consumedRows;
         private final Map<Long, CellCount> cells = new LinkedHashMap<>();
@@ -599,13 +586,13 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         if (held.isEmpty()) {
             return 0;
         }
+        List<LandingSnapshot> snapshots = new ArrayList<>();
         Set<Landing> matched = new HashSet<>();
-        Set<Landing> deferred = new HashSet<>();
         // Only landings present when the pass begins may be dropped as unmatched. A worker that
         // creates a landing while the pass runs keeps it for the next report instead of losing the
         // row to a cleanup it raced.
         Set<Landing> startingKeys = new HashSet<>(landings.keySet());
-        int reported = 0;
+        long totalRows = 0L;
         for (Authorization authorization : held) {
             for (Seat seat : authorization.seats()) {
                 Landing key = new Landing(authorization.planSequence(), seat.position(),
@@ -614,18 +601,8 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
                 if (landed == null) {
                     continue;
                 }
-                // The report never waits for a writer: a landing whose monitor is held is deferred
-                // whole to the next freeze/control point. The worker's lock is the only short
-                // critical section; the server takes it only when it is free.
-                if (!landed.lock.tryLock()) {
-                    if (landed.deferredPasses.incrementAndGet() > MAX_DEFERRED_LANDING_PASSES) {
-                        reportBuffer.markFailed();
-                        throw new IllegalStateException("claim landing report starvation");
-                    }
-                    deferred.add(key);
-                    continue;
-                }
-                try {
+                LandingSnapshot snapshot;
+                synchronized (landed) {
                     if (landings.get(key) != landed) {
                         continue;
                     }
@@ -633,38 +610,42 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
                         landings.remove(key, landed);
                         continue;
                     }
-                    landed.deferredPasses.set(0);
-                    LandingSnapshot snapshot = snapshotLanded(key, landed, seat, authorization);
-                    // The capacity check, the buffer insert and the consume watermark all happen
-                    // under the same free lock: if any part fails, the snapshot has not been
-                    // consumed and the landing is retried by the next pass.
-                    reportBuffer.checkCapacity(1, snapshot.rows());
-                    reportBuffer.add(snapshot.report().planSequence(), List.of(snapshot.report()),
-                        settlement == null ? null : List.of(snapshot.attributed()));
-                    landed.consumedRows += snapshot.rows();
-                    for (Map.Entry<Long, Long> entry : snapshot.consumedCells().entrySet()) {
-                        CellCount held = landed.cells.get(entry.getKey());
-                        if (held != null) {
-                            held.consumedRows += entry.getValue();
-                        }
-                    }
-                    if (landed.rows == landed.consumedRows) {
-                        landings.remove(key, landed);
-                    }
-                    matched.add(key);
-                    reported++;
-                } finally {
-                    landed.lock.unlock();
+                    // The rows and their cell content are copied under the landing monitor. A
+                    // worker either ran before this copy (its rows are in the report) or waits
+                    // and finds a new landing after the consume watermark (its rows are next).
+                    snapshot = snapshotLanded(key, landed, seat, authorization);
                 }
+                matched.add(key);
+                snapshots.add(snapshot);
+                totalRows += snapshot.rows();
             }
         }
-        dropUnmatchedLandings(matched, deferred, startingKeys);
-        return reported;
+        if (snapshots.isEmpty()) {
+            dropUnmatchedLandings(matched, startingKeys);
+            return 0;
+        }
+        reportBuffer.checkCapacity(snapshots.size(), totalRows);
+        Map<Long, List<Report>> byPlan = new LinkedHashMap<>();
+        Map<Long, List<Attributed>> attributedByPlan = settlement == null ? null
+            : new LinkedHashMap<>();
+        for (LandingSnapshot snapshot : snapshots) {
+            byPlan.computeIfAbsent(snapshot.report().planSequence(), plan -> new ArrayList<>())
+                .add(snapshot.report());
+            if (attributedByPlan != null) {
+                attributedByPlan.computeIfAbsent(snapshot.report().planSequence(),
+                    plan -> new ArrayList<>()).add(snapshot.attributed());
+            }
+        }
+        reportBuffer.addAll(byPlan, attributedByPlan);
+        for (LandingSnapshot snapshot : snapshots) {
+            markConsumed(snapshot);
+        }
+        dropUnmatchedLandings(matched, startingKeys);
+        return snapshots.size();
     }
 
     /** Copies exactly the rows a landing has produced but not yet reported, with the attribution
-     * cells belonging to those rows. Called only by the report while it holds the free landing
-     * lock. */
+     * cells belonging to those rows. Called only while the caller holds the landing monitor. */
     private static LandingSnapshot snapshotLanded(Landing key, Landed landed, Seat seat,
                                                   Authorization authorization) {
         long rows = landed.rows - landed.consumedRows;
@@ -698,22 +679,39 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         return new LandingSnapshot(key, landed, report, rows, consumedCells, attributed);
     }
 
-    /** Removes landings that match no saved seat and counts their rows as landed without a node.
-     * It also only tries the landing lock: the report path never waits for a writer. */
-    private void dropUnmatchedLandings(Set<Landing> matched, Set<Landing> deferred,
-                                       Set<Landing> startingKeys) {
+    /** Advances the consume watermark by exactly the snapshotted rows. New worker rows stay after
+     * the watermark for the next report; a fully consumed landing is removed only under the same
+     * monitor, and a writer that held it retries against the map. */
+    private void markConsumed(LandingSnapshot snapshot) {
+        Landed landed = snapshot.landed();
+        synchronized (landed) {
+            if (landings.get(snapshot.key()) != landed) {
+                return;
+            }
+            landed.consumedRows += snapshot.rows();
+            for (Map.Entry<Long, Long> entry : snapshot.consumedCells().entrySet()) {
+                CellCount held = landed.cells.get(entry.getKey());
+                if (held != null) {
+                    held.consumedRows += entry.getValue();
+                }
+            }
+            if (landed.rows == landed.consumedRows) {
+                landings.remove(snapshot.key(), landed);
+            }
+        }
+    }
+
+    /** Removes landings that match no saved seat and counts their rows as landed without a node. */
+    private void dropUnmatchedLandings(Set<Landing> matched, Set<Landing> startingKeys) {
         for (Landing key : startingKeys) {
-            if (matched.contains(key) || deferred.contains(key)) {
+            if (matched.contains(key)) {
                 continue;
             }
             Landed landed = landings.get(key);
             if (landed == null) {
                 continue;
             }
-            if (!landed.lock.tryLock()) {
-                continue;
-            }
-            try {
+            synchronized (landed) {
                 if (landings.get(key) != landed) {
                     continue;
                 }
@@ -723,17 +721,8 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
                 }
                 landings.remove(key, landed);
                 landedWithoutNode++;
-            } finally {
-                landed.lock.unlock();
             }
         }
-    }
-
-    /** Test seam: the lock of one existing landing, so a fixture can hold it and observe that the
-     * report path defers instead of waiting. */
-    ReentrantLock landingLockForTest(long planSequence, int position, String nodeKey) {
-        Landed landed = landings.get(new Landing(planSequence, position, nodeKey));
-        return landed == null ? null : landed.lock;
     }
 
     /** The plans whose claims are still retained and whose reports therefore cannot be delivered
@@ -1004,11 +993,10 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
         Landing seat = new Landing(slot.key().planSequence(), slot.position(), slot.planNodeKey());
         while (true) {
             Landed landed = landings.computeIfAbsent(seat, key -> new Landed(slot));
-            landed.lock.lock();
-            try {
+            synchronized (landed) {
                 if (landings.get(seat) != landed) {
                     // The server consumed and removed this landing between the lookup and the
-                    // lock; a fresh one carries this row.
+                    // monitor; a fresh one carries this row.
                     continue;
                 }
                 landed.rows++;
@@ -1016,8 +1004,6 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
                     attribute(landed, row);
                 }
                 break;
-            } finally {
-                landed.lock.unlock();
             }
         }
         landedByNode.computeIfAbsent(slot.planNodeKey(), key -> new LongAdder()).increment();
