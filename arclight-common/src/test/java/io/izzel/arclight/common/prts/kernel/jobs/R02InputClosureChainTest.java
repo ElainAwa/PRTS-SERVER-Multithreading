@@ -15,6 +15,8 @@ import io.izzel.arclight.common.prts.kernel.commit.CommitRing;
 import io.izzel.arclight.common.prts.kernel.commit.DeclarationInstanceAllocator;
 import io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations;
 import io.izzel.arclight.common.prts.kernel.commit.RangeSealTable;
+import io.izzel.arclight.common.prts.kernel.observe.ArrivalDigestObserver;
+import io.izzel.arclight.common.prts.kernel.observe.ChunkDemandObserver;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlanPlanner;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlanStore;
@@ -57,6 +59,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -313,6 +316,27 @@ class R02InputClosureChainTest {
         assertNotEquals(left.cells(), right.cells());
     }
 
+    @Test
+    void n12TwoIndependentRunsWithDifferentArrivalRowsDoNotNormaliseToTheSameIdentity() {
+        ArrivalIdentity first = arrivalIdentity(2, 0);
+        ArrivalIdentity sameAgain = arrivalIdentity(2, 0);
+
+        assertEquals(first, sameAgain,
+            "the same arrival run normalises to the same row identity");
+
+        ArrivalIdentity second = arrivalIdentity(1, 1);
+        assertEquals(first.requests(), second.requests(), "the request totals are equal");
+        assertEquals(first.satisfied(), second.satisfied());
+        assertEquals(first.writes(), second.writes());
+        assertEquals(first.rows().size(), second.rows().size());
+        assertNotEquals(first, second,
+            "equal totals with a different arrival row do not normalise to the same identity");
+        assertNotEquals(first.rows().get(0), second.rows().get(0),
+            "the first tick carries a different arrival row");
+        assertNotEquals(first.rows().get(1), second.rows().get(1),
+            "the second tick carries a different arrival row");
+    }
+
     // ---------------------------------------------------------------- negative cases
 
     @Test
@@ -466,6 +490,59 @@ class R02InputClosureChainTest {
     }
 
     @Test
+    void n08AStampOfAnotherBatchPublishesNoSeal() {
+        PipelineBatchLedger ledger = new PipelineBatchLedger(64, 1000);
+        DemandShadowCandidates candidates = new DemandShadowCandidates(ledger.pendingLimit());
+        PrtsChunkDemand.install(candidates);
+        PrtsPipelineBatches.install(ledger, () -> TICK);
+        PipelineRunSeal.install(candidates::statusFor);
+        TickPlanStore plans = new TickPlanStore(8);
+        RangeSealTable table = new RangeSealTable(ledger.pendingLimit());
+        DeclarationInstanceAllocator instances = new DeclarationInstanceAllocator();
+        FrozenDeclarations declarations = FrozenDeclarations.of(
+            new FrozenDeclarations.FreezeKey("host/1/0", 1L), PLAN, List.of()).declarations();
+        PipelineRangeSeals factory = new PipelineRangeSeals(ledger, table, plans,
+            instances::mintOne, world -> EPOCH, () -> declarations);
+        PipelineRunSeal.installRange(factory);
+
+        PipelineBatchLedger.TrackedTask first = ledger.mint(new Object(), WORLD, MAILBOX, CELL,
+            TICK);
+        ledger.enqueued(first);
+        PipelineBatchLedger.TrackedTask second = ledger.mint(new Object(), WORLD, MAILBOX, CELL2,
+            TICK);
+        ledger.enqueued(second);
+        PipelineBatchLedger.BatchId batch = ledger.freeze(WORLD, MAILBOX, PLAN, TICK);
+        assertNotNull(batch);
+        plans.publish(plan(PLAN, PipelineRoundJobs.batchKeyOf(batch)));
+        setState(first, new PipelineBatchLedger.Running(batch));
+
+        PipelineBatchLedger.TaskId id = first.id();
+        DemandShadowCandidates.TaskStatus good = statusOf(first, batch);
+        DemandShadowCandidates.TaskStatus otherBatch = new DemandShadowCandidates.TaskStatus(
+            good.status(), new DemandShadowCandidates.TaskStamp(id.ordinal(), id.worldId(),
+                id.mailbox(), id.cell(), id.mintTick(), batch.freezeOrdinal() + 1L,
+                batch.planSequence(), 77L));
+        long refusedBefore = factory.refused();
+
+        FrozenDeclarations.RangeSeal mismatched = factory.seal(first, otherBatch,
+            factory.generation());
+
+        assertNull(mismatched, "a stamp of another batch publishes no seal");
+        assertEquals(0, table.size(), "no half seal of the other batch entered the table");
+        assertTrue(factory.refused() > refusedBefore, "the mismatch is refused by the factory");
+
+        FrozenDeclarations.RangeSeal sealed = factory.seal(first, good, factory.generation());
+        assertNotNull(sealed, "the same running task publishes the seal of its own batch");
+        assertTrue(sealed.wellFormed());
+        assertEquals(id.ordinal(), sealed.stamp().taskOrdinal());
+        assertEquals(id.cell(), sealed.stamp().cell());
+        assertEquals(batch.freezeOrdinal(), sealed.stamp().batchFreezeOrdinal());
+        assertEquals(batch.planSequence(), sealed.stamp().planSequence());
+        assertArrayEquals(ledger.cellsOf(batch), sealed.cells());
+        assertEquals(1, table.size());
+    }
+
+    @Test
     void n09ALandingWithoutAPlanNodeIsNotReported() {
         ChainFixture fixture = new ChainFixture(CELL);
         JobDeclaration declaration = ownDeclaration();
@@ -604,6 +681,69 @@ class R02InputClosureChainTest {
     private record NormalisedIdentity(String world, String mailbox, int taskCount,
                                       List<Long> cells, int declarations, long minted,
                                       long claimed, long hostTicked) {
+    }
+
+    /** The observer's windowed constructor is package-private to the observe package; the fixture
+     * reaches the same production type through the one constructor it declares, with no test hook in
+     * the production path. */
+    private static ArrivalDigestObserver arrivalObserver(int window) {
+        try {
+            java.lang.reflect.Constructor<ArrivalDigestObserver> constructor =
+                ArrivalDigestObserver.class.getDeclaredConstructor(int.class);
+            constructor.setAccessible(true);
+            return constructor.newInstance(window);
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+        }
+    }
+
+    /** One arrival row normalised to a run's first tick: the row identity, not only its totals. */
+    private record ArrivalRow(long relativeTick, String world, long requests, long satisfied,
+                              long missed, long blocking, long futuresTaken, long futuresCompleted,
+                              long inFlight, long writes) {
+    }
+
+    /** What an arrival window folds to: every row in order plus the totals the rows carry. */
+    private record ArrivalIdentity(List<ArrivalRow> rows, long requests, long satisfied,
+                                   long writes) {
+    }
+
+    /** Runs one arrival window over the production observer: per-tick demand, one write, one fold. */
+    private static ArrivalIdentity arrivalIdentity(int... requestsPerTick) {
+        ArrivalDigestObserver observer = arrivalObserver(4);
+        ChunkDemandObserver demand = new ChunkDemandObserver();
+        observer.demand(demand);
+        demand.attach();
+        observer.attach();
+        try {
+            for (int index = 0; index < requestsPerTick.length; index++) {
+                long tick = index + 1L;
+                for (int count = 0; count < requestsPerTick[index]; count++) {
+                    demand.demandStarted(WORLD, "full", false);
+                }
+                if (index == 0) {
+                    observer.writeAtWorld(WORLD);
+                }
+                observer.arrivalTick(tick, List.of(WORLD));
+            }
+            long requests = 0L;
+            long satisfied = 0L;
+            long writes = 0L;
+            long firstTick = observer.firstTick();
+            List<ArrivalRow> rows = new ArrayList<>();
+            for (ArrivalDigestObserver.Row row : observer.rows()) {
+                rows.add(new ArrivalRow(row.tick() - firstTick, row.world(), row.requests(),
+                    row.satisfied(), row.missed(), row.blocking(), row.futuresTaken(),
+                    row.futuresCompleted(), row.inFlight(), row.writes()));
+                requests += row.requests();
+                satisfied += row.satisfied();
+                writes += row.writes();
+            }
+            return new ArrivalIdentity(List.copyOf(rows), requests, satisfied, writes);
+        } finally {
+            observer.detach();
+            demand.detach();
+        }
     }
 
     private static NormalisedIdentity normalise(long planSequence, long... cells) {
