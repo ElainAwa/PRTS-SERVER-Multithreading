@@ -57,7 +57,7 @@ class KernelDrainCommandTest {
     void theDrainCommandAnswersZeroWhenNoReportsAreBuffered() {
         System.setProperty("arclight.prts.kernel", "true");
         List<String> answer = extension.run(List.of("drain"));
-        assertTrue(answer.get(0).contains("drain delivered="), answer.toString());
+        assertTrue(answer.get(0).contains("drain delivered=0"), answer.toString());
         assertFalse(answer.get(0).isBlank());
     }
 }
