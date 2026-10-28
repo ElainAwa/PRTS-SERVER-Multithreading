@@ -227,7 +227,7 @@ public final class KernelModule {
         this::noteTypedSettlement);
     /** A bounded exact order for a plan a retained claim still names; cleared with the claim floor. */
     private final Map<Long, RetainedOrder> retainedOrders = new ConcurrentHashMap<>();
-    private record RetainedOrder(long lifecycle, List<TickPlan.CommitStep> order) {
+    record RetainedOrder(long lifecycle, List<TickPlan.CommitStep> order) {
     }
     private final ShareMeterPoint jobMeter = new ShareMeterPoint();
     private final TickPlanStore plans = new TickPlanStore(KernelSettings.planHistoryCap());
@@ -951,7 +951,7 @@ public final class KernelModule {
                 // sweep ends its obligation here, so a window that published one leaves no pin.
                 // A claim still holding an older plan keeps that plan's seals readable for the
                 // settlement that has not reached it yet.
-                long retainedFloor = claimsEnabled() ? claims.retainedPlanFloor() : Long.MAX_VALUE;
+                long retainedFloor = claimRetentionFloor();
                 rangeSealFactory.settleBefore(result.plan().planSequence(), retainedFloor);
                 trimRetainedOrders(Math.min(result.plan().planSequence(), retainedFloor));
             }
@@ -1377,21 +1377,43 @@ public final class KernelModule {
     private CommitLog.Resolved resolveCommitOrderAt(long planSequence, long lifecycle,
                                                     String worldId, String domainId,
                                                     String nodeKey) {
-        TickPlanStore.StepRef ref = plans.resolveIn(planSequence, lifecycle, worldId, domainId,
+        boolean enabled = claimsEnabled();
+        boolean pending = enabled && claims.hasPendingReportPlan(planSequence);
+        return resolveRetainedOrderAt(plans, retainedOrders, enabled,
+            enabled && claims.holdsPlan(planSequence), pending, planSequence, lifecycle,
+            worldId, domainId, nodeKey);
+    }
+
+    /** Resolves one explicit report against the bounded history first and the retained exact order
+     * second. The retained order must remain readable for the whole end-drain delivery, so a plan
+     * the live claims no longer hold but the report buffer still names is resolved too. */
+    static CommitLog.Resolved resolveRetainedOrderAt(TickPlanStore planStore,
+                                                     Map<Long, RetainedOrder> retained,
+                                                     boolean claimsEnabled, boolean holdsPlan,
+                                                     boolean pendingReport, long planSequence,
+                                                     long lifecycle, String worldId,
+                                                     String domainId, String nodeKey) {
+        TickPlanStore.StepRef ref = planStore.resolveIn(planSequence, lifecycle, worldId, domainId,
             nodeKey);
-        if (ref == null) {
-            if (!claimsEnabled() || !claims.holdsPlan(planSequence)) {
-                return null;
-            }
-            return retainedOrderAt(planSequence, lifecycle, worldId, domainId, nodeKey);
+        if (ref != null) {
+            return new CommitLog.Resolved(ref.planSequence(), ref.position(), ref.intent());
         }
-        return new CommitLog.Resolved(ref.planSequence(), ref.position(), ref.intent());
+        if (!claimsEnabled) {
+            return null;
+        }
+        // A report that is still in the end-drain buffer keeps its exact order readable even after
+        // the live claims released the plan; that is the one late window the retained map serves.
+        if (!holdsPlan && !pendingReport) {
+            return null;
+        }
+        return retainedOrderAt(retained, planSequence, lifecycle, worldId, domainId, nodeKey);
     }
 
     /** The exact seat of one retained plan when the bounded plan history no longer carries it. */
-    private CommitLog.Resolved retainedOrderAt(long planSequence, long lifecycle, String worldId,
-                                               String domainId, String nodeKey) {
-        RetainedOrder held = retainedOrders.get(planSequence);
+    static CommitLog.Resolved retainedOrderAt(Map<Long, RetainedOrder> retained,
+                                              long planSequence, long lifecycle, String worldId,
+                                              String domainId, String nodeKey) {
+        RetainedOrder held = retained.get(planSequence);
         if (held == null || held.lifecycle() != lifecycle) {
             return null;
         }
@@ -1416,7 +1438,17 @@ public final class KernelModule {
         }
         retainedOrders.put(plan.planSequence(),
             new RetainedOrder(plans.lifecycle(), List.copyOf(plan.commitOrder())));
-        trimRetainedOrders(claims.retainedPlanFloor());
+        trimRetainedOrders(claimRetentionFloor());
+    }
+
+    /** The oldest plan whose exact order must remain readable: the oldest retained claim, or the
+     * oldest report still buffered for the end drain. A pending end-drain plan must not be trimmed
+     * just because its claims already closed. */
+    private long claimRetentionFloor() {
+        if (!claimsEnabled()) {
+            return Long.MAX_VALUE;
+        }
+        return Math.min(claims.retainedPlanFloor(), claims.pendingReportPlanFloor());
     }
 
     private void trimRetainedOrders(long floor) {

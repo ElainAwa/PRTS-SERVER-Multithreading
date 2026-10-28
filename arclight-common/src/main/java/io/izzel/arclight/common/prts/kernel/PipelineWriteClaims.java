@@ -145,6 +145,20 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
             return pending.size();
         }
 
+        /** The oldest plan whose report is still buffered, or MAX when the buffer is empty. The
+         * kernel keeps that plan's exact order readable until the end drain delivers it. */
+        long pendingPlanFloor() {
+            long floor = Long.MAX_VALUE;
+            for (Long plan : pending.keySet()) {
+                floor = Math.min(floor, plan);
+            }
+            return floor;
+        }
+
+        boolean hasPendingPlan(long planSequence) {
+            return pending.containsKey(planSequence);
+        }
+
         boolean failed() {
             return failed;
         }
@@ -785,6 +799,16 @@ public final class PipelineWriteClaims implements PrtsPipelineRows.MailboxOwnerT
 
     int pendingPlanCount() {
         return reportBuffer.pendingPlans();
+    }
+
+    /** The oldest plan still waiting in the report buffer; MAX when nothing is buffered. */
+    long pendingReportPlanFloor() {
+        return reportBuffer.pendingPlanFloor();
+    }
+
+    /** Whether this exact plan still has a report waiting for the end drain. */
+    boolean hasPendingReportPlan(long planSequence) {
+        return reportBuffer.hasPendingPlan(planSequence);
     }
 
     boolean reportBufferFailed() {
