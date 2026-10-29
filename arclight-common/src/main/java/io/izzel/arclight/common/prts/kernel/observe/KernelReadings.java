@@ -884,11 +884,20 @@ public final class KernelReadings {
         add(lines, "budget.would_degrade_level", degradeLevel(shares));
         add(lines, "budget.action_executed", shares.anyActionExecuted() ? 1 : 0);
         add(lines, "budget.over_class_total", shares.classOverrunTotal());
-        add(lines, "budget.over_world_total", shares.worldOverrunTotal());
+        add(lines, "budget.world_overrun_total", shares.worldOverrunTotal());
         for (ShareClass shareClass : ShareClass.values()) {
             add(lines, "budget.over_class_" + shareClass.key(), shares.classOverrunCount(shareClass));
         }
-        for (String world : shares.overrunWorlds()) {
+        List<String> budgetWorlds = new ArrayList<>();
+        if (table != null) {
+            budgetWorlds.addAll(table.worlds());
+        }
+        for (String overrunWorld : shares.overrunWorlds()) {
+            if (!budgetWorlds.contains(overrunWorld)) {
+                budgetWorlds.add(overrunWorld);
+            }
+        }
+        for (String world : budgetWorlds) {
             add(lines, "budget.over_world_" + safe(world), shares.worldOverrunCount(world));
         }
         metering(lines, module);
