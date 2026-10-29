@@ -3,6 +3,8 @@ package io.izzel.arclight.common.prts.kernel.shares;
 
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
 
+import java.util.List;
+
 /** The rows of the time-budget share table. Five rows are the asserted classes, one row carries
  * the region tick work as a single item, one row carries the world level resources and one is the
  * catch-all. */
@@ -16,6 +18,10 @@ public enum ShareClass {
     REGIONTICK("regiontick", 0.06),
     WORLDRES("worldres", 0.02),
     OTHER("other", 0.02);
+
+    /** The five asserted classes whose rows are compared against the platform budget; the other
+     * three rows are supporting rows and are still published, zero included. */
+    public static final List<ShareClass> ASSERTED = List.of(ENTITY, BLOCKENTITY, GRAPH, EVENT, AI);
 
     private final String key;
     private final double weight;

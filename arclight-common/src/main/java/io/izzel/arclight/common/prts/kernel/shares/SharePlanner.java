@@ -113,6 +113,9 @@ public final class SharePlanner {
         if (purpose == null) {
             throw new IllegalArgumentException("the reserved pool needs a purpose");
         }
+        if (!Double.isFinite(millis) || millis < 0.0) {
+            throw new IllegalArgumentException("a reserve draw must be a finite non-negative amount");
+        }
         reserveUsed += millis;
         reserveUsedByPurpose.merge(purpose, millis, Double::sum);
     }
