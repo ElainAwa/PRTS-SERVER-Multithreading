@@ -96,7 +96,8 @@ public final class KernelSettings {
     public static final String PIPELINE_JOBS = "pipeline-jobs";
 
     /** Publishes the read-only aggregate identity of the frozen batch cells; off, the two
-     * identity rows are not emitted and no aggregate is kept. */
+     * identity rows are not emitted and no aggregate is kept. The emitted form is the v2
+     * since-reset window aggregate; the earlier per-freeze last aggregate is historic. */
     public static final String R02_IDENTITY_DIGEST = "r02-identity-digest";
 
     /** Converges every commit producer on the commit log; off, each producer keeps its own path. */

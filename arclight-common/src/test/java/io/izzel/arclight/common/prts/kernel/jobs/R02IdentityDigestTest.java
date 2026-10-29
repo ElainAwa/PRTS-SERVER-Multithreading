@@ -25,9 +25,10 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-/** The two read-only identity keys: off by default, a freeze-level FNV-1a64 of the frozen batches
- * when opened, cleared by the kernel reset, and no other reading or producer output moved by the
- * switch. */
+/** The two read-only identity keys in their v2 since-reset window form: off by default, a
+ * FNV-1a64 that each freeze appends its frozen batches to, an empty freeze that keeps the
+ * accumulated value, a kernel reset that clears it, and no other reading or producer output moved
+ * by the switch. The earlier per-freeze last aggregate remains historic and is not reinterpreted. */
 class R02IdentityDigestTest {
 
     private static final String WORLD = "minecraft:overworld";
@@ -85,7 +86,7 @@ class R02IdentityDigestTest {
     }
 
     @Test
-    void theAggregateCountsTheFrozenBatchesAndTheKernelResetClearsIt() throws IOException {
+    void oneFreezeCountsEachBatchAndTheKernelResetClearsIt() throws IOException {
         writeConfig(true);
         PipelineBatchLedger ledger = new PipelineBatchLedger();
         PipelineRoundJobs jobs = producer(ledger);
@@ -101,6 +102,36 @@ class R02IdentityDigestTest {
         jobs.reset();
         assertEquals("0000000000000000", jobs.identityDigest(), "reset clears the aggregate");
         assertEquals(0L, jobs.identityEntries(), "reset clears the entry count");
+    }
+
+    @Test
+    void theWindowAccumulatesAcrossFreezesAndEmptyFreezesKeepIt() throws IOException {
+        writeConfig(true);
+        PipelineBatchLedger ledger = new PipelineBatchLedger();
+        PipelineRoundJobs jobs = producer(ledger);
+        JobIntake intake = new JobIntake(() -> 64);
+
+        mint(ledger, WORLD, MAILBOX, CELL_A);
+        mint(ledger, WORLD, MAILBOX, CELL_B);
+        assertEquals(1, jobs.declareInto(intake, PLAN, TICK));
+        assertEquals(1L, jobs.identityEntries());
+        assertEquals("b08758390920c48b", jobs.identityDigest(),
+            "the first freeze keeps the single-freeze pin");
+
+        mint(ledger, WORLD, LIGHT, CELL_C);
+        assertEquals(1, jobs.declareInto(intake, PLAN + 1L, TICK + 1L));
+        assertEquals(2L, jobs.identityEntries(), "the second freeze adds its batch to the window");
+        assertEquals("536ccbece8b95aff", jobs.identityDigest(),
+            "the second freeze continues the same fold");
+
+        assertEquals(0, jobs.declareInto(intake, PLAN + 2L, TICK + 2L));
+        assertEquals(2L, jobs.identityEntries(), "an empty freeze leaves the entries alone");
+        assertEquals("536ccbece8b95aff", jobs.identityDigest(),
+            "an empty freeze leaves the digest alone");
+
+        jobs.reset();
+        assertEquals("0000000000000000", jobs.identityDigest(), "reset clears the window");
+        assertEquals(0L, jobs.identityEntries(), "reset clears the window count");
     }
 
     @Test
@@ -168,11 +199,13 @@ class R02IdentityDigestTest {
         PipelineBatchLedger ledger = new PipelineBatchLedger();
         PipelineRoundJobs jobs = producer(ledger);
         JobIntake intake = new JobIntake(() -> 64);
+        jobs.ownerRound(WORLD, MAILBOX);
         mint(ledger, WORLD, MAILBOX, CELL_A);
         mint(ledger, WORLD, MAILBOX, CELL_B);
-        mint(ledger, WORLD, LIGHT, CELL_C);
-        jobs.ownerRound(WORLD, MAILBOX);
         jobs.declareInto(intake, PLAN, TICK);
+        mint(ledger, WORLD, LIGHT, CELL_C);
+        jobs.declareInto(intake, PLAN + 1L, TICK + 1L);
+        jobs.declareInto(intake, PLAN + 2L, TICK + 2L);
         return new Snapshot(intake.take(), jobs.candidateDeclarations(), jobs.windows(),
             jobs.declared(), jobs.refused(), jobs.coveredRounds(), jobs.lastDeclared(),
             jobs.lastRounds(), jobs.roundsSeen(), jobs.tasksSeen(), jobs.identityDigest());

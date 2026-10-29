@@ -58,7 +58,9 @@ public final class PipelineRoundJobs implements PrtsPipelineRows.MailboxOwnerTap
     private long lastDeclared;
     private long lastRounds;
     private long handles;
-    /** Freeze-level aggregate of the batch identities; zero when the switch is off or empty. */
+    /** Since-reset window aggregate of the batch identities (v2); zero when the switch is off or
+     * the window is empty. The original per-freeze last aggregate is historic and is not
+     * reinterpreted from these fields. */
     private long identityDigest;
     private long identityEntries;
 
@@ -118,7 +120,10 @@ public final class PipelineRoundJobs implements PrtsPipelineRows.MailboxOwnerTap
         long covered = 0L;
         long declaredNow = 0L;
         boolean identity = KernelSettings.r02IdentityDigest();
-        long identityHash = FNV_OFFSET;
+        // The v2 aggregate belongs to the since-reset window: a second freeze continues the fold
+        // and adds its batches to the count, so the end of a window can still read what its first
+        // freezes saw. Empty freezes keep the accumulated value.
+        long identityHash = identityEntries == 0L ? FNV_OFFSET : identityDigest;
         long identityCount = 0L;
         for (PipelineBatchLedger.BatchId batch : batches) {
             long tasks = source.tasksOf(batch).size();
@@ -145,8 +150,10 @@ public final class PipelineRoundJobs implements PrtsPipelineRows.MailboxOwnerTap
         coveredRounds += covered;
         lastRounds = covered;
         lastDeclared = declaredNow;
-        identityDigest = identity && identityCount > 0L ? identityHash : 0L;
-        identityEntries = identity ? identityCount : 0L;
+        if (identity && identityCount > 0L) {
+            identityDigest = identityHash;
+            identityEntries += identityCount;
+        }
         last = Map.copyOf(traces);
         return batches.size();
     }
@@ -248,13 +255,13 @@ public final class PipelineRoundJobs implements PrtsPipelineRows.MailboxOwnerTap
         return lastRounds;
     }
 
-    /** The freeze-level FNV-1a64 of the frozen batches, lower-case 16 hex digits; zero when the
-     * switch is off or the freeze carried no batch. */
+    /** The v2 since-reset FNV-1a64 of the frozen batches, lower-case 16 hex digits; zero when the
+     * switch is off or the window carried no batch. */
     public String identityDigest() {
         return String.format(Locale.ROOT, "%016x", identityDigest);
     }
 
-    /** How many frozen batches entered the aggregate of the newest freeze. */
+    /** How many frozen batches this v2 window entered into the aggregate. */
     public long identityEntries() {
         return identityEntries;
     }
