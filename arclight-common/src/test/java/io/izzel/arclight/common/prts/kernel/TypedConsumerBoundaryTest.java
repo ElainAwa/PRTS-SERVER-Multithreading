@@ -69,10 +69,12 @@ class TypedConsumerBoundaryTest {
         while (matcher.find()) {
             defaults++;
         }
-        assertEquals(41, defaults,
-            "the declared feature defaults include the approved read-only identity switch");
+        assertEquals(42, defaults,
+            "the declared feature defaults include the approved read-only identity and world-set switches");
         assertTrue(config.contains("features.put(\"r02-identity-digest\", false)"),
             "the approved identity switch keeps its off default");
+        assertTrue(config.contains("features.put(\"world-set-readouts\", false)"),
+            "the approved world-set readout switch keeps its off default");
         for (String name : List.of("tick-plan", "pipeline-jobs", "product-commit")) {
             Matcher one = Pattern.compile("features\\.put\\(\"" + Pattern.quote(name)
                 + "\", (true|false)\\)").matcher(config);

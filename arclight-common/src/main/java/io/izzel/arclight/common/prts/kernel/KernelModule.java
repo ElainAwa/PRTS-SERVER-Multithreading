@@ -59,6 +59,7 @@ import io.izzel.arclight.common.prts.kernel.sites.WriteControlledSlots;
 import io.izzel.arclight.common.prts.kernel.sites.WritePath;
 import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
 import io.izzel.arclight.common.prts.kernel.sites.WorldEpochs;
+import io.izzel.arclight.common.prts.kernel.sites.WorldSetReadout;
 import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard;
 import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
 import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
@@ -195,6 +196,7 @@ public final class KernelModule {
         new ChunkMaterializationObserver();
     private final SaveIdentityObserver saveIdentity = new SaveIdentityObserver();
     private final RegionIdentityObserver regionIdentity = new RegionIdentityObserver();
+    private final WorldSetReadout worldSetReadout = new WorldSetReadout();
     private final StallAttributionObserver attribution = new StallAttributionObserver();
     private final ChunkDemandObserver chunkDemand = new ChunkDemandObserver();
     private final SelfCostTap selfCosts = new SelfCostTap();
@@ -595,6 +597,9 @@ public final class KernelModule {
         if (KernelSettings.commitLog()) {
             lastCommitReplay = commits.closeTick();
         }
+        if (KernelSettings.worldSetReadouts()) {
+            noteWorldSetReadout(worldIds);
+        }
         long overrunsBefore = waitPoints.waitOverrunCount();
         injectWaits();
         waitPoints.noteTick();
@@ -603,6 +608,18 @@ public final class KernelModule {
             SelfTimers.note(SelfClass.OBSERVE, RUNTIME_WORLD, "runtime",
                 System.nanoTime() - startedAt);
         }
+    }
+
+    /** Feeds the opt-in world-set readout from the world list of this tick and the plan/commit
+     * world ids; it is a read-only observation and changes no scheduling. */
+    private void noteWorldSetReadout(List<String> worldIds) {
+        TickPlan latest = plans.latest();
+        List<String> planWorlds = KernelSettings.tickPlan() && latest != null
+            ? latest.worlds() : List.of();
+        List<String> commitWorlds = KernelSettings.tickPlan() && latest != null
+            ? latest.commitOrder().stream().map(TickPlan.CommitStep::worldId).toList()
+            : List.of();
+        worldSetReadout.observe(worldIds, planWorlds, commitWorlds);
     }
 
     /** Installs the write path watcher. Called while the category is on. */
@@ -1666,6 +1683,11 @@ public final class KernelModule {
 
     public RegionIdentityObserver regionIdentity() {
         return regionIdentity;
+    }
+
+    /** The opt-in world-set readiness readout; it is updated only while world-set-readouts is on. */
+    public WorldSetReadout worldSetReadout() {
+        return worldSetReadout;
     }
 
     /** The per-instance attribution of the block entity and entity tick faces. */
@@ -3119,6 +3141,7 @@ public final class KernelModule {
         chunkFlow.reset();
         saveIdentity.reset();
         regionIdentity.reset();
+        worldSetReadout.reset();
         attribution.reset();
         chunkDemand.reset();
         arrivalDigest.reset();

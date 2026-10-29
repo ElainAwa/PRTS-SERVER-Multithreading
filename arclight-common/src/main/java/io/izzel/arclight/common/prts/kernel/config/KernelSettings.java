@@ -100,6 +100,10 @@ public final class KernelSettings {
      * since-reset window aggregate; the earlier per-freeze last aggregate is historic. */
     public static final String R02_IDENTITY_DIGEST = "r02-identity-digest";
 
+    /** Publishes the world-set readiness rows only while this instance switch is on; off, the
+     * world rows are not emitted and no readout is updated. */
+    public static final String WORLD_SET_READOUTS = "world-set-readouts";
+
     /** Converges every commit producer on the commit log; off, each producer keeps its own path. */
     public static final String COMMIT_LOG = "commit-log";
 
@@ -402,6 +406,10 @@ public final class KernelSettings {
 
     public static boolean r02IdentityDigest() {
         return feature(R02_IDENTITY_DIGEST);
+    }
+
+    public static boolean worldSetReadouts() {
+        return feature(WORLD_SET_READOUTS);
     }
 
     public static boolean commitLog() {

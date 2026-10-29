@@ -310,6 +310,7 @@ public final class PrtsConfigManager {
         features.put("job-graph", false);
         features.put("pipeline-jobs", false);
         features.put("r02-identity-digest", false);
+        features.put("world-set-readouts", false);
         features.put("commit-log", false);
         features.put("product-commit", false);
         features.put("safety-net", false);

@@ -53,6 +53,7 @@ import io.izzel.arclight.common.prts.kernel.sites.WritePath;
 import io.izzel.arclight.common.prts.kernel.sites.WriteControlledSlots;
 import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
 import io.izzel.arclight.common.prts.kernel.sites.WorldEpochs;
+import io.izzel.arclight.common.prts.kernel.sites.WorldSetReadout;
 import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard;
 import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
 import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
@@ -118,6 +119,7 @@ public final class KernelReadings {
         stallAttribution(lines, module);
         chunkDemand(lines, module);
         regions(lines, module);
+        worldReadouts(lines, module);
         control(lines, module);
         return lines;
     }
@@ -2370,6 +2372,17 @@ public final class KernelReadings {
      *  the double the fold used instead of the six digits a decimal form would keep. */
     private static String bits(long value) {
         return Long.toHexString(Double.doubleToRawLongBits(value));
+    }
+
+    /** The world-set readiness rows, emitted only while the opt-in instance switch is on. */
+    private static void worldReadouts(List<String> lines, KernelModule module) {
+        if (!KernelSettings.worldSetReadouts()) {
+            return;
+        }
+        WorldSetReadout readout = module.worldSetReadout();
+        add(lines, "world.count", readout.worldCount());
+        add(lines, "world.id_mismatch", readout.idMismatch());
+        add(lines, "world.set_change_events", readout.setChangeEvents());
     }
 
     /** The regions the loaded chunks of every world fall into: the identity a stability window and
