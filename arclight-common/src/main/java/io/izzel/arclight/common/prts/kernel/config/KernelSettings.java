@@ -95,6 +95,10 @@ public final class KernelSettings {
     /** Declares the rounds the chunk pipeline ran as jobs of the planning period; off. */
     public static final String PIPELINE_JOBS = "pipeline-jobs";
 
+    /** Publishes the read-only aggregate identity of the frozen batch cells; off, the two
+     * identity rows are not emitted and no aggregate is kept. */
+    public static final String R02_IDENTITY_DIGEST = "r02-identity-digest";
+
     /** Converges every commit producer on the commit log; off, each producer keeps its own path. */
     public static final String COMMIT_LOG = "commit-log";
 
@@ -393,6 +397,10 @@ public final class KernelSettings {
 
     public static boolean pipelineJobs() {
         return feature(PIPELINE_JOBS);
+    }
+
+    public static boolean r02IdentityDigest() {
+        return feature(R02_IDENTITY_DIGEST);
     }
 
     public static boolean commitLog() {

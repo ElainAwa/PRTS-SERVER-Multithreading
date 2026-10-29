@@ -2135,6 +2135,10 @@ public final class KernelReadings {
         add(lines, "r02.rounds_covered", jobs.coveredRounds());
         add(lines, "r02.last_declared", jobs.lastDeclared());
         add(lines, "r02.last_rounds", jobs.lastRounds());
+        if (KernelSettings.r02IdentityDigest()) {
+            add(lines, "r02.identity_digest", jobs.identityDigest());
+            add(lines, "r02.identity_entries", jobs.identityEntries());
+        }
         add(lines, "r02.dispatch_handed_out", module.lastDispatchHandedOut());
         // Chunk-pipeline rows: every submit at the sorter's host entry is one host-ticked row,
         // whatever its placement; every task a freeze claimed into a batch is one owned row.
