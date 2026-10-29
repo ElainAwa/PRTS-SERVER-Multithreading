@@ -59,6 +59,7 @@ import io.izzel.arclight.common.prts.kernel.sites.WriteControlledSlots;
 import io.izzel.arclight.common.prts.kernel.sites.WritePath;
 import io.izzel.arclight.common.prts.kernel.sites.WritePathCounters;
 import io.izzel.arclight.common.prts.kernel.sites.WorldEpochs;
+import io.izzel.arclight.common.prts.kernel.sites.WorldLifecycleOwner;
 import io.izzel.arclight.common.prts.kernel.sites.WorldSetReadout;
 import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard;
 import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
@@ -197,6 +198,7 @@ public final class KernelModule {
     private final SaveIdentityObserver saveIdentity = new SaveIdentityObserver();
     private final RegionIdentityObserver regionIdentity = new RegionIdentityObserver();
     private final WorldSetReadout worldSetReadout = new WorldSetReadout();
+    private final WorldLifecycleOwner worldLifecycle = new WorldLifecycleOwner();
     private final StallAttributionObserver attribution = new StallAttributionObserver();
     private final ChunkDemandObserver chunkDemand = new ChunkDemandObserver();
     private final SelfCostTap selfCosts = new SelfCostTap();
@@ -1690,6 +1692,11 @@ public final class KernelModule {
         return worldSetReadout;
     }
 
+    /** The internal world lifecycle owner that refuses non-owner and illegal transitions. */
+    public WorldLifecycleOwner worldLifecycle() {
+        return worldLifecycle;
+    }
+
     /** The per-instance attribution of the block entity and entity tick faces. */
     public StallAttributionObserver attribution() {
         return attribution;
@@ -3142,6 +3149,7 @@ public final class KernelModule {
         saveIdentity.reset();
         regionIdentity.reset();
         worldSetReadout.reset();
+        worldLifecycle.reset();
         attribution.reset();
         chunkDemand.reset();
         arrivalDigest.reset();

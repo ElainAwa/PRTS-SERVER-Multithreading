@@ -14,6 +14,7 @@ import io.izzel.arclight.common.mod.server.world.border.ArclightBorderChangeList
 import io.izzel.arclight.common.mod.server.world.border.ArclightDelegatedBorderListener;
 import io.izzel.arclight.common.mod.util.ArclightCaptures;
 import io.izzel.arclight.common.mod.util.WorldHookCompat;
+import io.izzel.arclight.common.prts.kernel.WorldLifecycleWiring;
 import io.izzel.arclight.common.prts.support.PrtsLevelLifecycle;
 import io.izzel.arclight.common.mod.util.BukkitOptionParser;
 import io.izzel.arclight.common.util.IteratorUtil;
@@ -308,8 +309,9 @@ public abstract class MinecraftServerMixin extends ReentrantBlockableEventLoop<T
         Object previous = DecorationOps.callsite().invoke(instance, k, v);
         // A failed initializer or put must not publish a dimension that was never registered.
         if (v instanceof ServerLevel level) {
-            PrtsLevelLifecycle.server().retain(
-                PrtsLevelLifecycle.server().load(level.dimension().location().toString()));
+            String worldId = level.dimension().location().toString();
+            PrtsLevelLifecycle.server().retain(PrtsLevelLifecycle.server().load(worldId));
+            WorldLifecycleWiring.onLevelLoaded(worldId);
         }
         return previous;
     }
@@ -460,8 +462,9 @@ public abstract class MinecraftServerMixin extends ReentrantBlockableEventLoop<T
     public void addLevel(ServerLevel level) {
         this.levels.put(level.dimension(), level);
         // Publish after registration succeeds so load callbacks see the same registered dimensions.
-        PrtsLevelLifecycle.server().retain(
-            PrtsLevelLifecycle.server().load(level.dimension().location().toString()));
+        String worldId = level.dimension().location().toString();
+        PrtsLevelLifecycle.server().retain(PrtsLevelLifecycle.server().load(worldId));
+        WorldLifecycleWiring.onLevelLoaded(worldId);
         this.arclight$onServerLoad(level);
         this.bridge$forge$markLevelsDirty();
     }
@@ -469,8 +472,9 @@ public abstract class MinecraftServerMixin extends ReentrantBlockableEventLoop<T
     public void removeLevel(ServerLevel level) {
         this.levels.remove(level.dimension());
         // This path removes one level. A refused id does not put that level back.
-        PrtsLevelLifecycle.server().retain(
-            PrtsLevelLifecycle.server().unload(level.dimension().location().toString()));
+        String worldId = level.dimension().location().toString();
+        PrtsLevelLifecycle.server().retain(PrtsLevelLifecycle.server().unload(worldId));
+        WorldLifecycleWiring.onLevelUnloaded(worldId);
         this.arclight$onServerUnload(level);
         this.bridge$forge$markLevelsDirty();
         ((CraftServerBridge) Bukkit.getServer()).bridge$removeWorld(level);
@@ -487,8 +491,9 @@ public abstract class MinecraftServerMixin extends ReentrantBlockableEventLoop<T
     private void arclight$unloadLevel(CallbackInfo ci) {
         for (var serverLevel : this.getAllLevels()) {
             // Shutdown drops worlds here and does not call removeLevel. A refused id does not restore one.
-            PrtsLevelLifecycle.server().retain(
-                PrtsLevelLifecycle.server().unload(serverLevel.dimension().location().toString()));
+            String worldId = serverLevel.dimension().location().toString();
+            PrtsLevelLifecycle.server().retain(PrtsLevelLifecycle.server().unload(worldId));
+            WorldLifecycleWiring.onLevelUnloaded(worldId);
             ((CraftServerBridge) Bukkit.getServer()).bridge$removeWorld(serverLevel);
         }
     }

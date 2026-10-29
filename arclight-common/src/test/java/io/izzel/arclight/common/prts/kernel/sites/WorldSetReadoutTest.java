@@ -96,21 +96,22 @@ class WorldSetReadoutTest {
         assertTrue(lines.stream().noneMatch(line -> line.startsWith("world.count=")));
         assertTrue(lines.stream().noneMatch(line -> line.startsWith("world.id_mismatch=")));
         assertTrue(lines.stream().noneMatch(line -> line.startsWith("world.set_change_events=")));
+        assertTrue(lines.stream().noneMatch(line -> line.startsWith("world.lifecycle_denied=")));
     }
 
     @Test
-    void theOpenSwitchEmitsOnlyTheThreeWorldRowsAndResetClears() throws IOException {
+    void theOpenSwitchEmitsTheWorldRowsAndResetClears() throws IOException {
         writeConfig(true);
         assertTrue(KernelSettings.worldSetReadouts());
         KernelModule module = KernelModule.instance();
+        module.worldLifecycle().reset();
         module.worldSetReadout().observe(List.of(A, B), List.of(A), List.of(B));
 
         List<String> lines = KernelReadings.export(module);
         assertTrue(lines.contains("world.count=2"));
         assertTrue(lines.contains("world.id_mismatch=0"));
         assertTrue(lines.contains("world.set_change_events=0"));
-        assertTrue(lines.stream().noneMatch(line -> line.startsWith("world.lifecycle_denied=")),
-            "A03 keys are not implemented in this batch");
+        assertTrue(lines.contains("world.lifecycle_denied=0"));
         assertTrue(lines.stream().noneMatch(line -> line.startsWith("world.unload_")),
             "A04 keys are not implemented in this batch");
 
@@ -119,6 +120,7 @@ class WorldSetReadoutTest {
         assertTrue(afterReset.contains("world.count=0"));
         assertTrue(afterReset.contains("world.id_mismatch=0"));
         assertTrue(afterReset.contains("world.set_change_events=0"));
+        assertTrue(afterReset.contains("world.lifecycle_denied=0"));
     }
 
     @Test

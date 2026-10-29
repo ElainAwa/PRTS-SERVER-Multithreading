@@ -2383,6 +2383,7 @@ public final class KernelReadings {
         add(lines, "world.count", readout.worldCount());
         add(lines, "world.id_mismatch", readout.idMismatch());
         add(lines, "world.set_change_events", readout.setChangeEvents());
+        add(lines, "world.lifecycle_denied", module.worldLifecycle().deniedCount());
     }
 
     /** The regions the loaded chunks of every world fall into: the identity a stability window and

@@ -34,6 +34,15 @@ class LevelLifecyclePublicationTest {
             .replace("ADD_METHOD", method(text, "public void addLevel("));
         Path java = classes.resolve("LifecycleFixture.java");
         Files.writeString(java, fixture);
+        Path wiring = classes.resolve("WorldLifecycleWiring.java");
+        Files.writeString(wiring, """
+            package io.izzel.arclight.common.prts.kernel;
+            public final class WorldLifecycleWiring {
+                private WorldLifecycleWiring() {}
+                public static void onLevelLoaded(String worldId) {}
+                public static void onLevelUnloaded(String worldId) {}
+            }
+            """);
         for (String suffix : List.of("", "$Snapshot", "$Mark", "$Refusal")) {
             String name = "io/izzel/arclight/common/prts/support/PrtsLevelLifecycle" + suffix + ".class";
             Path target = classes.resolve(name);
@@ -46,7 +55,7 @@ class LevelLifecyclePublicationTest {
         var compiler = ToolProvider.getSystemJavaCompiler();
         assertNotNull(compiler, "the fixture requires a JDK");
         assertEquals(0, compiler.run(null, null, null, "-proc:none", "-classpath", classes.toString(),
-            "-d", classes.toString(), java.toString()));
+            "-d", classes.toString(), java.toString(), wiring.toString()));
     }
 
     @Test
@@ -113,6 +122,7 @@ class LevelLifecyclePublicationTest {
 
     private static final String HOST = """
         import io.izzel.arclight.common.prts.support.PrtsLevelLifecycle;
+        import io.izzel.arclight.common.prts.kernel.WorldLifecycleWiring;
         import java.util.*;
 
         class MinecraftServer {}
