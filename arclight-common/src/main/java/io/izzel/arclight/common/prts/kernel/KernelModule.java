@@ -99,7 +99,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.Deque;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.Locale;
 import java.util.Map;
 
@@ -465,6 +467,11 @@ public final class KernelModule {
     private long unloadPlatformPosts;
     private long unloadHostRemovePosts;
     private boolean unloadDeliveryInstalled;
+    private long unloadFlushCount;
+    private long unloadTokenReclaimCount;
+    private long unloadArenaReturnCount;
+    private long unloadCountedCount;
+    private final Set<String> pendingUncountedUnloads = new HashSet<>();
     private int commitCloseGivenBack;
     private int commitCloseUnrecorded;
     private int commitClosePublishing;
@@ -2345,6 +2352,20 @@ public final class KernelModule {
      * nowhere. The world stops taking new work, its waiting writes are handed to the payload, the row of
      * its unload is written, and what the flush could not land goes back. */
     public WorldStopFlush flushWorldAtStop(String worldId) {
+        String named = worldId == null || worldId.isEmpty() ? "unnamed" : worldId;
+        boolean record = KernelSettings.worldSetReadouts() && worldLifecycle.holdsUnload(named);
+        return flushWorldAtStop(worldId, record, false);
+    }
+
+    /** Flushes one world and records the A04 session only when the owner accepted it. The event
+     * stopping path passes false and leaves a pending session for the owner-gated unload path to
+     * count once; the generic path passes true after the owner accepted the unload. */
+    public WorldStopFlush flushWorldAtStop(String worldId, boolean recordSession) {
+        return flushWorldAtStop(worldId, recordSession, !recordSession);
+    }
+
+    private WorldStopFlush flushWorldAtStop(String worldId, boolean recordSession,
+                                            boolean trackPending) {
         stopFlushLastSequence = ++hostEntrySequence;
         String named = worldId == null || worldId.isEmpty() ? "unnamed" : worldId;
         stopFlushEntries.put(named, stopFlushLastSequence);
@@ -2366,8 +2387,38 @@ public final class KernelModule {
         }
         long reclaimStep = ++stopStepSequence;
         int reclaimed = intents.releaseWorld(named);
+        arena.returnWorld(named);
+        shares.forgetWorld(named);
+        if (recordSession) {
+            recordUnloadSession();
+        } else if (trackPending) {
+            pendingUncountedUnloads.add(named);
+        }
         return noteStopFlush(new WorldStopFlush(named, epoch, "", dispatchStep, flushStep, unloadRowStep,
             reclaimStep, flushed, reclaimed));
+    }
+
+    /** Counts one A04 session at the owner-accepted entry; the flush/returns may already have run
+     * on the stopping path. */
+    public boolean countPendingUnload(String worldId) {
+        String named = worldId == null || worldId.isEmpty() ? "unnamed" : worldId;
+        if (!pendingUncountedUnloads.remove(named)) {
+            return false;
+        }
+        recordUnloadSession();
+        return true;
+    }
+
+    public void discardPendingUnload(String worldId) {
+        String named = worldId == null || worldId.isEmpty() ? "unnamed" : worldId;
+        pendingUncountedUnloads.remove(named);
+    }
+
+    private void recordUnloadSession() {
+        unloadFlushCount++;
+        unloadTokenReclaimCount++;
+        unloadArenaReturnCount++;
+        unloadCountedCount++;
     }
 
     /** Step two of the set: the intents still waiting for one world are handed to the payload in the
@@ -2614,6 +2665,26 @@ public final class KernelModule {
     /** How many deliveries found the shared token count moved while they ran; must stay 0. */
     public long unloadTokenReclaims() {
         return unloadTokenReclaims;
+    }
+
+    /** How many valid unload sessions reached the flush stage since the last reset. */
+    public long unloadFlushCount() {
+        return unloadFlushCount;
+    }
+
+    /** How many valid unload sessions reached the token-reclaim stage since the last reset. */
+    public long unloadTokenReclaimCount() {
+        return unloadTokenReclaimCount;
+    }
+
+    /** How many valid unload sessions reached the arena-return stage since the last reset. */
+    public long unloadArenaReturnCount() {
+        return unloadArenaReturnCount;
+    }
+
+    /** How many valid unload sessions reached the counted stage since the last reset. */
+    public long unloadCountedCount() {
+        return unloadCountedCount;
     }
 
     /** The stop entry the recorded deliveries belong to, or zero while no close entry has run. */
@@ -3150,6 +3221,11 @@ public final class KernelModule {
         regionIdentity.reset();
         worldSetReadout.reset();
         worldLifecycle.reset();
+        unloadFlushCount = 0L;
+        unloadTokenReclaimCount = 0L;
+        unloadArenaReturnCount = 0L;
+        unloadCountedCount = 0L;
+        pendingUncountedUnloads.clear();
         attribution.reset();
         chunkDemand.reset();
         arrivalDigest.reset();

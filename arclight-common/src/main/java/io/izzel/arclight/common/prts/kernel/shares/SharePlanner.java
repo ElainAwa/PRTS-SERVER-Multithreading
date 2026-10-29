@@ -177,6 +177,13 @@ public final class SharePlanner {
         return new ArrayList<>(worldOverruns.keySet());
     }
 
+    /** Returns the per-world overrun state of a world that is unloading; the class totals stay,
+     * because they are process-wide. */
+    public synchronized void forgetWorld(String worldId) {
+        worldOverruns.remove(worldId);
+        records.removeIf(record -> record.worldId().equals(worldId));
+    }
+
     public long hungerEventCount() {
         return hungerEvents.sum();
     }

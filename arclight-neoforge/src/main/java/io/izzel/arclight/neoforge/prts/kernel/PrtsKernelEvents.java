@@ -2,6 +2,7 @@
 package io.izzel.arclight.neoforge.prts.kernel;
 
 import io.izzel.arclight.common.prts.kernel.KernelModule;
+import io.izzel.arclight.common.prts.kernel.WorldLifecycleWiring;
 import io.izzel.arclight.common.prts.config.PrtsConfigManager;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.observe.CloseSealWriter;
@@ -141,9 +142,7 @@ public final class PrtsKernelEvents {
         seal.entry(worlds, module);
         try {
             seal.flushing();
-            for (String world : worlds) {
-                module.flushWorldAtStop(world);
-            }
+            WorldLifecycleWiring.onServerStopping(worlds);
             seal.closed(module.closeCommitChain());
         } catch (RuntimeException error) {
             seal.errored(error);

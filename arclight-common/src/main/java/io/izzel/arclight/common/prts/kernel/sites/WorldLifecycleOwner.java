@@ -96,6 +96,13 @@ public final class WorldLifecycleOwner {
         return transitions;
     }
 
+    /** Whether this world is in a state the owner may unload: ready, pinned, or already
+     * unloading because the owner accepted the request. */
+    public synchronized boolean holdsUnload(String worldId) {
+        State state = worlds.get(worldId);
+        return state == State.READY || state == State.PINNED || state == State.UNLOADING;
+    }
+
     /** Clears the window counters only; the loaded world states survive a readout reset, so a
      * later legal unload is still recognized instead of being refused as unknown. */
     public synchronized void reset() {

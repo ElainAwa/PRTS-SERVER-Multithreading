@@ -124,6 +124,31 @@ public final class ArenaLedger {
         quarantinedSlots = 0L;
     }
 
+    /** Returns every segment of one world and counts the slots it force-released; a world that is
+     * unloading takes its own arena state with it and no other world's segment is touched. */
+    public synchronized int returnWorld(String worldId) {
+        if (worldId == null || worldId.isEmpty()) {
+            return 0;
+        }
+        int returned = 0;
+        var iterator = segments.entrySet().iterator();
+        while (iterator.hasNext()) {
+            ArenaSegment segment = iterator.next().getValue();
+            if (!segment.ref().worldId().equals(worldId)) {
+                continue;
+            }
+            for (ArenaSlot slot : segment.slots()) {
+                if (slot.forceRelease()) {
+                    releases++;
+                    generationBumps++;
+                    returned++;
+                }
+            }
+            iterator.remove();
+        }
+        return returned;
+    }
+
     /** Releases every pinned slot and forgets every segment; used by shutdown and by tests. */
     public synchronized void releaseAll() {
         for (ArenaSegment segment : segments.values()) {

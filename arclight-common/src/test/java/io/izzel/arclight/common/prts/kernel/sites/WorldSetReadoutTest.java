@@ -112,8 +112,10 @@ class WorldSetReadoutTest {
         assertTrue(lines.contains("world.id_mismatch=0"));
         assertTrue(lines.contains("world.set_change_events=0"));
         assertTrue(lines.contains("world.lifecycle_denied=0"));
-        assertTrue(lines.stream().noneMatch(line -> line.startsWith("world.unload_")),
-            "A04 keys are not implemented in this batch");
+        assertTrue(lines.stream().anyMatch(line -> line.startsWith("world.unload_flush=")));
+        assertTrue(lines.stream().anyMatch(line -> line.startsWith("world.unload_token_reclaim=")));
+        assertTrue(lines.stream().anyMatch(line -> line.startsWith("world.unload_arena_return=")));
+        assertTrue(lines.stream().anyMatch(line -> line.startsWith("world.unload_counted=")));
 
         module.worldSetReadout().reset();
         List<String> afterReset = KernelReadings.export(module);
