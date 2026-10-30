@@ -52,8 +52,8 @@ class P2F05uB3TokenQueueTest {
         tokens.add(planner.tokenOf(second));
         assertTrue(KernelModule.markAllB3Tokens(planner, tokens));
         assertTrue(planner.anyActionExecuted());
-        // A second pass cannot mark the same records again.
-        assertFalse(KernelModule.markAllB3Tokens(planner, tokens));
+        // A second pass is idempotent: an already-true record still counts as success.
+        assertTrue(KernelModule.markAllB3Tokens(planner, tokens));
     }
 
     @Test

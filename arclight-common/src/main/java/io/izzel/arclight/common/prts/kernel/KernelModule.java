@@ -1895,13 +1895,17 @@ public final class KernelModule {
     /** All-or-nothing mark: no record changes unless every token still exists and marks. */
     static boolean markAllB3Tokens(SharePlanner shares, java.util.ArrayDeque<Long> tokens) {
         for (long token : tokens) {
-            if (!shares.hasToken(token)) {
+            boolean present = shares.hasToken(token);
+            B3_DEBUG.debug("b3 markAll probe: token={} hasToken={}", token, present);
+            if (!present) {
                 return false;
             }
         }
         boolean allMarked = true;
         for (long token : tokens) {
-            allMarked &= shares.markTokenExecuted(token);
+            boolean marked = shares.markTokenExecuted(token);
+            B3_DEBUG.debug("b3 markAll probe: token={} marked={}", token, marked);
+            allMarked &= marked;
         }
         return allMarked;
     }

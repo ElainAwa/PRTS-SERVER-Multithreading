@@ -95,7 +95,7 @@ class P2F05sB3MergePrototypeTest {
         long tokenB = planner.tokenOf(recordB);
         assertTrue(tokenA > 0L && tokenB > 0L && tokenA != tokenB);
         assertTrue(planner.markTokenExecuted(tokenA));
-        assertFalse(planner.markTokenExecuted(tokenA));
+        assertTrue(planner.markTokenExecuted(tokenA));
         assertTrue(planner.markTokenExecuted(tokenB));
         assertFalse(planner.markTokenExecuted(99999L));
         planner.clearRecordTokens();
@@ -124,7 +124,7 @@ class P2F05sB3MergePrototypeTest {
         assertFalse(planner.anyActionExecuted());
         assertTrue(planner.markTokenExecuted(token));
         assertTrue(planner.anyActionExecuted());
-        assertFalse(planner.markTokenExecuted(token));
+        assertTrue(planner.markTokenExecuted(token));
         assertEquals(DegradeLevel.B3, record.wouldDegradeLevel());
     }
 

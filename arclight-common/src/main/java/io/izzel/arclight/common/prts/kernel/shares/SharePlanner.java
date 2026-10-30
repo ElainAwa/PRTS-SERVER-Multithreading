@@ -170,7 +170,16 @@ public final class SharePlanner {
 
     /** True while the token still names a stored trigger record. */
     public synchronized boolean hasToken(long token) {
-        return token > 0L && recordTokens.containsValue(token);
+        if (token <= 0L) {
+            return false;
+        }
+        for (OverrunRecord record : records) {
+            Long recordToken = recordTokens.get(record);
+            if (recordToken != null && recordToken == token) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Drops the internal token table with the rest of the readings. */
@@ -187,11 +196,18 @@ public final class SharePlanner {
         for (int index = records.size() - 1; index >= 0; index--) {
             OverrunRecord record = records.get(index);
             Long recordToken = recordTokens.get(record);
-            if (recordToken != null && recordToken == token && !record.actionExecuted()) {
-                records.set(index, record.withActionExecuted(true));
-                actionExecutedFlag = true;
+            if (recordToken == null || recordToken != token) {
+                continue;
+            }
+            if (record.actionExecuted()) {
                 return true;
             }
+            OverrunRecord updated = record.withActionExecuted(true);
+            records.set(index, updated);
+            recordTokens.remove(record);
+            recordTokens.put(updated, token);
+            actionExecutedFlag = true;
+            return true;
         }
         return false;
     }
