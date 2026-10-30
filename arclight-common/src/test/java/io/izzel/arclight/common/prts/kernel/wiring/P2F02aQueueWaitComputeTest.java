@@ -10,7 +10,6 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 
 /** The one real queue row wired in this batch: the compute wait already booked by dispatch. The
  * producer row stays absent because no producer-wait counter exists. */
@@ -34,24 +33,21 @@ class P2F02aQueueWaitComputeTest {
     }
 
     @Test
-    void theComputeWaitRowStartsAtZeroAndReadsTheDispatchCounter() {
+    void theWaitRowsStartAtZeroAndReadTheirOwnDispatchCounters() {
         List<String> zero = KernelReadings.export(module);
         assertEquals("0.000", line(zero, "queue.wait_compute_ms"));
-        assertFalse(contains(zero, "queue.wait_producer_ms"),
-            "the missing producer row must not be invented");
+        assertEquals("0.000", line(zero, "queue.wait_producer_ms"));
 
         domain.readings().noteComputeWait(2_500_000L);
+        domain.readings().noteProducerWait(3_000_000L);
         List<String> after = KernelReadings.export(module);
         assertEquals("2.500", line(after, "queue.wait_compute_ms"));
-    }
+        assertEquals("3.000", line(after, "queue.wait_producer_ms"));
 
-    private static boolean contains(List<String> lines, String key) {
-        for (String line : lines) {
-            if (line.startsWith(key + "=")) {
-                return true;
-            }
-        }
-        return false;
+        domain.readings().reset();
+        List<String> reset = KernelReadings.export(module);
+        assertEquals("0.000", line(reset, "queue.wait_compute_ms"));
+        assertEquals("0.000", line(reset, "queue.wait_producer_ms"));
     }
 
     private static String line(List<String> lines, String key) {

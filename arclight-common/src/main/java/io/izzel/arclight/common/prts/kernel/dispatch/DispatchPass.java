@@ -132,7 +132,9 @@ public final class DispatchPass {
             TaskOutcome outcome = entry.immediate();
             if (outcome == null) {
                 long remaining = deadlineNanos - System.nanoTime();
+                long started = System.nanoTime();
                 outcome = entry.handle().await(remaining);
+                readings.noteProducerWait(System.nanoTime() - started);
             }
             if (outcome == null) {
                 TaskOutcome cancelledOutcome = TaskOutcome.cancelled(entry.batch().batchId(), 0,

@@ -124,6 +124,31 @@ class DispatchParallelTest {
     }
 
     @Test
+    void producerWaitIsCountedAtAwaitAllAndResetWithTheWindow() {
+        DispatchReadings readings = new DispatchReadings();
+        ArenaLedger arena = new ArenaLedger();
+        TaskLedger ledger = new TaskLedger(1L);
+        WorkPlan plan = WorkPlan.freeze(TICK, 1L, List.of(view("world-producer", 1)), 4, 1L);
+        WorkerPool pool = pool(readings, arena, 4, 1);
+        try {
+            DispatchPass pass = DispatchPass.dispatch(plan, pool, (batch, target, token) -> {
+                sleep(80L);
+                return EntityIntegrator.INSTANCE.run(batch, target, token);
+            }, arena, readings, ledger);
+            assertEquals(0L, readings.producerWaitNanos(),
+                "nothing has waited before awaitAll");
+            pass.awaitAll(System.nanoTime() + 2_000_000_000L);
+            assertTrue(readings.producerWaitNanos() > 0L,
+                "awaitAll did not book the time it spent waiting for the producer");
+
+            readings.reset();
+            assertEquals(0L, readings.producerWaitNanos());
+        } finally {
+            pool.shutdown(true, true, 500L);
+        }
+    }
+
+    @Test
     void theThreeFailureKindsHaveThreeTerminalStatuses() throws Exception {
         assertEquals(TaskOutcome.Status.RETRIED, outcomeOf(new RetryableFault("retry"), 0));
         assertEquals(TaskOutcome.Status.FELLBACK, outcomeOf(new NonRetryableFault("no"), 0));

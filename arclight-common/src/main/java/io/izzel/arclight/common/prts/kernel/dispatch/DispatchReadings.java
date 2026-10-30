@@ -41,6 +41,7 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
     private final LongAdder verifyNanos = new LongAdder();
     private final LongAdder computeNanos = new LongAdder();
     private final LongAdder computeWaitNanos = new LongAdder();
+    private final LongAdder producerWaitNanos = new LongAdder();
     private final LongAdder computeFrameNanos = new LongAdder();
     private final LongAdder verifyRows = new LongAdder();
     private final LongAdder verifyMismatch = new LongAdder();
@@ -153,6 +154,14 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
     public void noteComputeWait(long nanos) {
         if (nanos > 0L) {
             computeWaitNanos.add(nanos);
+        }
+    }
+
+    /** The tick thread blocked in one dispatch pass waiting for a producer's answer. This is the
+     * wait a row can be paired with compute wait; it is not the worker's own compute time. */
+    public void noteProducerWait(long nanos) {
+        if (nanos > 0L) {
+            producerWaitNanos.add(nanos);
         }
     }
 
@@ -481,6 +490,10 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
         return computeFrameNanos.sum();
     }
 
+    public long producerWaitNanos() {
+        return producerWaitNanos.sum();
+    }
+
     public long verifyRows() {
         return verifyRows.sum();
     }
@@ -664,6 +677,7 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
         builder.append(" dispatch_compute_ms=").append(ms(computeNanos()));
         builder.append(" dispatch_compute_wait_ms=").append(ms(computeWaitNanos()));
         builder.append(" dispatch_compute_frame_ms=").append(ms(computeFrameNanos()));
+        builder.append(" dispatch_producer_wait_ms=").append(ms(producerWaitNanos()));
         builder.append(" dispatch_redo_ms=").append(ms(redoNanos()));
         builder.append(" dispatch_rows=").append(rowsTotal());
         builder.append(" dispatch_commit_channel_ms=").append(ms(commitChannelNanos()));
@@ -740,6 +754,7 @@ public final class DispatchReadings implements BatchWriteBack.Counters {
         verifyNanos.reset();
         computeNanos.reset();
         computeWaitNanos.reset();
+        producerWaitNanos.reset();
         computeFrameNanos.reset();
         verifyRows.reset();
         verifyMismatch.reset();
