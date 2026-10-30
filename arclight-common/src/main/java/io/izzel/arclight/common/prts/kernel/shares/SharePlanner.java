@@ -27,6 +27,7 @@ public final class SharePlanner {
     private final List<OverrunRecord> records = new ArrayList<>();
     private final Map<OverrunRecord, Long> recordTokens = new java.util.IdentityHashMap<>();
     private long nextRecordToken = 1L;
+    private boolean actionExecutedFlag;
     private final LongAdder hungerEvents = new LongAdder();
     private final LongAdder reserveBorrowed = new LongAdder();
     private double reserveUsed;
@@ -175,6 +176,7 @@ public final class SharePlanner {
     /** Drops the internal token table with the rest of the readings. */
     public synchronized void clearRecordTokens() {
         recordTokens.clear();
+        actionExecutedFlag = false;
     }
 
     /** Marks the one record the token names, not every record of a tick or level. */
@@ -187,6 +189,7 @@ public final class SharePlanner {
             Long recordToken = recordTokens.get(record);
             if (recordToken != null && recordToken == token && !record.actionExecuted()) {
                 records.set(index, record.withActionExecuted(true));
+                actionExecutedFlag = true;
                 return true;
             }
         }
@@ -356,12 +359,7 @@ public final class SharePlanner {
     }
 
     public synchronized boolean anyActionExecuted() {
-        for (OverrunRecord record : records) {
-            if (record.actionExecuted()) {
-                return true;
-            }
-        }
-        return false;
+        return actionExecutedFlag;
     }
 
     /** One starvation observation: the first tick a world reaches the missed-share threshold. The

@@ -56,6 +56,26 @@ class P2F05uB3TokenQueueTest {
         assertFalse(KernelModule.markAllB3Tokens(planner, tokens));
     }
 
+    @Test
+    void actionFlagSurvivesRecordEvictionAndClearsOnReset() {
+        SharePlanner planner = new SharePlanner();
+        OverrunRecord marked = planner.record(row(), "runtime", 1L);
+        planner.recordWouldDegrade(marked);
+        assertTrue(planner.markTokenExecuted(planner.tokenOf(marked)));
+        assertTrue(planner.anyActionExecuted());
+
+        for (int index = 0; index < 300; index++) {
+            OverrunRecord later = planner.record(row(), "runtime", 2L + index);
+            planner.recordWouldDegrade(later);
+        }
+        assertTrue(planner.records().size() <= 256);
+        assertFalse(planner.records().stream().anyMatch(OverrunRecord::actionExecuted));
+        assertTrue(planner.anyActionExecuted());
+
+        planner.clearRecordTokens();
+        assertFalse(planner.anyActionExecuted());
+    }
+
     private static ShareTable.ShareRow row() {
         return new ShareTable.ShareRow("world", ShareClass.ENTITY, 1.0, 2.0);
     }
