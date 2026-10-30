@@ -208,7 +208,11 @@ public final class EntityDomain implements KernelDomain {
             taskSeq + 1L);
         long b3Token = module.pendingB3Token();
         if (b3Token > 0L && module.b3MergeWanted()) {
-            int cap = Math.max(1, policy.batchChunks() * 2);
+            int largestTask = 0;
+            for (WorkPlan.WorkTask task : plan.tasks()) {
+                largestTask = Math.max(largestTask, task.entityCount());
+            }
+            int cap = Math.max(1, Math.max(policy.batchChunks() * 2, largestTask * 2));
             WorkPlan.MergeResult merge = plan.mergeAdjacent(cap);
             if (merge.receipts().isEmpty()) {
                 module.noteB3MergeMissed(b3Token);

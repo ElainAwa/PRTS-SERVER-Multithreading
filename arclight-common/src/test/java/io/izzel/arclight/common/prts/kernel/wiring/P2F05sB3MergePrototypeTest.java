@@ -128,10 +128,34 @@ class P2F05sB3MergePrototypeTest {
         assertEquals(DegradeLevel.B3, record.wouldDegradeLevel());
     }
 
+    @Test
+    void twoLargeRegionsMergeOnlyWithTheLargestTaskBound() {
+        WorkPlan plan = WorkPlan.freeze(1L, 1L, List.of(viewRegions(1024, 0, 4)), 4, 1L);
+        assertEquals(2, plan.taskCount());
+        assertEquals(1024, plan.tasks().get(0).entityCount());
+        assertTrue(plan.mergeAdjacent(8).receipts().isEmpty());
+
+        WorkPlan.MergeResult merged = plan.mergeAdjacent(2048);
+        assertEquals(1, merged.receipts().size());
+        assertEquals(1, merged.plan().taskCount());
+        assertEquals(2048, merged.plan().tasks().get(0).entityCount());
+    }
+
     private static EntityCandidateView view(int count) {
         EntityCandidateView.Builder builder = EntityCandidateView.builder("world", 1L);
         for (int index = 0; index < count; index++) {
             builder.add(index + 1L, index, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0L);
+        }
+        return builder.build();
+    }
+
+    private static EntityCandidateView viewRegions(int perRegion, int... chunkXs) {
+        EntityCandidateView.Builder builder = EntityCandidateView.builder("world", 1L);
+        long seq = 1L;
+        for (int chunkX : chunkXs) {
+            for (int index = 0; index < perRegion; index++) {
+                builder.add(seq++, chunkX, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0L);
+            }
         }
         return builder.build();
     }
