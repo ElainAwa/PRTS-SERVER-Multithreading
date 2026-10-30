@@ -1797,8 +1797,8 @@ public final class KernelReadings {
             add(lines, "wp.injection_walkthrough_" + waitClass.key(),
                 registry.walkthroughOf(waitClass));
         }
-        add(lines, "wp.injection_walkthrough_classes", WaitClass.classified().size());
-        add(lines, "wp.injection_walkthrough_unclassified",
+        add(lines, "wp.walkthrough.classes", WaitClass.classified().size());
+        add(lines, "wp.walkthrough.unclassified",
             registry.walkthroughOf(WaitClass.UNCLASSIFIED));
         for (Map.Entry<String, Integer> entry : coverage.injectionWalkthrough().entrySet()) {
             add(lines, "wp.walkthrough." + entry.getKey(), entry.getValue());
