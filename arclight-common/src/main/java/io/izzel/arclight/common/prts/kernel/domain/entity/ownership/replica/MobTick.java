@@ -14,6 +14,7 @@
 package io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica;
 
 import io.izzel.arclight.common.prts.fixes.ownership.PrtsAttributeMapStateMixin;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityQueryReadings;
 import io.izzel.arclight.common.prts.fixes.ownership.PrtsBodyRotationControlStateMixin;
 import io.izzel.arclight.common.prts.fixes.ownership.PrtsCombatTrackerStateMixin;
 import io.izzel.arclight.common.prts.fixes.ownership.PrtsEntityTickStateMixin;
@@ -164,10 +165,12 @@ public final class MobTick {
         // query is not reproduced by a worker, so a row with an item inside that reach stays with
         // the host: the box is wider than the reach the tick uses, so passing it means the tick
         // sees the same empty list and its pickup branch is a no-op either way.
-        if (living instanceof Mob mob && mob.canPickUpLoot()
-            && !living.level().getEntitiesOfClass(ItemEntity.class,
-            living.getBoundingBox().inflate(1.0, 1.0, 1.0)).isEmpty()) {
-            return PICKUP;
+        if (living instanceof Mob mob && mob.canPickUpLoot()) {
+            EntityQueryReadings.noteQuery();
+            if (!living.level().getEntitiesOfClass(ItemEntity.class,
+                living.getBoundingBox().inflate(1.0, 1.0, 1.0)).isEmpty()) {
+                return PICKUP;
+            }
         }
         return REPLICABLE;
     }

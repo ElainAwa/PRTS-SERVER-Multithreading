@@ -33,6 +33,7 @@ import io.izzel.arclight.common.prts.kernel.exits.DualExits;
 import io.izzel.arclight.common.prts.kernel.safety.SafetyNet;
 import io.izzel.arclight.common.prts.kernel.safety.ZeroEffectDetector;
 import io.izzel.arclight.common.prts.kernel.DomainReadings;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityQueryReadings;
 import io.izzel.arclight.common.prts.kernel.KernelDomain;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
@@ -103,6 +104,7 @@ public final class KernelReadings {
         degradation(lines, module);
         selfTimers(lines, module);
         domainReadings(lines, module);
+        queryReadings(lines);
         waitPoints(lines, module);
         waitLadderReadings(lines, module);
         differential(lines, module);
@@ -122,6 +124,13 @@ public final class KernelReadings {
         worldReadouts(lines, module);
         control(lines, module);
         return lines;
+    }
+
+    /** The two ACC-09 counters: real neighbour-query calls and the current snapshot row count. The
+     * snapshot value is replaced every tick and is never derived from the cumulative census. */
+    private static void queryReadings(List<String> lines) {
+        add(lines, "query.calls", EntityQueryReadings.queryCalls());
+        add(lines, "entity.count", EntityQueryReadings.entityCount());
     }
 
     /** The three keys this group adds, and the whole of what it adds: no other product key is

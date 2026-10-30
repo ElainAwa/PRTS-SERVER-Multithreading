@@ -12,6 +12,7 @@
 package io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica;
 
 import io.izzel.arclight.common.prts.fixes.ownership.PrtsCombatTrackerStateMixin;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityQueryReadings;
 import io.izzel.arclight.common.prts.fixes.ownership.PrtsEntityTickStateMixin;
 import io.izzel.arclight.common.prts.fixes.ownership.PrtsLivingEntityTickStateMixin;
 import net.minecraft.util.Mth;
@@ -136,6 +137,7 @@ public final class ArmorStandTick {
         // The armour stand pushes the rideable minecarts within 0.2 blocks of its centre, and the
         // living push walks everything pushable that overlaps it. A pushable entity within half a
         // block is inside the inflated box of the row, so this one query refuses both cases.
+        EntityQueryReadings.noteQuery();
         if (!stand.level().getEntities(stand, stand.getBoundingBox().inflate(0.5D),
             EntitySelector.pushableBy(stand)).isEmpty()) {
             return STATE;

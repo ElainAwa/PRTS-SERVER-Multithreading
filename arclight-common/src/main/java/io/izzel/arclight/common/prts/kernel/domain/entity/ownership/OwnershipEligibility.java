@@ -8,6 +8,7 @@
 package io.izzel.arclight.common.prts.kernel.domain.entity.ownership;
 
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityQueryReadings;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.TickModels;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.WholeTickModel;
 import net.minecraft.server.level.ServerLevel;
@@ -84,6 +85,7 @@ final class OwnershipEligibility {
         if (entity.isInWater() || entity.isInLava() || entity.isInPowderSnow) {
             return FLUID;
         }
+        EntityQueryReadings.noteQuery();
         if (!level.getEntities(entity, entity.getBoundingBox(), EntitySelector.pushableBy(entity))
             .isEmpty()) {
             return NEIGHBOURS;

@@ -27,6 +27,7 @@ public final class DispatchSnapshot {
             worlds = List.copyOf(Bukkit.getWorlds());
         } catch (Throwable ignored) {
             // A platform that cannot list its worlds contributes no candidates; the tick continues.
+            EntityQueryReadings.noteEntityCount(0L);
             return views;
         }
         for (World world : worlds) {
@@ -37,6 +38,11 @@ public final class DispatchSnapshot {
                 // A world that cannot be read contributes no candidates; the tick continues.
             }
         }
+        long total = 0L;
+        for (EntityCandidateView view : views) {
+            total += view.count();
+        }
+        EntityQueryReadings.noteEntityCount(total);
         return views;
     }
 
