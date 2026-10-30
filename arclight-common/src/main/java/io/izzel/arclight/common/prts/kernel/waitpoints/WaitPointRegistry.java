@@ -79,6 +79,8 @@ public final class WaitPointRegistry {
     private final ForcedConvergence convergence = new ForcedConvergence();
     private final LongAdder waitOverruns = new LongAdder();
     private final LongAdder observations = new LongAdder();
+    private final AtomicLong maxWaitMsThisTick = new AtomicLong();
+    private volatile long lastTickMaxWaitMs;
     private final LongAdder unregisteredRefusals = new LongAdder();
     private final IntSupplier boundMs;
     private final BooleanSupplier refuseUnregistered;
@@ -189,6 +191,7 @@ public final class WaitPointRegistry {
         }
         sites.noteObserved(span.siteId());
         long waitMs = Math.max(0L, span.waitMs());
+        maxWaitMsThisTick.accumulateAndGet(waitMs, Math::max);
         AtomicLong max = observedMax.computeIfAbsent(key, ignored -> new AtomicLong());
         long current = max.accumulateAndGet(waitMs, Math::max);
         observations.increment();
@@ -239,6 +242,7 @@ public final class WaitPointRegistry {
     /** Closes one host tick on the rollback gate. Nothing is rolled back here: the gate only records
      * whether the tick carried a wait that crossed the bound, and answers how long the clean run is. */
     public void noteTick() {
+        lastTickMaxWaitMs = maxWaitMsThisTick.getAndSet(0L);
         convergence.noteTick(overrunThisTick);
         overrunThisTick = false;
     }
@@ -301,6 +305,12 @@ public final class WaitPointRegistry {
         return waitOverruns.sum();
     }
 
+    /** The longest single wait observed in the tick that just closed. It is the current-tick value
+     * a return condition can compare with the bound; the cumulative maximum cannot fall back. */
+    public long lastTickMaxWaitMs() {
+        return lastTickMaxWaitMs;
+    }
+
     /** How many waits one row saw over the bound. */
     public long overrunOf(String wpId) {
         LongAdder count = wpId == null ? null : overrunsByRow.get(wpId);
@@ -352,6 +362,8 @@ public final class WaitPointRegistry {
     public void resetReadings() {
         waitOverruns.reset();
         observations.reset();
+        maxWaitMsThisTick.set(0L);
+        lastTickMaxWaitMs = 0L;
         unregisteredRefusals.reset();
         observedMax.clear();
         overrunsByRow.clear();

@@ -506,11 +506,15 @@ public final class KernelModule {
         ladder.bindSecondCondition(DegradeLevel.B1, "budget.margin.ai", this::aiMarginWithin);
         ladder.bindSecondCondition(DegradeLevel.B5, "budget.conservation_ok",
             () -> lastConservation.ok());
-        // The first rung of the wait ladder returns on the progress signal of the wait points: the
-        // reading is the same one the readout publishes, so a gate can never pass on a value nobody
-        // published. The other two rungs stay unbound and say so.
+        // Every rung now answers on a producer this module already carries: A1 on the wait point
+        // progress signal, A2 on the last tick's longest wait against the bound, and A3 on the
+        // intent queue depth. None of them is a synthetic readout value.
         waitLadder.bindSecondCondition(WaitLadder.Level.A1, "wp.signal.moved",
             this::anyProgressMoved);
+        waitLadder.bindSecondCondition(WaitLadder.Level.A2, "wait.last_tick_max_ms",
+            () -> waitPoints.lastTickMaxWaitMs() <= waitPoints.boundMs());
+        waitLadder.bindSecondCondition(WaitLadder.Level.A3, "intent.queue_depth",
+            () -> intents.depth() == 0L);
     }
 
     private boolean anyProgressMoved() {
@@ -882,6 +886,25 @@ public final class KernelModule {
             waitCrossStreak = 0;
         }
         waitLadder.noteTick(crossed);
+        noteWaitLadderReturns();
+    }
+
+    /** The A-branch return driver: the gate is asked once per tick, and only a ready rung is
+     * returned. A rung that is not the deepest one is not asked, so a lower gate can never hide the
+     * rung above it. */
+    private void noteWaitLadderReturns() {
+        if (!waitLadder.sign().actionsEnabled()) {
+            return;
+        }
+        int deepest = waitLadder.sign().deepest().ordinal();
+        WaitLadder.Level[] levels = WaitLadder.Level.values();
+        for (int ordinal = deepest; ordinal > 0; ordinal--) {
+            WaitLadder.Level level = levels[ordinal];
+            if (!waitLadder.gate(level, KernelSettings.waitRollbackTicks()).ready()) {
+                break;
+            }
+            waitLadder.noteReturned(level);
+        }
     }
 
     /** A tick whose control frame is missing is a bootstrap tick: no plan is built from it. */
