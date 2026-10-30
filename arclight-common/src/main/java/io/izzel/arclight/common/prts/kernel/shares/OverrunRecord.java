@@ -6,4 +6,10 @@ import io.izzel.arclight.common.prts.kernel.codes.DegradeLevel;
 public record OverrunRecord(long tickIndex, String worldId, ShareClass overClass, String siteId,
                             long overClassHits, long overWorldHits,
                             DegradeLevel wouldDegradeLevel, boolean actionExecuted) {
+
+    /** Copies the one trigger record with the action flag its token observed. */
+    public OverrunRecord withActionExecuted(boolean executed) {
+        return new OverrunRecord(tickIndex, worldId, overClass, siteId, overClassHits, overWorldHits,
+            wouldDegradeLevel, executed);
+    }
 }

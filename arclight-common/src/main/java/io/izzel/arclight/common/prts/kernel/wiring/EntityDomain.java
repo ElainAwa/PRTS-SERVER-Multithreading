@@ -164,6 +164,7 @@ public final class EntityDomain implements KernelDomain {
             EVIDENCE.info(segBreakLine(probe.report()));
         }
         if (!KernelSettings.dispatchParallel()) {
+            module.clearPendingB3Tokens();
             if (pool != null || pending != null) {
                 shutdown();
             }
@@ -205,6 +206,19 @@ public final class EntityDomain implements KernelDomain {
             System.nanoTime() - snapshotStart);
         WorkPlan plan = WorkPlan.freeze(tick, ledger.epoch(), views, policy.batchChunks(),
             taskSeq + 1L);
+        long b3Token = module.pendingB3Token();
+        if (b3Token > 0L && module.b3MergeWanted()) {
+            int cap = Math.max(1, policy.batchChunks() * 2);
+            WorkPlan.MergeResult merge = plan.mergeAdjacent(cap);
+            if (merge.receipts().isEmpty()) {
+                module.noteB3MergeMissed(b3Token);
+            } else {
+                plan = merge.plan();
+                module.noteB3Merged(b3Token, merge.receipts().get(0));
+            }
+        } else if (b3Token > 0L) {
+            module.clearPendingB3Tokens();
+        }
         taskSeq += plan.taskCount();
         readings.noteTasks(plan.taskCount());
         List<WorkPlan.WorkTask> orderedTasks = plan.tasks();

@@ -28,6 +28,50 @@ public record WorkPlan(long tickIndex, long planEpoch, List<EntityCandidateView>
         return tasks.isEmpty();
     }
 
+    /** One actual adjacent merge in the entity scope: the rows keep their order and only the
+     * task boundary moves. */
+    public record MergeReceipt(String worldId, int mergedTasks, int entities, long firstBatchId,
+                              long lastBatchId) {
+    }
+
+    /** The merged plan and the receipts of the merges that actually happened. */
+    public record MergeResult(WorkPlan plan, List<MergeReceipt> receipts) {
+    }
+
+    /** Merges adjacent tasks of the same world whose ranges touch, bounded by the entity count
+     * the caller allows in one merged task. Views and row order are untouched. */
+    public MergeResult mergeAdjacent(int maxEntities) {
+        int cap = Math.max(1, maxEntities);
+        List<WorkTask> merged = new ArrayList<>(tasks.size());
+        List<MergeReceipt> receipts = new ArrayList<>();
+        for (WorkTask task : tasks) {
+            if (!merged.isEmpty()) {
+                WorkTask previous = merged.get(merged.size() - 1);
+                if (previous.worldId().equals(task.worldId())
+                    && previous.entitySeqEnd() == task.entitySeqStart()
+                    && previous.entityCount() + task.entityCount() <= cap) {
+                    // The merged task carries the sum of the shares and both cancellation
+                    // scopes; the '+' names the composed region, never a fresh identity.
+                    WorkTask combined = new WorkTask(previous.taskId(), previous.worldId(),
+                        previous.regionId() + "+" + task.regionId(), previous.batchId(),
+                        previous.entitySeqStart(), task.entitySeqEnd(), previous.snapshotRef(),
+                        previous.worldEpoch(), previous.shareMsHint() + task.shareMsHint(),
+                        previous.cancelScope() + "+" + task.cancelScope());
+                    merged.set(merged.size() - 1, combined);
+                    receipts.add(new MergeReceipt(combined.worldId(), 2, combined.entityCount(),
+                        previous.batchId(), task.batchId()));
+                    continue;
+                }
+            }
+            merged.add(task);
+        }
+        if (receipts.isEmpty()) {
+            return new MergeResult(this, List.of());
+        }
+        return new MergeResult(new WorkPlan(tickIndex, planEpoch, views, merged, hardDeadlineTick),
+            List.copyOf(receipts));
+    }
+
     /** Freezes the plan of one tick from the entity views. Each view is grouped by region first,
      * so the rows of one region are contiguous and a task is exactly one region. */
     public static WorkPlan freeze(long tickIndex, long planEpoch, List<EntityCandidateView> views,

@@ -29,6 +29,7 @@ import io.izzel.arclight.common.prts.kernel.safety.SafetyNet;
 import io.izzel.arclight.common.prts.kernel.safety.ZeroEffectDetector;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.degrade.DegradeLadder;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import io.izzel.arclight.common.prts.kernel.jobs.DemandShadowCandidates;
@@ -384,6 +385,7 @@ public final class KernelModule {
     /** The generation holder of a chain this module adopts: the module is its lifecycle owner. */
     private final CommitNamespaces.ResetEpochs commitChainEpochs = new CommitNamespaces.ResetEpochs();
     private long tickIndex;
+    private final java.util.ArrayDeque<Long> pendingB3Tokens = new java.util.ArrayDeque<>();
     /** The server whose live levels the claim point resolves; the host names it before the tick. */
     private volatile net.minecraft.server.MinecraftServer liveServer;
     private int waitCrossStreak;
@@ -810,6 +812,7 @@ public final class KernelModule {
         lastMetering = ShareMeter.read(tickIndex, KernelSettings.selfTimers(), totals);
         ShareTable table = shares.plan(worldIds == null ? List.of() : worldIds, tickIndex, used);
         lastConservation = shares.checkConservation(table);
+        pendingB3Tokens.clear();
         double minMargin = Double.POSITIVE_INFINITY;
         long overruns = 0L;
         for (ShareTable.ShareRow row : table.rows()) {
@@ -820,6 +823,10 @@ public final class KernelModule {
             OverrunRecord record = shares.record(row, "runtime", tickIndex);
             shares.recordWouldDegrade(record);
             ladder.noteEntered(record.wouldDegradeLevel(), tickIndex);
+            if (record.wouldDegradeLevel() == DegradeLevel.B3
+                && KernelSettings.dispatchParallel() && b3MergeWanted()) {
+                addPendingB3Token(pendingB3Tokens, shares.tokenOf(record));
+            }
             overruns++;
         }
         if (minMargin == Double.POSITIVE_INFINITY) {
@@ -1839,6 +1846,74 @@ public final class KernelModule {
 
     public SharePlanner shares() {
         return shares;
+    }
+
+    /** The first token of the B3 trigger records waiting for an actual entity merge, or -1. */
+    public long pendingB3Token() {
+        Long token = pendingB3Tokens.peekFirst();
+        return token == null ? -1L : token;
+    }
+
+    /** The B3 action only runs while the existing switch is on and the ladder has reached B3. */
+    public boolean b3MergeWanted() {
+        return KernelSettings.degradeActions()
+            && ladder.sign().deepest().ordinal() >= DegradeLevel.B3.ordinal();
+    }
+
+    /** Clears the pending tokens when the frozen plan had no adjacent pair to merge. */
+    public void noteB3MergeMissed(long token) {
+        if (pendingB3Tokens.contains(token)) {
+            pendingB3Tokens.clear();
+        }
+    }
+
+    /** Clears tokens that can no longer run, e.g. when the action switch or level moved away. */
+    public void clearPendingB3Tokens() {
+        pendingB3Tokens.clear();
+    }
+
+    static final int MAX_PENDING_B3_TOKENS = 64;
+
+    /** Adds a token only while the action can run; the oldest is dropped above the cap. */
+    static void addPendingB3Token(java.util.ArrayDeque<Long> tokens, long token) {
+        if (token <= 0L) {
+            return;
+        }
+        if (tokens.size() >= MAX_PENDING_B3_TOKENS) {
+            tokens.removeFirst();
+        }
+        tokens.addLast(token);
+    }
+
+    /** All-or-nothing mark: no record changes unless every token still exists and marks. */
+    static boolean markAllB3Tokens(SharePlanner shares, java.util.ArrayDeque<Long> tokens) {
+        for (long token : tokens) {
+            if (!shares.hasToken(token)) {
+                return false;
+            }
+        }
+        boolean allMarked = true;
+        for (long token : tokens) {
+            allMarked &= shares.markTokenExecuted(token);
+        }
+        return allMarked;
+    }
+
+    /** Marks every trigger record of this tick before the action becomes effective. */
+    public boolean noteB3Merged(long token, WorkPlan.MergeReceipt receipt) {
+        if (token <= 0L || receipt == null || !pendingB3Tokens.contains(token)) {
+            return false;
+        }
+        boolean allMarked = markAllB3Tokens(shares, pendingB3Tokens);
+        if (!allMarked) {
+            pendingB3Tokens.clear();
+            return false;
+        }
+        boolean effective = ladder.noteEffective(DegradeLevel.B3);
+        if (effective) {
+            pendingB3Tokens.clear();
+        }
+        return effective;
     }
 
     public BudgetStateMachine budgetStates() {
@@ -3239,6 +3314,8 @@ public final class KernelModule {
         for (KernelDomain domain : domains) {
             domain.reset();
         }
+        pendingB3Tokens.clear();
+        shares.clearRecordTokens();
         EntityQueryReadings.reset();
         loadThread.reset();
         chunkFlow.reset();

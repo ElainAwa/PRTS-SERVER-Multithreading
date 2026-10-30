@@ -25,6 +25,8 @@ public final class SharePlanner {
     private final Map<ReservePurpose, Double> reserveUsedByPurpose = new EnumMap<>(ReservePurpose.class);
     private final Map<String, Integer> hungerStreaks = new HashMap<>();
     private final List<OverrunRecord> records = new ArrayList<>();
+    private final Map<OverrunRecord, Long> recordTokens = new java.util.IdentityHashMap<>();
+    private long nextRecordToken = 1L;
     private final LongAdder hungerEvents = new LongAdder();
     private final LongAdder reserveBorrowed = new LongAdder();
     private double reserveUsed;
@@ -153,20 +155,59 @@ public final class SharePlanner {
     /** Records what a degradation would have done. */
     public synchronized void recordWouldDegrade(OverrunRecord record) {
         if (records.size() >= RECORD_LIMIT) {
-            records.remove(0);
+            OverrunRecord evicted = records.remove(0);
+            recordTokens.remove(evicted);
         }
         records.add(record);
     }
 
+    /** The stable internal identity of one trigger record; no readout key is added. */
+    public synchronized long tokenOf(OverrunRecord record) {
+        Long token = recordTokens.get(record);
+        return token == null ? -1L : token;
+    }
+
+    /** True while the token still names a stored trigger record. */
+    public synchronized boolean hasToken(long token) {
+        return token > 0L && recordTokens.containsValue(token);
+    }
+
+    /** Drops the internal token table with the rest of the readings. */
+    public synchronized void clearRecordTokens() {
+        recordTokens.clear();
+    }
+
+    /** Marks the one record the token names, not every record of a tick or level. */
+    public synchronized boolean markTokenExecuted(long token) {
+        if (token <= 0L) {
+            return false;
+        }
+        for (int index = records.size() - 1; index >= 0; index--) {
+            OverrunRecord record = records.get(index);
+            Long recordToken = recordTokens.get(record);
+            if (recordToken != null && recordToken == token && !record.actionExecuted()) {
+                records.set(index, record.withActionExecuted(true));
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Turns an overrun row into the record shape without executing it. */
-    public OverrunRecord record(ShareTable.ShareRow row, String siteId, long tickIndex) {
+    public synchronized OverrunRecord record(ShareTable.ShareRow row, String siteId,
+                                             long tickIndex) {
         WouldDegrade verdict = noteOverrun(row, siteId);
         if (verdict == null) {
             return null;
         }
-        return new OverrunRecord(tickIndex, row.worldId(), row.shareClass(), siteId,
+        OverrunRecord record = new OverrunRecord(tickIndex, row.worldId(), row.shareClass(), siteId,
             classOverrunCount(row.shareClass()), worldOverrunCount(row.worldId()),
             verdict.level(), false);
+        if (recordTokens.size() > RECORD_LIMIT * 2) {
+            recordTokens.keySet().retainAll(records);
+        }
+        recordTokens.put(record, nextRecordToken++);
+        return record;
     }
 
     /** Records a hunger event. */
