@@ -120,6 +120,12 @@ public final class DegradeLadder {
         if (target == null || target == DegradeLevel.NONE || target.ordinal() <= 0) {
             return new Advance(deepest, List.of(), false);
         }
+        // A caller that asks for a rung below the deepest one is asking to re-enter a rung the
+        // ladder already passed. Walking it again would need a negative-capacity list and would
+        // double-count the rungs in between, so the answer is the current state.
+        if (target.ordinal() <= deepest.ordinal()) {
+            return new Advance(deepest, List.of(), false);
+        }
         boolean isSkip = target.ordinal() > deepest.ordinal() + 1;
         if (isSkip) {
             skipped.increment();
