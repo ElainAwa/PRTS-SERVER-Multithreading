@@ -892,7 +892,7 @@ public final class KernelReadings {
         add(lines, "budget.hunger_events", shares.hungerEventCount());
         add(lines, "budget.would_degrade_level", degradeLevel(shares));
         add(lines, "budget.action_executed", shares.anyActionExecuted() ? 1 : 0);
-        add(lines, "budget.over_class_total", shares.classOverrunTotal());
+        add(lines, "budget.class_overrun_total", shares.classOverrunTotal());
         add(lines, "budget.world_overrun_total", shares.worldOverrunTotal());
         for (ShareClass shareClass : ShareClass.values()) {
             add(lines, "budget.over_class_" + shareClass.key(), shares.classOverrunCount(shareClass));
