@@ -213,12 +213,17 @@ public final class EntityDomain implements KernelDomain {
                 largestTask = Math.max(largestTask, task.entityCount());
             }
             int cap = Math.max(1, Math.max(policy.batchChunks() * 2, largestTask * 2));
+            EVIDENCE.debug("b3 merge probe: token={} tasks={} largest={} cap={}",
+                b3Token, plan.taskCount(), largestTask, cap);
             WorkPlan.MergeResult merge = plan.mergeAdjacent(cap);
+            EVIDENCE.debug("b3 merge probe: token={} receipts={} before={} after={}",
+                b3Token, merge.receipts().size(), plan.taskCount(), merge.plan().taskCount());
             if (merge.receipts().isEmpty()) {
                 module.noteB3MergeMissed(b3Token);
             } else {
                 plan = merge.plan();
-                module.noteB3Merged(b3Token, merge.receipts().get(0));
+                boolean marked = module.noteB3Merged(b3Token, merge.receipts().get(0));
+                EVIDENCE.debug("b3 merge probe: token={} marked={}", b3Token, marked);
             }
         } else if (b3Token > 0L) {
             module.clearPendingB3Tokens();

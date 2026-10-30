@@ -112,6 +112,8 @@ import java.util.Map;
  * has passed. */
 public final class KernelModule {
 
+    private static final Logger B3_DEBUG = LogManager.getLogger("PRTS");
+
     /** The control plane of one tick: the five values the next tick would plan with. The state, the
      * rung it names and the tick that state was entered are read-only: nothing in this build plans
      * from them. */
@@ -825,7 +827,12 @@ public final class KernelModule {
             ladder.noteEntered(record.wouldDegradeLevel(), tickIndex);
             if (record.wouldDegradeLevel() == DegradeLevel.B3
                 && KernelSettings.dispatchParallel() && b3MergeWanted()) {
-                addPendingB3Token(pendingB3Tokens, shares.tokenOf(record));
+                long token = shares.tokenOf(record);
+                B3_DEBUG.debug("b3 append plan: token={} size_before={} class={} tick={}",
+                    token, pendingB3Tokens.size(), record.overClass(), tickIndex);
+                addPendingB3Token(pendingB3Tokens, token);
+                B3_DEBUG.debug("b3 append plan: token={} size_after={}", token,
+                    pendingB3Tokens.size());
             }
             overruns++;
         }
@@ -1902,14 +1909,19 @@ public final class KernelModule {
     /** Marks every trigger record of this tick before the action becomes effective. */
     public boolean noteB3Merged(long token, WorkPlan.MergeReceipt receipt) {
         if (token <= 0L || receipt == null || !pendingB3Tokens.contains(token)) {
+            B3_DEBUG.debug("b3 mark rejected: token={} receipt={} pending={}", token,
+                receipt, pendingB3Tokens.size());
             return false;
         }
         boolean allMarked = markAllB3Tokens(shares, pendingB3Tokens);
         if (!allMarked) {
+            B3_DEBUG.debug("b3 mark failed: token={} pending={}", token, pendingB3Tokens.size());
             pendingB3Tokens.clear();
             return false;
         }
         boolean effective = ladder.noteEffective(DegradeLevel.B3);
+        B3_DEBUG.debug("b3 mark ok: token={} effective={} pending={}", token, effective,
+            pendingB3Tokens.size());
         if (effective) {
             pendingB3Tokens.clear();
         }
