@@ -70,6 +70,7 @@ import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitProgress;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSite;
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityQueryReadings;
 import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteObserver;
 import io.izzel.arclight.common.prts.kernel.observe.ArrivalDigestObserver;
 import io.izzel.arclight.common.prts.kernel.observe.ChunkDemandObserver;
@@ -3238,6 +3239,7 @@ public final class KernelModule {
         for (KernelDomain domain : domains) {
             domain.reset();
         }
+        EntityQueryReadings.reset();
         loadThread.reset();
         chunkFlow.reset();
         saveIdentity.reset();
