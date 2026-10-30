@@ -30,12 +30,27 @@ public final class SharePlanner {
     private double reserveUsed;
     private volatile ShareTable lastTable;
 
+    /** The share budget left after the host overhead and the reserved pool. The version that
+     * subtracted only the reserve let an eight-world table plan 70 ms against a 50 ms budget. */
+    private static double availableShareMs() {
+        return Math.max(0.0, KernelSettings.eBudgetMs() - KernelSettings.reserveMs()
+            - KernelSettings.hostOverheadMs());
+    }
+
+    /** One world's fair share, capped by the declared per-world share. The cap is an upper bound,
+     * not a multiplier: eight worlds must divide the available budget, not multiply the cap. */
+    private static double fairWorldShare(double fairMs) {
+        return Math.min(KernelSettings.worldShareMs(), Math.max(0.0, fairMs));
+    }
+
     /** Plans the table of one tick. */
     public ShareTable plan(List<String> worlds, long tickIndex,
                            Map<String, EnumMap<ShareClass, Double>> usedMs) {
-        double worldShare = KernelSettings.worldShareMs();
+        int count = worlds == null ? 0 : worlds.size();
+        double worldShare = count == 0 ? 0.0 : fairWorldShare(availableShareMs() / count);
+        List<String> safeWorlds = worlds == null ? List.of() : worlds;
         List<ShareTable.ShareRow> rows = new ArrayList<>();
-        for (String world : worlds) {
+        for (String world : safeWorlds) {
             EnumMap<ShareClass, Double> used = usedMs == null ? null : usedMs.get(world);
             for (ShareClass shareClass : ShareClass.values()) {
                 double spent = used == null ? 0.0 : used.getOrDefault(shareClass, 0.0);
@@ -61,7 +76,7 @@ public final class SharePlanner {
                                Map<String, Double> activityWeights) {
         List<String> safeWorlds = worlds == null ? List.of() : List.copyOf(worlds);
         int count = safeWorlds.size();
-        double total = KernelSettings.worldShareMs() * count;
+        double total = availableShareMs();
         double[] weights = new double[count];
         double weightSum = 0.0;
         for (int index = 0; index < count; index++) {
@@ -80,7 +95,8 @@ public final class SharePlanner {
         List<ShareTable.ShareRow> rows = new ArrayList<>();
         for (int index = 0; index < count; index++) {
             String world = safeWorlds.get(index);
-            double worldShare = count == 0 ? 0.0 : total * weights[index] / weightSum;
+            double worldShare = count == 0 ? 0.0
+                : fairWorldShare(total * weights[index] / weightSum);
             EnumMap<ShareClass, Double> used = usedMs == null ? null : usedMs.get(world);
             for (ShareClass shareClass : ShareClass.values()) {
                 double spent = used == null ? 0.0 : used.getOrDefault(shareClass, 0.0);

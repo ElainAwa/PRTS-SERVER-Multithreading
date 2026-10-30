@@ -24,14 +24,14 @@ class P2B02FairShareTest {
         ShareTable table = planner.planFair(List.of("p2b02-a", "p2b02-b"), 1L,
             Map.of("p2b02-a", used(9.0), "p2b02-b", used(9.0)),
             Map.of("p2b02-a", 1.0, "p2b02-b", 3.0));
-        double worldShare = KernelSettings.worldShareMs();
 
-        assertEquals(worldShare * 0.5, sumShares(table.rowsOf("p2b02-a")), 1.0e-9);
-        assertEquals(worldShare * 1.5, sumShares(table.rowsOf("p2b02-b")), 1.0e-9);
+        // The fair split would be 11 / 33, but the declared per-world cap is 8, so both bind to 8.
+        assertEquals(8.0, sumShares(table.rowsOf("p2b02-a")), 1.0e-9);
+        assertEquals(8.0, sumShares(table.rowsOf("p2b02-b")), 1.0e-9);
         for (ShareTable.ShareRow row : table.rowsOf("p2b02-a")) {
-            assertEquals(row.shareMs(), worldShare * 0.5 * row.shareClass().weight(), 1.0e-9);
+            assertEquals(row.shareMs(), 8.0 * row.shareClass().weight(), 1.0e-9);
         }
-        assertEquals(worldShare * 2.0, table.sumSharesMs(), 1.0e-9);
+        assertEquals(16.0, table.sumSharesMs(), 1.0e-9);
         assertTrue(planner.checkConservation(table).ok());
     }
 
