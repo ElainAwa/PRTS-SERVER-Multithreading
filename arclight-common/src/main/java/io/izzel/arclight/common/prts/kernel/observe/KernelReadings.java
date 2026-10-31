@@ -106,6 +106,7 @@ public final class KernelReadings {
         domainReadings(lines, module);
         queryReadings(lines);
         scaleReadings(lines);
+        healthReadings(lines);
         waitPoints(lines, module);
         waitLadderReadings(lines, module);
         differential(lines, module);
@@ -140,6 +141,17 @@ public final class KernelReadings {
         add(lines, "scale.entity_count", EntityQueryReadings.entityCount());
         add(lines, "scale.over_budget", ScaleBudgetReadings.overBudgetTicks());
         add(lines, "scale.degraded", ScaleBudgetReadings.degradedCount());
+    }
+
+    /** The four long-window slopes; all or none, and nothing before the warm-up window ends. */
+    private static void healthReadings(List<String> lines) {
+        if (!HealthReadings.published()) {
+            return;
+        }
+        add(lines, "health.entity_slope", HealthReadings.entitySlope());
+        add(lines, "health.churn_slope", HealthReadings.churnSlope());
+        add(lines, "health.inflight_slope", HealthReadings.inflightSlope());
+        add(lines, "health.alloc_slope", HealthReadings.allocSlope());
     }
 
     /** The three keys this group adds, and the whole of what it adds: no other product key is
