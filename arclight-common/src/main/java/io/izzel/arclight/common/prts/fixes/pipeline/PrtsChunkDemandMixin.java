@@ -8,6 +8,7 @@ import com.llamalad7.mixinextras.sugar.Share;
 import com.llamalad7.mixinextras.sugar.ref.LocalLongRef;
 import io.izzel.arclight.api.ArclightPlatform;
 import io.izzel.arclight.common.mod.mixins.annotation.OnlyInPlatform;
+import io.izzel.arclight.common.prts.kernel.observe.UnloadedReadReadings;
 import io.izzel.arclight.common.prts.support.PrtsChunkDemand;
 import io.izzel.arclight.common.prts.support.PrtsPipelineBatches;
 import net.minecraft.server.level.ChunkResult;
@@ -36,6 +37,10 @@ public abstract class PrtsChunkDemandMixin {
     @Final
     private ServerLevel level;
 
+    @Shadow
+    @Final
+    private Thread mainThread;
+
     private String prts$worldId() {
         return level.dimension().location().toString();
     }
@@ -43,6 +48,12 @@ public abstract class PrtsChunkDemandMixin {
     @Inject(method = "getChunk", at = @At("HEAD"))
     private void prts$demandOpened(int x, int z, ChunkStatus status, boolean blocking,
                                    CallbackInfoReturnable<ChunkAccess> cir) {
+        if (blocking && Thread.currentThread() == mainThread) {
+            ServerChunkCache cache = (ServerChunkCache) (Object) this;
+            if (UnloadedReadReadings.shouldCount(true, true, cache.getChunkNow(x, z) != null)) {
+                UnloadedReadReadings.noteColdLoad();
+            }
+        }
         if (PrtsChunkDemand.installed()) {
             PrtsChunkDemand.demandStarted(prts$worldId(), x, z, status.getName(), blocking);
         }
