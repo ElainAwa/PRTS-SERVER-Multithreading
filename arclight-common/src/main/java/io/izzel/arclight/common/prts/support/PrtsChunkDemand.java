@@ -2,6 +2,7 @@
 package io.izzel.arclight.common.prts.support;
 
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Consumer;
 
 /** The seam the chunk cache reports its demand side through: what was asked, what answered it, and
@@ -76,6 +77,7 @@ public final class PrtsChunkDemand {
     public static final long NO_TOKEN = 0L;
 
     private static final AtomicLong callTokens = new AtomicLong();
+    private static final LongAdder DEMAND_CALLS = new LongAdder();
     private static volatile boolean tokensExhausted;
 
     private static long nextToken() {
@@ -126,7 +128,12 @@ public final class PrtsChunkDemand {
         }
     }
 
+    public static long demandCalls() {
+        return DEMAND_CALLS.sum();
+    }
+
     public static void demandStarted(String worldId, String status, boolean blocking) {
+        DEMAND_CALLS.increment();
         DemandTap watcher = tap;
         if (watcher == null) {
             return;
@@ -139,6 +146,7 @@ public final class PrtsChunkDemand {
 
     public static void demandStarted(String worldId, int chunkX, int chunkZ, String status,
                                      boolean requireChunk) {
+        DEMAND_CALLS.increment();
         DemandTap watcher = tap;
         if (watcher == null) {
             return;
@@ -163,6 +171,7 @@ public final class PrtsChunkDemand {
     }
 
     public static void futureOpened(String worldId, String status) {
+        DEMAND_CALLS.increment();
         DemandTap watcher = tap;
         if (watcher == null) {
             return;

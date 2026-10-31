@@ -31,6 +31,7 @@ public final class PrtsChunkMaterialization {
 
     private static final AtomicLong TICKETS = new AtomicLong();
     private static final LongAdder CALLBACK_FAILURES = new LongAdder();
+    private static final LongAdder MATERIALIZED = new LongAdder();
     private static volatile MaterializationTap tap;
 
     private PrtsChunkMaterialization() {
@@ -52,8 +53,13 @@ public final class PrtsChunkMaterialization {
         return tap;
     }
 
+    public static long materializedCount() {
+        return MATERIALIZED.sum();
+    }
+
     public static void materialized(long ticket, String worldId, long chunkPos, String status,
                                     int generation) {
+        MATERIALIZED.increment();
         MaterializationTap watcher = tap;
         if (watcher != null) {
             watcher.materialized(ticket, worldId, chunkPos, status, generation);
