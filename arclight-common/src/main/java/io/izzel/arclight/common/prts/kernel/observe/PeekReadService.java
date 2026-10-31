@@ -8,6 +8,7 @@ import net.minecraft.server.level.ChunkMap;
 import net.minecraft.server.level.DistanceManager;
 import net.minecraft.server.level.ServerChunkCache;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.ChunkPos;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -57,8 +58,7 @@ public final class PeekReadService {
         long epoch = EPOCH.get();
         long started = System.nanoTime();
         String worldId = level == null ? "" : level.dimension().location().toString();
-        long chunkPos = pos == null ? 0L : ((long) (pos.getX() >> 4) << 32)
-            ^ ((pos.getZ() >> 4) & 0xffffffffL);
+        long chunkPos = pos == null ? 0L : ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4);
         long demandBefore = PrtsChunkDemand.demandCalls();
         long materializedBefore = PrtsChunkMaterialization.materializedCount();
         boolean loadedBefore = loaded(level, pos);
@@ -143,7 +143,7 @@ public final class PeekReadService {
             Field field = DistanceManager.class.getDeclaredField("tickets");
             field.setAccessible(true);
             Object raw = field.get(distance);
-            long chunk = ((long) (pos.getX() >> 4) << 32) ^ ((pos.getZ() >> 4) & 0xffffffffL);
+            long chunk = ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4);
             Method get = raw == null ? null : raw.getClass().getMethod("get", long.class);
             Object set = get == null ? null : get.invoke(raw, chunk);
             if (set != null) {
@@ -157,7 +157,7 @@ public final class PeekReadService {
         }
         boolean forcedKnown;
         try {
-            long chunk = ((long) (pos.getX() >> 4) << 32) ^ ((pos.getZ() >> 4) & 0xffffffffL);
+            long chunk = ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4);
             if (level.getForcedChunks().contains(chunk)) {
                 names.add("forced");
             }
