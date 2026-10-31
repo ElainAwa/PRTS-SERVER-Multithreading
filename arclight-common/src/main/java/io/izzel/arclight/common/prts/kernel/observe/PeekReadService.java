@@ -181,7 +181,8 @@ public final class PeekReadService {
         return new TicketView(names, true, forceloadIntent, source);
     }
 
-    private static long setDifference(List<String> after, List<String> before) {
+    /** Package-private for the direct new-ticket difference regression; pure set operation. */
+    static long setDifference(List<String> after, List<String> before) {
         Set<String> added = new LinkedHashSet<>(after);
         added.removeAll(new LinkedHashSet<>(before));
         return added.size();

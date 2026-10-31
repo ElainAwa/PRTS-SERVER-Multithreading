@@ -90,6 +90,15 @@ class P2ACC06PeekReadReceiptTest {
     }
 
     @Test
+    void setDifferenceCountsNewIdentitiesOnly() {
+        assertEquals(1L, PeekReadService.setDifference(List.of("a"), List.of()));
+        assertEquals(0L, PeekReadService.setDifference(List.of("b", "a"), List.of("a", "b")));
+        assertEquals(1L, PeekReadService.setDifference(List.of("b"), List.of("a")));
+        assertEquals(1L, PeekReadService.setDifference(List.of("a", "a"), List.of()));
+        assertEquals(0L, PeekReadService.setDifference(List.of(), List.of("a")));
+    }
+
+    @Test
     void receiptKeepsLoadingAndMaterializationSources() {
         PeekReadService.ReadReceipt loading = PeekReadService.build(7L, 3L, "world", 1L, 4L, 9L,
             PeekBlockService.Status.LOADED, "chunk-now", 2L, true, true, "peek-result",
