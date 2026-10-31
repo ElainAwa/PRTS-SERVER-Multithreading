@@ -57,6 +57,9 @@
     "observation.PrtsEntitySelfCostMixin",
     "observation.PrtsBlockEntitySelfCostMixin",
     "observation.PrtsBlockEntityTickCostMixin",
+    "observation.PrtsNeighborUpdateCostMixin",
+    "observation.PrtsPacketEncodeCostMixin",
+    "observation.PrtsPacketDecodeCostMixin",
     "pipeline.PrtsChunkDemandMixin",
     "pipeline.PrtsChunkMaterializationMixin"
   ]
