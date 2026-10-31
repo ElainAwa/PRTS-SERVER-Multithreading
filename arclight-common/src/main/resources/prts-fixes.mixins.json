@@ -58,6 +58,8 @@
     "observation.PrtsBlockEntitySelfCostMixin",
     "observation.PrtsBlockEntityTickCostMixin",
     "observation.PrtsNeighborUpdateCostMixin",
+    "observation.PrtsMobAiDecisionMixin",
+    "observation.PrtsGoalSelectorDecisionMixin",
     "observation.PrtsPacketEncodeCostMixin",
     "observation.PrtsPacketDecodeCostMixin",
     "pipeline.PrtsChunkDemandMixin",

@@ -70,6 +70,7 @@ import io.izzel.arclight.common.prts.kernel.waitpoints.WaitLadder;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitProgress;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSite;
+import io.izzel.arclight.common.prts.kernel.decision.B1DecisionGate;
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityQueryReadings;
 import io.izzel.arclight.common.prts.kernel.observe.HealthReadings;
@@ -392,6 +393,8 @@ public final class KernelModule {
     private final CommitNamespaces.ResetEpochs commitChainEpochs = new CommitNamespaces.ResetEpochs();
     private long tickIndex;
     private final java.util.ArrayDeque<Long> pendingB3Tokens = new java.util.ArrayDeque<>();
+    private long pendingB1Token = -1L;
+    private String pendingB1World;
     /** The server whose live levels the claim point resolves; the host names it before the tick. */
     private volatile net.minecraft.server.MinecraftServer liveServer;
     private int waitCrossStreak;
@@ -829,6 +832,7 @@ public final class KernelModule {
         ShareTable table = shares.plan(worldIds == null ? List.of() : worldIds, tickIndex, used);
         lastConservation = shares.checkConservation(table);
         pendingB3Tokens.clear();
+        B1DecisionGate.clearStale(tickIndex, KernelSettings.degradeRollbackTicks());
         double minMargin = Double.POSITIVE_INFINITY;
         long overruns = 0L;
         for (ShareTable.ShareRow row : table.rows()) {
@@ -839,6 +843,14 @@ public final class KernelModule {
             OverrunRecord record = shares.record(row, "runtime", tickIndex);
             shares.recordWouldDegrade(record);
             ladder.noteEntered(record.wouldDegradeLevel(), tickIndex);
+            if (record.wouldDegradeLevel() == DegradeLevel.B1 && KernelSettings.degradeActions()) {
+                long token = shares.tokenOf(record);
+                if (token > 0L) {
+                    pendingB1Token = token;
+                    pendingB1World = record.worldId();
+                    B1DecisionGate.arm(record.worldId(), token, tickIndex);
+                }
+            }
             if (record.wouldDegradeLevel() == DegradeLevel.B3
                 && KernelSettings.dispatchParallel() && b3MergeWanted()) {
                 long token = shares.tokenOf(record);
@@ -1925,6 +1937,30 @@ public final class KernelModule {
     }
 
     /** Marks every trigger record of this tick before the action becomes effective. */
+    /** Marks the first real B1 goal-selection skip; ARMED alone is never effective. */
+    public boolean noteB1Applied(long token) {
+        if (token <= 0L || token != pendingB1Token) {
+            return false;
+        }
+        if (!shares.markTokenExecuted(token)) {
+            pendingB1Token = -1L;
+            if (pendingB1World != null) {
+                B1DecisionGate.disarm(pendingB1World);
+                pendingB1World = null;
+            }
+            return false;
+        }
+        boolean effective = ladder.noteEffective(DegradeLevel.B1);
+        if (effective) {
+            pendingB1Token = -1L;
+            if (pendingB1World != null) {
+                B1DecisionGate.disarm(pendingB1World);
+                pendingB1World = null;
+            }
+        }
+        return effective;
+    }
+
     public boolean noteB3Merged(long token, WorkPlan.MergeReceipt receipt) {
         if (token <= 0L || receipt == null || !pendingB3Tokens.contains(token)) {
             B3_DEBUG.debug("b3 mark rejected: token={} receipt={} pending={}", token,
@@ -3345,6 +3381,9 @@ public final class KernelModule {
             domain.reset();
         }
         pendingB3Tokens.clear();
+        pendingB1Token = -1L;
+        pendingB1World = null;
+        B1DecisionGate.reset();
         shares.clearRecordTokens();
         EntityQueryReadings.reset();
         ScaleBudgetReadings.reset();
