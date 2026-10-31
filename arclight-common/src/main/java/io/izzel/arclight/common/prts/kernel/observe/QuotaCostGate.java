@@ -9,6 +9,7 @@ public final class QuotaCostGate {
     /** Controlled-start switch, not a config key; absent means off. */
     public static final String PROPERTY = "arclight.prts.quotaCost";
 
+
     private static volatile Boolean testOverride;
 
     private QuotaCostGate() {
@@ -28,4 +29,5 @@ public final class QuotaCostGate {
     public static void clearTestOverride() {
         testOverride = null;
     }
+
 }

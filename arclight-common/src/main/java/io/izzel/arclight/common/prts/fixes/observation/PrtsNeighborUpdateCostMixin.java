@@ -12,12 +12,12 @@ import io.izzel.arclight.common.prts.kernel.observe.QuotaCostGate;
 import io.izzel.arclight.common.prts.kernel.observe.QuotaCostSpans;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.world.level.Level;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.Block;
 import org.spongepowered.asm.mixin.Mixin;
 
 @OnlyInPlatform(ArclightPlatform.NEOFORGE)
-@Mixin(Level.class)
+@Mixin(ServerLevel.class)
 public abstract class PrtsNeighborUpdateCostMixin {
 
     @WrapMethod(method = "updateNeighborsAt")
