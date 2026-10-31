@@ -106,6 +106,7 @@ public final class KernelReadings {
         domainReadings(lines, module);
         queryReadings(lines);
         scaleReadings(lines);
+        readReadings(lines);
         quotaReadings(lines);
         healthReadings(lines);
         waitPoints(lines, module);
@@ -142,6 +143,12 @@ public final class KernelReadings {
         add(lines, "scale.entity_count", EntityQueryReadings.entityCount());
         add(lines, "scale.over_budget", ScaleBudgetReadings.overBudgetTicks());
         add(lines, "scale.degraded", ScaleBudgetReadings.degradedCount());
+    }
+
+    /** The formal materialized-unloaded count; absent until a complete managed window closes. */
+    private static void readReadings(List<String> lines) {
+        MaterializedUnloadedReadings.publishedValue().ifPresent(value ->
+            add(lines, "read.materialized_unloaded", value));
     }
 
     /** The entity-scoped quota window; only the over count is published, never the occupancy. */

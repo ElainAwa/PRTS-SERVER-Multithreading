@@ -66,7 +66,14 @@ public final class PeekReadService {
         long materializedBefore = PrtsChunkMaterialization.materializedCount();
         boolean loadedBefore = loaded(level, pos);
         TicketView ticketsBefore = tickets(level, pos);
+        long managedReadId = MaterializedUnloadedReadings.begin(worldId, chunkPos, "peek");
         PeekBlockService.Result result = PeekBlockService.peek(level, pos, fallback);
+        MaterializedUnloadedReadings.end(managedReadId,
+            result.status() == PeekBlockService.Status.NO_WORLD
+                ? MaterializedUnloadedReadings.Outcome.NO_WORLD
+                : result.status() == PeekBlockService.Status.LOADED
+                    ? MaterializedUnloadedReadings.Outcome.LOADED_SNAPSHOT
+                    : MaterializedUnloadedReadings.Outcome.COMPLETE);
         boolean loadedAfter = loaded(level, pos);
         TicketView ticketsAfter = tickets(level, pos);
         boolean ticketsKnown = ticketsBefore.known() && ticketsAfter.known();

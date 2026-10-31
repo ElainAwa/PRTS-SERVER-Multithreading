@@ -8,8 +8,10 @@ import com.llamalad7.mixinextras.sugar.Share;
 import com.llamalad7.mixinextras.sugar.ref.LocalLongRef;
 import io.izzel.arclight.api.ArclightPlatform;
 import io.izzel.arclight.common.mod.mixins.annotation.OnlyInPlatform;
+import io.izzel.arclight.common.prts.kernel.observe.MaterializedUnloadedReadings;
 import io.izzel.arclight.common.prts.kernel.observe.UnloadedReadReadings;
 import io.izzel.arclight.common.prts.support.PrtsChunkDemand;
+import net.minecraft.world.level.ChunkPos;
 import io.izzel.arclight.common.prts.support.PrtsPipelineBatches;
 import net.minecraft.server.level.ChunkResult;
 import net.minecraft.server.level.ServerChunkCache;
@@ -41,6 +43,9 @@ public abstract class PrtsChunkDemandMixin {
     @Final
     private Thread mainThread;
 
+    @org.spongepowered.asm.mixin.Unique
+    private boolean prts$absentAtCall;
+
     private String prts$worldId() {
         return level.dimension().location().toString();
     }
@@ -48,9 +53,10 @@ public abstract class PrtsChunkDemandMixin {
     @Inject(method = "getChunk", at = @At("HEAD"))
     private void prts$demandOpened(int x, int z, ChunkStatus status, boolean blocking,
                                    CallbackInfoReturnable<ChunkAccess> cir) {
+        ServerChunkCache cache = (ServerChunkCache) (Object) this;
+        prts$absentAtCall = cache.getChunkNow(x, z) == null;
         if (blocking && Thread.currentThread() == mainThread) {
-            ServerChunkCache cache = (ServerChunkCache) (Object) this;
-            if (UnloadedReadReadings.shouldCount(true, true, cache.getChunkNow(x, z) != null)) {
+            if (UnloadedReadReadings.shouldCount(true, true, !prts$absentAtCall)) {
                 UnloadedReadReadings.noteColdLoad();
             }
         }
@@ -62,6 +68,8 @@ public abstract class PrtsChunkDemandMixin {
     @Inject(method = "getChunk", at = @At("RETURN"))
     private void prts$demandClosed(int x, int z, ChunkStatus status, boolean blocking,
                                    CallbackInfoReturnable<ChunkAccess> cir) {
+        MaterializedUnloadedReadings.onSynchronousRead(prts$worldId(),
+            ChunkPos.asLong(x, z), blocking, prts$absentAtCall, cir.getReturnValue() != null);
         if (!PrtsChunkDemand.installed()) {
             return;
         }

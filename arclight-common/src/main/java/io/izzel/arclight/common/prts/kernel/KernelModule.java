@@ -74,6 +74,7 @@ import io.izzel.arclight.common.prts.kernel.decision.B1DecisionGate;
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityQueryReadings;
 import io.izzel.arclight.common.prts.kernel.observe.HealthReadings;
+import io.izzel.arclight.common.prts.kernel.observe.MaterializedUnloadedReadings;
 import io.izzel.arclight.common.prts.kernel.observe.QuotaCostReadings;
 import io.izzel.arclight.common.prts.kernel.observe.QuotaEntityWindow;
 import io.izzel.arclight.common.prts.kernel.observe.ScaleBudgetReadings;
@@ -3388,6 +3389,7 @@ public final class KernelModule {
         EntityQueryReadings.reset();
         ScaleBudgetReadings.reset();
         QuotaEntityWindow.reset();
+        MaterializedUnloadedReadings.reset();
         HealthReadings.reset();
         loadThread.reset();
         chunkFlow.reset();
