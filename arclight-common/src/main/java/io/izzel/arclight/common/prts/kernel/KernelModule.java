@@ -73,6 +73,8 @@ import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSite;
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityQueryReadings;
 import io.izzel.arclight.common.prts.kernel.observe.HealthReadings;
+import io.izzel.arclight.common.prts.kernel.observe.QuotaCostReadings;
+import io.izzel.arclight.common.prts.kernel.observe.QuotaEntityWindow;
 import io.izzel.arclight.common.prts.kernel.observe.ScaleBudgetReadings;
 import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteObserver;
 import io.izzel.arclight.common.prts.kernel.observe.ArrivalDigestObserver;
@@ -616,6 +618,10 @@ public final class KernelModule {
         ScaleBudgetReadings.noteTick(tickIndex, EntityQueryReadings.entityCount(),
             KernelSettings.scaleEntityBudget(), KernelSettings.selfWindowTicks(),
             ladder.counters(DegradeLevel.B3).effective());
+        QuotaEntityWindow.noteTick(tickIndex,
+            QuotaCostReadings.wallNanos(QuotaCostReadings.QuotaClass.ENTITY),
+            KernelSettings.selfWindowTicks(), KernelSettings.selfWarmupTicks(),
+            KernelSettings.quotaEntityMs());
         HealthReadings.noteTick(tickIndex, EntityQueryReadings.entityCount(),
             worldLifecycle.transitionCount(), chunkDemand.futuresInFlight(), arena.claims(),
             KernelSettings.selfWindowTicks(), KernelSettings.selfWarmupTicks());
@@ -3342,6 +3348,7 @@ public final class KernelModule {
         shares.clearRecordTokens();
         EntityQueryReadings.reset();
         ScaleBudgetReadings.reset();
+        QuotaEntityWindow.reset();
         HealthReadings.reset();
         loadThread.reset();
         chunkFlow.reset();

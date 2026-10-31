@@ -106,6 +106,7 @@ public final class KernelReadings {
         domainReadings(lines, module);
         queryReadings(lines);
         scaleReadings(lines);
+        quotaReadings(lines);
         healthReadings(lines);
         waitPoints(lines, module);
         waitLadderReadings(lines, module);
@@ -141,6 +142,11 @@ public final class KernelReadings {
         add(lines, "scale.entity_count", EntityQueryReadings.entityCount());
         add(lines, "scale.over_budget", ScaleBudgetReadings.overBudgetTicks());
         add(lines, "scale.degraded", ScaleBudgetReadings.degradedCount());
+    }
+
+    /** The entity-scoped quota window; only the over count is published, never the occupancy. */
+    private static void quotaReadings(List<String> lines) {
+        add(lines, "quota.entity_over", QuotaEntityWindow.overCount());
     }
 
     /** The four long-window slopes; all or none, and nothing before the warm-up window ends. */

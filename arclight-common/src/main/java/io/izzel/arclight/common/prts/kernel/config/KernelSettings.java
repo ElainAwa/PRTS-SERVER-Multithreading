@@ -67,6 +67,10 @@ public final class KernelSettings {
      * not change scheduling, shares or degradation. */
     public static final String SCALE_ENTITY_BUDGET = "scale-entity-budget";
 
+    /** Read-only entity quota, in milliseconds of entity wall time per segment second; it does not
+     * change scheduling, shares or degradation. */
+    public static final String QUOTA_ENTITY_MS = "quota-entity-ms";
+
     /** Lets a rung of the wait ladder execute its action; off, a rung that was reached only
      * publishes its counters. */
     public static final String WAIT_ACTIONS = "wait-actions";
@@ -281,6 +285,10 @@ public final class KernelSettings {
      * scheduling limit. */
     public static int scaleEntityBudget() {
         return clamp(number(SCALE_ENTITY_BUDGET), 1, 1_000_000);
+    }
+
+    public static int quotaEntityMs() {
+        return clamp(number(QUOTA_ENTITY_MS), 0, 1000);
     }
 
     public static boolean waitActions() {
