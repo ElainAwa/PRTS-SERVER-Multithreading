@@ -27,6 +27,7 @@ class KernelDrainCommandTest {
         assertTrue(extension.subcommands().contains("drain"));
         assertTrue(extension.subcommands().contains("reset"));
         assertTrue(extension.subcommands().contains("selftest"));
+        assertTrue(extension.subcommands().contains("peek"));
 
         List<String> answer = extension.run(List.of("drain"));
         assertEquals(1, answer.size());
@@ -35,7 +36,7 @@ class KernelDrainCommandTest {
 
         List<String> usage = extension.run(List.of("drain", "extra"));
         assertEquals(1, usage.size());
-        assertTrue(usage.get(0).contains("usage: /prts kernel [drain|reset|selftest]"),
+        assertTrue(usage.get(0).contains("usage: /prts kernel [drain|peek"),
             usage.toString());
 
         assertTrue(extension.complete(List.of()).contains("drain"));

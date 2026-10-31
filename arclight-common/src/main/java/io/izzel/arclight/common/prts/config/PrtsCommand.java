@@ -2,6 +2,7 @@
 package io.izzel.arclight.common.prts.config;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import io.izzel.arclight.common.prts.PrtsSwitches;
 import net.minecraft.commands.CommandSourceStack;
@@ -81,8 +82,11 @@ public final class PrtsCommand {
         LiteralArgumentBuilder<CommandSourceStack> node = Commands.literal(extension.name())
             .executes(context -> reply(context.getSource(), extension.run(List.of())));
         for (String subcommand : extension.subcommands()) {
-            node.then(Commands.literal(subcommand).executes(context ->
-                reply(context.getSource(), extension.run(List.of(subcommand)))));
+            node.then(Commands.literal(subcommand)
+                .executes(context -> reply(context.getSource(), extension.run(List.of(subcommand))))
+                .then(Commands.argument("args", StringArgumentType.greedyString())
+                    .executes(context -> reply(context.getSource(), extension.run(List.of(subcommand,
+                        StringArgumentType.getString(context, "args")))))));
         }
         return node;
     }

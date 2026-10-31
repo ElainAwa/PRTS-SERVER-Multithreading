@@ -4,6 +4,11 @@ package io.izzel.arclight.common.prts.kernel.observe;
 import io.izzel.arclight.common.prts.config.PrtsCommandExtension;
 import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
+import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
+import org.bukkit.Bukkit;
+import org.bukkit.World;
+import org.bukkit.craftbukkit.v.CraftWorld;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -17,6 +22,7 @@ public final class KernelCommandExtension implements PrtsCommandExtension {
     private static final String SELFTEST = "selftest";
     private static final String RESET = "reset";
     private static final String DRAIN = "drain";
+    private static final String PEEK = "peek";
     private static final String PREFIX = "[PRTS] kernel ";
 
     private KernelCommandExtension() {
@@ -33,7 +39,7 @@ public final class KernelCommandExtension implements PrtsCommandExtension {
 
     @Override
     public List<String> subcommands() {
-        return List.of(DRAIN, RESET, SELFTEST);
+        return List.of(DRAIN, PEEK, RESET, SELFTEST);
     }
 
     @Override
@@ -50,14 +56,17 @@ public final class KernelCommandExtension implements PrtsCommandExtension {
         if (arguments.size() == 1 && DRAIN.equalsIgnoreCase(arguments.get(0))) {
             return drain();
         }
-        return List.of("[PRTS] kernel usage: /prts kernel [" + DRAIN + "|" + RESET + "|"
-            + SELFTEST + "]");
+        if (arguments.size() == 2 && PEEK.equalsIgnoreCase(arguments.get(0))) {
+            return peek(arguments.get(1));
+        }
+        return List.of("[PRTS] kernel usage: /prts kernel [" + DRAIN + "|" + PEEK
+            + " <world> <x> <y> <z>|" + RESET + "|" + SELFTEST + "]");
     }
 
     @Override
     public List<String> complete(List<String> arguments) {
         if (arguments == null || arguments.isEmpty()) {
-            return List.of(DRAIN, RESET, SELFTEST);
+            return List.of(DRAIN, PEEK, RESET, SELFTEST);
         }
         return List.of();
     }
@@ -65,6 +74,33 @@ public final class KernelCommandExtension implements PrtsCommandExtension {
     @Override
     public List<String> statusLines() {
         return KernelStatusLines.status(KernelModule.instance());
+    }
+
+    /** Ops face for a non-loading block peek: the world must already be registered; a missing
+     * chunk is answered UNKNOWN, never by loading it. */
+    private static List<String> peek(String raw) {
+        String[] parts = raw == null ? new String[0] : raw.trim().split("\\s+");
+        if (parts.length != 4) {
+            return List.of(PREFIX + "peek usage: /prts kernel peek <world> <x> <y> <z>");
+        }
+        try {
+            World world = Bukkit.getWorld(parts[0]);
+            if (world == null) {
+                return List.of(PREFIX + "peek world=" + parts[0] + " status=no_world result="
+                    + PeekBlockService.describe(new PeekBlockService.Result(parts[0], null, null,
+                        PeekBlockService.Status.NO_WORLD, "no-world"))
+                    + " demand=" + PeekBlockService.demandCount());
+            }
+            ServerLevel level = ((CraftWorld) world).getHandle();
+            BlockPos pos = new BlockPos(Integer.parseInt(parts[1]), Integer.parseInt(parts[2]),
+                Integer.parseInt(parts[3]));
+            PeekBlockService.Result result = PeekBlockService.peek(level, pos, null);
+            return List.of(PREFIX + "peek world=" + result.worldId() + " " + PeekBlockService.describe(result)
+                + " demand=" + PeekBlockService.demandCount()
+                + " overflow=" + PeekBlockService.demandOverflow());
+        } catch (NumberFormatException invalid) {
+            return List.of(PREFIX + "peek usage: /prts kernel peek <world> <x> <y> <z>");
+        }
     }
 
     private static List<String> export() {
