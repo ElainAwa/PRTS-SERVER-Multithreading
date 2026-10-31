@@ -105,6 +105,7 @@ public final class KernelReadings {
         selfTimers(lines, module);
         domainReadings(lines, module);
         queryReadings(lines);
+        scaleReadings(lines);
         waitPoints(lines, module);
         waitLadderReadings(lines, module);
         differential(lines, module);
@@ -131,6 +132,14 @@ public final class KernelReadings {
     private static void queryReadings(List<String> lines) {
         add(lines, "query.calls", EntityQueryReadings.queryCalls());
         add(lines, "entity.count", EntityQueryReadings.entityCount());
+    }
+
+    /** The read-only scale window: entity count over the declared budget and the B3/entity action
+     * count in that window. It does not change scheduling. */
+    private static void scaleReadings(List<String> lines) {
+        add(lines, "scale.entity_count", EntityQueryReadings.entityCount());
+        add(lines, "scale.over_budget", ScaleBudgetReadings.overBudgetTicks());
+        add(lines, "scale.degraded", ScaleBudgetReadings.degradedCount());
     }
 
     /** The three keys this group adds, and the whole of what it adds: no other product key is

@@ -72,6 +72,7 @@ import io.izzel.arclight.common.prts.kernel.waitpoints.WaitProgress;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSite;
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityQueryReadings;
+import io.izzel.arclight.common.prts.kernel.observe.ScaleBudgetReadings;
 import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteObserver;
 import io.izzel.arclight.common.prts.kernel.observe.ArrivalDigestObserver;
 import io.izzel.arclight.common.prts.kernel.observe.ChunkDemandObserver;
@@ -611,6 +612,9 @@ public final class KernelModule {
         }
         ledger.verifyClosure();
         tickDomains();
+        ScaleBudgetReadings.noteTick(tickIndex, EntityQueryReadings.entityCount(),
+            KernelSettings.scaleEntityBudget(), KernelSettings.selfWindowTicks(),
+            ladder.counters(DegradeLevel.B3).effective());
         tickDigest.noteTick(tickIndex);
         if (KernelSettings.commitLog()) {
             lastCommitReplay = commits.closeTick();
@@ -3333,6 +3337,7 @@ public final class KernelModule {
         pendingB3Tokens.clear();
         shares.clearRecordTokens();
         EntityQueryReadings.reset();
+        ScaleBudgetReadings.reset();
         loadThread.reset();
         chunkFlow.reset();
         saveIdentity.reset();

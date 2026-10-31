@@ -63,6 +63,10 @@ public final class KernelSettings {
     /** Run of clean ticks a rung needs before it may return; a declared value, not a measured one. */
     public static final String DEGRADE_ROLLBACK_TICKS = "degrade-rollback-ticks";
 
+    /** Read-only entity count above which the scale readout counts an over-budget tick; it does
+     * not change scheduling, shares or degradation. */
+    public static final String SCALE_ENTITY_BUDGET = "scale-entity-budget";
+
     /** Lets a rung of the wait ladder execute its action; off, a rung that was reached only
      * publishes its counters. */
     public static final String WAIT_ACTIONS = "wait-actions";
@@ -271,6 +275,12 @@ public final class KernelSettings {
 
     public static int degradeRollbackTicks() {
         return clamp(number(DEGRADE_ROLLBACK_TICKS), 1, 600);
+    }
+
+    /** The read-only scale threshold; 2000 is the documented scale reference, not a measured
+     * scheduling limit. */
+    public static int scaleEntityBudget() {
+        return clamp(number(SCALE_ENTITY_BUDGET), 1, 1_000_000);
     }
 
     public static boolean waitActions() {

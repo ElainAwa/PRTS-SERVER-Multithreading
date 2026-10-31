@@ -324,6 +324,7 @@ public final class PrtsConfigManager {
         Map<String, IntSetting> numbers = new LinkedHashMap<>();
         numbers.put("self-window-seconds", new IntSetting(600, 600, 86400));
         numbers.put("self-warmup-seconds", new IntSetting(60, 0, 3600));
+        numbers.put("scale-entity-budget", new IntSetting(2000, 1, 1_000_000));
         numbers.put("e-budget-ms", new IntSetting(50, 1, 1000));
         numbers.put("world-share-ms", new IntSetting(8, 1, 1000));
         numbers.put("reserve-ms", new IntSetting(4, 0, 500));
