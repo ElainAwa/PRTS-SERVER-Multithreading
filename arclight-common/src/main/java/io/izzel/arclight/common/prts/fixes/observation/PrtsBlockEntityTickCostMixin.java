@@ -8,6 +8,7 @@ import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import io.izzel.arclight.api.ArclightPlatform;
 import io.izzel.arclight.common.mod.mixins.annotation.OnlyInPlatform;
+import io.izzel.arclight.common.prts.kernel.observe.BlockEntityAttribution;
 import io.izzel.arclight.common.prts.support.PrtsBlockEntityCosts;
 import io.izzel.arclight.common.prts.support.PrtsCpuClock;
 import net.minecraft.world.level.Level;
@@ -55,9 +56,11 @@ public abstract class PrtsBlockEntityTickCostMixin {
             original.call(ticker);
         } finally {
             Level level = (Level) (Object) this;
-            PrtsBlockEntityCosts.blockEntityTick(ticker, level,
-                level.dimension().location().toString(),
-                System.nanoTime() - startedAt, PrtsCpuClock.since(cpuStartedAt));
+            String worldId = level.dimension().location().toString();
+            long wallNanos = System.nanoTime() - startedAt;
+            long cpuNanos = PrtsCpuClock.since(cpuStartedAt);
+            PrtsBlockEntityCosts.blockEntityTick(ticker, level, worldId, wallNanos, cpuNanos);
+            BlockEntityAttribution.noteTick(ticker, level, worldId, wallNanos, cpuNanos);
         }
     }
 }
