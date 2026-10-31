@@ -58,6 +58,29 @@ class P2ACC06PeekReadReceiptTest {
     }
 
     @Test
+    void ticketDecisionCoversForcedAndFailsClosed() {
+        PeekReadService.TicketView emptyLoaded = PeekReadService.ticketDecision(true,
+            List.of(), true, true);
+        assertFalse(emptyLoaded.known());
+        assertEquals(List.of("UNKNOWN"), emptyLoaded.tickets());
+
+        PeekReadService.TicketView forced = PeekReadService.ticketDecision(true,
+            List.of("forced"), true, true);
+        assertTrue(forced.known());
+        assertEquals(List.of("forced"), forced.tickets());
+
+        PeekReadService.TicketView unreadable = PeekReadService.ticketDecision(true,
+            List.of("forced"), false, true);
+        assertFalse(unreadable.known());
+        assertEquals(List.of("UNKNOWN"), unreadable.tickets());
+
+        PeekReadService.TicketView cold = PeekReadService.ticketDecision(false,
+            List.of(), true, true);
+        assertTrue(cold.known());
+        assertEquals(List.of(), cold.tickets());
+    }
+
+    @Test
     void receiptKeepsLoadingAndMaterializationSources() {
         PeekReadService.ReadReceipt loading = PeekReadService.build(7L, 3L, "world", 1L, 4L, 9L,
             PeekBlockService.Status.LOADED, "chunk-now", 2L, true, true, "peek-result",
