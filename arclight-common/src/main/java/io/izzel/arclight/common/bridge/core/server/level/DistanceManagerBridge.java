@@ -13,6 +13,9 @@ public interface DistanceManagerBridge {
 
     boolean bridge$addTicket(long chunkPos, Ticket<?> ticket);
 
+    /** Immutable copy of the active ticket descriptions at one chunk; owner-thread callers only. */
+    java.util.List<String> bridge$ticketSnapshot(long chunkPos);
+
     boolean bridge$removeTicket(long chunkPos, Ticket<?> ticket);
 
     void bridge$tick();

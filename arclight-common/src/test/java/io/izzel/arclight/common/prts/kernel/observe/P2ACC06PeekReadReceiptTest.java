@@ -35,6 +35,7 @@ class P2ACC06PeekReadReceiptTest {
         assertFalse(receipt.loadedAfter());
         assertEquals(0L, receipt.loadingCalls());
         assertEquals("none", receipt.materializationSource());
+        assertEquals("source-unavailable", receipt.ticketSource());
         assertEquals(1L, receipt.readId());
     }
 
@@ -58,33 +59,41 @@ class P2ACC06PeekReadReceiptTest {
     }
 
     @Test
-    void ticketDecisionCoversForcedAndFailsClosed() {
-        PeekReadService.TicketView emptyLoaded = PeekReadService.ticketDecision(true,
-            List.of(), true, true);
-        assertFalse(emptyLoaded.known());
-        assertEquals(List.of("UNKNOWN"), emptyLoaded.tickets());
+    void ticketDecisionKeepsKnownEmptyAndSeparatesIntent() {
+        PeekReadService.TicketView emptyLoaded = PeekReadService.ticketDecision(true, true,
+            List.of(), true, true, false);
+        assertTrue(emptyLoaded.known());
+        assertEquals(List.of(), emptyLoaded.active());
+        assertEquals("known-empty", emptyLoaded.source());
 
-        PeekReadService.TicketView forced = PeekReadService.ticketDecision(true,
-            List.of("forced"), true, true);
-        assertTrue(forced.known());
-        assertEquals(List.of("forced"), forced.tickets());
+        PeekReadService.TicketView active = PeekReadService.ticketDecision(true, true,
+            List.of("ticket"), true, true, true);
+        assertTrue(active.known());
+        assertEquals(List.of("ticket"), active.active());
+        assertTrue(active.forceloadIntent());
+        assertEquals("active", active.source());
 
-        PeekReadService.TicketView unreadable = PeekReadService.ticketDecision(true,
-            List.of("forced"), false, true);
+        PeekReadService.TicketView unreadable = PeekReadService.ticketDecision(true, true,
+            List.of("ticket"), false, true, true);
         assertFalse(unreadable.known());
-        assertEquals(List.of("UNKNOWN"), unreadable.tickets());
+        assertEquals(List.of("UNKNOWN"), unreadable.active());
+        assertEquals("source-unavailable", unreadable.source());
 
-        PeekReadService.TicketView cold = PeekReadService.ticketDecision(false,
-            List.of(), true, true);
+        PeekReadService.TicketView cold = PeekReadService.ticketDecision(true, false,
+            List.of(), true, true, false);
+        PeekReadService.TicketView offThread = PeekReadService.ticketDecision(false, true,
+            List.of("ticket"), true, true, true);
+        assertFalse(offThread.known());
+        assertEquals("thread-unavailable", offThread.source());
         assertTrue(cold.known());
-        assertEquals(List.of(), cold.tickets());
+        assertEquals(List.of(), cold.active());
     }
 
     @Test
     void receiptKeepsLoadingAndMaterializationSources() {
         PeekReadService.ReadReceipt loading = PeekReadService.build(7L, 3L, "world", 1L, 4L, 9L,
             PeekBlockService.Status.LOADED, "chunk-now", 2L, true, true, "peek-result",
-            List.of("ticket"), true, 2L, 1L, "chunk.demand", false);
+            List.of("ticket"), true, 2L, 1L, "chunk.demand", false, false, "active");
         assertEquals(2L, loading.loadingCalls());
         assertEquals(1L, loading.newTickets());
         assertEquals("chunk.demand", loading.materializationSource());
@@ -95,7 +104,7 @@ class P2ACC06PeekReadReceiptTest {
     void eventLossAndUnknownAreNotFilledWithZero() {
         PeekReadService.ReadReceipt loss = PeekReadService.build(8L, 0L, "world", 1L, 5L, 1L,
             PeekBlockService.Status.UNKNOWN, "chunk-absent", 0L, false, false, "none",
-            List.of("UNKNOWN"), false, 0L, -1L, "UNKNOWN", true);
+            List.of("UNKNOWN"), false, 0L, -1L, "UNKNOWN", true, false, "source-unavailable");
         assertTrue(loss.eventLoss());
         assertFalse(loss.ticketsKnown());
         assertEquals(-1L, loss.newTickets());

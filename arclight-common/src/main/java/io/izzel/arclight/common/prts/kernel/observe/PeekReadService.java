@@ -1,25 +1,27 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.observe;
 
+import io.izzel.arclight.common.bridge.core.server.level.DistanceManagerBridge;
 import io.izzel.arclight.common.prts.support.PrtsChunkDemand;
 import io.izzel.arclight.common.prts.support.PrtsChunkMaterialization;
 import net.minecraft.core.BlockPos;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ChunkMap;
 import net.minecraft.server.level.DistanceManager;
 import net.minecraft.server.level.ServerChunkCache;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.ChunkPos;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.util.ArrayDeque;
-import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** Frozen read-only peek receipt: each explicit peek records the before/after loaded state, the
- * bounded demand/loading/materialization counters and the real chunk's ticket set. It never calls
- * getChunk(load=true), join or ticket APIs. Unavailable sources are UNKNOWN, never zero. */
+ * bounded demand/loading/materialization counters and the real chunk's active tickets and persistent
+ * forceload intent. It never calls getChunk(load=true), join or ticket APIs. Unavailable sources are
+ * UNKNOWN, never zero; a known-empty set stays a known empty set. */
 public final class PeekReadService {
 
     /** One immutable read receipt; every source that could not be observed is explicitly UNKNOWN. */
@@ -27,11 +29,12 @@ public final class PeekReadService {
                               long timeNanos, PeekBlockService.Status status, String source,
                               long demand, boolean loadedBefore, boolean loadedAfter, String holder,
                               List<String> tickets, boolean ticketsKnown, long loadingCalls,
-                              long newTickets, String materializationSource, boolean eventLoss) {
+                              long newTickets, String materializationSource, boolean eventLoss,
+                              boolean forceloadIntent, String ticketSource) {
     }
 
-    /** One read-only ticket view; known=false means the source could not be read. */
-    record TicketView(List<String> tickets, boolean known) {
+    /** One read-only ticket view: active runtime set, persistent intent, and their sources. */
+    record TicketView(List<String> active, boolean known, boolean forceloadIntent, String source) {
     }
 
     private static final int RING_LIMIT = 256;
@@ -69,18 +72,19 @@ public final class PeekReadService {
         boolean ticketsKnown = ticketsBefore.known() && ticketsAfter.known();
         long demand = PrtsChunkDemand.demandCalls() - demandBefore;
         long materialized = PrtsChunkMaterialization.materializedCount() - materializedBefore;
-        long newTickets = ticketsKnown
-            ? Math.max(0L, ticketsAfter.tickets().size() - ticketsBefore.tickets().size()) : -1L;
+        long newTickets = ticketsKnown ? setDifference(ticketsAfter.active(), ticketsBefore.active()) : -1L;
         String materializationSource = materialized > 0L ? PrtsChunkMaterialization.SOURCE
             : demand > 0L ? "chunk.demand" : "none";
         boolean ticketChanged = ticketsKnown
-            && !ticketsAfter.tickets().equals(ticketsBefore.tickets());
+            && !ticketsAfter.active().equals(ticketsBefore.active());
         boolean eventLoss = ticketChanged && demand == 0L && materialized == 0L;
+        String ticketSource = ticketsBefore.source().equals(ticketsAfter.source())
+            ? ticketsAfter.source() : "source-changed";
         ReadReceipt receipt = new ReadReceipt(readId, epoch, worldId, chunkPos, sequence++,
             System.nanoTime() - started, result.status(), result.source(), demand, loadedBefore,
             loadedAfter, result.block() == null ? "none" : "peek-result",
-            ticketsKnown ? ticketsAfter.tickets() : List.of("UNKNOWN"), ticketsKnown, demand,
-            newTickets, materializationSource, eventLoss);
+            ticketsKnown ? ticketsAfter.active() : List.of("UNKNOWN"), ticketsKnown, demand,
+            newTickets, materializationSource, eventLoss, ticketsAfter.forceloadIntent(), ticketSource);
         append(receipt);
         return receipt;
     }
@@ -91,10 +95,11 @@ public final class PeekReadService {
                                     String source, long demand, boolean loadedBefore,
                                     boolean loadedAfter, String holder, List<String> tickets,
                                     boolean ticketsKnown, long loadingCalls, long newTickets,
-                                    String materializationSource, boolean eventLoss) {
+                                    String materializationSource, boolean eventLoss,
+                                    boolean forceloadIntent, String ticketSource) {
         return new ReadReceipt(readId, epoch, worldId, chunkPos, sequence, timeNanos, status,
             source, demand, loadedBefore, loadedAfter, holder, List.copyOf(tickets), ticketsKnown,
-            loadingCalls, newTickets, materializationSource, eventLoss);
+            loadingCalls, newTickets, materializationSource, eventLoss, forceloadIntent, ticketSource);
     }
 
     private static void append(ReadReceipt receipt) {
@@ -128,56 +133,57 @@ public final class PeekReadService {
             && level.getChunkSource().getChunkNow(pos.getX() >> 4, pos.getZ() >> 4) != null;
     }
 
-    /** Combines the real distance-manager ticket set with the world's forced chunks; an unreadable
-     * source stays UNKNOWN, and a loaded chunk with an empty known set fails closed. */
+    /** Owner-thread only: the bridge copies the active set, the forced set is read separately. */
     private static TicketView tickets(ServerLevel level, BlockPos pos) {
         if (level == null || pos == null) {
-            return new TicketView(List.of("UNKNOWN"), false);
+            return new TicketView(List.of("UNKNOWN"), false, false, "source-unavailable");
         }
-        List<String> names = new ArrayList<>();
-        boolean distanceKnown;
+        MinecraftServer server = level.getServer();
+        if (server == null || !server.isSameThread()) {
+            return new TicketView(List.of("UNKNOWN"), false, false, "thread-unavailable");
+        }
+        long chunk = ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4);
+        List<String> active;
+        boolean activeKnown;
         try {
             ServerChunkCache cache = level.getChunkSource();
             ChunkMap map = cache.chunkMap;
             DistanceManager distance = map.getDistanceManager();
-            Field field = DistanceManager.class.getDeclaredField("tickets");
-            field.setAccessible(true);
-            Object raw = field.get(distance);
-            long chunk = ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4);
-            Method get = raw == null ? null : raw.getClass().getMethod("get", long.class);
-            Object set = get == null ? null : get.invoke(raw, chunk);
-            if (set != null) {
-                for (Object ticket : (Iterable<?>) set) {
-                    names.add(String.valueOf(ticket));
-                }
-            }
-            distanceKnown = true;
+            active = ((DistanceManagerBridge) distance).bridge$ticketSnapshot(chunk);
+            activeKnown = true;
         } catch (Throwable unknown) {
-            distanceKnown = false;
+            active = List.of("UNKNOWN");
+            activeKnown = false;
         }
         boolean forcedKnown;
+        boolean forceloadIntent = false;
         try {
-            long chunk = ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4);
-            if (level.getForcedChunks().contains(chunk)) {
-                names.add("forced");
-            }
+            forceloadIntent = level.getForcedChunks().contains(chunk);
             forcedKnown = true;
         } catch (Throwable unknown) {
             forcedKnown = false;
         }
-        return ticketDecision(loaded(level, pos), names, distanceKnown, forcedKnown);
+        return ticketDecision(true, loaded(level, pos), active, activeKnown, forcedKnown, forceloadIntent);
     }
 
-    /** Pure ticket-view decision; an unreadable side or a loaded-but-empty set is UNKNOWN. */
-    static TicketView ticketDecision(boolean loaded, List<String> distance, boolean distanceKnown,
-                                     boolean forcedKnown) {
-        if (!distanceKnown || !forcedKnown) {
-            return new TicketView(List.of("UNKNOWN"), false);
+    /** Pure ticket-view decision: known-empty stays known; only an unreadable source is UNKNOWN. */
+    static TicketView ticketDecision(boolean ownerThread, boolean loaded, List<String> active,
+                                     boolean activeKnown, boolean forcedKnown,
+                                     boolean forceloadIntent) {
+        if (!ownerThread) {
+            return new TicketView(List.of("UNKNOWN"), false, forceloadIntent, "thread-unavailable");
         }
-        List<String> names = new ArrayList<>(distance);
-        if (loaded && names.isEmpty()) {
-            return new TicketView(List.of("UNKNOWN"), false);
+        if (!activeKnown || !forcedKnown) {
+            return new TicketView(List.of("UNKNOWN"), false, forceloadIntent, "source-unavailable");
         }
-        return new TicketView(List.copyOf(names), true);
+        List<String> names = List.copyOf(active);
+        String source = loaded && names.isEmpty() ? "known-empty" : "active";
+        return new TicketView(names, true, forceloadIntent, source);
+    }
+
+    private static long setDifference(List<String> after, List<String> before) {
+        Set<String> added = new LinkedHashSet<>(after);
+        added.removeAll(new LinkedHashSet<>(before));
+        return added.size();
     }
 }

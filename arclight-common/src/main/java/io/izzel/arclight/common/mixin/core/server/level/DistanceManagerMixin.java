@@ -130,6 +130,19 @@ public abstract class DistanceManagerMixin implements DistanceManagerBridge {
         return addTicket(chunkPos, ticket);
     }
 
+    @Override
+    public java.util.List<String> bridge$ticketSnapshot(long chunkPos) {
+        SortedArraySet<Ticket<?>> set = this.tickets.get(chunkPos);
+        if (set == null || set.isEmpty()) {
+            return java.util.List.of();
+        }
+        java.util.List<String> names = new java.util.ArrayList<>(set.size());
+        for (Ticket<?> ticket : set) {
+            names.add(ticket.toString());
+        }
+        return java.util.List.copyOf(names);
+    }
+
     public <T> void removeAllTicketsFor(TicketType<T> ticketType, int ticketLevel, T ticketIdentifier) {
         Ticket<T> target = new Ticket<>(ticketType, ticketLevel, ticketIdentifier);
         Iterator<Long2ObjectMap.Entry<SortedArraySet<Ticket<?>>>> iterator = this.tickets.long2ObjectEntrySet().fastIterator();
