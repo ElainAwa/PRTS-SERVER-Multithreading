@@ -188,6 +188,22 @@ public final class SharePlanner {
         actionExecutedFlag = false;
     }
 
+    /** Answers whether the one record the token names already carries the executed flag. A token
+     * that names no stored record answers false, so a replay after an eviction or a reset cannot
+     * look like an execution that never happened. */
+    public synchronized boolean isTokenExecuted(long token) {
+        if (token <= 0L) {
+            return false;
+        }
+        for (OverrunRecord record : records) {
+            Long recordToken = recordTokens.get(record);
+            if (recordToken != null && recordToken == token) {
+                return record.actionExecuted();
+            }
+        }
+        return false;
+    }
+
     /** Marks the one record the token names, not every record of a tick or level. */
     public synchronized boolean markTokenExecuted(long token) {
         if (token <= 0L) {

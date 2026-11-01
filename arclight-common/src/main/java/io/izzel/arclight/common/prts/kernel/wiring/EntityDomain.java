@@ -50,6 +50,8 @@ public final class EntityDomain implements KernelDomain {
      * it books. */
     private static final boolean FRAME_MIGRATION = Boolean.getBoolean("arclight.prts.frameMigration");
     private static final String THREAD_PREFIX = "prts-worker-";
+    /** Metering-only pseudo-world; never a B3 or plan world key (plans and receipts use real
+     * dimension keys). */
     private static final String RUNTIME_WORLD = "";
     private static final long EVIDENCE_TICKS = 400L;
     private static final long SHUTDOWN_WAIT_MS = 250L;
@@ -206,7 +208,7 @@ public final class EntityDomain implements KernelDomain {
             System.nanoTime() - snapshotStart);
         WorkPlan plan = WorkPlan.freeze(tick, ledger.epoch(), views, policy.batchChunks(),
             taskSeq + 1L);
-        long b3Token = module.pendingB3Token();
+        long b3Token = module.pendingB3EntityToken(plan);
         if (b3Token > 0L && module.b3MergeWanted()) {
             int largestTask = 0;
             for (WorkPlan.WorkTask task : plan.tasks()) {
@@ -215,14 +217,16 @@ public final class EntityDomain implements KernelDomain {
             int cap = Math.max(1, Math.max(policy.batchChunks() * 2, largestTask * 2));
             EVIDENCE.debug("b3 merge probe: token={} tasks={} largest={} cap={}",
                 b3Token, plan.taskCount(), largestTask, cap);
-            WorkPlan.MergeResult merge = plan.mergeAdjacent(cap);
+            WorkPlan sourcePlan = plan;
+            WorkPlan.MergeResult merge = sourcePlan.mergeAdjacent(cap);
             EVIDENCE.debug("b3 merge probe: token={} receipts={} before={} after={}",
-                b3Token, merge.receipts().size(), plan.taskCount(), merge.plan().taskCount());
+                b3Token, merge.receipts().size(), sourcePlan.taskCount(),
+                merge.plan().taskCount());
             if (merge.receipts().isEmpty()) {
                 module.noteB3MergeMissed(b3Token);
             } else {
                 plan = merge.plan();
-                boolean marked = module.noteB3Merged(b3Token, merge.receipts().get(0));
+                boolean marked = module.markB3Merge(sourcePlan, merge.plan(), merge.receipts());
                 EVIDENCE.debug("b3 merge probe: token={} marked={}", b3Token, marked);
             }
         } else if (b3Token > 0L) {

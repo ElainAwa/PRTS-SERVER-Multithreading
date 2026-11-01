@@ -29,9 +29,11 @@ public record WorkPlan(long tickIndex, long planEpoch, List<EntityCandidateView>
     }
 
     /** One actual adjacent merge in the entity scope: the rows keep their order and only the
-     * task boundary moves. */
+     * task boundary moves. {@code mergedTasks} is how many source tasks the merged segment carries
+     * after this step, and the two plan fields name the plan the step happened in, so a receipt
+     * cannot be replayed against a later plan that reuses its batch numbers. */
     public record MergeReceipt(String worldId, int mergedTasks, int entities, long firstBatchId,
-                              long lastBatchId) {
+                              long lastBatchId, long sourcePlanTick, long sourcePlanEpoch) {
     }
 
     /** The merged plan and the receipts of the merges that actually happened. */
@@ -43,10 +45,12 @@ public record WorkPlan(long tickIndex, long planEpoch, List<EntityCandidateView>
     public MergeResult mergeAdjacent(int maxEntities) {
         int cap = Math.max(1, maxEntities);
         List<WorkTask> merged = new ArrayList<>(tasks.size());
+        List<Integer> mergedCounts = new ArrayList<>(tasks.size());
         List<MergeReceipt> receipts = new ArrayList<>();
         for (WorkTask task : tasks) {
             if (!merged.isEmpty()) {
-                WorkTask previous = merged.get(merged.size() - 1);
+                int last = merged.size() - 1;
+                WorkTask previous = merged.get(last);
                 if (previous.worldId().equals(task.worldId())
                     && previous.entitySeqEnd() == task.entitySeqStart()
                     && previous.entityCount() + task.entityCount() <= cap) {
@@ -57,13 +61,17 @@ public record WorkPlan(long tickIndex, long planEpoch, List<EntityCandidateView>
                         previous.entitySeqStart(), task.entitySeqEnd(), previous.snapshotRef(),
                         previous.worldEpoch(), previous.shareMsHint() + task.shareMsHint(),
                         previous.cancelScope() + "+" + task.cancelScope());
-                    merged.set(merged.size() - 1, combined);
-                    receipts.add(new MergeReceipt(combined.worldId(), 2, combined.entityCount(),
-                        previous.batchId(), task.batchId()));
+                    merged.set(last, combined);
+                    int mergedCount = mergedCounts.get(last) + 1;
+                    mergedCounts.set(last, mergedCount);
+                    receipts.add(new MergeReceipt(combined.worldId(), mergedCount,
+                        combined.entityCount(), previous.batchId(), task.batchId(), tickIndex,
+                        planEpoch));
                     continue;
                 }
             }
             merged.add(task);
+            mergedCounts.add(1);
         }
         if (receipts.isEmpty()) {
             return new MergeResult(this, List.of());

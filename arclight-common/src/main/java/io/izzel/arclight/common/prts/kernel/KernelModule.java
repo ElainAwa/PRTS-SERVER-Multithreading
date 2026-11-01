@@ -132,6 +132,12 @@ public final class KernelModule {
         }
     }
 
+    /** One trigger record waiting for the entity merge action: the token names the share planner's
+     * record of the overrun, and the other three fields are the identity an actual merge has to
+     * match before the record can be marked as executed. */
+    public record PendingB3(long token, String worldId, ShareClass overClass, long tickIndex) {
+    }
+
     /** The one seam a planning-period component may take a wall clock through, and the counter that
      * answers how often it did. Nothing in this build calls it: the planning period is a function of the
      * tick index, the plan sequence and the control frame the tick before published, and the compiled
@@ -393,7 +399,7 @@ public final class KernelModule {
     /** The generation holder of a chain this module adopts: the module is its lifecycle owner. */
     private final CommitNamespaces.ResetEpochs commitChainEpochs = new CommitNamespaces.ResetEpochs();
     private long tickIndex;
-    private final java.util.ArrayDeque<Long> pendingB3Tokens = new java.util.ArrayDeque<>();
+    private final ArrayDeque<PendingB3> pendingB3Tokens = new ArrayDeque<>();
     private long pendingB1Token = -1L;
     private String pendingB1World;
     /** The server whose live levels the claim point resolves; the host names it before the tick. */
@@ -854,12 +860,8 @@ public final class KernelModule {
             }
             if (record.wouldDegradeLevel() == DegradeLevel.B3
                 && KernelSettings.dispatchParallel() && b3MergeWanted()) {
-                long token = shares.tokenOf(record);
-                B3_DEBUG.debug("b3 append plan: token={} size_before={} class={} tick={}",
-                    token, pendingB3Tokens.size(), record.overClass(), tickIndex);
-                addPendingB3Token(pendingB3Tokens, token);
-                B3_DEBUG.debug("b3 append plan: token={} size_after={}", token,
-                    pendingB3Tokens.size());
+                addPendingB3Token(pendingB3Tokens, new PendingB3(shares.tokenOf(record),
+                    record.worldId(), record.overClass(), tickIndex));
             }
             overruns++;
         }
@@ -1882,10 +1884,26 @@ public final class KernelModule {
         return shares;
     }
 
-    /** The first token of the B3 trigger records waiting for an actual entity merge, or -1. */
-    public long pendingB3Token() {
-        Long token = pendingB3Tokens.peekFirst();
-        return token == null ? -1L : token;
+    /** The first token of the trigger records of this plan tick whose world the plan covers, or -1
+     * when none is pending. The trigger record names the world of the share row, which is the
+     * dimension key the plan's tasks carry; the runtime pseudo world of the metering is never a
+     * record world. */
+    public long pendingB3EntityToken(WorkPlan plan) {
+        return pendingB3EntityToken(pendingB3Tokens, plan);
+    }
+
+    /** The token of the only pending record of that exact world, class and tick, or -1 when none
+     * is pending. A second record of the same identity answers -1 as well: an ambiguous identity
+     * cannot be attributed to one record. */
+    public long pendingB3Token(ShareClass overClass, String worldId, long tickIndex) {
+        return pendingB3Token(pendingB3Tokens, overClass, worldId, tickIndex);
+    }
+
+    /** Marks the entity trigger records whose world's adjacent merge the receipts prove, against
+     * this module's share planner, ladder and pending queue. */
+    public boolean markB3Merge(WorkPlan sourcePlan, WorkPlan mergedPlan,
+                               List<WorkPlan.MergeReceipt> receipts) {
+        return markB3Merge(shares, ladder, pendingB3Tokens, sourcePlan, mergedPlan, receipts);
     }
 
     /** The B3 action only runs while the existing switch is on and the ladder has reached B3. */
@@ -1894,11 +1912,10 @@ public final class KernelModule {
             && ladder.sign().deepest().ordinal() >= DegradeLevel.B3.ordinal();
     }
 
-    /** Clears the pending tokens when the frozen plan had no adjacent pair to merge. */
+    /** Removes only the one pending record the token names, e.g. because the frozen plan had no
+     * adjacent pair to merge; the records of other worlds and classes stay untouched. */
     public void noteB3MergeMissed(long token) {
-        if (pendingB3Tokens.contains(token)) {
-            pendingB3Tokens.clear();
-        }
+        removePendingB3Token(pendingB3Tokens, token);
     }
 
     /** Clears tokens that can no longer run, e.g. when the action switch or level moved away. */
@@ -1908,36 +1925,79 @@ public final class KernelModule {
 
     static final int MAX_PENDING_B3_TOKENS = 64;
 
-    /** Adds a token only while the action can run; the oldest is dropped above the cap. */
-    static void addPendingB3Token(java.util.ArrayDeque<Long> tokens, long token) {
-        if (token <= 0L) {
+    /** Adds one trigger identity only while the action can run; the oldest is dropped above the
+     * cap. */
+    static void addPendingB3Token(ArrayDeque<PendingB3> tokens, PendingB3 record) {
+        if (tokens == null || record == null || record.token() <= 0L) {
             return;
         }
         if (tokens.size() >= MAX_PENDING_B3_TOKENS) {
             tokens.removeFirst();
         }
-        tokens.addLast(token);
+        tokens.addLast(record);
     }
 
-    /** All-or-nothing mark: no record changes unless every token still exists and marks. */
-    static boolean markAllB3Tokens(SharePlanner shares, java.util.ArrayDeque<Long> tokens) {
-        for (long token : tokens) {
-            boolean present = shares.hasToken(token);
-            B3_DEBUG.debug("b3 markAll probe: token={} hasToken={}", token, present);
-            if (!present) {
-                return false;
+    /** Removes the one record the token names; the other records are left in place. */
+    static boolean removePendingB3Token(ArrayDeque<PendingB3> tokens, long token) {
+        if (tokens == null || token <= 0L) {
+            return false;
+        }
+        return tokens.removeIf(record -> record.token() == token);
+    }
+
+    /** The token of the only pending record of that exact identity, or -1 when none or ambiguous. */
+    static long pendingB3Token(ArrayDeque<PendingB3> pending, ShareClass overClass,
+                               String worldId, long tickIndex) {
+        if (pending == null || overClass == null) {
+            return -1L;
+        }
+        long found = -1L;
+        for (PendingB3 record : pending) {
+            if (record.tickIndex() != tickIndex || record.overClass() != overClass
+                || !java.util.Objects.equals(record.worldId(), worldId)) {
+                continue;
+            }
+            if (found > 0L) {
+                return -1L;
+            }
+            found = record.token();
+        }
+        return found;
+    }
+
+    /** The first pending entity record of the plan tick whose world the plan carries, or -1. */
+    static long pendingB3EntityToken(ArrayDeque<PendingB3> pending, WorkPlan plan) {
+        if (pending == null || pending.isEmpty() || plan == null) {
+            return -1L;
+        }
+        List<String> worlds = new ArrayList<>();
+        for (WorkPlan.WorkTask task : plan.tasks()) {
+            if (!worlds.contains(task.worldId())) {
+                worlds.add(task.worldId());
             }
         }
-        boolean allMarked = true;
-        for (long token : tokens) {
-            boolean marked = shares.markTokenExecuted(token);
-            B3_DEBUG.debug("b3 markAll probe: token={} marked={}", token, marked);
-            allMarked &= marked;
+        for (String worldId : worlds) {
+            long token = pendingB3Token(pending, ShareClass.ENTITY, worldId, plan.tickIndex());
+            if (token > 0L) {
+                return token;
+            }
         }
-        return allMarked;
+        return -1L;
     }
 
-    /** Marks every trigger record of this tick before the action becomes effective. */
+    /** How many pending records carry that exact identity; two of them make it ambiguous. */
+    static int pendingB3Matches(ArrayDeque<PendingB3> pending, ShareClass overClass,
+                                String worldId, long tickIndex) {
+        int matches = 0;
+        for (PendingB3 record : pending) {
+            if (record.tickIndex() == tickIndex && record.overClass() == overClass
+                && java.util.Objects.equals(record.worldId(), worldId)) {
+                matches++;
+            }
+        }
+        return matches;
+    }
+
     /** Marks the first real B1 goal-selection skip; ARMED alone is never effective. */
     public boolean noteB1Applied(long token) {
         if (token <= 0L || token != pendingB1Token) {
@@ -1962,25 +2022,145 @@ public final class KernelModule {
         return effective;
     }
 
-    public boolean noteB3Merged(long token, WorkPlan.MergeReceipt receipt) {
-        if (token <= 0L || receipt == null || !pendingB3Tokens.contains(token)) {
-            B3_DEBUG.debug("b3 mark rejected: token={} receipt={} pending={}", token,
-                receipt, pendingB3Tokens.size());
+    /** Marks the entity trigger records whose world's adjacent merge the receipts prove. The
+     * receipts have to replay the source plan into the merged plan exactly; a receipt of another
+     * plan, a tampered one, an empty merge or an ambiguous identity marks nothing. Only the entity
+     * class of a world that really merged is marked, and only once: a replay marks nothing and
+     * leaves the ladder counter alone. The return value reports a newly attributed record. */
+    public static boolean markB3Merge(SharePlanner shares, DegradeLadder ladder,
+                                      ArrayDeque<PendingB3> pending, WorkPlan sourcePlan,
+                                      WorkPlan mergedPlan, List<WorkPlan.MergeReceipt> receipts) {
+        if (shares == null || ladder == null || pending == null || sourcePlan == null
+            || mergedPlan == null || receipts == null || receipts.isEmpty()) {
             return false;
         }
-        boolean allMarked = markAllB3Tokens(shares, pendingB3Tokens);
-        if (!allMarked) {
-            B3_DEBUG.debug("b3 mark failed: token={} pending={}", token, pendingB3Tokens.size());
-            pendingB3Tokens.clear();
+        List<String> mergedWorlds = mergedWorldsOf(sourcePlan, mergedPlan, receipts);
+        if (mergedWorlds == null) {
+            B3_DEBUG.debug("b3 mark rejected: receipts do not replay the source plan");
             return false;
         }
-        boolean effective = ladder.noteEffective(DegradeLevel.B3);
-        B3_DEBUG.debug("b3 mark ok: token={} effective={} pending={}", token, effective,
-            pendingB3Tokens.size());
-        if (effective) {
-            pendingB3Tokens.clear();
+        for (String worldId : mergedWorlds) {
+            if (pendingB3Matches(pending, ShareClass.ENTITY, worldId, sourcePlan.tickIndex()) > 1) {
+                B3_DEBUG.debug("b3 mark rejected: ambiguous identity world={} tick={}", worldId,
+                    sourcePlan.tickIndex());
+                return false;
+            }
         }
-        return effective;
+        boolean newlyExecuted = false;
+        for (String worldId : mergedWorlds) {
+            long token = pendingB3Token(pending, ShareClass.ENTITY, worldId, sourcePlan.tickIndex());
+            if (token <= 0L || !shares.hasToken(token) || shares.isTokenExecuted(token)) {
+                continue;
+            }
+            if (shares.markTokenExecuted(token)) {
+                newlyExecuted = true;
+                B3_DEBUG.debug("b3 mark: token={} world={} tick={}", token, worldId,
+                    sourcePlan.tickIndex());
+            }
+        }
+        if (!newlyExecuted) {
+            return false;
+        }
+        ladder.noteEffective(DegradeLevel.B3);
+        return true;
+    }
+
+    /** Answers the worlds whose adjacent tasks the receipts really merged, in plan order, or null
+     * when the receipt set does not replay the source plan into the merged plan. */
+    static List<String> mergedWorldsOf(WorkPlan sourcePlan, WorkPlan mergedPlan,
+                                       List<WorkPlan.MergeReceipt> receipts) {
+        if (mergedPlan.tickIndex() != sourcePlan.tickIndex()
+            || mergedPlan.planEpoch() != sourcePlan.planEpoch()
+            || mergedPlan.hardDeadlineTick() != sourcePlan.hardDeadlineTick()
+            || !mergedPlan.views().equals(sourcePlan.views())) {
+            return null;
+        }
+        List<WorkPlan.WorkTask> source = sourcePlan.tasks();
+        if (receipts.size() != source.size() - mergedPlan.taskCount()) {
+            return null;
+        }
+        Map<Long, WorkPlan.MergeReceipt> appended = new HashMap<>();
+        for (WorkPlan.MergeReceipt receipt : receipts) {
+            if (receipt == null || receipt.worldId() == null || receipt.mergedTasks() < 2
+                || receipt.sourcePlanTick() != sourcePlan.tickIndex()
+                || receipt.sourcePlanEpoch() != sourcePlan.planEpoch()) {
+                return null;
+            }
+            if (appended.put(receipt.lastBatchId(), receipt) != null) {
+                return null;
+            }
+        }
+        List<WorkPlan.WorkTask> rebuilt = new ArrayList<>(mergedPlan.taskCount());
+        List<String> mergedWorlds = new ArrayList<>();
+        WorkPlan.WorkTask runHead = null;
+        String runWorld = null;
+        String runRegion = null;
+        String runCancel = null;
+        int runStart = 0;
+        int runEnd = 0;
+        int runCount = 0;
+        int runEntities = 0;
+        int runShareMs = 0;
+        for (int index = 0; index < source.size(); index++) {
+            WorkPlan.WorkTask task = source.get(index);
+            WorkPlan.MergeReceipt receipt = appended.get(task.batchId());
+            if (receipt == null) {
+                if (runHead != null) {
+                    rebuilt.add(runOf(runHead, runWorld, runRegion, runStart, runEnd, runShareMs,
+                        runCancel));
+                    if (runCount > 1 && !mergedWorlds.contains(runWorld)) {
+                        mergedWorlds.add(runWorld);
+                    }
+                    runHead = null;
+                }
+                runHead = task;
+                runWorld = task.worldId();
+                runRegion = task.regionId();
+                runCancel = task.cancelScope();
+                runStart = task.entitySeqStart();
+                runEnd = task.entitySeqEnd();
+                runCount = 1;
+                runEntities = task.entityCount();
+                runShareMs = task.shareMsHint();
+                continue;
+            }
+            if (runHead == null || !task.worldId().equals(runWorld)
+                || source.get(index - 1).entitySeqEnd() != task.entitySeqStart()
+                || receipt.mergedTasks() != runCount + 1
+                || receipt.entities() != runEntities + task.entityCount()
+                || receipt.firstBatchId() != runHead.batchId()
+                || !receipt.worldId().equals(runWorld)) {
+                return null;
+            }
+            runEnd = task.entitySeqEnd();
+            runCount++;
+            runEntities += task.entityCount();
+            runShareMs += task.shareMsHint();
+            runRegion = runRegion + "+" + task.regionId();
+            runCancel = runCancel + "+" + task.cancelScope();
+        }
+        if (runHead != null) {
+            rebuilt.add(runOf(runHead, runWorld, runRegion, runStart, runEnd, runShareMs,
+                runCancel));
+            if (runCount > 1 && !mergedWorlds.contains(runWorld)) {
+                mergedWorlds.add(runWorld);
+            }
+        }
+        if (rebuilt.size() != mergedPlan.taskCount()) {
+            return null;
+        }
+        for (int index = 0; index < rebuilt.size(); index++) {
+            if (!rebuilt.get(index).equals(mergedPlan.tasks().get(index))) {
+                return null;
+            }
+        }
+        return mergedWorlds;
+    }
+
+    private static WorkPlan.WorkTask runOf(WorkPlan.WorkTask head, String worldId, String regionId,
+                                           int start, int end, int shareMs, String cancelScope) {
+        return new WorkPlan.WorkTask(head.taskId(), worldId, regionId, head.batchId(), start, end,
+            head.snapshotRef(), head.worldEpoch(), shareMs, cancelScope);
     }
 
     public BudgetStateMachine budgetStates() {
