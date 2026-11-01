@@ -80,6 +80,7 @@ import io.izzel.arclight.common.prts.kernel.observe.QuotaEntityWindow;
 import io.izzel.arclight.common.prts.kernel.observe.QuotaMachineWindow;
 import io.izzel.arclight.common.prts.kernel.observe.QuotaNetWindow;
 import io.izzel.arclight.common.prts.kernel.quota.DeviceTickDeferral;
+import io.izzel.arclight.common.prts.kernel.quota.MachineTickDeferral;
 import io.izzel.arclight.common.prts.kernel.observe.ScaleBudgetReadings;
 import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteObserver;
 import io.izzel.arclight.common.prts.kernel.observe.ArrivalDigestObserver;
@@ -95,6 +96,7 @@ import io.izzel.arclight.common.prts.kernel.observe.StallAttributionObserver;
 import io.izzel.arclight.common.prts.kernel.observe.TickDigestObserver;
 import io.izzel.arclight.common.prts.kernel.meter.SelfCostTap;
 import io.izzel.arclight.common.prts.support.PrtsChunkDemand;
+import io.izzel.arclight.common.prts.support.PrtsMachineReplay;
 import io.izzel.arclight.common.prts.support.PrtsChunkMaterialization;
 import io.izzel.arclight.common.prts.support.PrtsPipelineBatches;
 import io.izzel.arclight.common.prts.support.PrtsPipelineRows;
@@ -559,6 +561,11 @@ public final class KernelModule {
         // RETURN could not finish (for example a tick that ended without reaching it) and never
         // carries deferred work into the next tick on purpose.
         DeviceTickDeferral.drain(guard.worldEpochs()::epochOf);
+        // Fallback only: a level replays its own deferred MACHINE neighbour updates at that level
+        // tick's RETURN, inside the same tick. This drain catches a call issued after its level
+        // returned (for example in the tick's closing phase) and never carries work into the next
+        // tick on purpose.
+        MachineTickDeferral.drain(guard.worldEpochs()::epochOf, PrtsMachineReplay.INSTANCE);
         if (!KernelSettings.enabled()) {
             LiveLevels.clear();
             guard.refresh(false, false, false, tickIndex);
@@ -3586,6 +3593,7 @@ public final class KernelModule {
         QuotaEntityWindow.reset();
         QuotaNetWindow.reset();
         QuotaMachineWindow.reset();
+        MachineTickDeferral.reset();
         DeviceTickDeferral.reset();
         MaterializedUnloadedReadings.reset();
         HealthReadings.reset();

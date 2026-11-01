@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.observe;
 
-/** The read-only MACHINE quota window: the neighbour-update wall time per segment second against the
- * declared global tick budget. A completed non-warmup window is counted at most once, and the window
- * never acts: MACHINE has no safe action in this build, so the counter is the only output and a
- * positive over is a named refusal for acceptance, not a degradation. */
+/** The MACHINE quota window: the neighbour-update wall time per segment second against the declared
+ * global tick budget. A completed non-warmup window is counted at most once and arms one bounded
+ * action for the following ticks: the root neighbour updates are deferred to the tick's end safe
+ * point while the window state is over. An under window releases the action, so the counter and the
+ * action always follow the same window. */
 public final class QuotaMachineWindow {
 
     private static long totalStartTick = -1L;
@@ -12,6 +13,7 @@ public final class QuotaMachineWindow {
     private static long lastMachineNanos;
     private static boolean warmed;
     private static long overCount;
+    private static boolean overActive;
 
     private QuotaMachineWindow() {
     }
@@ -37,7 +39,8 @@ public final class QuotaMachineWindow {
             && tickIndex - totalStartTick < Math.max(0L, warmupTicks) + width;
         if (!warm) {
             warmed = true;
-            if (limitMs > 0.0 && usedMsPerSecond > limitMs) {
+            overActive = limitMs > 0.0 && usedMsPerSecond > limitMs;
+            if (overActive) {
                 overCount++;
             }
         }
@@ -49,11 +52,17 @@ public final class QuotaMachineWindow {
         return overCount;
     }
 
+    /** True while the newest completed non-warmup window is over; an under window clears it. */
+    public static synchronized boolean overActive() {
+        return overActive;
+    }
+
     public static synchronized void reset() {
         totalStartTick = -1L;
         windowStartTick = -1L;
         lastMachineNanos = 0L;
         warmed = false;
         overCount = 0L;
+        overActive = false;
     }
 }

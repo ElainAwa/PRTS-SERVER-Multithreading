@@ -10,6 +10,11 @@ public final class QuotaCostSpans {
     private QuotaCostSpans() {
     }
 
+    /** The current machine span depth of this thread; zero means a root neighbour update. */
+    public static int machineDepth() {
+        return MACHINE_DEPTH.get();
+    }
+
     /** @return true only for the outermost call on this thread */
     public static boolean enterMachine() {
         int depth = MACHINE_DEPTH.get();

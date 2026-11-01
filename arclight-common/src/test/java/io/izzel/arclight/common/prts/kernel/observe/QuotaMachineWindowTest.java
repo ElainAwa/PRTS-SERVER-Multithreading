@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** The MACHINE quota window counts at most one over per completed non-warmup window, publishes the
@@ -121,6 +122,38 @@ class QuotaMachineWindowTest {
         assertTrue(has(lines, "quota.entity_over"));
         assertTrue(has(lines, "quota.net_over"));
         assertTrue(has(lines, "quota.device_over"));
+    }
+
+    @Test
+    void anOverWindowArmsTheActionAndAnUnderWindowReleasesIt() {
+        QuotaMachineWindow.noteTick(0L, 0L, WIDTH, 0L, 50.0);
+        QuotaMachineWindow.noteTick(WIDTH, 100_000_000L, WIDTH, 0L, 50.0);
+        assertEquals(1L, QuotaMachineWindow.overCount());
+        assertTrue(QuotaMachineWindow.overActive(), "an over window arms the bounded action");
+
+        QuotaMachineWindow.noteTick(WIDTH * 2L, 120_000_000L, WIDTH, 0L, 50.0);
+        assertEquals(1L, QuotaMachineWindow.overCount(), "the under window adds no over");
+        assertFalse(QuotaMachineWindow.overActive(), "an under window releases the action");
+    }
+
+    @Test
+    void aWarmupWindowDoesNotArmTheAction() {
+        QuotaMachineWindow.noteTick(0L, 0L, WIDTH, WIDTH, 50.0);
+        QuotaMachineWindow.noteTick(WIDTH, 100_000_000L, WIDTH, WIDTH, 50.0);
+        assertEquals(0L, QuotaMachineWindow.overCount());
+        assertFalse(QuotaMachineWindow.overActive());
+    }
+
+    @Test
+    void resetClearsTheArmedState() {
+        QuotaMachineWindow.noteTick(0L, 0L, WIDTH, 0L, 50.0);
+        QuotaMachineWindow.noteTick(WIDTH, 100_000_000L, WIDTH, 0L, 50.0);
+        assertTrue(QuotaMachineWindow.overActive());
+        QuotaMachineWindow.reset();
+        assertEquals(0L, QuotaMachineWindow.overCount());
+        assertFalse(QuotaMachineWindow.overActive());
+        QuotaMachineWindow.noteTick(0L, 0L, WIDTH, 0L, 50.0);
+        assertFalse(QuotaMachineWindow.overActive(), "a reset window is measured from scratch");
     }
 
     private static String value(List<String> lines, String key) {
