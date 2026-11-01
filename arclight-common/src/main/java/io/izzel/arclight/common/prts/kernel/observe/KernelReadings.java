@@ -38,6 +38,7 @@ import io.izzel.arclight.common.prts.kernel.KernelDomain;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.MeterWindow;
+import io.izzel.arclight.common.prts.kernel.quota.DeviceTickDeferral;
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.SelfRow;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers;
@@ -151,10 +152,11 @@ public final class KernelReadings {
             add(lines, "read.materialized_unloaded", value));
     }
 
-    /** The entity-scoped quota window; only the over count is published, never the occupancy. */
+    /** The per-family quota over counters; only an over count is published, never the occupancy. */
     private static void quotaReadings(List<String> lines) {
         add(lines, "quota.entity_over", QuotaEntityWindow.overCount());
         add(lines, "quota.net_over", QuotaNetWindow.overCount());
+        add(lines, "quota.device_over", DeviceTickDeferral.overCount());
     }
 
     /** The four long-window slopes; all or none, and nothing before the warm-up window ends. */

@@ -78,6 +78,7 @@ import io.izzel.arclight.common.prts.kernel.observe.MaterializedUnloadedReadings
 import io.izzel.arclight.common.prts.kernel.observe.QuotaCostReadings;
 import io.izzel.arclight.common.prts.kernel.observe.QuotaEntityWindow;
 import io.izzel.arclight.common.prts.kernel.observe.QuotaNetWindow;
+import io.izzel.arclight.common.prts.kernel.quota.DeviceTickDeferral;
 import io.izzel.arclight.common.prts.kernel.observe.ScaleBudgetReadings;
 import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteObserver;
 import io.izzel.arclight.common.prts.kernel.observe.ArrivalDigestObserver;
@@ -552,6 +553,11 @@ public final class KernelModule {
 
     /** Advances the kernel by one tick. */
     public void serverTick(List<String> worldIds) {
+        // Fallback safe point only: a level drains its own deferred block-entity ticks at that
+        // level's tickBlockEntities RETURN, inside the same tick. This drain catches a plan a level
+        // RETURN could not finish (for example a tick that ended without reaching it) and never
+        // carries deferred work into the next tick on purpose.
+        DeviceTickDeferral.drain(guard.worldEpochs()::epochOf);
         if (!KernelSettings.enabled()) {
             LiveLevels.clear();
             guard.refresh(false, false, false, tickIndex);
@@ -3574,6 +3580,7 @@ public final class KernelModule {
         ScaleBudgetReadings.reset();
         QuotaEntityWindow.reset();
         QuotaNetWindow.reset();
+        DeviceTickDeferral.reset();
         MaterializedUnloadedReadings.reset();
         HealthReadings.reset();
         loadThread.reset();
