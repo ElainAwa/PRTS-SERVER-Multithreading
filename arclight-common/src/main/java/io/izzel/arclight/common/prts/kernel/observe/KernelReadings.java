@@ -137,8 +137,8 @@ public final class KernelReadings {
         add(lines, "entity.count", EntityQueryReadings.entityCount());
     }
 
-    /** The read-only scale window: entity count over the declared budget and the B3/entity action
-     * count in that window. It does not change scheduling. */
+    /** The read-only scale window: the entity count over the declared budget and the real entity
+     * merges the scale trigger itself caused in that window. It does not change scheduling. */
     private static void scaleReadings(List<String> lines) {
         add(lines, "scale.entity_count", EntityQueryReadings.entityCount());
         add(lines, "scale.over_budget", ScaleBudgetReadings.overBudgetTicks());

@@ -26,6 +26,7 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.EntityCandidateView;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
+import io.izzel.arclight.common.prts.kernel.observe.ScaleBudgetReadings;
 import io.izzel.arclight.common.prts.kernel.wiring.JobGraphAdapter;
 import io.izzel.arclight.common.prts.support.PrtsEntityCapability;
 import io.izzel.arclight.common.prts.support.PrtsEntityRescope;
@@ -33,7 +34,9 @@ import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.SelfRow;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.function.ToLongFunction;
 
 /** The entity domain of this build: it freezes the row view of one tick, hands the batches to the
  * pool, merges what came back and turns a settled frame into writes the commit segment lands. The
@@ -206,31 +209,55 @@ public final class EntityDomain implements KernelDomain {
             DispatchSnapshot.capture(module.guard().worldEpochs()::epochOf);
         DispatchWriteBack.noteSnapshot(readings, RUNTIME_WORLD, "snapshot",
             System.nanoTime() - snapshotStart);
+        long entityCount = 0L;
+        for (EntityCandidateView view : views) {
+            entityCount += view.count();
+        }
         WorkPlan plan = WorkPlan.freeze(tick, ledger.epoch(), views, policy.batchChunks(),
             taskSeq + 1L);
         long b3Token = module.pendingB3EntityToken(plan);
-        if (b3Token > 0L && module.b3MergeWanted()) {
+        boolean b3Wanted = b3Token > 0L && module.b3MergeWanted();
+        if (b3Token > 0L && !b3Wanted) {
+            module.clearPendingB3Tokens();
+        }
+        // The time-share trigger and the scale trigger share the single adjacent merge of this
+        // tick; neither is allowed to merge a plan the other already merged.
+        ScaleTrigger scale = scaleTrigger(plan, entityCount,
+            KernelSettings.scaleEntityBudget(), KernelSettings.degradeActions(),
+            KernelSettings.selfWindowTicks());
+        if (b3Wanted || scale != null) {
             int largestTask = 0;
             for (WorkPlan.WorkTask task : plan.tasks()) {
                 largestTask = Math.max(largestTask, task.entityCount());
             }
             int cap = Math.max(1, Math.max(policy.batchChunks() * 2, largestTask * 2));
-            EVIDENCE.debug("b3 merge probe: token={} tasks={} largest={} cap={}",
-                b3Token, plan.taskCount(), largestTask, cap);
+            EVIDENCE.debug("merge probe: b3Token={} scale={} tasks={} largest={} cap={}",
+                b3Token, scale != null, plan.taskCount(), largestTask, cap);
             WorkPlan sourcePlan = plan;
-            WorkPlan.MergeResult merge = sourcePlan.mergeAdjacent(cap);
-            EVIDENCE.debug("b3 merge probe: token={} receipts={} before={} after={}",
-                b3Token, merge.receipts().size(), sourcePlan.taskCount(),
-                merge.plan().taskCount());
-            if (merge.receipts().isEmpty()) {
-                module.noteB3MergeMissed(b3Token);
+            WorkPlan.MergeResult merge = mergeForTriggers(sourcePlan, b3Token, b3Wanted, scale,
+                cap);
+            if (merge == null || merge.receipts().isEmpty()) {
+                if (b3Wanted) {
+                    module.noteB3MergeMissed(b3Token);
+                }
             } else {
                 plan = merge.plan();
-                boolean marked = module.markB3Merge(sourcePlan, merge.plan(), merge.receipts());
-                EVIDENCE.debug("b3 merge probe: token={} marked={}", b3Token, marked);
+                if (b3Wanted) {
+                    boolean marked = module.markB3Merge(sourcePlan, merge.plan(), merge.receipts());
+                    EVIDENCE.debug("merge probe: b3Token={} marked={}", b3Token, marked);
+                }
+                if (scale != null) {
+                    int credited = markScaleMerge(scale, sourcePlan, merge.plan(),
+                        merge.receipts(), KernelSettings.degradeActions(),
+                        KernelSettings.selfWindowTicks(), ScaleBudgetReadings.generation(),
+                        module.guard().worldEpochs()::epochOf);
+                    if (credited > 0) {
+                        ScaleBudgetReadings.noteScaleMerged(scale.tickIndex(),
+                            scale.windowStartTick(), scale.resetGeneration(), credited);
+                    }
+                    EVIDENCE.debug("merge probe: scale credited={}", credited);
+                }
             }
-        } else if (b3Token > 0L) {
-            module.clearPendingB3Tokens();
         }
         taskSeq += plan.taskCount();
         readings.noteTasks(plan.taskCount());
@@ -418,5 +445,116 @@ public final class EntityDomain implements KernelDomain {
      * driver. */
     public void stage(DispatchPass pass) {
         this.pending = pass;
+    }
+
+    /** The bounded scale trigger of one tick: the real entity count over the declared budget, the
+     * identity of the plan it was built for, the plan's world set with the lifecycle epoch each
+     * world held at the capture, the window the tick belongs to and the reset generation it was
+     * admitted under. A trigger is a value of one tick and is never stored or reused. */
+    public record ScaleTrigger(long tickIndex, long planEpoch, List<String> worlds,
+                               List<Long> worldEpochs, long entityCount, long budget,
+                               long windowStartTick, long resetGeneration,
+                               boolean actionsEnabled) {
+
+        /** Validates and freezes the trigger identity. */
+        public ScaleTrigger {
+            if (worlds == null || worldEpochs == null || worlds.size() != worldEpochs.size()) {
+                throw new IllegalArgumentException("a scale trigger needs one epoch per world");
+            }
+            worlds = List.copyOf(worlds);
+            worldEpochs = List.copyOf(worldEpochs);
+        }
+    }
+
+    /** Builds the bounded scale trigger of this plan, or null when the scale axis may not act: the
+     * action switch is off, the real count is inside the declared budget, or the frozen plan has no
+     * task to merge. */
+    public static ScaleTrigger scaleTrigger(WorkPlan plan, long entityCount, long budget,
+                                            boolean actionsEnabled, long windowTicks) {
+        if (plan == null || !actionsEnabled || budget <= 0L || entityCount <= budget
+            || plan.empty()) {
+            return null;
+        }
+        List<String> worlds = new ArrayList<>();
+        List<Long> worldEpochs = new ArrayList<>();
+        for (WorkPlan.WorkTask task : plan.tasks()) {
+            if (!worlds.contains(task.worldId())) {
+                worlds.add(task.worldId());
+                worldEpochs.add(task.worldEpoch());
+            }
+        }
+        return new ScaleTrigger(plan.tickIndex(), plan.planEpoch(), worlds, worldEpochs,
+            entityCount, budget,
+            ScaleBudgetReadings.windowStartFor(plan.tickIndex(), windowTicks),
+            ScaleBudgetReadings.generation(), true);
+    }
+
+    /** The one adjacent merge of this tick, run when the time-share trigger or the scale trigger
+     * asks for it; both triggers share this call, so a tick merges at most once. Null when neither
+     * trigger may act. */
+    public static WorkPlan.MergeResult mergeForTriggers(WorkPlan sourcePlan, long b3Token,
+                                                        boolean b3Wanted,
+                                                        ScaleTrigger scaleTrigger, int cap) {
+        if (sourcePlan == null) {
+            return null;
+        }
+        if (scaleTrigger == null && (b3Token <= 0L || !b3Wanted)) {
+            return null;
+        }
+        return sourcePlan.mergeAdjacent(cap);
+    }
+
+    /** Counts the adjacent merge steps the receipts prove, when the scale trigger admits them: the
+     * same tick, plan epoch, reset generation and window; the plan's world set with the same
+     * lifecycle epochs; a real over-budget count; the action switch on; and receipts that replay
+     * the source plan into the merged one. Returns 0 for anything that is not a proven
+     * scale-caused merge. */
+    public static int markScaleMerge(ScaleTrigger trigger, WorkPlan sourcePlan, WorkPlan mergedPlan,
+                                     List<WorkPlan.MergeReceipt> receipts, boolean actionsEnabled,
+                                     long windowTicks, long currentGeneration,
+                                     ToLongFunction<String> worldEpoch) {
+        if (trigger == null || sourcePlan == null || mergedPlan == null || receipts == null
+            || receipts.isEmpty() || worldEpoch == null || !actionsEnabled
+            || !trigger.actionsEnabled()) {
+            return 0;
+        }
+        if (trigger.tickIndex() != sourcePlan.tickIndex()
+            || trigger.planEpoch() != sourcePlan.planEpoch()
+            || trigger.resetGeneration() != currentGeneration
+            || trigger.entityCount() <= trigger.budget()
+            || trigger.windowStartTick() != ScaleBudgetReadings.windowStartFor(trigger.tickIndex(),
+                windowTicks)) {
+            return 0;
+        }
+        List<String> planWorlds = planWorlds(sourcePlan);
+        if (!trigger.worlds().equals(planWorlds)) {
+            return 0;
+        }
+        for (int index = 0; index < planWorlds.size(); index++) {
+            if (worldEpoch.applyAsLong(planWorlds.get(index)) != trigger.worldEpochs().get(index)) {
+                return 0;
+            }
+        }
+        List<String> mergedWorlds = KernelModule.mergedWorldsOf(sourcePlan, mergedPlan, receipts);
+        if (mergedWorlds == null || mergedWorlds.isEmpty()) {
+            return 0;
+        }
+        for (String worldId : mergedWorlds) {
+            if (!trigger.worlds().contains(worldId)) {
+                return 0;
+            }
+        }
+        return receipts.size();
+    }
+
+    /** The distinct worlds of the plan, in frozen order: the scope a trigger has to name. */
+    private static List<String> planWorlds(WorkPlan plan) {
+        List<String> worlds = new ArrayList<>();
+        for (WorkPlan.WorkTask task : plan.tasks()) {
+            if (!worlds.contains(task.worldId())) {
+                worlds.add(task.worldId());
+            }
+        }
+        return worlds;
     }
 }

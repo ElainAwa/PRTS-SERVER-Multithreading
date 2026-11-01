@@ -626,8 +626,7 @@ public final class KernelModule {
         ledger.verifyClosure();
         tickDomains();
         ScaleBudgetReadings.noteTick(tickIndex, EntityQueryReadings.entityCount(),
-            KernelSettings.scaleEntityBudget(), KernelSettings.selfWindowTicks(),
-            ladder.counters(DegradeLevel.B3).effective());
+            KernelSettings.scaleEntityBudget(), KernelSettings.selfWindowTicks());
         QuotaEntityWindow.noteTick(tickIndex,
             QuotaCostReadings.wallNanos(QuotaCostReadings.QuotaClass.ENTITY),
             KernelSettings.selfWindowTicks(), KernelSettings.selfWarmupTicks(),
@@ -2067,8 +2066,8 @@ public final class KernelModule {
 
     /** Answers the worlds whose adjacent tasks the receipts really merged, in plan order, or null
      * when the receipt set does not replay the source plan into the merged plan. */
-    static List<String> mergedWorldsOf(WorkPlan sourcePlan, WorkPlan mergedPlan,
-                                       List<WorkPlan.MergeReceipt> receipts) {
+    public static List<String> mergedWorldsOf(WorkPlan sourcePlan, WorkPlan mergedPlan,
+                                              List<WorkPlan.MergeReceipt> receipts) {
         if (mergedPlan.tickIndex() != sourcePlan.tickIndex()
             || mergedPlan.planEpoch() != sourcePlan.planEpoch()
             || mergedPlan.hardDeadlineTick() != sourcePlan.hardDeadlineTick()
