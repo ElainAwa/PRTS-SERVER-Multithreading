@@ -154,6 +154,7 @@ public final class KernelReadings {
     /** The entity-scoped quota window; only the over count is published, never the occupancy. */
     private static void quotaReadings(List<String> lines) {
         add(lines, "quota.entity_over", QuotaEntityWindow.overCount());
+        add(lines, "quota.net_over", QuotaNetWindow.overCount());
     }
 
     /** The four long-window slopes; all or none, and nothing before the warm-up window ends. */

@@ -77,6 +77,7 @@ import io.izzel.arclight.common.prts.kernel.observe.HealthReadings;
 import io.izzel.arclight.common.prts.kernel.observe.MaterializedUnloadedReadings;
 import io.izzel.arclight.common.prts.kernel.observe.QuotaCostReadings;
 import io.izzel.arclight.common.prts.kernel.observe.QuotaEntityWindow;
+import io.izzel.arclight.common.prts.kernel.observe.QuotaNetWindow;
 import io.izzel.arclight.common.prts.kernel.observe.ScaleBudgetReadings;
 import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteObserver;
 import io.izzel.arclight.common.prts.kernel.observe.ArrivalDigestObserver;
@@ -631,6 +632,10 @@ public final class KernelModule {
             QuotaCostReadings.wallNanos(QuotaCostReadings.QuotaClass.ENTITY),
             KernelSettings.selfWindowTicks(), KernelSettings.selfWarmupTicks(),
             KernelSettings.quotaEntityMs());
+        QuotaNetWindow.noteTick(tickIndex,
+            QuotaCostReadings.wallNanos(QuotaCostReadings.QuotaClass.NET),
+            KernelSettings.selfWindowTicks(), KernelSettings.selfWarmupTicks(),
+            KernelSettings.eBudgetMs());
         HealthReadings.noteTick(tickIndex, EntityQueryReadings.entityCount(),
             worldLifecycle.transitionCount(), chunkDemand.futuresInFlight(), arena.claims(),
             KernelSettings.selfWindowTicks(), KernelSettings.selfWarmupTicks());
@@ -3568,6 +3573,7 @@ public final class KernelModule {
         EntityQueryReadings.reset();
         ScaleBudgetReadings.reset();
         QuotaEntityWindow.reset();
+        QuotaNetWindow.reset();
         MaterializedUnloadedReadings.reset();
         HealthReadings.reset();
         loadThread.reset();

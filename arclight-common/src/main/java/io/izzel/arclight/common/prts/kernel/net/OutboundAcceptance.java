@@ -61,6 +61,16 @@ public final class OutboundAcceptance {
         return Boolean.getBoolean(PROPERTY);
     }
 
+    /** Applies an end-of-window network quota decision. With acceptance disarmed this always
+     * clears the flag, so a property-off start cannot leave a stale defer behind. */
+    public static void applyNetQuotaDefer(boolean over) {
+        if (!enabled()) {
+            deferDeferableWrites = false;
+            return;
+        }
+        deferDeferableWrites = over;
+    }
+
     /** Whether the listener class name belongs to the fixed PLAY phase, the only phase accepted here. */
     public static boolean isPlayPhase(String listenerClassName) {
         return "net.minecraft.server.network.ServerGamePacketListenerImpl".equals(listenerClassName)
