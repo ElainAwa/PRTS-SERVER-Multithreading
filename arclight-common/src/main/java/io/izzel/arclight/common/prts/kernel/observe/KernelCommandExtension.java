@@ -94,10 +94,14 @@ public final class KernelCommandExtension implements PrtsCommandExtension {
             ServerLevel level = ((CraftWorld) world).getHandle();
             BlockPos pos = new BlockPos(Integer.parseInt(parts[1]), Integer.parseInt(parts[2]),
                 Integer.parseInt(parts[3]));
-            PeekBlockService.Result result = PeekBlockService.peek(level, pos, null);
-            return List.of(PREFIX + "peek world=" + result.worldId() + " " + PeekBlockService.describe(result)
-                + " demand=" + PeekBlockService.demandCount()
-                + " overflow=" + PeekBlockService.demandOverflow());
+            MaterializedUnloadedReadings.beginWindow(1);
+            PeekReadService.ReadReceipt receipt = PeekReadService.read(level, pos, null);
+            return List.of(PREFIX + "peek world=" + receipt.worldId()
+                + " status=" + receipt.status().name().toLowerCase(java.util.Locale.ROOT)
+                + " source=" + receipt.source()
+                + " demand=" + receipt.demand()
+                + " overflow=" + PeekBlockService.demandOverflow()
+                + " managed=" + MaterializedUnloadedReadings.publishedValue().orElse(-1L));
         } catch (NumberFormatException invalid) {
             return List.of(PREFIX + "peek usage: /prts kernel peek <world> <x> <y> <z>");
         }

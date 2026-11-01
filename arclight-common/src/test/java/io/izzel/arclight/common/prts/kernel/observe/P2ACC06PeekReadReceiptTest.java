@@ -21,6 +21,7 @@ class P2ACC06PeekReadReceiptTest {
     void cleanup() {
         PeekReadService.reset();
         PeekBlockService.reset();
+        MaterializedUnloadedReadings.reset();
     }
 
     @Test
@@ -37,6 +38,37 @@ class P2ACC06PeekReadReceiptTest {
         assertEquals("none", receipt.materializationSource());
         assertEquals("source-unavailable", receipt.ticketSource());
         assertEquals(1L, receipt.readId());
+    }
+
+    @Test
+    void managedPeekWindowCompletesAndPublishesZero() {
+        MaterializedUnloadedReadings.beginWindow(1);
+        PeekReadService.ReadReceipt first = PeekReadService.read(null, POS, null);
+        assertEquals(PeekBlockService.Status.NO_WORLD, first.status());
+        assertEquals(java.util.OptionalLong.of(0L), MaterializedUnloadedReadings.publishedValue());
+        assertEquals(0L, MaterializedUnloadedReadings.publishedValue().orElse(-1L));
+
+        MaterializedUnloadedReadings.beginWindow(1);
+        PeekReadService.ReadReceipt second = PeekReadService.read(null, POS, null);
+        assertEquals(PeekBlockService.Status.NO_WORLD, second.status());
+        assertEquals(java.util.OptionalLong.of(0L), MaterializedUnloadedReadings.publishedValue());
+        assertFalse(MaterializedUnloadedReadings.failOnPositive());
+    }
+
+    @Test
+    void actualMaterializationPublishesPositiveAndFails() {
+        MaterializedUnloadedReadings.beginWindow(1);
+        long readId = MaterializedUnloadedReadings.begin("world", 42L, "peek");
+        MaterializedUnloadedReadings.onSynchronousRead("world", 42L, true, true, true);
+        MaterializedUnloadedReadings.onSynchronousRead("world", 42L, true, true, true);
+        MaterializedUnloadedReadings.end(readId, MaterializedUnloadedReadings.Outcome.COMPLETE);
+        assertEquals(java.util.OptionalLong.of(1L), MaterializedUnloadedReadings.publishedValue());
+        assertTrue(MaterializedUnloadedReadings.failOnPositive());
+
+        MaterializedUnloadedReadings.reset();
+        MaterializedUnloadedReadings.beginWindow(0);
+        assertEquals(java.util.OptionalLong.of(0L), MaterializedUnloadedReadings.publishedValue());
+        assertFalse(MaterializedUnloadedReadings.failOnPositive());
     }
 
     @Test
