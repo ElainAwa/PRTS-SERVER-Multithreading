@@ -63,6 +63,7 @@
     "observation.PrtsPacketEncodeCostMixin",
     "observation.PrtsPacketDecodeCostMixin",
     "pipeline.PrtsChunkDemandMixin",
-    "pipeline.PrtsChunkMaterializationMixin"
+    "pipeline.PrtsChunkMaterializationMixin",
+    "net.PrtsOutboundAcceptanceMixin"
   ]
 }
