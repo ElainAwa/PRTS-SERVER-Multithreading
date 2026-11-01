@@ -154,6 +154,7 @@ public final class KernelReadings {
 
     /** The per-family quota over counters; only an over count is published, never the occupancy. */
     private static void quotaReadings(List<String> lines) {
+        add(lines, "quota.machine_over", QuotaMachineWindow.overCount());
         add(lines, "quota.entity_over", QuotaEntityWindow.overCount());
         add(lines, "quota.net_over", QuotaNetWindow.overCount());
         add(lines, "quota.device_over", DeviceTickDeferral.overCount());

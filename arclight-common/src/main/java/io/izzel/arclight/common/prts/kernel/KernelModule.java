@@ -77,6 +77,7 @@ import io.izzel.arclight.common.prts.kernel.observe.HealthReadings;
 import io.izzel.arclight.common.prts.kernel.observe.MaterializedUnloadedReadings;
 import io.izzel.arclight.common.prts.kernel.observe.QuotaCostReadings;
 import io.izzel.arclight.common.prts.kernel.observe.QuotaEntityWindow;
+import io.izzel.arclight.common.prts.kernel.observe.QuotaMachineWindow;
 import io.izzel.arclight.common.prts.kernel.observe.QuotaNetWindow;
 import io.izzel.arclight.common.prts.kernel.quota.DeviceTickDeferral;
 import io.izzel.arclight.common.prts.kernel.observe.ScaleBudgetReadings;
@@ -640,6 +641,10 @@ public final class KernelModule {
             KernelSettings.quotaEntityMs());
         QuotaNetWindow.noteTick(tickIndex,
             QuotaCostReadings.wallNanos(QuotaCostReadings.QuotaClass.NET),
+            KernelSettings.selfWindowTicks(), KernelSettings.selfWarmupTicks(),
+            KernelSettings.eBudgetMs());
+        QuotaMachineWindow.noteTick(tickIndex,
+            QuotaCostReadings.wallNanos(QuotaCostReadings.QuotaClass.MACHINE),
             KernelSettings.selfWindowTicks(), KernelSettings.selfWarmupTicks(),
             KernelSettings.eBudgetMs());
         HealthReadings.noteTick(tickIndex, EntityQueryReadings.entityCount(),
@@ -3580,6 +3585,7 @@ public final class KernelModule {
         ScaleBudgetReadings.reset();
         QuotaEntityWindow.reset();
         QuotaNetWindow.reset();
+        QuotaMachineWindow.reset();
         DeviceTickDeferral.reset();
         MaterializedUnloadedReadings.reset();
         HealthReadings.reset();
