@@ -71,6 +71,11 @@ public final class KernelSettings {
      * change scheduling, shares or degradation. */
     public static final String QUOTA_ENTITY_MS = "quota-entity-ms";
 
+    /** Read-only machine quota, in milliseconds of neighbour-update wall time per segment second.
+     * It is the MACHINE family's own limit, read by the machine window alone; the global tick
+     * budget is a different quantity and cannot stand in for it. */
+    public static final String QUOTA_MACHINE_MS = "quota-machine-ms";
+
     /** Lets a rung of the wait ladder execute its action; off, a rung that was reached only
      * publishes its counters. */
     public static final String WAIT_ACTIONS = "wait-actions";
@@ -289,6 +294,11 @@ public final class KernelSettings {
 
     public static int quotaEntityMs() {
         return clamp(number(QUOTA_ENTITY_MS), 0, 1000);
+    }
+
+    /** The per-family MACHINE wall-time quota; independent of the global tick budget. */
+    public static int quotaMachineMs() {
+        return clamp(number(QUOTA_MACHINE_MS), 0, 1000);
     }
 
     public static boolean waitActions() {

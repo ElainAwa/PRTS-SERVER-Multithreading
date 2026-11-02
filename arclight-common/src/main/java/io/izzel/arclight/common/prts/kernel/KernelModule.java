@@ -653,7 +653,7 @@ public final class KernelModule {
         QuotaMachineWindow.noteTick(tickIndex,
             QuotaCostReadings.wallNanos(QuotaCostReadings.QuotaClass.MACHINE),
             KernelSettings.selfWindowTicks(), KernelSettings.selfWarmupTicks(),
-            KernelSettings.eBudgetMs());
+            KernelSettings.quotaMachineMs());
         HealthReadings.noteTick(tickIndex, EntityQueryReadings.entityCount(),
             worldLifecycle.transitionCount(), chunkDemand.futuresInFlight(), arena.claims(),
             KernelSettings.selfWindowTicks(), KernelSettings.selfWarmupTicks());

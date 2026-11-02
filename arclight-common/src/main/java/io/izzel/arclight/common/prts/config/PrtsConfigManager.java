@@ -171,7 +171,9 @@ public final class PrtsConfigManager {
                 + "# 'e-budget-ms' is what one tick may spend, 'world-share-ms' is the fair share of\n"
                 + "# one world inside it, 'reserve-ms' is the single column only a forced\n"
                 + "# materialization or a migration wait may draw from, and 'host-overhead-ms' is the\n"
-                + "# part the class rows may not borrow.\n"
+                + "# part the class rows may not borrow. 'quota-machine-ms' is the MACHINE family's own\n"
+                + "# wall-time limit per segment second, read by the machine window alone, so the\n"
+                + "# global tick budget cannot stand in for it.\n"
                 + "# 'intent-queue-cap' is the depth at which one world's intent shard refuses instead\n"
                 + "# of growing and 'commit-budget' is how many intents one tick's commit walk may\n"
                 + "# reach, so a large queue cannot turn one tick into a long synchronous drain.\n"
@@ -326,6 +328,7 @@ public final class PrtsConfigManager {
         numbers.put("self-warmup-seconds", new IntSetting(60, 0, 3600));
         numbers.put("scale-entity-budget", new IntSetting(2000, 1, 1_000_000));
         numbers.put("quota-entity-ms", new IntSetting(1000, 0, 1000));
+        numbers.put("quota-machine-ms", new IntSetting(50, 0, 1000));
         numbers.put("e-budget-ms", new IntSetting(50, 1, 1000));
         numbers.put("world-share-ms", new IntSetting(8, 1, 1000));
         numbers.put("reserve-ms", new IntSetting(4, 0, 500));
