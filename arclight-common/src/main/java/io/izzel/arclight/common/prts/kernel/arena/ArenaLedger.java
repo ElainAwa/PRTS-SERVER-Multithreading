@@ -75,6 +75,13 @@ public final class ArenaLedger {
         return pinned;
     }
 
+    /** The outstanding allocations: what was claimed and not released yet, never negative. The
+     * health readout samples this gauge, so a steady claim/release load has a flat slope; the
+     * cumulative claims/releases counters stay as they are. */
+    public synchronized long activeClaims() {
+        return Math.max(0L, claims - releases);
+    }
+
     public synchronized long claims() {
         return claims;
     }

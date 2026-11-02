@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.observe;
 
-/** The long-window health slopes: entity rows, world transitions, in-flight futures and arena
- * claims. It samples only and changes no scheduling decision; a window that has not finished its
- * warm-up publishes nothing. */
+/** The long-window health slopes: entity rows, world transitions, in-flight futures and the
+ * outstanding arena allocations (a gauge, never the cumulative claim counter). It samples only and
+ * changes no scheduling decision; a window that has not finished its warm-up publishes nothing. */
 public final class HealthReadings {
 
     private static long windowStartTick = -1L;

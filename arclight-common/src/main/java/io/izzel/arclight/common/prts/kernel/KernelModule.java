@@ -655,8 +655,9 @@ public final class KernelModule {
             KernelSettings.selfWindowTicks(), KernelSettings.selfWarmupTicks(),
             KernelSettings.quotaMachineMs());
         HealthReadings.noteTick(tickIndex, EntityQueryReadings.entityCount(),
-            worldLifecycle.transitionCount(), chunkDemand.futuresInFlight(), arena.claims(),
-            KernelSettings.selfWindowTicks(), KernelSettings.selfWarmupTicks());
+            worldLifecycle.transitionCount(), chunkDemand.futuresInFlight(),
+            arena.activeClaims(), KernelSettings.selfWindowTicks(),
+            KernelSettings.selfWarmupTicks());
         tickDigest.noteTick(tickIndex);
         if (KernelSettings.commitLog()) {
             lastCommitReplay = commits.closeTick();
