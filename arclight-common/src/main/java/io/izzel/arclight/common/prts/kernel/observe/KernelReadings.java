@@ -1799,6 +1799,22 @@ public final class KernelReadings {
         add(lines, "self.wait_total_ms", format(window.waitTotalMs()));
         add(lines, "self.wait_max_ms", format(window.waitMaxMs()));
         add(lines, "self.wait_observations", window.waitObservations());
+        add(lines, "self.machine_ms",
+            format(QuotaCostReadings.wallNanos(QuotaCostReadings.QuotaClass.MACHINE) / 1_000_000.0));
+        add(lines, "self.machine_calls",
+            QuotaCostReadings.calls(QuotaCostReadings.QuotaClass.MACHINE));
+        add(lines, "self.device_ms",
+            format(QuotaCostReadings.wallNanos(QuotaCostReadings.QuotaClass.DEVICE) / 1_000_000.0));
+        add(lines, "self.device_calls",
+            QuotaCostReadings.calls(QuotaCostReadings.QuotaClass.DEVICE));
+        add(lines, "self.entity_ms",
+            format(QuotaCostReadings.wallNanos(QuotaCostReadings.QuotaClass.ENTITY) / 1_000_000.0));
+        add(lines, "self.entity_calls",
+            QuotaCostReadings.calls(QuotaCostReadings.QuotaClass.ENTITY));
+        add(lines, "self.net_ms",
+            format(QuotaCostReadings.wallNanos(QuotaCostReadings.QuotaClass.NET) / 1_000_000.0));
+        add(lines, "self.net_calls",
+            QuotaCostReadings.calls(QuotaCostReadings.QuotaClass.NET));
         for (SelfRow row : window.rows()) {
             String key = row.selfClass().key();
             add(lines, "self." + key + "_ms", format(row.totalMs()));
