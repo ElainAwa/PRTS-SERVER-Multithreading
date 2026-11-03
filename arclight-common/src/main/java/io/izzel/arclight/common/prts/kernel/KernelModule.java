@@ -93,6 +93,7 @@ import io.izzel.arclight.common.prts.kernel.observe.ChunkMaterializationObserver
 import io.izzel.arclight.common.prts.kernel.observe.CloseSealWriter;
 import io.izzel.arclight.common.prts.kernel.observe.LoadThreadObserver;
 import io.izzel.arclight.common.prts.kernel.observe.PipelineRowObserver;
+import io.izzel.arclight.common.prts.kernel.observe.ChunkPipelineProgress;
 import io.izzel.arclight.common.prts.kernel.observe.WorldResChildMeter;
 import io.izzel.arclight.common.prts.kernel.observe.RegionIdentityObserver;
 import io.izzel.arclight.common.prts.kernel.observe.SaveIdentityObserver;
@@ -412,7 +413,7 @@ public final class KernelModule {
         () -> commits, rangeSeals, () -> commitIdentitySource.currentController());
     /** The generation holder of a chain this module adopts: the module is its lifecycle owner. */
     private final CommitNamespaces.ResetEpochs commitChainEpochs = new CommitNamespaces.ResetEpochs();
-    private long tickIndex;
+    private volatile long tickIndex;
     private final ArrayDeque<PendingB3> pendingB3Tokens = new ArrayDeque<>();
     private long pendingB1Token = -1L;
     private String pendingB1World;
@@ -794,7 +795,9 @@ public final class KernelModule {
         syncPipelineOwnerTap(wanted && KernelSettings.pipelineJobs() && KernelSettings.tickPlan());
         // The meter rides the existing row tap and follows the existing share-table switch on every
         // tick, so a reloaded switch needs no tap round trip; no seam of its own is installed.
-        pipelineRows.childMeter(wanted && KernelSettings.shareTable() ? worldResMeter : null);
+        boolean childMeter = wanted && KernelSettings.shareTable();
+        pipelineRows.childMeter(childMeter ? worldResMeter : null);
+        ChunkPipelineProgress.install(childMeter, guard.worldEpochs()::epochOf, this::tickIndex);
         if (pipelineRowTapInstalled == wanted) {
             return;
         }
@@ -2841,6 +2844,7 @@ public final class KernelModule {
         shares.forgetWorld(named);
         worldResMeter.forgetWorld(named);
         worldResLedger.forgetWorld(named);
+        ChunkPipelineProgress.forgetWorld(named);
         tickDigest.forgetMailboxPlacement(named);
         if (recordSession) {
             recordUnloadSession();
@@ -3675,6 +3679,7 @@ public final class KernelModule {
         shares.clearRecordTokens();
         worldResMeter.reset();
         worldResLedger.reset();
+        ChunkPipelineProgress.reset();
         EntityQueryReadings.reset();
         ScaleBudgetReadings.reset();
         QuotaEntityWindow.reset();
