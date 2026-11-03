@@ -81,6 +81,7 @@ import io.izzel.arclight.common.prts.kernel.observe.MaterializedUnloadedReadings
 import io.izzel.arclight.common.prts.kernel.observe.QuotaCostReadings;
 import io.izzel.arclight.common.prts.kernel.observe.QuotaEntityWindow;
 import io.izzel.arclight.common.prts.kernel.observe.QuotaMachineWindow;
+import io.izzel.arclight.common.prts.kernel.observe.EventOrderProbe;
 import io.izzel.arclight.common.prts.kernel.observe.QuotaNetWindow;
 import io.izzel.arclight.common.prts.kernel.quota.DeviceTickDeferral;
 import io.izzel.arclight.common.prts.kernel.quota.MachineTickDeferral;
@@ -3749,6 +3750,7 @@ public final class KernelModule {
         lastDispatchHandedOut = 0L;
         jobMeter.reset();
         RecomputeUnbounded.reset();
+        EventOrderProbe.reset();
         plans.reset();
         versionSlots.reset();
         ownerGrants.reset();

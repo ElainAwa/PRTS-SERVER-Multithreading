@@ -104,6 +104,7 @@ public final class KernelReadings {
         shareBudget(lines, module);
         budgetStates(lines, module);
         degradation(lines, module);
+        eventOrderFace(lines);
         selfTimers(lines, module);
         domainReadings(lines, module);
         queryReadings(lines);
@@ -130,6 +131,15 @@ public final class KernelReadings {
         worldReadouts(lines, module);
         control(lines, module);
         return lines;
+    }
+
+    /** The one formal event face: both rows appear only after a complete observed root dispatch, so
+     * a missing line means the source was not covered, not that it measured zero. */
+    private static void eventOrderFace(List<String> lines) {
+        EventOrderProbe.reading().ifPresent(reading -> {
+            add(lines, "event.order_violation", reading.orderViolation());
+            add(lines, "event.nesting_depth", reading.nestingDepth());
+        });
     }
 
     /** The two ACC-09 counters: real neighbour-query calls and the current snapshot row count. The
