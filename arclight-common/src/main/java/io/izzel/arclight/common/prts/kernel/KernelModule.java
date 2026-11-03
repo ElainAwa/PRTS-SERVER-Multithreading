@@ -798,6 +798,8 @@ public final class KernelModule {
         boolean childMeter = wanted && KernelSettings.shareTable();
         pipelineRows.childMeter(childMeter ? worldResMeter : null);
         ChunkPipelineProgress.install(childMeter, guard.worldEpochs()::epochOf, this::tickIndex);
+        SendDelayAction.install(childMeter, this::tickIndex, guard.worldEpochs()::epochOf,
+            worldResLedger::settlements);
         if (childMeter) {
             waitPoints.progress().bindWorlds("gen", "chunk.pipeline.gen_steps",
                 () -> ChunkPipelineProgress.snapshot().worlds().stream()
@@ -2862,6 +2864,7 @@ public final class KernelModule {
         worldResMeter.forgetWorld(named);
         worldResLedger.forgetWorld(named);
         ChunkPipelineProgress.forgetWorld(named);
+        SendDelayAction.forgetWorld(named);
         tickDigest.forgetMailboxPlacement(named);
         if (recordSession) {
             recordUnloadSession();
@@ -3697,6 +3700,7 @@ public final class KernelModule {
         worldResMeter.reset();
         worldResLedger.reset();
         ChunkPipelineProgress.reset();
+        SendDelayAction.reset();
         EntityQueryReadings.reset();
         ScaleBudgetReadings.reset();
         QuotaEntityWindow.reset();
