@@ -3,6 +3,7 @@ package io.izzel.arclight.common.prts.kernel.observe;
 
 import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.PipelineWriteClaims;
+import io.izzel.arclight.common.prts.kernel.SendDelayAction;
 import io.izzel.arclight.common.prts.kernel.OwnerGrantPoint;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
@@ -1931,6 +1932,7 @@ public final class KernelReadings {
         }
         worldSignals(lines, registry.progress());
         worldSendSignals(lines, registry.progress().worldReadings("send"));
+        delaySendCount(lines);
         add(lines, "wp.signal_rows", registry.progress().declaredCount());
         add(lines, "wp.signal_bound", registry.progress().boundCount());
         chunkMaterialization(lines, module);
@@ -2042,6 +2044,13 @@ public final class KernelReadings {
             String prefix = "wp.signal.send." + safe(reading.worldId()) + ".";
             add(lines, prefix + "value", reading.value());
             add(lines, prefix + "delta", reading.delta());
+        }
+    }
+
+    /** Emits the one formal delayed-send pass count only while the action is installed. */
+    static void delaySendCount(List<String> lines) {
+        if (SendDelayAction.installed()) {
+            add(lines, "delay.send_count", SendDelayAction.delayedPasses());
         }
     }
 

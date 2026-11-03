@@ -6,6 +6,8 @@ import io.izzel.arclight.common.prts.kernel.sites.WorldEpochs;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.LongSupplier;
@@ -29,6 +31,8 @@ public final class SendDelayAction {
 
     private static final Object LOCK = new Object();
     private static final Map<String, DelayState> STATES = new HashMap<>();
+    private static final Map<String, DelayedCountState> COUNTS =
+        new LinkedHashMap<>(16, 0.75f, true);
     private static volatile boolean installed;
     private static LongSupplier tickSource = () -> 0L;
     private static ToLongFunction<String> epochSource = world -> WorldEpochs.UNTRACKED;
@@ -49,6 +53,7 @@ public final class SendDelayAction {
             settlementSource = settlements == null ? List::of : settlements;
             if (!enabled) {
                 STATES.clear();
+                COUNTS.clear();
             }
         }
     }
@@ -97,6 +102,7 @@ public final class SendDelayAction {
                     return false;
                 }
                 state.lastTick = now;
+                countDelayedLocked(worldId, epoch);
                 return true;
             }
         } catch (Throwable unreadable) {
@@ -111,13 +117,68 @@ public final class SendDelayAction {
         }
         synchronized (LOCK) {
             STATES.remove(worldId);
+            COUNTS.remove(worldId);
         }
     }
 
-    /** Drops every retained delay state but keeps the install state and suppliers. */
+    /** Drops every retained delay state and delayed-pass count but keeps the install state. */
     public static void reset() {
         synchronized (LOCK) {
             STATES.clear();
+            COUNTS.clear();
+        }
+    }
+
+    /** True while the action is installed; the readout emits delay.send_count only in this state. */
+    public static boolean installed() {
+        return installed;
+    }
+
+    /** The real delayed-send pass count of the current live generations: one per cancelled
+     * PlayerChunkSender.sendNextChunks call, not per pending chunk. A world whose epoch changed or
+     * was unloaded is removed; an off action answers zero and the readout omits the key. */
+    public static long delayedPasses() {
+        synchronized (LOCK) {
+            if (!installed) {
+                return 0L;
+            }
+            long total = 0L;
+            Iterator<Map.Entry<String, DelayedCountState>> iterator = COUNTS.entrySet().iterator();
+            while (iterator.hasNext()) {
+                Map.Entry<String, DelayedCountState> entry = iterator.next();
+                long epoch;
+                try {
+                    epoch = epochSource.applyAsLong(entry.getKey());
+                } catch (Throwable unreadable) {
+                    iterator.remove();
+                    continue;
+                }
+                if (epoch <= WorldEpochs.UNTRACKED || epoch != entry.getValue().epoch) {
+                    iterator.remove();
+                    continue;
+                }
+                total = total > Long.MAX_VALUE - entry.getValue().count
+                    ? Long.MAX_VALUE : total + entry.getValue().count;
+            }
+            return total;
+        }
+    }
+
+    private static void countDelayedLocked(String worldId, long epoch) {
+        DelayedCountState count = COUNTS.get(worldId);
+        if (count == null || count.epoch != epoch) {
+            COUNTS.remove(worldId);
+            if (COUNTS.size() >= MAX_WORLDS) {
+                Iterator<String> oldest = COUNTS.keySet().iterator();
+                if (oldest.hasNext()) {
+                    COUNTS.remove(oldest.next());
+                }
+            }
+            count = new DelayedCountState(epoch);
+            COUNTS.put(worldId, count);
+        }
+        if (count.count < Long.MAX_VALUE) {
+            count.count++;
         }
     }
 
@@ -140,6 +201,16 @@ public final class SendDelayAction {
             }
         }
         return latest;
+    }
+
+    private static final class DelayedCountState {
+
+        private final long epoch;
+        private long count;
+
+        private DelayedCountState(long epoch) {
+            this.epoch = epoch;
+        }
     }
 
     private static final class DelayState {

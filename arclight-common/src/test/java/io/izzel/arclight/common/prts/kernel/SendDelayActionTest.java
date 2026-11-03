@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -110,6 +111,40 @@ class SendDelayActionTest {
             assertTrue(SendDelayAction.shouldDefer("world-" + index, 1));
         }
         assertFalse(SendDelayAction.shouldDefer("world-" + SendDelayAction.MAX_WORLDS, 1));
+    }
+
+    @Test
+    void delayedPassCountTracksActualDeferralsAndClearsPerGeneration() {
+        arm();
+        budgets.set(List.of(budget(WORLD, 10L, 1L, true)));
+        assertTrue(SendDelayAction.shouldDefer(WORLD, 4));
+        tick.set(11L);
+        budgets.set(List.of(budget(WORLD, 11L, 1L, true)));
+        assertTrue(SendDelayAction.shouldDefer(WORLD, 4));
+        assertEquals(2L, SendDelayAction.delayedPasses());
+
+        tick.set(12L);
+        budgets.set(List.of(budget(WORLD, 12L, 1L, false)));
+        assertFalse(SendDelayAction.shouldDefer(WORLD, 4));
+        assertEquals(2L, SendDelayAction.delayedPasses(), "recovery does not erase the count");
+
+        SendDelayAction.reset();
+        assertEquals(0L, SendDelayAction.delayedPasses());
+
+        budgets.set(List.of(budget(WORLD, 12L, 1L, true)));
+        assertTrue(SendDelayAction.shouldDefer(WORLD, 4));
+        SendDelayAction.forgetWorld(WORLD);
+        assertEquals(0L, SendDelayAction.delayedPasses(), "unload drops the count");
+
+        budgets.set(List.of(budget(WORLD, 12L, 2L, true)));
+        epochs.put(WORLD, 2L);
+        SendDelayAction.install(true, tick::get,
+            world -> epochs.getOrDefault(world, 0L), budgets::get);
+        assertTrue(SendDelayAction.shouldDefer(WORLD, 4));
+        assertEquals(1L, SendDelayAction.delayedPasses(), "a new epoch starts at one");
+        SendDelayAction.install(false, null, null, null);
+        assertEquals(0L, SendDelayAction.delayedPasses());
+        assertFalse(SendDelayAction.shouldDefer(WORLD, 4));
     }
 
     @Test
