@@ -1930,6 +1930,7 @@ public final class KernelReadings {
             add(lines, prefix + "delta", reading.delta());
         }
         worldGenSignals(lines, registry.progress().worldReadings("gen"));
+        worldLightSignals(lines, registry.progress().worldReadings("gen"));
         add(lines, "wp.signal_rows", registry.progress().declaredCount());
         add(lines, "wp.signal_bound", registry.progress().boundCount());
         chunkMaterialization(lines, module);
@@ -2023,8 +2024,22 @@ public final class KernelReadings {
         }
     }
 
-    /** Adds the explicit per-world gen readings of the gen row. Only worlds a producer actually
-     * carries are emitted; an absent or stale world produces no value/delta pair and no zero. */
+    /** Adds the explicit per-world light readings of the same world progress view. It publishes
+     * only worlds whose light count is positive; an absent or stale world emits no pair and no zero.
+     */
+    static void worldLightSignals(List<String> lines, List<WaitProgress.WorldReading> readings) {
+        for (WaitProgress.WorldReading reading : readings) {
+            if (reading.lightValue() <= 0L) {
+                continue;
+            }
+            String prefix = "wp.signal.light." + safe(reading.worldId()) + ".";
+            add(lines, prefix + "value", reading.lightValue());
+            add(lines, prefix + "delta", reading.lightDelta());
+        }
+    }
+
+    /** Adds the explicit per-world generation readings of the gen row. It publishes only worlds
+     * whose generation count is positive; a light-only world does not publish a gen zero. */
     static void worldGenSignals(List<String> lines, List<WaitProgress.WorldReading> readings) {
         for (WaitProgress.WorldReading reading : readings) {
             if (reading.value() <= 0L) {
