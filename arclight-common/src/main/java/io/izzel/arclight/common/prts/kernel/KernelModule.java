@@ -798,6 +798,16 @@ public final class KernelModule {
         boolean childMeter = wanted && KernelSettings.shareTable();
         pipelineRows.childMeter(childMeter ? worldResMeter : null);
         ChunkPipelineProgress.install(childMeter, guard.worldEpochs()::epochOf, this::tickIndex);
+        if (childMeter) {
+            waitPoints.progress().bindWorlds("gen", "chunk.pipeline.gen_steps",
+                () -> ChunkPipelineProgress.snapshot().worlds().stream()
+                    .filter(world -> world.genSteps() > 0L || world.lightSteps() > 0L)
+                    .map(world -> new WaitProgress.WorldValue(world.worldId(), world.epoch(),
+                        world.genSteps(), world.lightSteps()))
+                    .toList());
+        } else {
+            waitPoints.progress().unbindWorlds("gen");
+        }
         if (pipelineRowTapInstalled == wanted) {
             return;
         }

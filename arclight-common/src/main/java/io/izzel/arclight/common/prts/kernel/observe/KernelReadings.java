@@ -1929,6 +1929,7 @@ public final class KernelReadings {
             add(lines, prefix + "value", reading.value());
             add(lines, prefix + "delta", reading.delta());
         }
+        worldGenSignals(lines, registry.progress().worldReadings("gen"));
         add(lines, "wp.signal_rows", registry.progress().declaredCount());
         add(lines, "wp.signal_bound", registry.progress().boundCount());
         chunkMaterialization(lines, module);
@@ -2019,6 +2020,19 @@ public final class KernelReadings {
         }
         for (Map.Entry<String, Long> entry : producer.callbackWorldCounts().entrySet()) {
             add(lines, prefix + "world." + safe(entry.getKey()), entry.getValue());
+        }
+    }
+
+    /** Adds the explicit per-world gen readings of the gen row. Only worlds a producer actually
+     * carries are emitted; an absent or stale world produces no value/delta pair and no zero. */
+    static void worldGenSignals(List<String> lines, List<WaitProgress.WorldReading> readings) {
+        for (WaitProgress.WorldReading reading : readings) {
+            if (reading.value() <= 0L) {
+                continue;
+            }
+            String prefix = "wp.signal.gen." + safe(reading.worldId()) + ".";
+            add(lines, prefix + "value", reading.value());
+            add(lines, prefix + "delta", reading.delta());
         }
     }
 

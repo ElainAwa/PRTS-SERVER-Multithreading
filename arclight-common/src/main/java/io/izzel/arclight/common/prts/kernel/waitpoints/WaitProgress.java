@@ -2,10 +2,13 @@
 package io.izzel.arclight.common.prts.kernel.waitpoints;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 
 /** The progress side of a wait point: the value of the one signal form the row declares, the reading
  * it is taken from, and whether it moved since the previous read. A row whose producer is not built
@@ -24,7 +27,24 @@ public final class WaitProgress {
         }
     }
 
+    /** One per-world value a bound row publishes: the cumulative generation and light progress. */
+    public record WorldValue(String worldId, long epoch, long value, long light) {
+    }
+
+    /** One published per-world reading. It exists only for a world the producer actually carries;
+     * a world that is absent, stale or untracked publishes no row instead of a zero. The generation
+     * value/delta is the formal reading; the light pair is carried for the internal test/readout
+     * path and is not a separate formal key family. */
+    public record WorldReading(String wpId, String worldId, long epoch, boolean bound, String source,
+                               long value, long previous, long delta, long lightValue,
+                               long lightPrevious, long lightDelta) {
+    }
+
+    private static final int MAX_WORLD_READINGS = 256;
+
     private final Map<String, Slot> slots = new LinkedHashMap<>();
+    private final Map<String, WorldSource> worldSources = new LinkedHashMap<>();
+    private final Map<String, Map<String, WorldSlot>> worldSlots = new LinkedHashMap<>();
 
     /** Declares the signal one row publishes. */
     public synchronized void declare(String wpId, Dec19Elements.ProgressSignal signal) {
@@ -46,6 +66,79 @@ public final class WaitProgress {
         }
         slot.source = source;
         slot.reading = reading;
+    }
+
+    /** Binds the per-world values one row publishes. Only worlds present in the producer's list are
+     * read; the value is cumulative and the delta is measured from the previous export of the same
+     * world and epoch. A world absent from the list keeps no slot and publishes no zero. */
+    public synchronized void bindWorlds(String wpId, String source,
+                                        Supplier<List<WorldValue>> reading) {
+        if (wpId == null || reading == null) {
+            return;
+        }
+        worldSources.put(wpId, new WorldSource(source, reading));
+        worldSlots.computeIfAbsent(wpId, ignored -> new LinkedHashMap<>());
+    }
+
+    /** Hands the per-world binding back; no world reading is published after it. */
+    public synchronized void unbindWorlds(String wpId) {
+        worldSources.remove(wpId);
+        worldSlots.remove(wpId);
+    }
+
+    /** Reads the per-world values of one row, in the producer's order. It reads only the worlds the
+     * producer currently carries and never invents a zero for an absent or stale world. */
+    public synchronized List<WorldReading> worldReadings(String wpId) {
+        WorldSource source = worldSources.get(wpId);
+        if (source == null) {
+            return List.of();
+        }
+        List<WorldValue> values;
+        try {
+            values = source.reading().get();
+        } catch (RuntimeException | Error unreadable) {
+            return List.of();
+        }
+        if (values == null || values.isEmpty()) {
+            Map<String, WorldSlot> empty = worldSlots.get(wpId);
+            if (empty != null) {
+                empty.clear();
+            }
+            return List.of();
+        }
+        Map<String, WorldSlot> slots = worldSlots.computeIfAbsent(wpId,
+            ignored -> new LinkedHashMap<>());
+        List<WorldReading> readings = new ArrayList<>(Math.min(values.size(), MAX_WORLD_READINGS));
+        Set<String> seen = new HashSet<>();
+        for (WorldValue value : values) {
+            if (value == null || value.worldId() == null || value.worldId().isBlank()
+                || value.value() < 0L || !seen.add(value.worldId())) {
+                continue;
+            }
+            if (readings.size() >= MAX_WORLD_READINGS) {
+                break;
+            }
+            WorldSlot previous = slots.get(value.worldId());
+            boolean sameEpoch = previous != null && previous.epoch == value.epoch();
+            long previousValue = sameEpoch ? previous.previous : 0L;
+            long previousLight = sameEpoch ? previous.lightPrevious : 0L;
+            long delta = value.value() - previousValue;
+            if (delta < 0L) {
+                previousValue = 0L;
+                delta = value.value();
+            }
+            long lightDelta = value.light() - previousLight;
+            if (lightDelta < 0L) {
+                previousLight = 0L;
+                lightDelta = value.light();
+            }
+            slots.put(value.worldId(), new WorldSlot(value.epoch(), value.value(), value.light()));
+            readings.add(new WorldReading(wpId, value.worldId(), value.epoch(), true,
+                source.source(), value.value(), previousValue, delta, value.light(), previousLight,
+                lightDelta));
+        }
+        slots.keySet().retainAll(seen);
+        return List.copyOf(readings);
     }
 
     /** Hands a bound reading back. A row whose producer is switched off reports an unbound slot
@@ -122,6 +215,23 @@ public final class WaitProgress {
         for (Slot slot : slots.values()) {
             slot.observed = 0L;
             slot.value = 0L;
+        }
+        worldSlots.clear();
+    }
+
+    private record WorldSource(String source, Supplier<List<WorldValue>> reading) {
+    }
+
+    private static final class WorldSlot {
+
+        private final long epoch;
+        private final long previous;
+        private final long lightPrevious;
+
+        private WorldSlot(long epoch, long previous, long lightPrevious) {
+            this.epoch = epoch;
+            this.previous = previous;
+            this.lightPrevious = lightPrevious;
         }
     }
 
