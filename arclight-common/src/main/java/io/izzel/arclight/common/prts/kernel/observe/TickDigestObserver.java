@@ -73,7 +73,7 @@ public final class TickDigestObserver implements PrtsPipelineRows.MailboxOwnerTa
 
     /** How many ticks between two reads of the mailbox to world placement. The placement of a world
      * is fixed once its chunk map exists, so a slow refresh cannot move a row between worlds. */
-    private static final int PLACEMENT_REFRESH_TICKS = 20;
+    public static final int PLACEMENT_REFRESH_TICKS = 20;
 
     /** The upper bound of the window, so a mistyped declaration cannot grow without end. */
     public static final int WINDOW_MAX = 4_096;
@@ -112,6 +112,9 @@ public final class TickDigestObserver implements PrtsPipelineRows.MailboxOwnerTa
     private final int declaredWindow;
     private final List<String> declaredWorlds;
     private long lastPlacementTick = Long.MIN_VALUE;
+    private long placementAttempts;
+    private long placementRefreshes;
+    private long placementPublishes;
     private volatile LongPredicate deviation = tick -> false;
     private volatile ArrivalTickTap arrival;
     private long ticks;
@@ -205,6 +208,87 @@ public final class TickDigestObserver implements PrtsPipelineRows.MailboxOwnerTa
         PrtsPipelineRows.bindNonTargetMailboxes(java.util.Set.of());
         PrtsPipelineRows.bindNonTargetSorters(java.util.Set.of());
         placement = Map.of();
+        lastPlacementTick = Long.MIN_VALUE;
+    }
+
+    /** Publishes the mailbox to world placement from the server the caller named, at the bounded
+     * placement interval and without arming the digest window: only the mailbox/world binding is
+     * written, no digest row and no non-target set is touched, and an armed digest keeps ownership. */
+    public synchronized void publishPlacement(long tick) {
+        if (armed()) {
+            return;
+        }
+        placementAttempts++;
+        if (lastPlacementTick != Long.MIN_VALUE
+            && tick - lastPlacementTick < PLACEMENT_REFRESH_TICKS) {
+            return;
+        }
+        lastPlacementTick = tick;
+        placementRefreshes++;
+        PlacementScan scan = scanPlacement();
+        if (scan == null) {
+            return;
+        }
+        placement = scan.placed();
+        PrtsPipelineRows.bindMailboxWorlds(placement);
+        placementPublishes++;
+    }
+
+    /** Drops the decoupled placement of one world, e.g. at an unload; an armed digest keeps its own
+     * placement until its next refresh. */
+    public synchronized int forgetMailboxPlacement(String worldId) {
+        if (worldId == null || armed() || placement.isEmpty()) {
+            return 0;
+        }
+        java.util.Map<Object, String> remaining = new java.util.IdentityHashMap<>();
+        int dropped = 0;
+        for (java.util.Map.Entry<Object, String> entry : placement.entrySet()) {
+            if (worldId.equals(entry.getValue())) {
+                dropped++;
+            } else {
+                remaining.put(entry.getKey(), entry.getValue());
+            }
+        }
+        placement = Map.copyOf(remaining);
+        PrtsPipelineRows.bindMailboxWorlds(placement);
+        lastPlacementTick = Long.MIN_VALUE;
+        return dropped;
+    }
+
+    /** Clears the decoupled placement, e.g. at a reset; an armed digest keeps its own placement. */
+    public synchronized void clearMailboxPlacement() {
+        if (armed() || placement.isEmpty()) {
+            return;
+        }
+        placement = Map.of();
+        PrtsPipelineRows.bindMailboxWorlds(Map.of());
+        lastPlacementTick = Long.MIN_VALUE;
+    }
+
+    /** Package internal: publishes a placement a fixture built, without a live server; no digest
+     * state and no counter is touched. */
+    synchronized void publishPlacement(Map<Object, String> placing) {
+        if (armed()) {
+            return;
+        }
+        placement = Map.copyOf(placing == null ? Map.of() : placing);
+        PrtsPipelineRows.bindMailboxWorlds(placement);
+    }
+
+    long placementAttempts() {
+        return placementAttempts;
+    }
+
+    long placementRefreshes() {
+        return placementRefreshes;
+    }
+
+    long placementPublishes() {
+        return placementPublishes;
+    }
+
+    Map<Object, String> publishedPlacement() {
+        return placement;
     }
 
     @Override
@@ -424,10 +508,26 @@ public final class TickDigestObserver implements PrtsPipelineRows.MailboxOwnerTa
      * of its chunk pipeline; a mailbox that is not reachable this way stays unplaced and its rows
      * are counted apart instead of being folded into a world nobody read.
      */
+    private record PlacementScan(Map<Object, String> placed,
+                                 java.util.Set<Object> nonTargetMailboxes,
+                                 java.util.Set<Object> nonTargetSorters) {
+    }
+
     private void refreshPlacement() {
+        PlacementScan scan = scanPlacement();
+        if (scan == null) {
+            return;
+        }
+        placement = scan.placed();
+        PrtsPipelineRows.bindMailboxWorlds(scan.placed());
+        PrtsPipelineRows.bindNonTargetMailboxes(scan.nonTargetMailboxes());
+        PrtsPipelineRows.bindNonTargetSorters(scan.nonTargetSorters());
+    }
+
+    private PlacementScan scanPlacement() {
         MinecraftServer server = source;
         if (server == null) {
-            return;
+            return null;
         }
         Map<Object, String> placed = new java.util.IdentityHashMap<>();
         java.util.Set<Object> nonTargetMailboxes =
@@ -453,12 +553,9 @@ public final class TickDigestObserver implements PrtsPipelineRows.MailboxOwnerTa
                 }
             }
         } catch (Throwable failure) {
-            return;
+            return null;
         }
-        placement = Map.copyOf(placed);
-        PrtsPipelineRows.bindMailboxWorlds(placement);
-        PrtsPipelineRows.bindNonTargetMailboxes(nonTargetMailboxes);
-        PrtsPipelineRows.bindNonTargetSorters(nonTargetSorters);
+        return new PlacementScan(Map.copyOf(placed), nonTargetMailboxes, nonTargetSorters);
     }
 
     /** The processors one chunk map owns: every queue the sorter holds, named mailbox or plain

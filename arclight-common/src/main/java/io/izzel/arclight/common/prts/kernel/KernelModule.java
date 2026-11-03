@@ -615,6 +615,7 @@ public final class KernelModule {
             KernelSettings.routeUnregisteredWrites(), tickIndex);
         syncWaitSiteTap(KernelSettings.waitRegistry());
         syncPipelineRowTap(true);
+        refreshMailboxPlacement();
         syncLoadProbe(true);
         if (KernelSettings.commitLog()) {
             // The log of this tick collects what the commit walk and the domain work reach. The
@@ -817,6 +818,16 @@ public final class KernelModule {
             pipelineRows.detach();
             tickDigest.detach();
         }
+    }
+
+    /** Publishes the mailbox to world placement for the internal world-resource meter on the
+     * existing tick, at the observer's bounded placement interval; nothing runs while the row tap is
+     * not installed or the share table is off. */
+    private void refreshMailboxPlacement() {
+        if (!pipelineRowTapInstalled || !KernelSettings.shareTable()) {
+            return;
+        }
+        tickDigest.publishPlacement(tickIndex);
     }
 
     /** Installs or removes the reader that turns the rounds of the chunk pipeline into jobs; it is
@@ -2830,6 +2841,7 @@ public final class KernelModule {
         shares.forgetWorld(named);
         worldResMeter.forgetWorld(named);
         worldResLedger.forgetWorld(named);
+        tickDigest.forgetMailboxPlacement(named);
         if (recordSession) {
             recordUnloadSession();
         } else if (trackPending) {
@@ -3725,6 +3737,7 @@ public final class KernelModule {
         pipelineJobs.reset();
         pipelineBatches.reset();
         PrtsPipelineBatches.resetHostTicked();
+        tickDigest.clearMailboxPlacement();
         rangeSeals.reset();
         retainedOrders.clear();
         rangeSealFactory.reset();
