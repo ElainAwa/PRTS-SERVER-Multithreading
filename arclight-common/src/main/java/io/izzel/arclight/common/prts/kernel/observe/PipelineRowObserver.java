@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.observe;
 
+import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
+import io.izzel.arclight.common.prts.kernel.meter.SelfTimers;
 import io.izzel.arclight.common.prts.support.PrtsPipelineRows;
 
 import java.util.concurrent.atomic.LongAdder;
@@ -60,8 +62,8 @@ public final class PipelineRowObserver implements PrtsPipelineRows.MailboxRowTap
      * never in the bucket its name claims. */
     @Override
     public void mailboxTask(Object mailbox, String mailboxName, long nanos) {
-        int index = PrtsPipelineRows.isNonTargetMailbox(mailbox) ? indexOf(OTHER)
-            : indexOf(mailboxName);
+        boolean nonTarget = PrtsPipelineRows.isNonTargetMailbox(mailbox);
+        int index = nonTarget ? indexOf(OTHER) : indexOf(mailboxName);
         tasks[index].increment();
         if (nanos > 0L) {
             taskNanos[index].add(nanos);
@@ -69,7 +71,24 @@ public final class PipelineRowObserver implements PrtsPipelineRows.MailboxRowTap
         WorldResChildMeter meter = childMeter;
         if (meter != null) {
             meter.report(mailbox, mailboxName, nanos);
+            noteParentUse(mailbox, mailboxName, nanos, nonTarget, index);
         }
+    }
+
+    /** The world-resource row owns the target pipeline tasks that are not the generation/light
+     * children; recording them from the same mailbox tap gives the parent settlement a real
+     * "other" part without charging a child task twice. */
+    private static void noteParentUse(Object mailbox, String mailboxName, long nanos,
+                                      boolean nonTarget, int index) {
+        if (nonTarget || nanos <= 0L
+            || (index != indexOf(SORTER) && index != indexOf(MAIN) && index != indexOf(OTHER))) {
+            return;
+        }
+        String worldId = PrtsPipelineRows.worldOf(mailbox);
+        if (PrtsPipelineRows.UNPLACED_WORLD.equals(worldId)) {
+            return;
+        }
+        SelfTimers.note(SelfClass.WORLDRES, worldId, "pipeline-" + BUCKETS[index], nanos);
     }
 
     @Override

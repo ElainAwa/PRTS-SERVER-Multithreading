@@ -177,6 +177,60 @@ class WorldResChildProductionWiringTest {
         assertEquals(WorldResChildBudget.Status.UNKNOWN_DEMAND, budget(WORLD_B).status());
     }
 
+
+    @Test
+    void aParentPipelineTaskFeedsTheWorldResourceUsedAndCanOverrunTheRow() {
+        tick(WORLD_A);
+        double parentShare = module.shares().lastTable()
+            .row(WORLD_A, ShareClass.WORLDRES).shareMs();
+        long parentNanos = (long) Math.ceil(parentShare * 2_000_000.0) + 1_000_000L;
+
+        PrtsPipelineRows.task(mailboxA, "sorter", parentNanos);
+        tick(WORLD_A);
+        ShareTable.ShareRow usedRow = module.shares().lastTable()
+            .row(WORLD_A, ShareClass.WORLDRES);
+        assertTrue(usedRow.usedMs() > parentShare,
+            "the parent-world-resource task is the row's own used time, not zero");
+
+        tick(WORLD_A);
+        WorldResChildBudget budget = budget(WORLD_A);
+        assertNotNull(budget);
+        assertEquals(WorldResChildBudget.Status.PARENT_OVER, budget.status(),
+            "a parent own use above the row allowance is the explicit over status");
+        assertTrue(budget.otherMs() > budget.parentShareMs());
+        assertTrue(SendDelayAction.shouldDefer(WORLD_A, 4),
+            "the fresh over settlement now reaches the bounded send-delay consumer");
+    }
+
+    @Test
+    void parentAndChildPipelineTasksKeepSeparateUsedSources() {
+        tick(WORLD_A);
+        PrtsPipelineRows.task(mailboxA, "worldgen", 2_000_000L);
+        PrtsPipelineRows.task(mailboxA, "sorter", 5_000_000L);
+        tick(WORLD_A);
+        tick(WORLD_A);
+
+        WorldResChildBudget childWindow = null;
+        WorldResChildBudget parentWindow = null;
+        for (WorldResChildBudget candidate : module.worldResChildLedger().settlements()) {
+            if (!candidate.worldId().equals(WORLD_A)) {
+                continue;
+            }
+            if (candidate.tickIndex() <= 1L) {
+                childWindow = candidate;
+            } else {
+                parentWindow = candidate;
+            }
+        }
+        assertNotNull(childWindow);
+        assertNotNull(parentWindow);
+        assertEquals(2_000_000.0, childWindow.genTaskNanos(), 1.0e-9);
+        assertEquals(0.0, childWindow.otherMs(), 1.0e-9);
+        assertEquals(5.0, parentWindow.otherMs(), 1.0e-9,
+            "only the non-child parent task is the parent own use");
+        assertEquals(0.0, parentWindow.genTaskNanos(), 1.0e-9);
+    }
+
     @Test
     void aReloadedWorldStartsAtANewEpochAndTheOldWindowIsNotSettled() {
         tick(WORLD_A);
