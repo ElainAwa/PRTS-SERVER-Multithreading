@@ -65,6 +65,7 @@
     "pipeline.PrtsChunkDemandMixin",
     "pipeline.PrtsChunkMaterializationMixin",
     "pipeline.PrtsChunkPipelineProgressMixin",
+    "pipeline.PrtsChunkSendReadyMixin",
     "net.PrtsOutboundAcceptanceMixin"
   ]
 }

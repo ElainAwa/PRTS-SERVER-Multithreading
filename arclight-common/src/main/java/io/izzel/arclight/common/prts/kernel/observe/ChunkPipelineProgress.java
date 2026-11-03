@@ -48,13 +48,13 @@ public final class ChunkPipelineProgress {
         STALE_TICK
     }
 
-    /** One retained tick of one world: the completed generation and light steps at that tick. */
-    public record TickCounts(long tick, long genSteps, long lightSteps) {
+    /** One retained tick of one world: the completed generation, light and send-ready steps. */
+    public record TickCounts(long tick, long genSteps, long lightSteps, long sendSteps) {
     }
 
-    /** One world's bounded progress view: its real epoch, cumulative progress and retained ticks. */
+    /** One world's bounded progress view: real epoch, cumulative progress and retained ticks. */
     public record WorldReading(String worldId, long epoch, long genSteps, long lightSteps,
-                               List<TickCounts> ticks) {
+                               long sendSteps, List<TickCounts> ticks) {
     }
 
     /** An immutable read of the internal face; it is consumed by tests/agents, not by a readout key. */
@@ -128,6 +128,19 @@ public final class ChunkPipelineProgress {
      * and a full bound are answers in the outcome table, never exceptions to the future. */
     public static void note(long ticket, String worldId, long epochAtStart, long chunkPos,
                             boolean light, Throwable failure, boolean resultPresent) {
+        note(ticket, worldId, epochAtStart, chunkPos, light, failure, resultPresent, false);
+    }
+
+    /** Reports one real send-ready transition. The caller observed the host's own send-ready
+     * notification, so there is no failure/cancel result here; a transition that cannot be kept is
+     * refused into the same outcome table and never reaches the send path. */
+    public static void noteSend(String worldId, long epochAtStart, long chunkPos) {
+        note(0L, worldId, epochAtStart, chunkPos, false, null, true, true);
+    }
+
+    private static void note(long ticket, String worldId, long epochAtStart, long chunkPos,
+                             boolean light, Throwable failure, boolean resultPresent,
+                             boolean send) {
         if (!installed) {
             return;
         }
@@ -165,8 +178,11 @@ public final class ChunkPipelineProgress {
                     world = new WorldState(worldId);
                     WORLDS.put(worldId, world);
                 }
-                world.epoch = currentEpoch;
-                if (world.duplicate(ticket)) {
+                if (world.epoch != currentEpoch) {
+                    world.epoch = currentEpoch;
+                    world.clearSendHistory();
+                }
+                if (send ? world.sendDuplicate(chunkPos) : world.duplicate(ticket)) {
                     count(Outcome.DUPLICATE);
                     return;
                 }
@@ -174,7 +190,7 @@ public final class ChunkPipelineProgress {
                     count(Outcome.STALE_TICK);
                     return;
                 }
-                world.count(tick, light);
+                world.count(tick, light, send);
                 count(Outcome.COUNTED);
             }
         } catch (Throwable ignored) {
@@ -250,9 +266,12 @@ public final class ChunkPipelineProgress {
         private final TreeMap<Long, TickCounts> ticks = new TreeMap<>();
         private final ArrayDeque<Long> recentTickets = new ArrayDeque<>();
         private final Set<Long> recentTicketSet = new HashSet<>();
+        private final ArrayDeque<Long> recentSendChunks = new ArrayDeque<>();
+        private final Set<Long> recentSendChunkSet = new HashSet<>();
         private long epoch = WorldEpochs.UNTRACKED;
         private long genSteps;
         private long lightSteps;
+        private long sendSteps;
 
         private WorldState(String worldId) {
             this.worldId = worldId;
@@ -268,6 +287,23 @@ public final class ChunkPipelineProgress {
                 recentTicketSet.remove(old);
             }
             return false;
+        }
+
+        private boolean sendDuplicate(long chunkPos) {
+            if (!recentSendChunkSet.add(chunkPos)) {
+                return true;
+            }
+            recentSendChunks.addLast(chunkPos);
+            while (recentSendChunks.size() > MAX_RECENT_TICKETS) {
+                Long old = recentSendChunks.removeFirst();
+                recentSendChunkSet.remove(old);
+            }
+            return false;
+        }
+
+        private void clearSendHistory() {
+            recentSendChunks.clear();
+            recentSendChunkSet.clear();
         }
 
         private boolean acceptTick(long tick) {
@@ -288,9 +324,12 @@ public final class ChunkPipelineProgress {
             return ticks.size() < MAX_TICK_GROUPS || ticks.containsKey(tick);
         }
 
-        private void count(long tick, boolean light) {
+        private void count(long tick, boolean light, boolean send) {
             TimedCounts current = new TimedCounts(ticks.get(tick));
-            if (light) {
+            if (send) {
+                current.send++;
+                sendSteps++;
+            } else if (light) {
                 current.light++;
                 lightSteps++;
             } else {
@@ -305,7 +344,8 @@ public final class ChunkPipelineProgress {
             for (Map.Entry<Long, TickCounts> entry : ticks.entrySet()) {
                 copy.add(entry.getValue());
             }
-            return new WorldReading(worldId, epoch, genSteps, lightSteps, List.copyOf(copy));
+            return new WorldReading(worldId, epoch, genSteps, lightSteps, sendSteps,
+                List.copyOf(copy));
         }
     }
 
@@ -313,16 +353,18 @@ public final class ChunkPipelineProgress {
 
         private long gen;
         private long light;
+        private long send;
 
         private TimedCounts(TickCounts previous) {
             if (previous != null) {
                 this.gen = previous.genSteps();
                 this.light = previous.lightSteps();
+                this.send = previous.sendSteps();
             }
         }
 
         private TickCounts toRecord(long tick) {
-            return new TickCounts(tick, gen, light);
+            return new TickCounts(tick, gen, light, send);
         }
     }
 }

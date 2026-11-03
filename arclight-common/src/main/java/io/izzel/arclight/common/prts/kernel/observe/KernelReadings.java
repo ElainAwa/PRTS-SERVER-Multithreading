@@ -1930,6 +1930,7 @@ public final class KernelReadings {
             add(lines, prefix + "delta", reading.delta());
         }
         worldSignals(lines, registry.progress());
+        worldSendSignals(lines, registry.progress().worldReadings("send"));
         add(lines, "wp.signal_rows", registry.progress().declaredCount());
         add(lines, "wp.signal_bound", registry.progress().boundCount());
         chunkMaterialization(lines, module);
@@ -2029,6 +2030,19 @@ public final class KernelReadings {
         List<WaitProgress.WorldReading> readings = progress.worldReadings("gen");
         worldGenSignals(lines, readings);
         worldLightSignals(lines, readings);
+    }
+
+    /** Adds the explicit per-world send-ready readings. Only worlds with a positive send-ready
+     * count are emitted; absent/stale/untracked worlds emit no pair and no zero. */
+    static void worldSendSignals(List<String> lines, List<WaitProgress.WorldReading> readings) {
+        for (WaitProgress.WorldReading reading : readings) {
+            if (reading.value() <= 0L) {
+                continue;
+            }
+            String prefix = "wp.signal.send." + safe(reading.worldId()) + ".";
+            add(lines, prefix + "value", reading.value());
+            add(lines, prefix + "delta", reading.delta());
+        }
     }
 
     /** Adds the explicit per-world light readings of the same world progress view. It publishes

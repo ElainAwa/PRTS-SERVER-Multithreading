@@ -805,8 +805,15 @@ public final class KernelModule {
                     .map(world -> new WaitProgress.WorldValue(world.worldId(), world.epoch(),
                         world.genSteps(), world.lightSteps()))
                     .toList());
+            waitPoints.progress().bindWorlds("send", "chunk.send.ready_steps",
+                () -> ChunkPipelineProgress.snapshot().worlds().stream()
+                    .filter(world -> world.sendSteps() > 0L)
+                    .map(world -> new WaitProgress.WorldValue(world.worldId(), world.epoch(),
+                        world.sendSteps(), 0L))
+                    .toList());
         } else {
             waitPoints.progress().unbindWorlds("gen");
+            waitPoints.progress().unbindWorlds("send");
         }
         if (pipelineRowTapInstalled == wanted) {
             return;

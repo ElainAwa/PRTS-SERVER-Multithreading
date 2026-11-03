@@ -58,6 +58,17 @@ class KernelReadingsWorldSignalTest {
     }
 
     @Test
+    void aSendReadingBecomesASafeValueDeltaPair() {
+        List<String> lines = new ArrayList<>();
+        KernelReadings.worldSendSignals(lines, List.of(
+            new WaitProgress.WorldReading("send", "minecraft:overworld", 1L, true, "source",
+                3L, 0L, 3L, 0L, 0L, 0L)));
+        assertEquals(List.of(
+            "wp.signal.send.minecraft_overworld.value=3",
+            "wp.signal.send.minecraft_overworld.delta=3"), lines);
+    }
+
+    @Test
     void noReadingMeansNoZeroPair() {
         List<String> gen = new ArrayList<>();
         List<String> light = new ArrayList<>();
