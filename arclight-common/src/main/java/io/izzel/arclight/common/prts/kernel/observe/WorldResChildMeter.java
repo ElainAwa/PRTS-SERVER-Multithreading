@@ -6,24 +6,23 @@ import io.izzel.arclight.common.prts.support.PrtsPipelineRows;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** The bounded worker-side meter of generation and light task time. It is fed through the existing
- * pipeline mailbox tap (the mailbox object, the name and the task nanoseconds); the world is read
- * from the existing mailbox placement and the epoch is pinned by the window the owner opened. A
- * report that is negative, too long to be one task, non-target, unplaced, of a world outside the
- * window or beyond the bucket bound is rejected instead of entering a bucket. The owner drains the
- * window at its existing budget boundary and a drained window is never merged: a later report is
- * rejected as closed. This class is internal: no formal readout key and no new tap. */
+/** The bounded worker-side meter of generation and light task time, fed by the existing pipeline
+ * mailbox tap: the world comes from the existing placement, the epoch is pinned by the window the
+ * owner opened, and a report that is negative, discontinuous, non-target, unplaced, wrong-world,
+ * closed or beyond the bucket bound is rejected instead of entering a bucket. A drained window is
+ * never merged. */
 public final class WorldResChildMeter {
 
+    /** The mailbox name of generation tasks. */
     public static final String WORLDGEN = "worldgen";
 
+    /** The mailbox name of light tasks. */
     public static final String LIGHT = "light";
 
     /** How many worlds one window can hold; a world beyond it is rejected, not folded in. */
     public static final int MAX_WORLDS = 64;
 
-    /** One task longer than this is outside a single task's plausible span and is rejected as a
-     * discontinuity instead of entering a bucket. */
+    /** One task longer than this is outside a plausible single span and is rejected as a discontinuity. */
     public static final long MAX_SINGLE_REPORT_NANOS = 60_000_000_000L;
 
     /** One world's time samples in the current window. */
@@ -31,8 +30,8 @@ public final class WorldResChildMeter {
                          long reports) {
     }
 
-    /** One drained window. Rejection counters are cumulative and are copied so a reader can tell
-     * why a report did not enter a bucket. */
+    /** One drained window; the rejection counters are cumulative copies so a reader can tell why a
+     * report did not enter. */
     public record WindowReading(long tickIndex, Map<String, Long> epochs,
                                 Map<String, Sample> samples, long droppedWindows,
                                 long rejectedNegative, long rejectedNonTarget,
@@ -77,8 +76,8 @@ public final class WorldResChildMeter {
     private long rejectedCapacity;
     private long rejectedClosed;
 
-    /** Opens a fresh window for one owner tick and the epoch of each live world. A window the owner
-     * never drained is dropped, never merged into the new one; the drop is counted. */
+    /** Opens a fresh window for one owner tick and the epoch of each live world; an undrained window
+     * is dropped, never merged, and the drop is counted. */
     public synchronized void openWindow(long tickIndex, Map<String, Long> epochs) {
         if (window != null) {
             droppedWindows++;
@@ -174,6 +173,7 @@ public final class WorldResChildMeter {
             rejectedWrongWorld, rejectedDiscontinuity, rejectedCapacity, rejectedClosed);
     }
 
+    /** Clears the open window and every rejection counter. */
     public synchronized void reset() {
         window = null;
         droppedWindows = 0L;

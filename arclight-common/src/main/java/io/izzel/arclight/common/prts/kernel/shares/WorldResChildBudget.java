@@ -3,57 +3,38 @@ package io.izzel.arclight.common.prts.kernel.shares;
 
 import java.util.List;
 
-/** The child budget of the world-resource row: the parent {@link ShareClass#WORLDRES} row of one
- * world and tick is split into a generation share, a light share, the explicit parent other part
- * and an explicit margin. The split is a partition, not a second budget: the parent row is counted
- * once and the children never add to it.
- *
- * <p>The settlement is internal and names no readout key; it is a declaration about the parent
- * allowance, not a limit on the work the host actually ran. The split source is explicit; an
- * unknown demand is reported as unknown and is never replaced by a fifty-fifty default. Only time
- * cost enters the split: the two demands are task nanoseconds, no count or capacity is read. The
- * declared path keeps both shares finite and inside the available part even for the largest finite
- * demands; a non-finite or negative input is refused instead of being clamped.
- */
+/** The child budget of the world-resource row: the parent WORLDRES row of one world and tick is
+ * split into generation, light, the parent other part and the declared margin, and the parent row is
+ * counted once. */
 public final class WorldResChildBudget {
 
-    /** Where the two child shares came from. */
+    /** Where the two child shares came from; every value names a different declared answer. */
     public enum SplitSource {
 
-        /** Both child demands are declared time costs; the shares are proportional to them. */
         DECLARED_TASK_TIME,
 
-        /** Both child demands are a known zero; no child share is handed out. */
         KNOWN_ZERO_DEMAND,
 
-        /** The child demand is unknown; no split is invented. */
         DEMAND_UNKNOWN,
 
-        /** The inputs were invalid or the parent was exceeded; no split is handed out. */
         NONE
     }
 
     /** The settlement state of one child budget. */
     public enum Status {
 
-        /** The children plus the parent other part plus the margin fit the parent row. */
         SETTLED,
 
-        /** The demand is unknown; the children stay at zero and the rest stays unallocated. */
         UNKNOWN_DEMAND,
 
-        /** The declared parent other part plus margin exceeds the parent row. */
         PARENT_OVER,
 
-        /** A negative or non-finite input, or a non-finite parent row. */
         INVALID_INPUT,
 
-        /** The world has no world-resource row in the table. */
         NO_PARENT
     }
 
-    /** Two demands measured only as time, never as a count: the task nanoseconds of generation and
-     * of light. {@link #unknown()} is the explicit "the demand is not known" answer. */
+    /** Two task-nanosecond samples: the generation and light time of one world. */
     public record ChildDemand(double genTaskNanos, double lightTaskNanos) {
 
         /** The explicit unknown demand; no default split is applied to it. */
@@ -82,10 +63,12 @@ public final class WorldResChildBudget {
             return isKnown() && genTaskNanos == 0.0 && lightTaskNanos == 0.0;
         }
 
+        /** The generation sample in milliseconds. */
         public double genTaskMs() {
             return genTaskNanos / 1_000_000.0;
         }
 
+        /** The light sample in milliseconds. */
         public double lightTaskMs() {
             return lightTaskNanos / 1_000_000.0;
         }
@@ -126,8 +109,7 @@ public final class WorldResChildBudget {
         this.status = status;
     }
 
-    /** Settles one world's child budget from the real table's world-resource row. The caller passes
-     * the epoch and the two declared parent parts explicitly; nothing is defaulted. */
+    /** Settles one world's child budget from the real table's world-resource row; nothing is defaulted. */
     public static WorldResChildBudget settle(ShareTable table, String worldId, long epoch,
                                              ChildDemand demand, double otherMs,
                                              double marginMs) {
@@ -177,9 +159,7 @@ public final class WorldResChildBudget {
         if (Double.isFinite(demandNanos) && demandNanos > 0.0) {
             genRatio = genNanos / demandNanos;
         } else {
-            // Both samples are finite but their sum can overflow. Scale by the larger sample so a
-            // huge demand still splits in proportion: max + max is Infinity, while the ratio stays
-            // stable and the two shares stay finite.
+            // Both samples are finite but their sum can overflow: scale by the larger one.
             double max = Math.max(genNanos, lightNanos);
             if (!Double.isFinite(max) || max <= 0.0) {
                 return new WorldResChildBudget(worldId, tick, epoch, parentShare, 0.0, 0.0,
@@ -195,8 +175,7 @@ public final class WorldResChildBudget {
             genRatio = genScaled / scaledSum;
         }
         double genShare = available * genRatio;
-        // One multiply and one subtraction fill the available part exactly. A second independent
-        // multiply could round the pair past the row, or to infinity, at the largest finite samples.
+        // One multiply and one subtraction: a second multiply could round past the row.
         double lightShare = available - genShare;
         if (!Double.isFinite(genShare) || !Double.isFinite(lightShare) || lightShare < 0.0) {
             return new WorldResChildBudget(worldId, tick, epoch, parentShare, 0.0, 0.0,
@@ -215,54 +194,67 @@ public final class WorldResChildBudget {
         return Double.isFinite(value) ? value : 0.0;
     }
 
+    /** The world the settlement belongs to. */
     public String worldId() {
         return worldId;
     }
 
+    /** The tick of the table the settlement answered. */
     public long tickIndex() {
         return tickIndex;
     }
 
+    /** The world epoch the settlement was taken under. */
     public long epoch() {
         return epoch;
     }
 
+    /** The parent world-resource row the settlement partitions. */
     public double parentShareMs() {
         return parentShareMs;
     }
 
+    /** The generation child share. */
     public double genShareMs() {
         return genShareMs;
     }
 
+    /** The light child share. */
     public double lightShareMs() {
         return lightShareMs;
     }
 
+    /** The explicit parent other part. */
     public double otherMs() {
         return otherMs;
     }
 
+    /** The explicit margin kept inside the parent row. */
     public double marginMs() {
         return marginMs;
     }
 
+    /** The parent allowance no declared part named. */
     public double unallocatedMs() {
         return unallocatedMs;
     }
 
+    /** The generation task-nanosecond sample the ratio was taken from, zero when none is known. */
     public double genTaskNanos() {
         return genTaskNanos;
     }
 
+    /** The light task-nanosecond sample the ratio was taken from, zero when none is known. */
     public double lightTaskNanos() {
         return lightTaskNanos;
     }
 
+    /** Where the two child shares came from. */
     public SplitSource splitSource() {
         return splitSource;
     }
 
+    /** The settlement state of this budget. */
     public Status status() {
         return status;
     }
@@ -272,14 +264,12 @@ public final class WorldResChildBudget {
         return genShareMs + lightShareMs;
     }
 
-    /** Everything the settlement names inside the parent row: the children, the parent other part,
-     * the margin and the rest that stayed unallocated. */
+    /** Everything the settlement names inside the parent row, unallocated rest included. */
     public double plannedShareMs() {
         return genShareMs + lightShareMs + otherMs + marginMs + unallocatedMs;
     }
 
-    /** The whole settlement fits the parent row within the rounding tolerance. A non-finite term
-     * never passes conservation. */
+    /** The whole settlement fits the parent row within the rounding tolerance; a non-finite term never passes. */
     public boolean conserved() {
         if (status == Status.PARENT_OVER || status == Status.INVALID_INPUT
             || status == Status.NO_PARENT) {
@@ -297,14 +287,13 @@ public final class WorldResChildBudget {
             * Math.max(1.0, parentShareMs());
     }
 
-    /** The child rows this settlement would name, in generation/light order; the parent row is not
-     * repeated here, so a reader counting both levels can avoid a double count. */
+    /** The two child rows, generation then light; the parent row is not repeated. */
     public List<ChildRow> childRows() {
         return List.of(new ChildRow(worldId, tickIndex, epoch, "gen", genShareMs),
             new ChildRow(worldId, tickIndex, epoch, "light", lightShareMs));
     }
 
-    /** One child row of the world-resource parent; internal only, no readout key. */
+    /** One child row of the world-resource parent. */
     public record ChildRow(String worldId, long tickIndex, long epoch, String child, double shareMs) {
     }
 }

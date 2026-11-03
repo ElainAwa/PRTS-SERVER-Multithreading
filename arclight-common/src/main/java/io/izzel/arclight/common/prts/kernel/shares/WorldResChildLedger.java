@@ -70,6 +70,7 @@ public final class WorldResChildLedger {
         return countedParentMs;
     }
 
+    /** The number of settlements the ledger retains across every tracked world. */
     public synchronized int settlementCount() {
         int total = 0;
         for (WorldState state : worlds.values()) {
