@@ -1076,12 +1076,12 @@ public final class KernelSelfCheck {
             JobDeclaration.SiteClass.UNKNOWN, List.of("a/1"), 1));
         declarations.add(declaration("a/3", world, "entity", "r3", 3, ShareClass.ENTITY,
             JobDeclaration.SiteClass.PARALLEL, List.of("a/2", "a/0"), 1));
-        JobGraphBuilder.Freeze first = JobGraphBuilder.freeze(declarations, tick, 1L, 1L, 64);
+        JobGraphBuilder.Freeze first = JobGraphBuilder.freezeDiagnostic(declarations, tick, 1L, 1L, 64);
         List<JobDeclaration> shuffled = new ArrayList<>();
         for (int index = declarations.size() - 1; index >= 0; index--) {
             shuffled.add(declarations.get(index));
         }
-        JobGraphBuilder.Freeze second = JobGraphBuilder.freeze(shuffled, tick, 1L, 1L, 64);
+        JobGraphBuilder.Freeze second = JobGraphBuilder.freezeDiagnostic(shuffled, tick, 1L, 1L, 64);
         String firstOrder = first.ok() ? joinIds(first.graph().order()) : "refused";
         String secondOrder = second.ok() ? joinIds(second.graph().order()) : "refused";
         lines.add("selftest.jobgraph_nodes=" + (first.ok() ? first.graph().nodeCount() : 0)
@@ -1103,8 +1103,8 @@ public final class KernelSelfCheck {
             JobDeclaration.SiteClass.PARALLEL, List.of("a/5"), 1));
         cyclic.add(declaration("a/5", world, "entity", "r5", 5, ShareClass.ENTITY,
             JobDeclaration.SiteClass.PARALLEL, List.of("a/4"), 1));
-        JobGraphBuilder.Freeze cycle = JobGraphBuilder.freeze(cyclic, tick, 1L, 1L, 64);
-        JobGraphBuilder.Freeze duplicate = JobGraphBuilder.freeze(
+        JobGraphBuilder.Freeze cycle = JobGraphBuilder.freezeDiagnostic(cyclic, tick, 1L, 1L, 64);
+        JobGraphBuilder.Freeze duplicate = JobGraphBuilder.freezeDiagnostic(
             List.of(declaration("a/0", world, "entity", "r0", 0, ShareClass.ENTITY,
                 JobDeclaration.SiteClass.PARALLEL, List.of(), 1),
                 declaration("a/0", world, "entity", "r9", 0, ShareClass.ENTITY,
@@ -1112,13 +1112,13 @@ public final class KernelSelfCheck {
         JobDeclaration crossWorld = new JobDeclaration("x/0", 1L, world, "entity", 0, List.of(), 0,
             "r0", "region", List.of(ref), List.of(new JobDeclaration.DomainRef("world-b", "entity", 0)),
             ShareClass.ENTITY, JobDeclaration.SiteClass.PARALLEL, 0, 4);
-        JobGraphBuilder.Freeze cross = JobGraphBuilder.freeze(List.of(crossWorld), tick, 1L, 1L, 64);
+        JobGraphBuilder.Freeze cross = JobGraphBuilder.freezeDiagnostic(List.of(crossWorld), tick, 1L, 1L, 64);
         JobDeclaration unbounded = new JobDeclaration("u/0", 1L, world, "entity", 0, List.of(), 0,
             "r0", "region", List.of(ref), List.of(ref), ShareClass.ENTITY,
             JobDeclaration.SiteClass.PARALLEL, 0, 0);
-        JobGraphBuilder.Freeze bound = JobGraphBuilder.freeze(List.of(unbounded), tick, 1L, 1L, 64);
-        JobGraphBuilder.Freeze capped = JobGraphBuilder.freeze(declarations, tick, 1L, 1L, 2);
-        JobGraphBuilder.Freeze unknownPredecessor = JobGraphBuilder.freeze(
+        JobGraphBuilder.Freeze bound = JobGraphBuilder.freezeDiagnostic(List.of(unbounded), tick, 1L, 1L, 64);
+        JobGraphBuilder.Freeze capped = JobGraphBuilder.freezeDiagnostic(declarations, tick, 1L, 1L, 2);
+        JobGraphBuilder.Freeze unknownPredecessor = JobGraphBuilder.freezeDiagnostic(
             List.of(declaration("a/9", world, "entity", "r9", 0, ShareClass.ENTITY,
                 JobDeclaration.SiteClass.PARALLEL, List.of("nobody"), 1)), tick, 1L, 1L, 64);
         lines.add("selftest.jobgraph_refusals=" + codeOf(cycle) + "/" + codeOf(duplicate) + "/"
@@ -1163,7 +1163,7 @@ public final class KernelSelfCheck {
             JobDeclaration.SiteClass.PARALLEL, List.of(), 1));
         twoRoots.add(declaration("b/2", world, "entity", "r2", 0, ShareClass.ENTITY,
             JobDeclaration.SiteClass.PARALLEL, List.of("b/0"), 1));
-        JobGraph wide = JobGraphBuilder.freeze(twoRoots, tick, 1L, 1L, 64).graph();
+        JobGraph wide = JobGraphBuilder.freezeDiagnostic(twoRoots, tick, 1L, 1L, 64).graph();
         JobScheduler cappedScheduler = new JobScheduler();
         cappedScheduler.begin(wide, 1);
         boolean admitted = cappedScheduler.next() != null;

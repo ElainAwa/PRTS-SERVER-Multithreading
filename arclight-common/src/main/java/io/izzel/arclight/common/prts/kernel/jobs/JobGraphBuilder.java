@@ -118,11 +118,21 @@ public final class JobGraphBuilder {
     private JobGraphBuilder() {
     }
 
-    /** Freezes one tick's declarations without a caller budget: the offline entry the fixtures and
-     * the self check use. The planning period goes through {@link #recompute} instead, so a
-     * production full build always carries its work budget. */
+    /** Freezes one tick's declarations without a caller budget and counts the start: the planning
+     * period goes through {@link #recompute} instead, so this entry is the one real branch that can
+     * start a full rebuild without a work budget. */
     public static Freeze freeze(List<JobDeclaration> declarations, long tickIndex, long planSequence,
                                 long worldSetGeneration, int queueCap) {
+        RecomputeUnbounded.noteUnbudgetedStart();
+        return freeze(declarations, tickIndex, planSequence, worldSetGeneration, queueCap,
+            new Work(Integer.MAX_VALUE));
+    }
+
+    /** Freezes one tick's declarations offline for a diagnostic answer: the same unbudgeted build
+     * without counting it and without making the counter source covered, because a self check is not
+     * a planning execution. */
+    public static Freeze freezeDiagnostic(List<JobDeclaration> declarations, long tickIndex,
+                                          long planSequence, long worldSetGeneration, int queueCap) {
         return freeze(declarations, tickIndex, planSequence, worldSetGeneration, queueCap,
             new Work(Integer.MAX_VALUE));
     }
@@ -177,6 +187,7 @@ public final class JobGraphBuilder {
                 "a full recompute was asked for without a work budget", scanWork, scanBudget, 0,
                 fullBudget, dirty);
         }
+        RecomputeUnbounded.noteBudgetedBuild();
         Work work = new Work(fullBudget);
         Freeze freeze = freeze(request.declarations(), request.tickIndex(), request.planSequence(),
             request.worldSetGeneration(), cap, work);

@@ -25,6 +25,7 @@ import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
 import io.izzel.arclight.common.prts.kernel.jobs.JobScheduler;
 import io.izzel.arclight.common.prts.kernel.jobs.PipelineRoundJobs;
+import io.izzel.arclight.common.prts.kernel.jobs.RecomputeUnbounded;
 import io.izzel.arclight.common.prts.kernel.jobs.ShareMeterPoint;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlanStore;
@@ -1007,6 +1008,9 @@ public final class KernelReadings {
         add(lines, "plan.c1.nanos_builds", module.planC1NanosBuilds());
         add(lines, "plan.c1.nanos_per_build", module.planC1NanosBuilds() == 0L ? 0L
             : module.planC1NanosTotal() / module.planC1NanosBuilds());
+        // The one formal graph-recompute counter; omitted until a graph build covers the source.
+        RecomputeUnbounded.reading().ifPresent(value ->
+            add(lines, "recompute.unbounded", value));
         add(lines, "plan.control_observed", control.observed() ? 1 : 0);
         add(lines, "plan.control_tick", control.tickIndex());
         add(lines, "plan.control_sequence", control.planSequence());

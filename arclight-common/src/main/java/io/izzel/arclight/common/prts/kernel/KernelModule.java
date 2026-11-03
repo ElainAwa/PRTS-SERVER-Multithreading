@@ -40,6 +40,7 @@ import io.izzel.arclight.common.prts.kernel.jobs.JobScheduler;
 import io.izzel.arclight.common.prts.kernel.jobs.PipelineBatchLedger;
 import io.izzel.arclight.common.prts.kernel.jobs.PipelineRoundJobs;
 import io.izzel.arclight.common.prts.kernel.jobs.PipelineRunSeal;
+import io.izzel.arclight.common.prts.kernel.jobs.RecomputeUnbounded;
 import io.izzel.arclight.common.prts.kernel.jobs.ShareMeterPoint;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlanPlanner;
@@ -3734,6 +3735,7 @@ public final class KernelModule {
         jobDeclarations = 0L;
         lastDispatchHandedOut = 0L;
         jobMeter.reset();
+        RecomputeUnbounded.reset();
         plans.reset();
         versionSlots.reset();
         ownerGrants.reset();
