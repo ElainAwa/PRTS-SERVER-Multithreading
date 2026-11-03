@@ -1079,9 +1079,13 @@ public final class KernelModule {
         TickPlanStore.Feedback feedback = KernelSettings.planFeedback() ? plans.feedback()
             : TickPlanStore.Feedback.none();
         long freezeStartedAt = System.nanoTime();
+        // The newest published graph is the one the bounded recompute may reuse; a plan refused by
+        // the previous tick leaves the graph of the last accepted plan as the previous one.
+        TickPlan latestPlan = plans.latest();
         TickPlanPlanner.Result result = TickPlanPlanner.plan(new TickPlanPlanner.Input(tickIndex,
             planSequence, worldGeneration, worlds, domainIds, previousControl, jobIntake.take(),
-            shares.lastTable(), KernelSettings.jobQueueCap(), feedback));
+            shares.lastTable(), KernelSettings.jobQueueCap(), feedback,
+            latestPlan == null ? null : latestPlan.graph()));
         long freezeNanos = System.nanoTime() - freezeStartedAt;
         planNanosLast = freezeNanos;
         planNanosTotal += freezeNanos;

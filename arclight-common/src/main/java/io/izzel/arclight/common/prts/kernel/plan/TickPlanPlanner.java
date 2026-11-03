@@ -24,16 +24,27 @@ import java.util.TreeMap;
  * either of them. */
 public final class TickPlanPlanner {
 
-    /** What one build was given. */
+    /** What one build was given. {@code previousGraph} is the graph the newest plan published, or
+     * null on the first build of a planning life; it is the only input the bounded recompute reads
+     * to avoid rebuilding a graph the declarations did not change. */
     public record Input(long tickIndex, long planSequence, long worldSetGeneration,
                         List<String> worlds, List<String> declaredDomains, TickPlanStore.Control control,
                         List<JobDeclaration> declarations, ShareTable shareTable, int queueCap,
-                        TickPlanStore.Feedback feedback) {
+                        TickPlanStore.Feedback feedback, JobGraph previousGraph) {
 
         public Input {
             worlds = List.copyOf(worlds);
             declaredDomains = List.copyOf(declaredDomains);
             declarations = List.copyOf(declarations);
+        }
+
+        /** The first build of a planning life: no previous graph is available to reuse. */
+        public Input(long tickIndex, long planSequence, long worldSetGeneration, List<String> worlds,
+                     List<String> declaredDomains, TickPlanStore.Control control,
+                     List<JobDeclaration> declarations, ShareTable shareTable, int queueCap,
+                     TickPlanStore.Feedback feedback) {
+            this(tickIndex, planSequence, worldSetGeneration, worlds, declaredDomains, control,
+                declarations, shareTable, queueCap, feedback, null);
         }
     }
 
@@ -52,11 +63,17 @@ public final class TickPlanPlanner {
     }
 
     /** What one build produced. A refused build carries the code and names the item; it publishes no
-     * partial plan. */
-    public record Result(TickPlan plan, RejectCode code, String item, ModeCounts counts) {
+     * partial plan. {@code recompute} is the bounded recompute answer this build was made from, or
+     * null when the build was refused before the graph was asked for. */
+    public record Result(TickPlan plan, RejectCode code, String item, ModeCounts counts,
+                         JobGraphBuilder.Recompute recompute) {
 
         public Result(TickPlan plan, RejectCode code, String item) {
-            this(plan, code, item, ModeCounts.empty());
+            this(plan, code, item, ModeCounts.empty(), null);
+        }
+
+        public Result(TickPlan plan, RejectCode code, String item, ModeCounts counts) {
+            this(plan, code, item, counts, null);
         }
 
         public boolean ok() {
@@ -105,12 +122,20 @@ public final class TickPlanPlanner {
             return Result.refused(RejectCode.COMMIT_ORDER_VIOLATION,
                 "plan sequence " + input.planSequence() + " <= " + control.planSequence());
         }
-        JobGraphBuilder.Freeze freeze = JobGraphBuilder.freeze(input.declarations(),
-            input.tickIndex(), input.planSequence(), input.worldSetGeneration(), input.queueCap());
-        if (!freeze.ok()) {
-            return Result.refused(freeze.code(), freeze.item());
+        // The planning period never calls the unbudgeted freeze: the recompute charges the dirty
+        // scan and the fallback rebuild against two explicit work budgets derived from the queue
+        // bound, so a changed graph is rebuilt only inside its declared budget.
+        int queueCap = Math.max(1, input.queueCap());
+        JobGraphBuilder.Recompute recompute = JobGraphBuilder.recompute(
+            new JobGraphBuilder.RecomputeRequest(input.previousGraph(), input.declarations(),
+                input.tickIndex(), input.planSequence(), input.worldSetGeneration(), queueCap,
+                JobGraphBuilder.scanWorkBudget(queueCap),
+                JobGraphBuilder.fullWorkBudget(queueCap)));
+        if (!recompute.ok()) {
+            return new Result(null, recompute.code(), recompute.item(), ModeCounts.empty(),
+                recompute);
         }
-        JobGraph graph = freeze.graph();
+        JobGraph graph = recompute.graph();
         int unknownSites = 0;
         for (JobGraph.Node node : graph.nodes()) {
             if (node.siteClass() == JobDeclaration.SiteClass.UNKNOWN) {
@@ -156,7 +181,7 @@ public final class TickPlanPlanner {
         TickPlan plan = new TickPlan(input.tickIndex(), input.planSequence(),
             input.worldSetGeneration(), input.worlds(), graph, topologicalOrder, commitOrder,
             input.shareTable(), modes, unknownSites, graph.splitIntents(), hash, feedback);
-        return new Result(plan, null, "", counts);
+        return new Result(plan, null, "", counts, recompute);
     }
 
     /** Worlds in the order the world set gave them, then any world only a declaration named. */
