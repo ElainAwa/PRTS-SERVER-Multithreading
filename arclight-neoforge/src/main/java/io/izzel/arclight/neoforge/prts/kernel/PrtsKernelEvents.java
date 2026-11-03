@@ -56,12 +56,10 @@ public final class PrtsKernelEvents {
             module.installWaitSiteTap();
             module.installLoadProbe();
             module.installUnloadDelivery();
-            PrtsEventOrderBridge.install();
             NeoForge.EVENT_BUS.register(INSTANCE);
             subscribed = true;
             return;
         }
-        PrtsEventOrderBridge.remove();
         module.removeWritePathTap();
         module.removeWaitSiteTap();
         module.removeLoadProbe();
