@@ -261,4 +261,120 @@ class WorldResChildBudgetTest {
         assertEquals(0.0, settlement.budget().childShareMs(), 1.0e-12);
         assertEquals(0.0, ledger.countedParentMs(), 1.0e-12);
     }
+
+    private static ShareTable hugeParent() {
+        ShareTable.ShareRow row = new ShareTable.ShareRow("world-a", ShareClass.WORLDRES,
+            Double.MAX_VALUE, 0.0);
+        return new ShareTable(7L, List.of(row), new ShareTable.ReserveRow(0.0, 0.0, Map.of()),
+            0.0, Double.MAX_VALUE);
+    }
+
+    @Test
+    void theLargestFiniteDemandPairStillSplitsInProportion() {
+        ShareTable table = hugeParent();
+        double gen = Double.MAX_VALUE * 0.75;
+        double light = Double.MAX_VALUE * 0.5;
+        WorldResChildBudget budget = WorldResChildBudget.settle(table, "world-a", EPOCH,
+            WorldResChildBudget.ChildDemand.ofTaskNanos(gen, light), 0.0, 0.0);
+
+        assertEquals(WorldResChildBudget.Status.SETTLED, budget.status());
+        assertEquals(1.5, budget.genShareMs() / budget.lightShareMs(), 1.0e-9,
+            "the sum of the two samples overflows, the proportion of the two shares does not");
+        assertTrue(Double.isFinite(budget.genShareMs()));
+        assertTrue(Double.isFinite(budget.lightShareMs()));
+        assertTrue(Double.isFinite(budget.plannedShareMs()));
+        assertTrue(budget.conserved());
+        assertEquals(0.0, budget.unallocatedMs(), 0.0, "a declared demand fills the available part");
+    }
+
+    @Test
+    void theLargestFiniteSamplesKeepEverySettledTermFinite() {
+        ShareTable table = hugeParent();
+        WorldResChildBudget budget = WorldResChildBudget.settle(table, "world-a", EPOCH,
+            WorldResChildBudget.ChildDemand.ofTaskNanos(Double.MAX_VALUE, Double.MAX_VALUE),
+            0.0, 0.0);
+
+        assertEquals(WorldResChildBudget.Status.SETTLED, budget.status());
+        assertEquals(1.0, budget.genShareMs() / budget.lightShareMs(), 1.0e-9);
+        assertEquals(Double.MAX_VALUE / 2.0, budget.genShareMs(), 1.0e-3);
+        assertTrue(Double.isFinite(budget.parentShareMs()));
+        assertTrue(Double.isFinite(budget.plannedShareMs()));
+        assertTrue(budget.conserved());
+        assertTrue(budget.withinParent());
+    }
+
+    @Test
+    void aHugeDemandPairOnATwoWorldTableStaysInsideItsParent() {
+        ShareTable table = twoWorlds();
+        double parent = parent(table, "world-a");
+        WorldResChildBudget budget = WorldResChildBudget.settle(table, "world-a", EPOCH,
+            WorldResChildBudget.ChildDemand.ofTaskNanos(Double.MAX_VALUE,
+                Double.MAX_VALUE * 0.5), 0.0, 0.0);
+
+        assertEquals(WorldResChildBudget.Status.SETTLED, budget.status());
+        assertEquals(2.0, budget.genShareMs() / budget.lightShareMs(), 1.0e-9);
+        assertTrue(budget.childShareMs() > 0.0);
+        assertTrue(budget.childShareMs() <= parent);
+        assertTrue(budget.conserved());
+    }
+
+    @Test
+    void everyDeclaredSettlementIsFiniteAndConserved() {
+        ShareTable table = hugeParent();
+        double[] scales = {1.0, 1.0e-300, 1.0e300, Double.MAX_VALUE * 0.5};
+        for (double gen : scales) {
+            for (double light : scales) {
+                WorldResChildBudget budget = WorldResChildBudget.settle(table, "world-a", EPOCH,
+                    WorldResChildBudget.ChildDemand.ofTaskNanos(gen, light), 0.0, 0.0);
+                if (budget.status() != WorldResChildBudget.Status.SETTLED) {
+                    continue;
+                }
+                assertTrue(Double.isFinite(budget.genShareMs()));
+                assertTrue(Double.isFinite(budget.lightShareMs()));
+                assertTrue(Double.isFinite(budget.otherMs()));
+                assertTrue(Double.isFinite(budget.marginMs()));
+                assertTrue(Double.isFinite(budget.unallocatedMs()));
+                assertTrue(budget.conserved(), () -> "not conserved for " + gen + "/" + light);
+                assertTrue(budget.withinParent());
+            }
+        }
+    }
+
+    @Test
+    void aNonFiniteParentRowIsRefusedNotClamped() {
+        ShareTable.ShareRow nanRow = new ShareTable.ShareRow("world-a", ShareClass.WORLDRES,
+            Double.NaN, 0.0);
+        ShareTable nanTable = new ShareTable(TICK, List.of(nanRow),
+            new ShareTable.ReserveRow(0.0, 0.0, Map.of()), 0.0, 100.0);
+        ShareTable.ShareRow infRow = new ShareTable.ShareRow("world-a", ShareClass.WORLDRES,
+            Double.POSITIVE_INFINITY, 0.0);
+        ShareTable infTable = new ShareTable(TICK, List.of(infRow),
+            new ShareTable.ReserveRow(0.0, 0.0, Map.of()), 0.0, 100.0);
+        WorldResChildLedger ledger = new WorldResChildLedger(EPOCH);
+
+        WorldResChildLedger.Settlement nan = ledger.settle(nanTable, "world-a", EPOCH, DEMAND,
+            0.0, 0.0);
+        WorldResChildLedger.Settlement inf = ledger.settle(infTable, "world-a", EPOCH, DEMAND,
+            0.0, 0.0);
+
+        assertEquals(WorldResChildBudget.Status.INVALID_INPUT, nan.budget().status());
+        assertEquals(WorldResChildBudget.Status.INVALID_INPUT, inf.budget().status());
+        assertEquals(0.0, nan.budget().childShareMs(), 0.0);
+        assertEquals(0.0, inf.budget().childShareMs(), 0.0);
+        assertFalse(nan.budget().conserved());
+        assertFalse(inf.budget().conserved());
+        assertEquals(0.0, ledger.countedParentMs(), 0.0);
+    }
+
+    @Test
+    void aKnownDemandOnAHugeParentRowStaysFinite() {
+        ShareTable table = hugeParent();
+        WorldResChildBudget budget = WorldResChildBudget.settle(table, "world-a", EPOCH,
+            WorldResChildBudget.ChildDemand.ofTaskNanos(3.0, 1.0), 0.0, 0.0);
+
+        assertEquals(WorldResChildBudget.Status.SETTLED, budget.status());
+        assertEquals(3.0, budget.genShareMs() / budget.lightShareMs(), 1.0e-9);
+        assertTrue(Double.isFinite(budget.childShareMs()));
+        assertTrue(budget.conserved());
+    }
 }

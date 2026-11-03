@@ -3,15 +3,17 @@ package io.izzel.arclight.common.prts.kernel.shares;
 
 import java.util.List;
 
-/** The first-slice child budget of the world-resource row: the parent {@link ShareClass#WORLDRES}
- * row of one world and tick is split into a generation share, a light share, the explicit parent
- * other part and an explicit margin. The split is a partition, not a second budget: the parent row
- * is counted once and the children never add to it.
+/** The child budget of the world-resource row: the parent {@link ShareClass#WORLDRES} row of one
+ * world and tick is split into a generation share, a light share, the explicit parent other part
+ * and an explicit margin. The split is a partition, not a second budget: the parent row is counted
+ * once and the children never add to it.
  *
- * <p>This slice is internal: it is not wired to a readout, no production path calls it, and the
- * metering action stays NOT_WIRED. The split source is explicit; an unknown demand is reported as
- * unknown and is never replaced by a fifty-fifty default. Only time cost enters the split: the two
- * demands are task nanoseconds, no count or capacity is read.
+ * <p>The settlement is internal and names no readout key; it is a declaration about the parent
+ * allowance, not a limit on the work the host actually ran. The split source is explicit; an
+ * unknown demand is reported as unknown and is never replaced by a fifty-fifty default. Only time
+ * cost enters the split: the two demands are task nanoseconds, no count or capacity is read. The
+ * declared path keeps both shares finite and inside the available part even for the largest finite
+ * demands; a non-finite or negative input is refused instead of being clamped.
  */
 public final class WorldResChildBudget {
 
@@ -150,6 +152,10 @@ public final class WorldResChildBudget {
                 otherMs, marginMs, 0.0, 0.0, 0.0, SplitSource.NONE, Status.INVALID_INPUT);
         }
         double available = parentShare - otherMs - marginMs;
+        if (!Double.isFinite(available)) {
+            return new WorldResChildBudget(worldId, tick, epoch, parentShare, 0.0, 0.0,
+                otherMs, marginMs, 0.0, 0.0, 0.0, SplitSource.NONE, Status.INVALID_INPUT);
+        }
         if (available < 0.0) {
             return new WorldResChildBudget(worldId, tick, epoch, parentShare, 0.0, 0.0,
                 otherMs, marginMs, 0.0, 0.0, 0.0, SplitSource.NONE, Status.PARENT_OVER);
@@ -164,12 +170,41 @@ public final class WorldResChildBudget {
                 otherMs, marginMs, available, safeDemand.genTaskNanos(),
                 safeDemand.lightTaskNanos(), SplitSource.KNOWN_ZERO_DEMAND, Status.SETTLED);
         }
-        double demandNanos = safeDemand.genTaskNanos() + safeDemand.lightTaskNanos();
-        double genShare = available * safeDemand.genTaskNanos() / demandNanos;
-        double lightShare = available * safeDemand.lightTaskNanos() / demandNanos;
+        double genNanos = safeDemand.genTaskNanos();
+        double lightNanos = safeDemand.lightTaskNanos();
+        double demandNanos = genNanos + lightNanos;
+        double genRatio;
+        if (Double.isFinite(demandNanos) && demandNanos > 0.0) {
+            genRatio = genNanos / demandNanos;
+        } else {
+            // Both samples are finite but their sum can overflow. Scale by the larger sample so a
+            // huge demand still splits in proportion: max + max is Infinity, while the ratio stays
+            // stable and the two shares stay finite.
+            double max = Math.max(genNanos, lightNanos);
+            if (!Double.isFinite(max) || max <= 0.0) {
+                return new WorldResChildBudget(worldId, tick, epoch, parentShare, 0.0, 0.0,
+                    otherMs, marginMs, 0.0, 0.0, 0.0, SplitSource.NONE, Status.INVALID_INPUT);
+            }
+            double genScaled = genNanos / max;
+            double lightScaled = lightNanos / max;
+            double scaledSum = genScaled + lightScaled;
+            if (!Double.isFinite(scaledSum) || scaledSum <= 0.0) {
+                return new WorldResChildBudget(worldId, tick, epoch, parentShare, 0.0, 0.0,
+                    otherMs, marginMs, 0.0, 0.0, 0.0, SplitSource.NONE, Status.INVALID_INPUT);
+            }
+            genRatio = genScaled / scaledSum;
+        }
+        double genShare = available * genRatio;
+        // One multiply and one subtraction fill the available part exactly. A second independent
+        // multiply could round the pair past the row, or to infinity, at the largest finite samples.
+        double lightShare = available - genShare;
+        if (!Double.isFinite(genShare) || !Double.isFinite(lightShare) || lightShare < 0.0) {
+            return new WorldResChildBudget(worldId, tick, epoch, parentShare, 0.0, 0.0,
+                otherMs, marginMs, 0.0, 0.0, 0.0, SplitSource.NONE, Status.INVALID_INPUT);
+        }
         return new WorldResChildBudget(worldId, tick, epoch, parentShare, genShare, lightShare,
-            otherMs, marginMs, available - genShare - lightShare, safeDemand.genTaskNanos(),
-            safeDemand.lightTaskNanos(), SplitSource.DECLARED_TASK_TIME, Status.SETTLED);
+            otherMs, marginMs, 0.0, genNanos, lightNanos,
+            SplitSource.DECLARED_TASK_TIME, Status.SETTLED);
     }
 
     private static boolean validPart(double millis) {
@@ -243,11 +278,16 @@ public final class WorldResChildBudget {
         return genShareMs + lightShareMs + otherMs + marginMs + unallocatedMs;
     }
 
-    /** The whole settlement fits the parent row within the rounding tolerance. */
+    /** The whole settlement fits the parent row within the rounding tolerance. A non-finite term
+     * never passes conservation. */
     public boolean conserved() {
-        return status != Status.PARENT_OVER && status != Status.INVALID_INPUT
-            && status != Status.NO_PARENT
-            && Math.abs(plannedShareMs() - parentShareMs) <= TOLERANCE
+        if (status == Status.PARENT_OVER || status == Status.INVALID_INPUT
+            || status == Status.NO_PARENT) {
+            return false;
+        }
+        double planned = plannedShareMs();
+        return Double.isFinite(planned) && Double.isFinite(parentShareMs)
+            && Math.abs(planned - parentShareMs) <= TOLERANCE
                 * Math.max(1.0, parentShareMs());
     }
 

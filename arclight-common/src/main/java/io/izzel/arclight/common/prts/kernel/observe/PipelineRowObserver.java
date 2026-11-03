@@ -34,6 +34,14 @@ public final class PipelineRowObserver implements PrtsPipelineRows.MailboxRowTap
 
     private final LongAdder[] rounds = adders();
 
+    private volatile WorldResChildMeter childMeter;
+
+    /** Hands the existing mailbox row tap's object/nanos path to the internal world-resource child
+     * meter. Null removes the hand-off; no new tap is installed. */
+    public void childMeter(WorldResChildMeter meter) {
+        this.childMeter = meter;
+    }
+
     @Override
     public void mailboxTask(String mailbox, long nanos) {
         int index = indexOf(mailbox);
@@ -57,6 +65,10 @@ public final class PipelineRowObserver implements PrtsPipelineRows.MailboxRowTap
         tasks[index].increment();
         if (nanos > 0L) {
             taskNanos[index].add(nanos);
+        }
+        WorldResChildMeter meter = childMeter;
+        if (meter != null) {
+            meter.report(mailbox, mailboxName, nanos);
         }
     }
 

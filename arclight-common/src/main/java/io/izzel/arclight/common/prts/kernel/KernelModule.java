@@ -54,6 +54,8 @@ import io.izzel.arclight.common.prts.kernel.shares.ShareClass;
 import io.izzel.arclight.common.prts.kernel.shares.ShareMeter;
 import io.izzel.arclight.common.prts.kernel.shares.SharePlanner;
 import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
+import io.izzel.arclight.common.prts.kernel.shares.WorldResChildBudget;
+import io.izzel.arclight.common.prts.kernel.shares.WorldResChildLedger;
 import io.izzel.arclight.common.prts.kernel.sites.IntentPayloadDirectory;
 import io.izzel.arclight.common.prts.kernel.sites.ThreadOrigin;
 import io.izzel.arclight.common.prts.kernel.sites.WriteControlledSlots;
@@ -90,6 +92,7 @@ import io.izzel.arclight.common.prts.kernel.observe.ChunkMaterializationObserver
 import io.izzel.arclight.common.prts.kernel.observe.CloseSealWriter;
 import io.izzel.arclight.common.prts.kernel.observe.LoadThreadObserver;
 import io.izzel.arclight.common.prts.kernel.observe.PipelineRowObserver;
+import io.izzel.arclight.common.prts.kernel.observe.WorldResChildMeter;
 import io.izzel.arclight.common.prts.kernel.observe.RegionIdentityObserver;
 import io.izzel.arclight.common.prts.kernel.observe.SaveIdentityObserver;
 import io.izzel.arclight.common.prts.kernel.observe.StallAttributionObserver;
@@ -226,6 +229,11 @@ public final class KernelModule {
     private final ChunkDemandObserver chunkDemand = new ChunkDemandObserver();
     private final SelfCostTap selfCosts = new SelfCostTap();
     private final SharePlanner shares = new SharePlanner();
+    /** The internal child split of the world-resource row: the pipeline tap measures generation and
+     * light task time into the meter, and the budget boundary settles it against the real table row,
+     * once per world/tick/epoch. Neither object names a readout key and neither changes the plan. */
+    private final WorldResChildMeter worldResMeter = new WorldResChildMeter();
+    private final WorldResChildLedger worldResLedger = new WorldResChildLedger(WorldEpochs.UNTRACKED);
     private final BudgetStateMachine budgetStates = new BudgetStateMachine();
     private final DegradeLadder ladder = new DegradeLadder(KernelSettings::degradeActions);
     private final WaitLadder waitLadder = new WaitLadder(KernelSettings::waitActions);
@@ -782,6 +790,9 @@ public final class KernelModule {
 
     private void syncPipelineRowTap(boolean wanted) {
         syncPipelineOwnerTap(wanted && KernelSettings.pipelineJobs() && KernelSettings.tickPlan());
+        // The meter rides the existing row tap and follows the existing share-table switch on every
+        // tick, so a reloaded switch needs no tap round trip; no seam of its own is installed.
+        pipelineRows.childMeter(wanted && KernelSettings.shareTable() ? worldResMeter : null);
         if (pipelineRowTapInstalled == wanted) {
             return;
         }
@@ -801,6 +812,7 @@ public final class KernelModule {
             guard.arrivalWriteTap(null);
             tickDigest.arrival(null);
             arrivalDigest.detach();
+            worldResMeter.close();
             pipelineRows.detach();
             tickDigest.detach();
         }
@@ -859,8 +871,13 @@ public final class KernelModule {
             : Map.of();
         Map<String, EnumMap<ShareClass, Double>> used = ShareMeter.usedFromTickTotals(totals);
         lastMetering = ShareMeter.read(tickIndex, KernelSettings.selfTimers(), totals);
+        // The window the owner took answers the table it ran under, which is the previous one: the
+        // cost is settled before the next table replaces it, so no cost is counted under a table
+        // that did not run while it was measured.
+        settleWorldResChildren();
         ShareTable table = shares.plan(worldIds == null ? List.of() : worldIds, tickIndex, used);
         lastConservation = shares.checkConservation(table);
+        openWorldResWindow(table);
         pendingB3Tokens.clear();
         B1DecisionGate.clearStale(tickIndex, KernelSettings.degradeRollbackTicks());
         double minMargin = Double.POSITIVE_INFINITY;
@@ -898,6 +915,49 @@ public final class KernelModule {
             reserveUsedMs(), table.reserve().remainingMs(), degradeStateKey(),
             lastDecision.enteredTick());
         injectLadderWalk();
+    }
+
+    /** Settles the generation and light time the pipeline measured in the window the owner just
+     * took. The window answers only the table it ran under: a window whose table was already
+     * replaced is dropped, and a world whose live epoch changed inside the window is dropped instead
+     * of being settled against an allowance it no longer holds. */
+    private void settleWorldResChildren() {
+        WorldResChildMeter.WindowReading reading = worldResMeter.drain();
+        ShareTable table = shares.lastTable();
+        if (reading.tickIndex() < 0L || table == null || reading.tickIndex() != table.tickIndex()) {
+            return;
+        }
+        for (Map.Entry<String, Long> world : reading.epochs().entrySet()) {
+            String worldId = world.getKey();
+            long epoch = world.getValue();
+            if (guard.worldEpochs().epochOf(worldId) != epoch) {
+                continue;
+            }
+            ShareTable.ShareRow parent = table.row(worldId, ShareClass.WORLDRES);
+            if (parent == null) {
+                continue;
+            }
+            WorldResChildMeter.Sample sample = reading.samples().get(worldId);
+            WorldResChildBudget.ChildDemand demand = sample == null
+                ? WorldResChildBudget.ChildDemand.unknown()
+                : WorldResChildBudget.ChildDemand.ofTaskNanos(sample.genTaskNanos(),
+                    sample.lightTaskNanos());
+            // The explicit parent parts: the row's own metered use is the parent other part, a
+            // different source from the mailbox samples, so a task is never counted on both sides.
+            // The row declares no margin slice reserved from its children, so the margin stays zero
+            // and the settlement publishes the unallocated remainder itself.
+            worldResLedger.settle(table, worldId, epoch, demand, parent.usedMs(), 0.0);
+        }
+    }
+
+    /** Pins the window of one planned tick to the epoch of every world in its table; reports are
+     * attributed to those epochs until the owner drains the window at the next budget boundary. */
+    private void openWorldResWindow(ShareTable table) {
+        Map<String, Long> epochs = new HashMap<>();
+        for (String worldId : table.worlds()) {
+            epochs.put(worldId, guard.worldEpochs().epochOf(worldId));
+        }
+        worldResMeter.openWindow(table.tickIndex(), epochs);
     }
 
     /** One rung per tick, so the order is walked and never skipped. */
@@ -1907,6 +1967,11 @@ public final class KernelModule {
         return shares;
     }
 
+    /** The internal ledger of the world-resource child settlements; it names no readout key. */
+    WorldResChildLedger worldResChildLedger() {
+        return worldResLedger;
+    }
+
     /** The first token of the trigger records of this plan tick whose world the plan covers, or -1
      * when none is pending. The trigger record names the world of the share row, which is the
      * dimension key the plan's tasks carry; the runtime pseudo world of the metering is never a
@@ -2758,6 +2823,8 @@ public final class KernelModule {
         int reclaimed = intents.releaseWorld(named);
         arena.returnWorld(named);
         shares.forgetWorld(named);
+        worldResMeter.forgetWorld(named);
+        worldResLedger.forgetWorld(named);
         if (recordSession) {
             recordUnloadSession();
         } else if (trackPending) {
@@ -3589,6 +3656,8 @@ public final class KernelModule {
         pendingB1World = null;
         B1DecisionGate.reset();
         shares.clearRecordTokens();
+        worldResMeter.reset();
+        worldResLedger.reset();
         EntityQueryReadings.reset();
         ScaleBudgetReadings.reset();
         QuotaEntityWindow.reset();
