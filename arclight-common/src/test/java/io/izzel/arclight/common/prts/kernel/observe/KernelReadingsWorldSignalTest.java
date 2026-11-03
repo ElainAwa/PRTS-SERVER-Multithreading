@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -35,6 +36,25 @@ class KernelReadingsWorldSignalTest {
         assertEquals(List.of(
             "wp.signal.light.minecraft_overworld.value=2",
             "wp.signal.light.minecraft_overworld.delta=2"), light);
+    }
+
+    @Test
+    void oneReadCarriesBothFamiliesWithTheirRealDeltas() {
+        WaitProgress progress = new WaitProgress();
+        AtomicInteger sourceReads = new AtomicInteger();
+        progress.bindWorlds("gen", "source", () -> {
+            sourceReads.incrementAndGet();
+            return List.of(new WaitProgress.WorldValue("minecraft:overworld", 1L, 3L, 2L));
+        });
+        List<String> lines = new ArrayList<>();
+        KernelReadings.worldSignals(lines, progress);
+
+        assertEquals(1, sourceReads.get(), "one export must read the per-world source once");
+        assertEquals(List.of(
+            "wp.signal.gen.minecraft_overworld.value=3",
+            "wp.signal.gen.minecraft_overworld.delta=3",
+            "wp.signal.light.minecraft_overworld.value=2",
+            "wp.signal.light.minecraft_overworld.delta=2"), lines);
     }
 
     @Test

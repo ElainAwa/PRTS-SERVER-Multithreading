@@ -1929,8 +1929,7 @@ public final class KernelReadings {
             add(lines, prefix + "value", reading.value());
             add(lines, prefix + "delta", reading.delta());
         }
-        worldGenSignals(lines, registry.progress().worldReadings("gen"));
-        worldLightSignals(lines, registry.progress().worldReadings("gen"));
+        worldSignals(lines, registry.progress());
         add(lines, "wp.signal_rows", registry.progress().declaredCount());
         add(lines, "wp.signal_bound", registry.progress().boundCount());
         chunkMaterialization(lines, module);
@@ -2022,6 +2021,14 @@ public final class KernelReadings {
         for (Map.Entry<String, Long> entry : producer.callbackWorldCounts().entrySet()) {
             add(lines, prefix + "world." + safe(entry.getKey()), entry.getValue());
         }
+    }
+
+    /** Reads the per-world progress once and hands the same list to both emitters: reading the
+     * source twice would advance its previous deltas and make the second family read a zero. */
+    static void worldSignals(List<String> lines, WaitProgress progress) {
+        List<WaitProgress.WorldReading> readings = progress.worldReadings("gen");
+        worldGenSignals(lines, readings);
+        worldLightSignals(lines, readings);
     }
 
     /** Adds the explicit per-world light readings of the same world progress view. It publishes
