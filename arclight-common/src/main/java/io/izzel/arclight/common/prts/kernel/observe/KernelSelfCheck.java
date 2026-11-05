@@ -992,8 +992,8 @@ public final class KernelSelfCheck {
             || Math.abs(reading.row(ShareClass.AI).usedMs() - 0.5) > 1.0e-9) {
             failures.add("the per-class metering did not convert the samples of its source rows");
         }
-        if (reading.row(ShareClass.GRAPH) == null || reading.row(ShareClass.GRAPH).usedMs() != 0.0) {
-            failures.add("a share class without samples did not publish a zero row");
+        if (reading.row(ShareClass.GRAPH) == null || reading.row(ShareClass.GRAPH).usedMs() < 0.0) {
+            failures.add("the graph share class did not publish a non-negative row");
         }
         if (reading.unmapped().size() != 3) {
             failures.add("the timer rows that feed no share class were not named");

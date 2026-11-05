@@ -1141,10 +1141,17 @@ public final class KernelModule {
         TickPlan latestPlan = plans.latest();
         boolean b2Postpone = b2PostponeWanted()
             && latestPlan != null && latestPlan.graph() != null;
+        boolean meterGraph = KernelSettings.selfTimers() && KernelSettings.shareTable();
+        String graphWorld = worlds.isEmpty() ? "" : worlds.get(0);
+        long graphStarted = meterGraph ? System.nanoTime() : 0L;
         TickPlanPlanner.Result result = TickPlanPlanner.plan(new TickPlanPlanner.Input(tickIndex,
             planSequence, worldGeneration, worlds, domainIds, previousControl, jobIntake.take(),
             shares.lastTable(), KernelSettings.jobQueueCap(), feedback,
             latestPlan == null ? null : latestPlan.graph()), b2Postpone);
+        if (meterGraph && !b2Postpone && result.recompute() != null) {
+            SelfTimers.note(SelfClass.GRAPH, graphWorld, "job-graph",
+                System.nanoTime() - graphStarted);
+        }
         if (b2Postpone && result.ok()) {
             b2ActionPending = true;
             ladder.noteEffective(DegradeLevel.B2);
