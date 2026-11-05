@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Old-red/new-green source contract for the authorized B2/B5 triggered TickPlan actions. */
@@ -18,6 +19,10 @@ class P3ACC34B2B5ActionTest {
         assertTrue(kernel.contains("b2PostponeWanted"));
         assertTrue(kernel.contains("b5ShrinkWanted"));
         assertTrue(kernel.contains("noteEffective(DegradeLevel.B2)"));
+        assertTrue(kernel.contains("b2Postpone && result.recompute() != null"));
+        assertTrue(kernel.contains("RecomputeMode.REUSED"));
+        assertFalse(kernel.contains("b2Postpone && result.ok()"),
+            "B2 effective must not wait for the clean-window result");
         assertTrue(kernel.contains("noteEffective(DegradeLevel.B5)"));
         assertTrue(kernel.contains("noteReturned(DegradeLevel.B2)"));
         assertTrue(kernel.contains("noteReturned(DegradeLevel.B5)"));

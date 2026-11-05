@@ -1152,7 +1152,11 @@ public final class KernelModule {
             SelfTimers.note(SelfClass.GRAPH, graphWorld, "job-graph",
                 System.nanoTime() - graphStarted);
         }
-        if (b2Postpone && result.ok()) {
+        if (b2Postpone && result.recompute() != null
+            && result.recompute().mode()
+                == io.izzel.arclight.common.prts.kernel.jobs.JobGraphBuilder.RecomputeMode.REUSED) {
+            // The real postpone happened; effective is not a clean-window event. The return still
+            // waits for the over to disappear and the declared gate.
             b2ActionPending = true;
             ladder.noteEffective(DegradeLevel.B2);
         }
