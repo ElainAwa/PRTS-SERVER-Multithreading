@@ -422,6 +422,8 @@ public final class KernelModule {
     private final ArrayDeque<PendingB3> pendingB3Tokens = new ArrayDeque<>();
     private long pendingB1Token = -1L;
     private String pendingB1World;
+    private boolean b2ActionPending;
+    private boolean b5ActionPending;
     /** The server whose live levels the claim point resolves; the host names it before the tick. */
     private volatile net.minecraft.server.MinecraftServer liveServer;
     private int waitCrossStreak;
@@ -959,6 +961,10 @@ public final class KernelModule {
         lastDecision = budgetStates.judge(tickIndex, table, overruns, waitPoints.waitOverrunCount(),
             lastConservation);
         ladder.noteTick(lastDecision.degraded());
+        maybeReturnB1();
+        maybeReturnB3();
+        maybeReturnB2();
+        maybeReturnB5();
         control = new ControlFrame(tickIndex, minMargin, overruns, waitPoints.waitOverrunCount(),
             reserveUsedMs(), table.reserve().remainingMs(), degradeStateKey(),
             lastDecision.enteredTick());
@@ -1130,10 +1136,16 @@ public final class KernelModule {
         // The newest published graph is the one the bounded recompute may reuse; a plan refused by
         // the previous tick leaves the graph of the last accepted plan as the previous one.
         TickPlan latestPlan = plans.latest();
+        boolean b2Postpone = b2PostponeWanted()
+            && latestPlan != null && latestPlan.graph() != null;
         TickPlanPlanner.Result result = TickPlanPlanner.plan(new TickPlanPlanner.Input(tickIndex,
             planSequence, worldGeneration, worlds, domainIds, previousControl, jobIntake.take(),
             shares.lastTable(), KernelSettings.jobQueueCap(), feedback,
-            latestPlan == null ? null : latestPlan.graph()));
+            latestPlan == null ? null : latestPlan.graph()), b2Postpone);
+        if (b2Postpone && result.ok()) {
+            b2ActionPending = true;
+            ladder.noteEffective(DegradeLevel.B2);
+        }
         long freezeNanos = System.nanoTime() - freezeStartedAt;
         planNanosLast = freezeNanos;
         planNanosTotal += freezeNanos;
@@ -1184,7 +1196,14 @@ public final class KernelModule {
                 trimRetainedOrders(Math.min(result.plan().planSequence(), retainedFloor));
             }
             if (KernelSettings.pipelineJobs() && KernelSettings.tickPlan()) {
-                dispatchFrozen(result.plan());
+                if (b5ShrinkWanted()) {
+                    // Real B5 action: this tick's frozen jobs/segments/commit are not dispatched;
+                    // the next tick rebuilds against the degraded shares.
+                    b5ActionPending = true;
+                    ladder.noteEffective(DegradeLevel.B5);
+                } else {
+                    dispatchFrozen(result.plan());
+                }
             }
         } else {
             plans.noteFailure(result.code());
@@ -2682,6 +2701,71 @@ public final class KernelModule {
         ladder.noteEffective(DegradeLevel.B4);
     }
 
+    /** Real B1 rollback: only after a real B1 action took effect, the AI row came back inside
+     * its margin, and the ladder's declared clean gate is ready. */
+    private void maybeReturnB1() {
+        if (ladder.sign().deepest() != DegradeLevel.B1
+            || ladder.counters(DegradeLevel.B1).effective() <= 0L
+            || !aiMarginWithin()
+            || !ladder.gate(DegradeLevel.B1, KernelSettings.degradeRollbackTicks()).ready()) {
+            return;
+        }
+        ladder.noteReturned(DegradeLevel.B1);
+    }
+
+    /** Real B3 rollback: only after a real merge took effect, no entity/blockentity row is over,
+     * no pending B3 token remains, and the declared clean gate is ready. */
+    private void maybeReturnB3() {
+        if (ladder.sign().deepest() != DegradeLevel.B3
+            || ladder.counters(DegradeLevel.B3).effective() <= 0L
+            || !pendingB3Tokens.isEmpty()
+            || !ladder.gate(DegradeLevel.B3, KernelSettings.degradeRollbackTicks()).ready()) {
+            return;
+        }
+        ShareTable table = shares.lastTable();
+        if (table != null) {
+            for (ShareTable.ShareRow row : table.rows()) {
+                if ((row.shareClass() == ShareClass.ENTITY
+                    || row.shareClass() == ShareClass.BLOCKENTITY) && row.overrun()) {
+                    return;
+                }
+            }
+        }
+        ladder.noteReturned(DegradeLevel.B3);
+    }
+
+    private boolean b2PostponeWanted() {
+        return KernelSettings.degradeActions()
+            && ladder.sign().deepest() == DegradeLevel.B2;
+    }
+
+    private boolean b5ShrinkWanted() {
+        return KernelSettings.degradeActions()
+            && ladder.sign().deepest() == DegradeLevel.B5;
+    }
+
+    /** Real B2 rollback once the rung is no longer the deepest and the clean gate is ready. */
+    private void maybeReturnB2() {
+        if (!b2ActionPending || ladder.sign().deepest() == DegradeLevel.B2
+            || !ladder.gate(DegradeLevel.B2, KernelSettings.degradeRollbackTicks()).ready()) {
+            return;
+        }
+        if (ladder.noteReturned(DegradeLevel.B2)) {
+            b2ActionPending = false;
+        }
+    }
+
+    /** Real B5 rollback once the rung is no longer the deepest and the conservative gate is ready. */
+    private void maybeReturnB5() {
+        if (!b5ActionPending || ladder.sign().deepest() == DegradeLevel.B5
+            || !ladder.gate(DegradeLevel.B5, KernelSettings.degradeRollbackTicks()).ready()) {
+            return;
+        }
+        if (ladder.noteReturned(DegradeLevel.B5)) {
+            b5ActionPending = false;
+        }
+    }
+
     private void maybeReturnRcon() {
         if (!rconActionPending || !rconDeferral.idle() || rconDeferralWanted()) {
             return;
@@ -3770,6 +3854,8 @@ public final class KernelModule {
         pendingB1Token = -1L;
         pendingB1World = null;
         B1DecisionGate.reset();
+        b2ActionPending = false;
+        b5ActionPending = false;
         shares.clearRecordTokens();
         worldResMeter.reset();
         worldResLedger.reset();

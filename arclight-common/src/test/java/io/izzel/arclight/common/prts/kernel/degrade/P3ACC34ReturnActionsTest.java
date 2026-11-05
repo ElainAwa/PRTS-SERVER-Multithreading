@@ -1,0 +1,34 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+package io.izzel.arclight.common.prts.kernel.degrade;
+
+import org.junit.jupiter.api.Test;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/** Real B1/B3/B2/B5 rollback wiring, all after their declared clean gate; no injection. */
+class P3ACC34ReturnActionsTest {
+
+    @Test
+    void allFourRealReturnActionsExistAfterTheirCleanGate() throws Exception {
+        String source = Files.readString(Path.of(
+            "src/main/java/io/izzel/arclight/common/prts/kernel/KernelModule.java"));
+        for (String function : new String[]{"maybeReturnB1", "maybeReturnB2",
+            "maybeReturnB3", "maybeReturnB5"}) {
+            assertTrue(source.contains(function), function);
+        }
+        for (String call : new String[]{
+            "ladder.noteReturned(DegradeLevel.B1)",
+            "ladder.noteReturned(DegradeLevel.B2)",
+            "ladder.noteReturned(DegradeLevel.B3)",
+            "ladder.noteReturned(DegradeLevel.B5)"}) {
+            assertTrue(source.contains(call), call);
+        }
+        assertTrue(source.contains("counters(DegradeLevel.B1).effective()"));
+        assertTrue(source.contains("counters(DegradeLevel.B3).effective()"));
+        assertTrue(source.contains("gate(DegradeLevel.B1"));
+        assertTrue(source.contains("gate(DegradeLevel.B3"));
+    }
+}

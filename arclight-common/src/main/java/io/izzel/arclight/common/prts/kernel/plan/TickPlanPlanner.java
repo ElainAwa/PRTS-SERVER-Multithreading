@@ -91,8 +91,15 @@ public final class TickPlanPlanner {
     private TickPlanPlanner() {
     }
 
-    /** Builds the plan of one tick. */
+    /** Builds the plan of one tick with the normal (untriggered) graph recompute. */
     public static Result plan(Input input) {
+        return plan(input, false);
+    }
+
+    /** Builds the plan of one tick. When {@code postponeRebuild} is true and a previous graph is
+     * available, the real B2 action reuses that graph instead of asking the bounded recompute to
+     * rebuild it; every other input is still planned normally. */
+    public static Result plan(Input input, boolean postponeRebuild) {
         if (input == null) {
             return Result.refused(RejectCode.COUNTER_MISSING, "input");
         }
@@ -126,16 +133,24 @@ public final class TickPlanPlanner {
         // scan and the fallback rebuild against two explicit work budgets derived from the queue
         // bound, so a changed graph is rebuilt only inside its declared budget.
         int queueCap = Math.max(1, input.queueCap());
-        JobGraphBuilder.Recompute recompute = JobGraphBuilder.recompute(
-            new JobGraphBuilder.RecomputeRequest(input.previousGraph(), input.declarations(),
-                input.tickIndex(), input.planSequence(), input.worldSetGeneration(), queueCap,
-                JobGraphBuilder.scanWorkBudget(queueCap),
-                JobGraphBuilder.fullWorkBudget(queueCap)));
-        if (!recompute.ok()) {
-            return new Result(null, recompute.code(), recompute.item(), ModeCounts.empty(),
-                recompute);
+        JobGraphBuilder.Recompute recompute;
+        JobGraph graph;
+        if (postponeRebuild && input.previousGraph() != null) {
+            graph = input.previousGraph();
+            recompute = new JobGraphBuilder.Recompute(graph, JobGraphBuilder.RecomputeMode.REUSED,
+                null, "", 0, 0, 0, 0, 0);
+        } else {
+            recompute = JobGraphBuilder.recompute(
+                new JobGraphBuilder.RecomputeRequest(input.previousGraph(), input.declarations(),
+                    input.tickIndex(), input.planSequence(), input.worldSetGeneration(), queueCap,
+                    JobGraphBuilder.scanWorkBudget(queueCap),
+                    JobGraphBuilder.fullWorkBudget(queueCap)));
+            if (!recompute.ok()) {
+                return new Result(null, recompute.code(), recompute.item(), ModeCounts.empty(),
+                    recompute);
+            }
+            graph = recompute.graph();
         }
-        JobGraph graph = recompute.graph();
         int unknownSites = 0;
         for (JobGraph.Node node : graph.nodes()) {
             if (node.siteClass() == JobDeclaration.SiteClass.UNKNOWN) {
