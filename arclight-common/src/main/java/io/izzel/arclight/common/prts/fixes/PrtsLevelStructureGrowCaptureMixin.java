@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
- * The write and read sides of the tree capture: while a sapling grows, a write is answered from the
- * capture list so the generator sees its own write; false for every other level write and block read.
+ * The real level write entry: every setBlock attempt is judged by the write guard in place, and the
+ * deferred carrier is materialized only if a routed write actually needs the commit path. The same
+ * entry keeps the sapling capture's own-write read.
  */
 package io.izzel.arclight.common.prts.fixes;
 
@@ -43,8 +44,8 @@ public abstract class PrtsLevelStructureGrowCaptureMixin {
         if (!decision.judge()) {
             return true;
         }
-        return decision.admit(level, level.dimension().location().toString(),
-            new PrtsDeferredWrites.LevelWrite(level, pos, state, flags, recursionLeft));
+        return decision.admitLazy(level, level.dimension().location().toString(),
+            () -> new PrtsDeferredWrites.LevelWrite(level, pos, state, flags, recursionLeft));
     }
 
     /** The read side of the capture: only the level that started the grow answers from the capture

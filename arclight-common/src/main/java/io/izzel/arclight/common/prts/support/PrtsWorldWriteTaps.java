@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.support;
 
+import java.util.function.Supplier;
+
 /** The seam a world write path hands a write to whoever watches write rights; no kernel type crosses it. */
 public final class PrtsWorldWriteTaps {
 
@@ -23,6 +25,14 @@ public final class PrtsWorldWriteTaps {
 
         /** @return true when the write may proceed now; false means it is applied later through the deferred write */
         boolean admitBlockWrite(Object levelRef, String worldId, DeferredWrite deferred);
+
+        /** The lazy form: the deferred write is materialized only when a routed write really needs
+         * it, so an ordinary granted write pays no clone/allocation. */
+        default boolean admitBlockWriteLazy(Object levelRef, String worldId,
+                                            Supplier<DeferredWrite> deferred) {
+            return admitBlockWrite(levelRef, worldId,
+                deferred == null ? null : deferred.get());
+        }
     }
 
     private static volatile BlockWriteTap blockWriteTap;
@@ -68,6 +78,10 @@ public final class PrtsWorldWriteTaps {
 
         public boolean admit(Object levelRef, String worldId, DeferredWrite deferred) {
             return tap == null || tap.admitBlockWrite(levelRef, worldId, deferred);
+        }
+
+        public boolean admitLazy(Object levelRef, String worldId, Supplier<DeferredWrite> deferred) {
+            return tap == null || tap.admitBlockWriteLazy(levelRef, worldId, deferred);
         }
     }
 }

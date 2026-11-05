@@ -36,9 +36,11 @@ public final class PrtsSeams {
         new Seam("write_path_level",
             "io.izzel.arclight.common.prts.fixes.PrtsLevelStructureGrowCaptureMixin",
             "net.minecraft.world.level.Level", FIXES_CATEGORY),
+        // The platform entry is now the same real Level.setBlock path; the legacy seam id stays
+        // readable so the P0 seam-count/readout contract does not change.
         new Seam("write_path_platform",
-            "io.izzel.arclight.common.prts.fixes.PrtsCraftBlockWriteTapMixin",
-            "org.bukkit.craftbukkit.v.block.CraftBlock", FIXES_CATEGORY),
+            "io.izzel.arclight.common.prts.fixes.PrtsLevelStructureGrowCaptureMixin",
+            "net.minecraft.world.level.Level", FIXES_CATEGORY),
         waitSite("entity", "PrtsEntityWaitSiteMixin", "net.minecraft.world.entity.Entity"),
         waitSite("block_collisions", "PrtsBlockCollisionsWaitSiteMixin",
             "net.minecraft.world.level.BlockCollisions"),

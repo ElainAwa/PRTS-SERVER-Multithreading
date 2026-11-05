@@ -18,6 +18,7 @@ import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
 
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -275,7 +276,14 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
     }
 
     @Override
-    public boolean admitBlockWrite(Object levelRef, String worldId, PrtsWorldWriteTaps.DeferredWrite deferred) {
+    public boolean admitBlockWrite(Object levelRef, String worldId,
+                                   PrtsWorldWriteTaps.DeferredWrite deferred) {
+        return admitBlockWriteLazy(levelRef, worldId, deferred == null ? null : () -> deferred);
+    }
+
+    @Override
+    public boolean admitBlockWriteLazy(Object levelRef, String worldId,
+                                       Supplier<PrtsWorldWriteTaps.DeferredWrite> deferredSupplier) {
         if (!active) {
             return true;
         }
@@ -302,12 +310,18 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
             if (enforce) {
                 disposition = WriteDisposition.DENY;
                 code = RejectCode.WRITE_DENIED_NOT_OWNER;
-            } else if (routing && deferred != null) {
-                disposition = WriteDisposition.INTENT;
-                code = handOver(path, origin, holder, worldId, deferred);
-                handedOver = code == null;
-                if (!handedOver) {
-                    disposition = WriteDisposition.DENY;
+            } else if (routing && deferredSupplier != null) {
+                PrtsWorldWriteTaps.DeferredWrite deferred = deferredSupplier.get();
+                if (deferred != null) {
+                    disposition = WriteDisposition.INTENT;
+                    code = handOver(path, origin, holder, worldId, deferred);
+                    handedOver = code == null;
+                    if (!handedOver) {
+                        disposition = WriteDisposition.DENY;
+                    }
+                } else {
+                    disposition = WriteDisposition.INTENT;
+                    code = RejectCode.WRITE_DENIED_NOT_OWNER;
                 }
             } else {
                 disposition = WriteDisposition.INTENT;

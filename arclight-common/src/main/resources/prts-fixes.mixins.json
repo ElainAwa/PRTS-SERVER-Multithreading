@@ -21,7 +21,6 @@
     "PrtsLivingEntityTotemMixin",
     "PrtsShearsItemShearEventMixin",
     "PrtsLevelStructureGrowCaptureMixin",
-    "PrtsCraftBlockWriteTapMixin",
     "PrtsSaplingStructureGrowEventMixin",
     "PrtsTreeGrowerSpeciesMixin",
     "PrtsCraftMetaItemBlockEntityDataMixin",
