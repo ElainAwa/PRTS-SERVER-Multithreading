@@ -1,20 +1,19 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.modsupport.sable;
 
+import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import io.izzel.arclight.api.ArclightPlatform;
 import io.izzel.arclight.common.mod.mixins.annotation.LoadIfMod;
 import io.izzel.arclight.common.mod.mixins.annotation.OnlyInPlatform;
 import io.izzel.arclight.common.prts.support.PrtsSableLocks;
-import io.izzel.arclight.mixin.Decorate;
-import io.izzel.arclight.mixin.DecorationOps;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
-import org.spongepowered.asm.mixin.injection.At;
 
 /**
- * Runs the two physics steps under the native lock the rope calls also take, so the non-reentrant
- * native library is never entered from two threads at once. The whole step is one critical
- * section, not a sequence of them.
+ * Wraps the two whole physics steps under the native lock the rope calls also take, so the
+ * non-reentrant native library is never entered from two threads at once. The whole step is one
+ * critical section, and the unlock runs on both the normal and the exceptional return.
  */
 @OnlyInPlatform(ArclightPlatform.NEOFORGE)
 @LoadIfMod(modid = "sable", condition = LoadIfMod.ModCondition.PRESENT)
@@ -22,31 +21,31 @@ import org.spongepowered.asm.mixin.injection.At;
 @Mixin(targets = "dev.ryanhcode.sable.physics.impl.rapier.RapierPhysicsPipeline", remap = false)
 public abstract class PrtsSablePhysicsPipelineMixin {
 
-    @Decorate(method = "prePhysicsTicks", at = @At("HEAD"), remap = false, inject = true)
-    private void prts$serializePrePhysicsTicks() throws Throwable {
+    @WrapMethod(method = "prePhysicsTicks", remap = false)
+    private void prts$serializePrePhysicsTicks(Operation<Void> original) throws Throwable {
         if (!PrtsSableLocks.NativeCalls.enabled()) {
-            DecorationOps.callsite().invoke();
+            original.call();
             return;
         }
         PrtsSableLocks.NativeCalls.lock();
         try {
             PrtsSableLocks.NativeCalls.noteSerializedCall();
-            DecorationOps.callsite().invoke();
+            original.call();
         } finally {
             PrtsSableLocks.NativeCalls.unlock();
         }
     }
 
-    @Decorate(method = "physicsTick", at = @At("HEAD"), remap = false, inject = true)
-    private void prts$serializePhysicsTick(double delta) throws Throwable {
+    @WrapMethod(method = "physicsTick", remap = false)
+    private void prts$serializePhysicsTick(double delta, Operation<Void> original) throws Throwable {
         if (!PrtsSableLocks.NativeCalls.enabled()) {
-            DecorationOps.callsite().invoke(delta);
+            original.call(delta);
             return;
         }
         PrtsSableLocks.NativeCalls.lock();
         try {
             PrtsSableLocks.NativeCalls.noteSerializedCall();
-            DecorationOps.callsite().invoke(delta);
+            original.call(delta);
         } finally {
             PrtsSableLocks.NativeCalls.unlock();
         }
