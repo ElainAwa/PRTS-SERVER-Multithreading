@@ -39,7 +39,7 @@ class PaperApiSignatureInventoryTest {
         expect("org/bukkit/scheduler/BukkitScheduler", "runTask",
             "(Lorg/bukkit/plugin/Plugin;Ljava/lang/Runnable;)Lorg/bukkit/scheduler/BukkitTask;", PRESENT);
         expect("org/bukkit/command/PluginCommand", "getPlugin", "()Lorg/bukkit/plugin/Plugin;", PRESENT);
-        expect("net/kyori/adventure/text/Component", "text", "(Ljava/lang/String;)Lnet/kyori/adventure/text/TextComponent;", MISSING);
+        expect("net/kyori/adventure/text/Component", "text", "(Ljava/lang/String;)Lnet/kyori/adventure/text/TextComponent;", PRESENT);
         expect("org/bukkit/inventory/meta/components/FoodComponent", "getNutrition", "()I", PRESENT);
         expect("org/bukkit/entity/Player", "getPlayerProfile", "()Lcom/destroystokyo/paper/profile/PlayerProfile;", MISSING);
         expect("org/bukkit/World", "getChunkAtAsync", "(II)Ljava/util/concurrent/CompletableFuture;", MISSING);
