@@ -545,6 +545,8 @@ public final class KernelModule {
         // readout publishes; the other three rungs stay unbound and say so instead of reporting a
         // condition nothing observes.
         ladder.bindSecondCondition(DegradeLevel.B1, "budget.margin.ai", this::aiMarginWithin);
+        ladder.bindSecondCondition(DegradeLevel.B2, "budget.graph_over", () -> !hasOver(ShareClass.GRAPH));
+        ladder.bindSecondCondition(DegradeLevel.B3, "budget.batch_over", this::b3ReturnCondition);
         ladder.bindSecondCondition(DegradeLevel.B5, "budget.conservation_ok",
             () -> lastConservation.ok());
         // Every rung now answers on a producer this module already carries: A1 on the wait point
@@ -2705,8 +2707,6 @@ public final class KernelModule {
      * its margin, and the ladder's declared clean gate is ready. */
     private void maybeReturnB1() {
         if (ladder.sign().deepest() != DegradeLevel.B1
-            || ladder.counters(DegradeLevel.B1).effective() <= 0L
-            || !aiMarginWithin()
             || !ladder.gate(DegradeLevel.B1, KernelSettings.degradeRollbackTicks()).ready()) {
             return;
         }
@@ -2717,21 +2717,29 @@ public final class KernelModule {
      * no pending B3 token remains, and the declared clean gate is ready. */
     private void maybeReturnB3() {
         if (ladder.sign().deepest() != DegradeLevel.B3
-            || ladder.counters(DegradeLevel.B3).effective() <= 0L
             || !pendingB3Tokens.isEmpty()
             || !ladder.gate(DegradeLevel.B3, KernelSettings.degradeRollbackTicks()).ready()) {
             return;
         }
+        ladder.noteReturned(DegradeLevel.B3);
+    }
+
+    private boolean b3ReturnCondition() {
+        return pendingB3Tokens.isEmpty()
+            && !hasOver(ShareClass.ENTITY) && !hasOver(ShareClass.BLOCKENTITY);
+    }
+
+    private boolean hasOver(ShareClass shareClass) {
         ShareTable table = shares.lastTable();
-        if (table != null) {
-            for (ShareTable.ShareRow row : table.rows()) {
-                if ((row.shareClass() == ShareClass.ENTITY
-                    || row.shareClass() == ShareClass.BLOCKENTITY) && row.overrun()) {
-                    return;
-                }
+        if (table == null) {
+            return false;
+        }
+        for (ShareTable.ShareRow row : table.rows()) {
+            if (row.shareClass() == shareClass && row.overrun()) {
+                return true;
             }
         }
-        ladder.noteReturned(DegradeLevel.B3);
+        return false;
     }
 
     private boolean b2PostponeWanted() {
@@ -2746,7 +2754,7 @@ public final class KernelModule {
 
     /** Real B2 rollback once the rung is no longer the deepest and the clean gate is ready. */
     private void maybeReturnB2() {
-        if (!b2ActionPending || ladder.sign().deepest() == DegradeLevel.B2
+        if (ladder.sign().deepest() != DegradeLevel.B2
             || !ladder.gate(DegradeLevel.B2, KernelSettings.degradeRollbackTicks()).ready()) {
             return;
         }
@@ -2757,7 +2765,7 @@ public final class KernelModule {
 
     /** Real B5 rollback once the rung is no longer the deepest and the conservative gate is ready. */
     private void maybeReturnB5() {
-        if (!b5ActionPending || ladder.sign().deepest() == DegradeLevel.B5
+        if (ladder.sign().deepest() != DegradeLevel.B5
             || !ladder.gate(DegradeLevel.B5, KernelSettings.degradeRollbackTicks()).ready()) {
             return;
         }

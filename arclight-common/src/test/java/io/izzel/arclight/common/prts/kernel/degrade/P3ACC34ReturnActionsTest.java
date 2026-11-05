@@ -8,7 +8,8 @@ import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** Real B1/B3/B2/B5 rollback wiring, all after their declared clean gate; no injection. */
+/** Real top-down rollback: the top rung returns only when its own gate is ready, and the next
+ * lower rung can then become the deepest one; no rung waits for a deeper rung to have left first. */
 class P3ACC34ReturnActionsTest {
 
     @Test
@@ -26,9 +27,16 @@ class P3ACC34ReturnActionsTest {
             "ladder.noteReturned(DegradeLevel.B5)"}) {
             assertTrue(source.contains(call), call);
         }
-        assertTrue(source.contains("counters(DegradeLevel.B1).effective()"));
-        assertTrue(source.contains("counters(DegradeLevel.B3).effective()"));
-        assertTrue(source.contains("gate(DegradeLevel.B1"));
-        assertTrue(source.contains("gate(DegradeLevel.B3"));
+    }
+
+    @Test
+    void theTopRungIsReturnedWhileItIsStillDeepest() throws Exception {
+        String source = Files.readString(Path.of(
+            "src/main/java/io/izzel/arclight/common/prts/kernel/KernelModule.java"));
+        assertTrue(source.contains("ladder.sign().deepest() != DegradeLevel.B2"));
+        assertTrue(source.contains("ladder.sign().deepest() != DegradeLevel.B5"));
+        assertTrue(source.contains("bindSecondCondition(DegradeLevel.B2"));
+        assertTrue(source.contains("bindSecondCondition(DegradeLevel.B3"));
+        assertTrue(source.contains("b3ReturnCondition"));
     }
 }
