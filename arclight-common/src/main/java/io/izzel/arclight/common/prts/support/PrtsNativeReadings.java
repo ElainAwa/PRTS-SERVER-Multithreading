@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.LongAdder;
  * re-enter Java. The counter is closed over the covered callback bases only; the rest is a named gap. */
 public final class PrtsNativeReadings {
 
-    public record Snapshot(int substepsCap, int backlogCap, long callbackCount) {
+    public record Snapshot(int substepsCap, long callbackCount) {
     }
 
     private static final LongAdder CALLBACKS = new LongAdder();
@@ -44,8 +44,7 @@ public final class PrtsNativeReadings {
             }
             Object config = resolved.config.invoke(system);
             int substeps = resolved.substeps.getInt(config);
-            int backlog = resolved.resident.getInt(null);
-            return new Snapshot(substeps, backlog, CALLBACKS.sum());
+            return new Snapshot(substeps, CALLBACKS.sum());
         } catch (ReflectiveOperationException | RuntimeException ignored) {
             return null;
         }
@@ -67,8 +66,7 @@ public final class PrtsNativeReadings {
                 surface = new Surface(
                     system.getMethod("get", Level.class),
                     system.getMethod("getConfig"),
-                    config.getField("substepsPerTick"),
-                    system.getField("DEFAULT_RESIDENT_CAPACITY"));
+                    config.getField("substepsPerTick"));
             } catch (ReflectiveOperationException | RuntimeException ignored) {
                 surface = null;
             }
@@ -76,6 +74,6 @@ public final class PrtsNativeReadings {
         return surface;
     }
 
-    private record Surface(Method get, Method config, Field substeps, Field resident) {
+    private record Surface(Method get, Method config, Field substeps) {
     }
 }

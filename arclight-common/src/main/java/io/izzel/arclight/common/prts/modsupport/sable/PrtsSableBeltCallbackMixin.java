@@ -9,7 +9,7 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /** Counts the Belt callback entry that really re-enters Java from the native payload. */
 @OnlyInPlatform(ArclightPlatform.NEOFORGE)
@@ -19,7 +19,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class PrtsSableBeltCallbackMixin {
 
     @Inject(method = "sable$onCollision", at = @At("HEAD"), remap = false)
-    private void prts$countBeltCallback(CallbackInfo ci) {
+    private void prts$countBeltCallback(CallbackInfoReturnable<Object> cir) {
         PrtsNativeReadings.noteCallback();
     }
 }

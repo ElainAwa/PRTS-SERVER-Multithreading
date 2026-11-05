@@ -9,7 +9,7 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /** Counts the Fragile callback entry; Bell, Beehive and Explosive inherit this method. */
 @OnlyInPlatform(ArclightPlatform.NEOFORGE)
@@ -19,7 +19,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class PrtsSableFragileCallbackMixin {
 
     @Inject(method = "sable$onCollision", at = @At("HEAD"), remap = false)
-    private void prts$countFragileCallback(CallbackInfo ci) {
+    private void prts$countFragileCallback(CallbackInfoReturnable<Object> cir) {
         PrtsNativeReadings.noteCallback();
     }
 }

@@ -1878,7 +1878,6 @@ public final class KernelReadings {
             return;
         }
         add(lines, "native.substeps_cap", snapshot.substepsCap());
-        add(lines, "native.backlog_cap", snapshot.backlogCap());
         add(lines, "native.callback_count", snapshot.callbackCount());
     }
 
