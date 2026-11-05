@@ -38,5 +38,12 @@ class P3ACC34ReturnActionsTest {
         assertTrue(source.contains("bindSecondCondition(DegradeLevel.B2"));
         assertTrue(source.contains("bindSecondCondition(DegradeLevel.B3"));
         assertTrue(source.contains("b3ReturnCondition"));
+        assertTrue(source.contains("maybeReturnB4"));
+        int b5 = source.indexOf("maybeReturnB5();");
+        int b4 = source.indexOf("maybeReturnB4();");
+        int b3 = source.indexOf("maybeReturnB3();");
+        int b1 = source.indexOf("maybeReturnB1();");
+        assertTrue(b5 >= 0 && b4 > b5 && b3 > b4 && b1 > b3,
+            "returns run from the highest rung to the lowest");
     }
 }

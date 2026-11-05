@@ -963,10 +963,11 @@ public final class KernelModule {
         lastDecision = budgetStates.judge(tickIndex, table, overruns, waitPoints.waitOverrunCount(),
             lastConservation);
         ladder.noteTick(lastDecision.degraded());
-        maybeReturnB1();
+        maybeReturnB5();
+        maybeReturnB4();
         maybeReturnB3();
         maybeReturnB2();
-        maybeReturnB5();
+        maybeReturnB1();
         control = new ControlFrame(tickIndex, minMargin, overruns, waitPoints.waitOverrunCount(),
             reserveUsedMs(), table.reserve().remainingMs(), degradeStateKey(),
             lastDecision.enteredTick());
@@ -2771,6 +2772,18 @@ public final class KernelModule {
         }
         if (ladder.noteReturned(DegradeLevel.B5)) {
             b5ActionPending = false;
+        }
+    }
+
+    /** B4 returns before the lower rungs: once the event queue is idle and the gate is clear, no
+     * queued command is still being served, so the deepest event rung can drop first. */
+    private void maybeReturnB4() {
+        if (ladder.sign().deepest() != DegradeLevel.B4
+            || rconDeferralWanted() || !rconDeferral.idle()) {
+            return;
+        }
+        if (ladder.noteReturned(DegradeLevel.B4)) {
+            rconActionPending = false;
         }
     }
 
