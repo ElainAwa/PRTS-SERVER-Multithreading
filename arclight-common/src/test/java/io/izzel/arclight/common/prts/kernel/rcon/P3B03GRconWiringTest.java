@@ -14,6 +14,7 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -87,10 +88,14 @@ class P3B03GRconWiringTest {
         ClassNode mixin = read("io/izzel/arclight/common/mixin/core/server/dedicated/DedicatedServerMixin");
         MethodNode fallback = method(mixin, "arclight$runSynchronously");
         assertNotNull(fallback);
-        List<String> calls = calls(fallback);
-        assertTrue(calls.contains("net/minecraft/server/rcon/RconConsoleSource#prepareForCommand"), calls.toString());
-        assertTrue(calls.stream().anyMatch(call -> call.endsWith("#executeBlocking")), calls.toString());
-        assertTrue(calls.contains("net/minecraft/server/rcon/RconConsoleSource#getCommandResponse"), calls.toString());
+        assertTrue(calls(fallback).stream().anyMatch(call -> call.endsWith("#executeBlocking")),
+            calls(fallback).toString());
+        MethodNode ownerUnit = method(mixin, "arclight$runOwnerUnit");
+        assertNotNull(ownerUnit);
+        assertTrue(calls(ownerUnit).contains("net/minecraft/server/rcon/RconConsoleSource#prepareForCommand"),
+            calls(ownerUnit).toString());
+        assertTrue(calls(ownerUnit).contains("net/minecraft/server/rcon/RconConsoleSource#getCommandResponse"),
+            calls(ownerUnit).toString());
     }
 
     @Test
@@ -117,6 +122,20 @@ class P3B03GRconWiringTest {
         ClassNode lifecycle = read("io/izzel/arclight/common/prts/kernel/WorldLifecycleWiring");
         assertTrue(calls(method(lifecycle, "onServerStopping"))
             .contains("io/izzel/arclight/common/prts/kernel/KernelModule#terminateRconDeferrals"));
+    }
+
+    @Test
+    void theCompleteUnitNotesEventExactlyOnceInEachPath() throws Exception {
+        ClassNode mixin = read("io/izzel/arclight/common/mixin/core/server/dedicated/DedicatedServerMixin");
+        assertTrue(calls(method(mixin, "arclight$runOwnerUnit")).stream()
+            .anyMatch(call -> call.equals("io/izzel/arclight/common/prts/kernel/rcon/RconEventMeter#note")));
+        ClassNode owner = read("io/izzel/arclight/common/mixin/core/server/dedicated/DedicatedServerMixin$1");
+        assertEquals(1, calls(method(owner, "capture")).stream()
+            .filter(call -> call.equals("io/izzel/arclight/common/prts/kernel/rcon/RconEventMeter#note"))
+            .count());
+        assertEquals(1, calls(method(owner, "failed")).stream()
+            .filter(call -> call.equals("io/izzel/arclight/common/prts/kernel/rcon/RconEventMeter#note"))
+            .count());
     }
 
     @Test

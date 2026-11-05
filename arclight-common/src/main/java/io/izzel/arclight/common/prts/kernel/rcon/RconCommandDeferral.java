@@ -20,6 +20,10 @@ public final class RconCommandDeferral {
 
         /** Copies the response of the command that just ran on this owner thread. */
         String capture();
+
+        /** Called once when prepare or dispatch threw, so a meter can close a failed unit. */
+        default void failed(Throwable failure) {
+        }
     }
 
     /** How many not-yet-completed requests the process holds at once. */
@@ -182,6 +186,11 @@ public final class RconCommandDeferral {
                     response = request.unit.capture();
                 } catch (Throwable thrown) {
                     failure = thrown;
+                    try {
+                        request.unit.failed(thrown);
+                    } catch (Throwable ignored) {
+                        // The original command failure is the one returned to the caller.
+                    }
                 }
                 synchronized (lock) {
                     request.response = response;

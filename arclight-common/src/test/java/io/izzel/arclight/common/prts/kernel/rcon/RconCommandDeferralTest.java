@@ -265,7 +265,7 @@ class RconCommandDeferralTest {
             assertTrue(started.await(5, TimeUnit.SECONDS));
             Future<String> b = workers.submit(() -> deferral.await("b",
                 unit("b", new ArrayList<>(), "b"), 5_000L, null));
-            awaitTrue(() -> deferral.queued() == 1);
+            awaitTrue(() -> deferral.queued() == 2);
             deferral.terminateQueued();
             ExecutionException rejected = assertThrows(ExecutionException.class,
                 () -> b.get(5, TimeUnit.SECONDS));

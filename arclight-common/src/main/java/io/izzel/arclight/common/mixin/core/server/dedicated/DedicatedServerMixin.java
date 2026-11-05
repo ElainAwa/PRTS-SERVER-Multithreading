@@ -4,6 +4,7 @@ import io.izzel.arclight.common.bridge.core.server.dedicated.DedicatedServerBrid
 import io.izzel.arclight.common.mixin.core.server.MinecraftServerMixin;
 import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.rcon.RconCommandDeferral;
+import io.izzel.arclight.common.prts.kernel.rcon.RconEventMeter;
 import io.izzel.arclight.common.mod.server.ArclightServer;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -90,9 +91,14 @@ public abstract class DedicatedServerMixin extends MinecraftServerMixin implemen
         }
         try {
             return module.deferRconCommand(command, new RconCommandDeferral.OwnerUnit() {
+                private long startNanos;
+                private String worldId;
+
                 @Override
                 public void prepare() {
+                    startNanos = System.nanoTime();
                     rconConsoleSource.prepareForCommand();
+                    worldId = arclight$rconWorldId();
                 }
 
                 @Override
@@ -102,7 +108,14 @@ public abstract class DedicatedServerMixin extends MinecraftServerMixin implemen
 
                 @Override
                 public String capture() {
-                    return rconConsoleSource.getCommandResponse();
+                    String response = rconConsoleSource.getCommandResponse();
+                    RconEventMeter.note(worldId, startNanos);
+                    return response;
+                }
+
+                @Override
+                public void failed(Throwable failure) {
+                    RconEventMeter.note(worldId, startNanos);
                 }
             });
         } catch (RconCommandDeferral.Rejected rejected) {
@@ -114,9 +127,31 @@ public abstract class DedicatedServerMixin extends MinecraftServerMixin implemen
     }
 
     private String arclight$runSynchronously(String command) {
-        this.rconConsoleSource.prepareForCommand();
-        this.executeBlocking(() -> this.arclight$dispatchRemoteCommand(command));
-        return this.rconConsoleSource.getCommandResponse();
+        String[] response = new String[1];
+        this.executeBlocking(() -> response[0] = this.arclight$runOwnerUnit(command));
+        return response[0];
+    }
+
+    private String arclight$runOwnerUnit(String command) {
+        long startNanos = System.nanoTime();
+        String worldId = null;
+        try {
+            rconConsoleSource.prepareForCommand();
+            worldId = arclight$rconWorldId();
+            arclight$dispatchRemoteCommand(command);
+            return rconConsoleSource.getCommandResponse();
+        } finally {
+            RconEventMeter.note(worldId, startNanos);
+        }
+    }
+
+    private String arclight$rconWorldId() {
+        try {
+            return rconConsoleSource.createCommandSourceStack().getLevel().dimension()
+                .location().toString();
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     private void arclight$dispatchRemoteCommand(String command) {
