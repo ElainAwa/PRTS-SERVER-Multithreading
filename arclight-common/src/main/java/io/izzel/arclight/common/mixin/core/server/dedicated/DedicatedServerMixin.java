@@ -2,6 +2,8 @@ package io.izzel.arclight.common.mixin.core.server.dedicated;
 
 import io.izzel.arclight.common.bridge.core.server.dedicated.DedicatedServerBridge;
 import io.izzel.arclight.common.mixin.core.server.MinecraftServerMixin;
+import io.izzel.arclight.common.prts.kernel.KernelModule;
+import io.izzel.arclight.common.prts.kernel.rcon.RconCommandDeferral;
 import io.izzel.arclight.common.mod.server.ArclightServer;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -82,16 +84,49 @@ public abstract class DedicatedServerMixin extends MinecraftServerMixin implemen
      */
     @Overwrite
     public String runCommand(String command) {
-        this.rconConsoleSource.prepareForCommand();
-        this.executeBlocking(() -> {
-            RemoteServerCommandEvent event = new RemoteServerCommandEvent(remoteConsole, command);
-            Bukkit.getPluginManager().callEvent(event);
-            if (event.isCancelled()) {
-                return;
+        KernelModule module = KernelModule.instance();
+        if (!module.rconDeferralWanted()) {
+            return arclight$runSynchronously(command);
+        }
+        try {
+            return module.deferRconCommand(command, new RconCommandDeferral.OwnerUnit() {
+                @Override
+                public void prepare() {
+                    rconConsoleSource.prepareForCommand();
+                }
+
+                @Override
+                public void dispatch() {
+                    arclight$dispatchRemoteCommand(command);
+                }
+
+                @Override
+                public String capture() {
+                    return rconConsoleSource.getCommandResponse();
+                }
+            });
+        } catch (RconCommandDeferral.Rejected rejected) {
+            if (!rejected.gateCleared()) {
+                throw rejected;
             }
-            this.server.dispatchServerCommand(remoteConsole, new ConsoleInput(event.getCommand(), this.rconConsoleSource.createCommandSourceStack()));
-        });
+            return arclight$runSynchronously(command);
+        }
+    }
+
+    private String arclight$runSynchronously(String command) {
+        this.rconConsoleSource.prepareForCommand();
+        this.executeBlocking(() -> this.arclight$dispatchRemoteCommand(command));
         return this.rconConsoleSource.getCommandResponse();
+    }
+
+    private void arclight$dispatchRemoteCommand(String command) {
+        RemoteServerCommandEvent event = new RemoteServerCommandEvent(remoteConsole, command);
+        Bukkit.getPluginManager().callEvent(event);
+        if (event.isCancelled()) {
+            return;
+        }
+        this.server.dispatchServerCommand(remoteConsole,
+            new ConsoleInput(event.getCommand(), this.rconConsoleSource.createCommandSourceStack()));
     }
 
     @Inject(method = "onServerExit", at = @At("RETURN"))

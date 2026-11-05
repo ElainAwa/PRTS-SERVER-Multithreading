@@ -134,6 +134,7 @@ public final class PrtsKernelEvents {
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
         KernelModule module = KernelModule.instance();
+        module.terminateRconDeferrals();
         List<String> worlds = new ArrayList<>();
         for (ServerLevel level : event.getServer().getAllLevels()) {
             worlds.add(level.dimension().location().toString());

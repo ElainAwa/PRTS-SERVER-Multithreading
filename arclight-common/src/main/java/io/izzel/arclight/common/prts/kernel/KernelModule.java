@@ -29,6 +29,7 @@ import io.izzel.arclight.common.prts.kernel.safety.SafetyNet;
 import io.izzel.arclight.common.prts.kernel.safety.ZeroEffectDetector;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.degrade.DegradeLadder;
+import io.izzel.arclight.common.prts.kernel.rcon.RconCommandDeferral;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
@@ -237,6 +238,8 @@ public final class KernelModule {
     private final WorldResChildMeter worldResMeter = new WorldResChildMeter();
     private final WorldResChildLedger worldResLedger = new WorldResChildLedger(WorldEpochs.UNTRACKED);
     private final GenMinWatermark genMinWatermark = new GenMinWatermark();
+    private final RconCommandDeferral rconDeferral = new RconCommandDeferral();
+    private boolean rconActionPending;
     private final BudgetStateMachine budgetStates = new BudgetStateMachine();
     private final DegradeLadder ladder = new DegradeLadder(KernelSettings::degradeActions);
     private final WaitLadder waitLadder = new WaitLadder(KernelSettings::waitActions);
@@ -2631,7 +2634,60 @@ public final class KernelModule {
         if (!guard.serverThreadBound() || !guard.onServerThread()) {
             return mailboxSnapshot();
         }
-        return drainQueuedResets();
+        SafePoint point = drainQueuedResets();
+        pumpRconDeferrals();
+        return point;
+    }
+
+    /** Whether the latest real event share row is over its margin and the ladder has reached the
+     * event rung. The queue itself never feeds this gate: a full queue does not enter B4. */
+    public boolean rconDeferralWanted() {
+        return io.izzel.arclight.common.prts.kernel.rcon.RconCommandGate.shouldDefer(
+            shares.lastTable(), ladder.sign().deepest(),
+            KernelSettings.enabled(), KernelSettings.degradeActions());
+    }
+
+    /** Hands one complete RCON command to the bounded owner queue. The caller blocks until the
+     * owner has prepared, dispatched and captured the real result; rejection is thrown before any
+     * command side effect. */
+    public String deferRconCommand(String command, RconCommandDeferral.OwnerUnit unit) {
+        if (!rconDeferralWanted()) {
+            throw RconCommandDeferral.Rejected.gateCleared("event overrun cleared");
+        }
+        return rconDeferral.await(command, unit, RconCommandDeferral.DEFAULT_DEADLINE_MS,
+            this::noteRconDeferred);
+    }
+
+    /** Runs one bounded owner batch of deferred commands. Commands run only on the owner thread. */
+    public void pumpRconDeferrals() {
+        if (!KernelSettings.enabled()) {
+            rconDeferral.terminateQueued();
+            rconActionPending = false;
+            return;
+        }
+        rconDeferral.pumpOwner();
+        maybeReturnRcon();
+    }
+
+    /** Rejects requests the owner has not started; a started command finishes and is not reported
+     * as cancelled. */
+    public void terminateRconDeferrals() {
+        rconDeferral.terminateQueued();
+        rconActionPending = false;
+    }
+
+    private void noteRconDeferred() {
+        rconActionPending = true;
+        ladder.noteEffective(DegradeLevel.B4);
+    }
+
+    private void maybeReturnRcon() {
+        if (!rconActionPending || !rconDeferral.idle() || rconDeferralWanted()) {
+            return;
+        }
+        if (ladder.noteReturned(DegradeLevel.B4)) {
+            rconActionPending = false;
+        }
     }
 
     /** One consistent read of what the queue holds, for a caller that is not the owner. */
@@ -3726,6 +3782,8 @@ public final class KernelModule {
         QuotaMachineWindow.reset();
         MachineTickDeferral.reset();
         DeviceTickDeferral.reset();
+        rconDeferral.resetQueued();
+        rconActionPending = false;
         MaterializedUnloadedReadings.reset();
         HealthReadings.reset();
         loadThread.reset();

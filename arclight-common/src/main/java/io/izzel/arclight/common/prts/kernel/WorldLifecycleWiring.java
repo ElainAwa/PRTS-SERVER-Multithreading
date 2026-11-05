@@ -35,6 +35,7 @@ public final class WorldLifecycleWiring {
         if (worldIds == null) {
             return;
         }
+        module.terminateRconDeferrals();
         for (String worldId : worldIds) {
             module.flushWorldAtStop(worldId, false);
         }
