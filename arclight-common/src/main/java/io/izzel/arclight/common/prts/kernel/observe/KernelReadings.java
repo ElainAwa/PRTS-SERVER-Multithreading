@@ -18,6 +18,7 @@ import io.izzel.arclight.common.prts.kernel.commit.CommitRing;
 import io.izzel.arclight.common.prts.kernel.commit.EffectStore;
 import io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
+import io.izzel.arclight.common.prts.kernel.shares.WorldResChildBudget;
 import io.izzel.arclight.common.prts.support.PrtsChunkFlow;
 import io.izzel.arclight.common.prts.support.PrtsChunkMaterialization;
 import io.izzel.arclight.common.prts.support.PrtsLoadProbe;
@@ -78,11 +79,13 @@ import io.izzel.arclight.common.prts.support.PrtsSeams;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.ToLongFunction;
 
 /** Renders the full readout of the four pieces. The fields are observation requests: they are
  * published so an operator and the tests can see them, but they are not part of an approved
@@ -859,6 +862,66 @@ public final class KernelReadings {
         }
     }
 
+    /** One aggregate pair derived from the live B01-A child settlements. */
+    record WorldResChildShares(double genShareMs, double lightShareMs) {
+    }
+
+    /** Selects the latest current-epoch settlement per world and aggregates only SETTLED child
+     * shares. It returns null when no live settlement covers the source; it never synthesizes a
+     * zero for an unobserved, over-parent or unknown child. */
+    static WorldResChildShares worldResChildShares(List<WorldResChildBudget> settlements,
+                                                    ToLongFunction<String> epochOf) {
+        if (settlements == null || settlements.isEmpty() || epochOf == null) {
+            return null;
+        }
+        Map<String, WorldResChildBudget> latest = new HashMap<>();
+        for (WorldResChildBudget budget : settlements) {
+            if (budget == null || budget.worldId() == null) {
+                continue;
+            }
+            long currentEpoch;
+            try {
+                currentEpoch = epochOf.applyAsLong(budget.worldId());
+            } catch (Throwable unreadable) {
+                continue;
+            }
+            if (budget.epoch() != currentEpoch) {
+                continue;
+            }
+            WorldResChildBudget previous = latest.get(budget.worldId());
+            if (previous == null || budget.tickIndex() > previous.tickIndex()) {
+                latest.put(budget.worldId(), budget);
+            }
+        }
+        double gen = 0.0;
+        double light = 0.0;
+        boolean covered = false;
+        for (WorldResChildBudget budget : latest.values()) {
+            if (budget.status() != WorldResChildBudget.Status.SETTLED) {
+                continue;
+            }
+            double nextGen = gen + budget.genShareMs();
+            double nextLight = light + budget.lightShareMs();
+            if (!Double.isFinite(nextGen) || !Double.isFinite(nextLight)) {
+                return null;
+            }
+            gen = nextGen;
+            light = nextLight;
+            covered = true;
+        }
+        return covered ? new WorldResChildShares(gen, light) : null;
+    }
+
+    static void worldresChildSignals(List<String> lines, List<WorldResChildBudget> settlements,
+                                     ToLongFunction<String> epochOf) {
+        WorldResChildShares shares = worldResChildShares(settlements, epochOf);
+        if (shares == null) {
+            return;
+        }
+        add(lines, "budget.worldres.gen_share_ms", format(shares.genShareMs()));
+        add(lines, "budget.worldres.light_share_ms", format(shares.lightShareMs()));
+    }
+
     private static void rejectCodes(List<String> lines, KernelModule module) {
         for (RejectCode code : RejectCode.values()) {
             add(lines, "reject." + code.text(), module.ledger().codeCount(code));
@@ -921,6 +984,8 @@ public final class KernelReadings {
                 add(lines, "budget." + shareClass.key() + "_margin_ms", "0.000");
             }
         }
+        worldresChildSignals(lines, module.worldResChildSettlements(),
+            module.guard().worldEpochs()::epochOf);
         add(lines, "budget.reserve_row", table == null ? 0 : 1);
         add(lines, "budget.reserve_ms", table == null ? format(KernelSettings.reserveMs())
             : format(table.reserve().reserveMs()));

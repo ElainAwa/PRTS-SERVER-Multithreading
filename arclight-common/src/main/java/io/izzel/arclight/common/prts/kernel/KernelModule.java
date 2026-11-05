@@ -2020,6 +2020,12 @@ public final class KernelModule {
         return worldResLedger;
     }
 
+    /** Immutable bounded snapshot of the B01-A child settlements for the formal child readout; it
+     * is not a top-level ShareTable row and does not affect share count or conservation. */
+    public List<WorldResChildBudget> worldResChildSettlements() {
+        return worldResLedger.settlements();
+    }
+
     /** The first token of the trigger records of this plan tick whose world the plan covers, or -1
      * when none is pending. The trigger record names the world of the share row, which is the
      * dimension key the plan's tasks carry; the runtime pseudo world of the metering is never a
