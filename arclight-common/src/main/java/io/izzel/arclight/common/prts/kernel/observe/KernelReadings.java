@@ -106,6 +106,7 @@ public final class KernelReadings {
         arena(lines, module);
         rejectCodes(lines, module);
         shareBudget(lines, module);
+        eventOrderFace(lines);
         budgetStates(lines, module);
         degradation(lines, module);
         selfTimers(lines, module);
@@ -928,6 +929,15 @@ public final class KernelReadings {
         }
         add(lines, "reject.trigger_rows", RejectTrigger.values().length);
         add(lines, "reject.new_codes", 0);
+    }
+
+    /** The two formal event rows appear only after a complete observed RCON root, so a missing
+     * line means the source was not covered rather than a measured zero. */
+    private static void eventOrderFace(List<String> lines) {
+        BukkitEventOrderProbe.reading().ifPresent(reading -> {
+            add(lines, "event.order_violation", reading.orderViolation());
+            add(lines, "event.nesting_depth", reading.nestingDepth());
+        });
     }
 
     private static void shareBudget(List<String> lines, KernelModule module) {

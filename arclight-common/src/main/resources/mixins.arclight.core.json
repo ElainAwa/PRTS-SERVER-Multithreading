@@ -51,6 +51,7 @@
     "network.protocol.game.ServerboundUseItemPacketMixin",
     "network.protocol.game.ClientboundSetBorderCenterPacketMixin",
     "network.protocol.handshake.ClientIntentionPacketMixin",
+    "server.SimplePluginManagerMixin",
     "server.rcon.RconConsoleSourceMixin",
     "server.BootstrapMixin",
     "server.bossevents.CustomBossEventMixin",

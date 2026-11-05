@@ -5,6 +5,7 @@ import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.WorldLifecycleWiring;
 import io.izzel.arclight.common.prts.config.PrtsConfigManager;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
+import io.izzel.arclight.common.prts.kernel.observe.BukkitEventOrderProbe;
 import io.izzel.arclight.common.prts.kernel.observe.CloseSealWriter;
 import io.izzel.arclight.common.prts.kernel.wiring.KernelWiring;
 import io.izzel.arclight.common.prts.support.PrtsLoadProbe;
@@ -56,6 +57,7 @@ public final class PrtsKernelEvents {
             module.installWaitSiteTap();
             module.installLoadProbe();
             module.installUnloadDelivery();
+            BukkitEventOrderProbe.install();
             NeoForge.EVENT_BUS.register(INSTANCE);
             subscribed = true;
             return;
@@ -64,6 +66,7 @@ public final class PrtsKernelEvents {
         module.removeWaitSiteTap();
         module.removeLoadProbe();
         module.removeUnloadDelivery();
+        BukkitEventOrderProbe.uninstall();
         NeoForge.EVENT_BUS.unregister(INSTANCE);
         subscribed = false;
     }

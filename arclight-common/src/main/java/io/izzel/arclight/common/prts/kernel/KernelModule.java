@@ -77,6 +77,7 @@ import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSite;
 import io.izzel.arclight.common.prts.kernel.decision.B1DecisionGate;
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityQueryReadings;
+import io.izzel.arclight.common.prts.kernel.observe.BukkitEventOrderProbe;
 import io.izzel.arclight.common.prts.kernel.observe.HealthReadings;
 import io.izzel.arclight.common.prts.kernel.observe.MaterializedUnloadedReadings;
 import io.izzel.arclight.common.prts.kernel.observe.QuotaCostReadings;
@@ -3782,6 +3783,7 @@ public final class KernelModule {
         QuotaMachineWindow.reset();
         MachineTickDeferral.reset();
         DeviceTickDeferral.reset();
+        BukkitEventOrderProbe.reset();
         rconDeferral.resetQueued();
         rconActionPending = false;
         MaterializedUnloadedReadings.reset();
