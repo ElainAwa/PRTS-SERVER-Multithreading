@@ -58,6 +58,7 @@ public final class PrtsKernelEvents {
             module.installLoadProbe();
             module.installUnloadDelivery();
             BukkitEventOrderProbe.install();
+            PrtsEntityOwnershipEvents.syncSubscription(true);
             NeoForge.EVENT_BUS.register(INSTANCE);
             subscribed = true;
             return;
@@ -67,6 +68,7 @@ public final class PrtsKernelEvents {
         module.removeLoadProbe();
         module.removeUnloadDelivery();
         BukkitEventOrderProbe.uninstall();
+        PrtsEntityOwnershipEvents.syncSubscription(false);
         NeoForge.EVENT_BUS.unregister(INSTANCE);
         subscribed = false;
     }

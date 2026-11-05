@@ -3,8 +3,10 @@
  * flag here, so the row counted as skipped is the row that is cancelled. */
 package io.izzel.arclight.neoforge.prts.kernel;
 
+import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership;
+import io.izzel.arclight.common.prts.support.EntityTickBindingPolicy;
 import io.izzel.arclight.common.prts.support.PrtsHostTickCalls;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.common.NeoForge;
@@ -21,13 +23,26 @@ public final class PrtsEntityOwnershipEvents {
     private PrtsEntityOwnershipEvents() {
     }
 
-    /** Subscribes once, and only when this process declared the fixture. */
+    /** Binds the real entity-tick entry while the kernel is enabled; the ownership action itself
+     * remains behind the explicit fixture property, so this changes no P1 behavior by default. */
     public static synchronized void registerIfDeclared() {
-        if (subscribed || !EntityTickOwnership.live()) {
+        syncSubscription(KernelSettings.enabled());
+    }
+
+    /** Follows the kernel subscription on/off. It is the real host entry; an unarmed fixture still
+     * returns immediately, so no row is claimed unless the ownership fixture was explicitly armed. */
+    public static synchronized void syncSubscription(boolean kernelEnabled) {
+        boolean wanted = EntityTickBindingPolicy.shouldBind(kernelEnabled);
+        if (wanted == subscribed) {
             return;
         }
-        NeoForge.EVENT_BUS.register(INSTANCE);
-        subscribed = true;
+        if (wanted) {
+            NeoForge.EVENT_BUS.register(INSTANCE);
+            subscribed = true;
+        } else {
+            NeoForge.EVENT_BUS.unregister(INSTANCE);
+            subscribed = false;
+        }
     }
 
     @SubscribeEvent
