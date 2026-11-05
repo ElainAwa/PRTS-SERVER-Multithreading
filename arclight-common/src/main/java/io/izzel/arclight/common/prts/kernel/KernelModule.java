@@ -236,6 +236,7 @@ public final class KernelModule {
      * once per world/tick/epoch. Neither object names a readout key and neither changes the plan. */
     private final WorldResChildMeter worldResMeter = new WorldResChildMeter();
     private final WorldResChildLedger worldResLedger = new WorldResChildLedger(WorldEpochs.UNTRACKED);
+    private final GenMinWatermark genMinWatermark = new GenMinWatermark();
     private final BudgetStateMachine budgetStates = new BudgetStateMachine();
     private final DegradeLadder ladder = new DegradeLadder(KernelSettings::degradeActions);
     private final WaitLadder waitLadder = new WaitLadder(KernelSettings::waitActions);
@@ -616,6 +617,7 @@ public final class KernelModule {
             KernelSettings.routeUnregisteredWrites(), tickIndex);
         syncWaitSiteTap(KernelSettings.waitRegistry());
         syncPipelineRowTap(true);
+        syncGenProgressWatermark();
         refreshMailboxPlacement();
         syncLoadProbe(true);
         if (KernelSettings.commitLog()) {
@@ -791,6 +793,13 @@ public final class KernelModule {
         }
     }
 
+    /** Binds the existing generation wait-point row to the conservative min watermark only while
+     * the A02d producer is installed and the snapshot carries at least one tracked world. */
+    private void syncGenProgressWatermark() {
+        ChunkPipelineProgress.Snapshot snapshot = ChunkPipelineProgress.snapshot();
+        genMinWatermark.sync(waitPoints.progress(), snapshot.installed(), snapshot.worlds());
+    }
+
     private void syncPipelineRowTap(boolean wanted) {
         syncPipelineOwnerTap(wanted && KernelSettings.pipelineJobs() && KernelSettings.tickPlan());
         // The meter rides the existing row tap and follows the existing share-table switch on every
@@ -816,6 +825,7 @@ public final class KernelModule {
         } else {
             waitPoints.progress().unbindWorlds("gen");
             waitPoints.progress().unbindWorlds("send");
+            genMinWatermark.clear(waitPoints.progress());
         }
         if (pipelineRowTapInstalled == wanted) {
             return;
@@ -2865,6 +2875,7 @@ public final class KernelModule {
         worldResLedger.forgetWorld(named);
         ChunkPipelineProgress.forgetWorld(named);
         SendDelayAction.forgetWorld(named);
+        genMinWatermark.clear(waitPoints.progress());
         tickDigest.forgetMailboxPlacement(named);
         if (recordSession) {
             recordUnloadSession();
@@ -3701,6 +3712,7 @@ public final class KernelModule {
         worldResLedger.reset();
         ChunkPipelineProgress.reset();
         SendDelayAction.reset();
+        genMinWatermark.clear(waitPoints.progress());
         EntityQueryReadings.reset();
         ScaleBudgetReadings.reset();
         QuotaEntityWindow.reset();
