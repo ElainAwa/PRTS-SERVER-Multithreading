@@ -124,6 +124,7 @@ public final class KernelReadings {
         exits(lines, module);
         pipelineRows(lines, module);
         pipelineJobs(lines, module);
+        nativeReadings(lines, module);
         pipelineClaims(lines, module);
         pipelineRights(lines, module);
         tickDigest(lines, module);
@@ -1863,6 +1864,21 @@ public final class KernelReadings {
             }
         }
         return highest.name();
+    }
+
+    /** The three formal native keys exist only while the kernel and the optional payload are both
+     * present; a missing cap is omitted rather than published as a zero. */
+    private static void nativeReadings(List<String> lines, KernelModule module) {
+        if (!KernelSettings.enabled()) {
+            return;
+        }
+        io.izzel.arclight.common.prts.support.PrtsNativeReadings.Snapshot snapshot =
+            io.izzel.arclight.common.prts.support.PrtsNativeReadings.snapshot(module.hostLevel());
+        if (snapshot == null) {
+            return;
+        }
+        add(lines, "native.substeps_cap", snapshot.substepsCap());
+        add(lines, "native.callback_count", snapshot.callbackCount());
     }
 
     private static void selfTimers(List<String> lines, KernelModule module) {

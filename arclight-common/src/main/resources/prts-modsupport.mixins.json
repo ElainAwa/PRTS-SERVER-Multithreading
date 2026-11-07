@@ -21,6 +21,8 @@
     "paper.PrtsPaperBukkitApiMixin",
     "paper.PrtsPaperHumanEntityApiMixin",
     "paper.PrtsPaperServerApiMixin",
+    "sable.PrtsSableBeltCallbackMixin",
+    "sable.PrtsSableFragileCallbackMixin",
     "sable.PrtsSablePhysicsPipelineMixin",
     "sable.PrtsSableRopeMixin",
     "sable.PrtsSableVoxelCacheMixin",

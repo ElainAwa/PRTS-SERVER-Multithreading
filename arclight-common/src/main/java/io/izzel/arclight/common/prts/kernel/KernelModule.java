@@ -750,6 +750,12 @@ public final class KernelModule {
 
     /** Remembers the server the tick source is, so the save identity and the partition can be named
      * at a read. */
+    /** The world the readout can resolve the optional native payload against; null before boot. */
+    public net.minecraft.world.level.Level hostLevel() {
+        net.minecraft.server.MinecraftServer server = liveServer;
+        return server == null ? null : server.overworld();
+    }
+
     public void noteTickSource(net.minecraft.server.MinecraftServer server) {
         liveServer = server;
         LiveLevels.refresh(server);
@@ -3935,6 +3941,7 @@ public final class KernelModule {
         waitLadder.reset();
         waitCrossStreak = 0;
         SelfTimers.resetAll();
+        io.izzel.arclight.common.prts.support.PrtsNativeReadings.reset();
         guard.resetReadings();
         waitSites.reset();
         waitPoints.resetReadings();
