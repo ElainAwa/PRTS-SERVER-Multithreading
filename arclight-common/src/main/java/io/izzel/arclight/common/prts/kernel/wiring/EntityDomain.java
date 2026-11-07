@@ -179,6 +179,32 @@ public final class EntityDomain implements KernelDomain {
         flushLandedEntityBatches(true);
     }
 
+    /** Drops the held groups whose seating plan the store already moved past. The payload of those
+     * batches landed at settlement; only their observation line is stale, so the ring is left
+     * untouched instead of receiving a line that would be judged after a newer plan's. */
+    void discardStaleLandedEntityBatches() {
+        if (seatedReports.isEmpty()) {
+            return;
+        }
+        long latest = module.plans().latest() == null ? -1L
+            : module.plans().latest().planSequence();
+        takeStaleLandedReports(seatedReports, seatedLifecycles, latest);
+    }
+
+    /** Removes and returns the batches of the held groups a newer plan has already passed; the
+     * caller only observes them, so no ring, no order violation and no unplanned line is minted. */
+    static List<CommitLog.Batch> takeStaleLandedReports(Map<Long, List<CommitLog.Batch>> reports,
+                                                       Map<Long, Long> lifecycles, long latest) {
+        List<CommitLog.Batch> stale = new ArrayList<>();
+        for (long sequence : new ArrayList<>(reports.keySet())) {
+            if (sequence < latest) {
+                stale.addAll(reports.remove(sequence));
+                lifecycles.remove(sequence);
+            }
+        }
+        return stale;
+    }
+
     /** Reports every buffered group now; the tick close and shutdown cannot wait for a newer plan.
      * A plan the history no longer holds answers as unplanned instead of by a reused sequence. */
     void flushAllLandedEntityBatches() {
@@ -332,7 +358,11 @@ public final class EntityDomain implements KernelDomain {
                 HashWhitelist.bitexact(),
                 ID, writeBack);
             pending = null;
-            flushLandedEntityBatches();
+            // A group whose seating plan the store already moved past can only be a late report of
+            // a pass merged after the boundary: its payload landed when the batch settled, and a
+            // line inserted after a newer plan has reported would be judged descending. It is a
+            // stale observation, so it is discarded here, never reached and never counted.
+            discardStaleLandedEntityBatches();
             if (lastFrame == null) {
                 lastFrame = MergeSegment.Frame.empty();
                 merge.noteSkippedMerge();
