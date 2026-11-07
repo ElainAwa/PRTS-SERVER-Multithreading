@@ -51,6 +51,15 @@ class OwnershipVisibleParityTest {
     }
 
     @Test
+    void theCommitDrivesTheTrackedEntitySend() throws Exception {
+        String host = source("HostVisibleState.java");
+        assertTrue(host.contains("bridge$syncTrackedEntity"), "the commit does not drive the tracker");
+        String mixin = sourceAt("src/main/java/io/izzel/arclight/common/mixin/core/server/level/ChunkMapMixin.java");
+        assertTrue(mixin.contains("entityMap.get(entity.getId())"), "the tracked entity is not resolved");
+        assertTrue(mixin.contains("sendChanges()"), "the tracked entity send is not forced");
+    }
+
+    @Test
     void theHostVisibleCommitWritesEveryFieldTheTrackerReads() throws Exception {
         String host = source("HostVisibleState.java");
         for (String required : new String[]{"entity.setPos(", "entity.xo =", "entity.yo =",
@@ -80,9 +89,12 @@ class OwnershipVisibleParityTest {
     }
 
     private static String source(String name) throws Exception {
-        Path relative = Path.of("src/main/java/io/izzel/arclight/common/prts/kernel/domain/entity/ownership", name);
+        return sourceAt("src/main/java/io/izzel/arclight/common/prts/kernel/domain/entity/ownership/" + name);
+    }
+
+    private static String sourceAt(String relative) throws Exception {
+        Path path = Path.of(relative);
         Path fallback = Path.of("arclight-common").resolve(relative);
-        Path path = Files.exists(relative) ? relative : fallback;
-        return Files.readString(path);
+        return Files.readString(Files.exists(path) ? path : fallback);
     }
 }

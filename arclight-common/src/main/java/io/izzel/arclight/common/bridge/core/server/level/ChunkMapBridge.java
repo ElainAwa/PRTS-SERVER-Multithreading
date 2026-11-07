@@ -2,6 +2,7 @@ package io.izzel.arclight.common.bridge.core.server.level;
 
 import io.izzel.arclight.common.mod.util.ArclightCallbackExecutor;
 import net.minecraft.server.level.ChunkHolder;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.chunk.ChunkGenerator;
 
 import java.util.function.BooleanSupplier;
@@ -28,4 +29,7 @@ public interface ChunkMapBridge {
     void bridge$setViewDistance(int i);
 
     void bridge$setChunkGenerator(ChunkGenerator generator);
+
+    /** Sends one tracked entity's pending changes now; the skipped ownership commit is the caller. */
+    void bridge$syncTrackedEntity(Entity entity);
 }

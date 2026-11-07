@@ -3,14 +3,17 @@ package io.izzel.arclight.common.mixin.core.server.level;
 import com.mojang.datafixers.DataFixer;
 import io.izzel.arclight.common.bridge.core.world.level.WorldBridge;
 import io.izzel.arclight.common.bridge.core.server.level.ChunkMapBridge;
+import io.izzel.arclight.common.bridge.core.world.server.ChunkMap_TrackedEntityBridge;
 import io.izzel.arclight.common.mod.util.ArclightCallbackExecutor;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
+import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import net.minecraft.server.level.ChunkHolder;
 import net.minecraft.server.level.ChunkMap;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.progress.ChunkProgressListener;
 import net.minecraft.util.thread.BlockableEventLoop;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.chunk.ChunkGeneratorStructureState;
 import net.minecraft.world.level.chunk.LightChunkGetter;
@@ -46,6 +49,7 @@ public abstract class ChunkMapMixin implements ChunkMapBridge {
     @Shadow protected abstract Iterable<ChunkHolder> getChunks();
     @Shadow protected abstract void tick();
     @Shadow @Final public ServerLevel level;
+    @Shadow @Final private Int2ObjectMap<Object> entityMap;
     @Shadow @Final @Mutable private RandomState randomState;
     @Shadow @Final @Mutable private ChunkGeneratorStructureState chunkGeneratorState;
     @Shadow @Final @Mutable private WorldGenContext worldGenContext;
@@ -83,6 +87,17 @@ public abstract class ChunkMapMixin implements ChunkMapBridge {
     @Override
     public ChunkHolder bridge$chunkHolderAt(long chunkPos) {
         return getUpdatingChunkIfPresent(chunkPos);
+    }
+
+    @Override
+    public void bridge$syncTrackedEntity(Entity entity) {
+        if (entity == null) {
+            return;
+        }
+        Object tracked = entityMap.get(entity.getId());
+        if (tracked instanceof ChunkMap_TrackedEntityBridge bridge) {
+            bridge.bridge$getServerEntity().sendChanges();
+        }
     }
 
     @Override

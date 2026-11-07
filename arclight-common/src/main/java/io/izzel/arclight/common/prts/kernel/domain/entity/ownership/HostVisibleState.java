@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.domain.entity.ownership;
 
+import io.izzel.arclight.common.bridge.core.server.level.ChunkMapBridge;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.TickState;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 
 /** Finishes the commit of a row whose host tick the fixture skips: the model writes the row's
@@ -34,5 +36,18 @@ public final class HostVisibleState {
         entity.zo = state.zo;
         entity.tickCount = state.tickCount;
         entity.hasImpulse = true;
+        syncTracker(entity);
+    }
+
+    /** The tracker only checks the impulse when its own send pass runs; a skipped row has no
+     * other host step, so drive the tracked entity's send for this commit directly. */
+    private static void syncTracker(Entity entity) {
+        try {
+            if (entity.level() instanceof ServerLevel level) {
+                ((ChunkMapBridge) level.getChunkSource().chunkMap).bridge$syncTrackedEntity(entity);
+            }
+        } catch (Throwable ignored) {
+            // The fixture never turns a tracker edge into a tick fault; the next pass is the fallback.
+        }
     }
 }
