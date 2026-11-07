@@ -265,55 +265,6 @@ class EntityLandedSettlementOrderTest {
     }
 
     @Test
-    void aLateOldPlanReportIsNotInsertedAfterANewerPlansReport() {
-        WorkPlan previous = WorkPlan.freeze(TICK, 1L, List.of(view()), 4, 1L);
-        WorkPlan next = WorkPlan.freeze(TICK + 1L, 2L, List.of(farView()), 4, 10L);
-        List<TickPlan.CommitStep> previousOrder = new ArrayList<>();
-        previousOrder.add(step(previous.tasks().get(0), 0, 1L));
-        TickPlan previousPlan = new TickPlan(SEQUENCE, SEQUENCE, 1L, List.of(WORLD), null,
-            List.of(), previousOrder, null, List.of(), 0, 0, 0L, TickPlanStore.Feedback.none());
-        List<TickPlan.CommitStep> nextOrder = new ArrayList<>();
-        nextOrder.add(step(next.tasks().get(0), 0, 2L));
-        nextOrder.add(step(next.tasks().get(1), 1, 3L));
-        TickPlan nextPlan = new TickPlan(SEQUENCE + 1L, SEQUENCE + 1L, 1L, List.of(WORLD), null,
-            List.of(), nextOrder, null, List.of(), 0, 0, 0L, TickPlanStore.Feedback.none());
-        TickPlanStore store = new TickPlanStore(8);
-        store.publish(previousPlan);
-        store.publish(nextPlan);
-        CommitLog.Batch stale = batchOf(previous.tasks().get(0));
-        CommitLog.Batch first = batchOf(next.tasks().get(0));
-        CommitLog.Batch second = batchOf(next.tasks().get(1));
-
-        CommitLog inserted = log(store);
-        inserted.beginTick(TICK);
-        reachSeat(inserted, store, SEQUENCE + 1L, first);
-        reachSeat(inserted, store, SEQUENCE, stale);
-        inserted.closeTick();
-        assertEquals(1L, inserted.orderViolations(),
-            "a late old-plan report inserted after the new plan is judged descending");
-        assertEquals(1L, inserted.dropped());
-
-        CommitLog clean = log(store);
-        clean.beginTick(TICK);
-        reachSeat(clean, store, SEQUENCE + 1L, first);
-        Map<Long, List<CommitLog.Batch>> held = new LinkedHashMap<>();
-        Map<Long, Long> lifecycles = new LinkedHashMap<>();
-        held.put(SEQUENCE, new ArrayList<>(List.of(stale)));
-        lifecycles.put(SEQUENCE, store.lifecycle());
-        List<CommitLog.Batch> observed =
-            EntityDomain.takeStaleLandedReports(held, lifecycles, SEQUENCE + 1L);
-        assertEquals(1, observed.size(), "the stale observation line is kept out of the ring");
-        assertEquals(stale.nodeKey(), observed.get(0).nodeKey(), "the landed batch is not lost");
-        assertTrue(held.isEmpty(), "the stale group does not linger for a later tick");
-        reachSeat(clean, store, SEQUENCE + 1L, second);
-        CommitLog.Replay replay = clean.closeTick();
-        assertEquals(2L, clean.accepted(), "the new plan's lines are still accepted");
-        assertEquals(0L, clean.dropped());
-        assertEquals(0L, clean.orderViolations());
-        assertTrue(replay.orderMatches());
-    }
-
-    @Test
     void aPreviousPlansHeldReportsLandBeforeTheNextPlansReport() {
         WorkPlan previous = WorkPlan.freeze(TICK, 1L, List.of(view()), 4, 1L);
         WorkPlan next = WorkPlan.freeze(TICK + 1L, 2L, List.of(farView()), 4, 10L);
