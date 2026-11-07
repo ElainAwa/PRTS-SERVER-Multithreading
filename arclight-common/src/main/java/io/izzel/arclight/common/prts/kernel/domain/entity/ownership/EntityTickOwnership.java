@@ -491,6 +491,9 @@ public final class EntityTickOwnership {
             long commitStartedAt = System.nanoTime();
             model.apply(entity, answer);
             model.commitHostSteps(entity, answer);
+            // The host tick this entry skips also advances the counter and leaves the previous
+            // position and tracker impulse; carry those host-visible values before the skip.
+            HostVisibleState.commit(entity, answer);
             COMMIT_NANOS.add(System.nanoTime() - commitStartedAt);
             model.noteApplied();
             APPLIED.increment();
