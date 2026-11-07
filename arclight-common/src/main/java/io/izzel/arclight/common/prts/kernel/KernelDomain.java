@@ -14,6 +14,11 @@ public interface KernelDomain {
     /** Advances this domain by one tick of the kernel. */
     void tick(long tickIndex);
 
+    /** Called before the kernel advances and publishes the next plan: a domain reports whatever
+     * its published seating plan still holds, so those lines precede the new plan's. */
+    default void notePlanBoundary() {
+    }
+
     /** Closes everything this domain still holds. */
     void shutdown();
 

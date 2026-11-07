@@ -143,6 +143,12 @@ public final class EntityDomain implements KernelDomain {
      * in its own seat order, so a plan whose landed batches arrive over more than one tick still
      * reports ascending. */
     void flushLandedEntityBatches() {
+        flushLandedEntityBatches(false);
+    }
+
+    /** Reports the buffered groups; with the current plan included the boundary call reports every
+     * plan already published, before the kernel advances the sequence. */
+    private void flushLandedEntityBatches(boolean includePublished) {
         if (seatedReports.isEmpty()) {
             return;
         }
@@ -155,7 +161,7 @@ public final class EntityDomain implements KernelDomain {
             : module.plans().latest().planSequence();
         List<Long> closed = new ArrayList<>();
         for (long sequence : seatedReports.keySet()) {
-            if (sequence < latest) {
+            if (includePublished ? sequence <= latest : sequence < latest) {
                 closed.add(sequence);
             }
         }
@@ -163,6 +169,14 @@ public final class EntityDomain implements KernelDomain {
         for (long sequence : closed) {
             flushSeated(sequence);
         }
+    }
+
+    /** The kernel calls this before it freezes and publishes the next plan: every group whose
+     * seating plan is already published is reported now, so a held old plan's lines cannot land
+     * after the new plan's. */
+    @Override
+    public void notePlanBoundary() {
+        flushLandedEntityBatches(true);
     }
 
     /** Reports every buffered group now; the tick close and shutdown cannot wait for a newer plan.
@@ -222,9 +236,6 @@ public final class EntityDomain implements KernelDomain {
 
     @Override
     public void tick(long tick) {
-        // The kernel has published this tick's plan before the domain runs, so a group whose plan
-        // the store already moved past is complete and can be reported in its own seat order.
-        flushLandedEntityBatches();
         // The migrated face books what the host entry closed since the last adoption; it is read
         // here and nowhere else, so nothing this domain decides can depend on it.
         if (FRAME_MIGRATION) {

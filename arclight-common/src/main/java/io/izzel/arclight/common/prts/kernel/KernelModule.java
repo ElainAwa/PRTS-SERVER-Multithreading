@@ -651,6 +651,9 @@ public final class KernelModule {
             reviewSafety();
         }
         if (KernelSettings.tickPlan()) {
+            // The boundary runs before the sequence moves, so a plan whose reports were held over
+            // a tick lands before the next plan can report a line.
+            notePlanBoundary();
             freezePlan(worldIds);
         }
         if (KernelSettings.dualExits()) {
@@ -1856,6 +1859,12 @@ public final class KernelModule {
     private void tickDomains() {
         for (KernelDomain domain : domains) {
             domain.tick(tickIndex);
+        }
+    }
+
+    private void notePlanBoundary() {
+        for (KernelDomain domain : domains) {
+            domain.notePlanBoundary();
         }
     }
 

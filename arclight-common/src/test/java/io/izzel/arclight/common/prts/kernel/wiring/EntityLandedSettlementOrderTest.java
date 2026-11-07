@@ -264,8 +264,59 @@ class EntityLandedSettlementOrderTest {
             "the whole plan reported together stays in its own seat order");
     }
 
+    @Test
+    void aPreviousPlansHeldReportsLandBeforeTheNextPlansReport() {
+        WorkPlan previous = WorkPlan.freeze(TICK, 1L, List.of(view()), 4, 1L);
+        WorkPlan next = WorkPlan.freeze(TICK + 1L, 2L, List.of(farView()), 4, 10L);
+        List<TickPlan.CommitStep> previousOrder = new ArrayList<>();
+        previousOrder.add(step(previous.tasks().get(0), 0, 1L));
+        previousOrder.add(step(previous.tasks().get(1), 2, 2L));
+        TickPlan previousPlan = new TickPlan(SEQUENCE, SEQUENCE, 1L, List.of(WORLD), null,
+            List.of(), previousOrder, null, List.of(), 0, 0, 0L, TickPlanStore.Feedback.none());
+        List<TickPlan.CommitStep> nextOrder = new ArrayList<>();
+        nextOrder.add(step(next.tasks().get(0), 0, 3L));
+        TickPlan nextPlan = new TickPlan(SEQUENCE + 1L, SEQUENCE + 1L, 1L, List.of(WORLD), null,
+            List.of(), nextOrder, null, List.of(), 0, 0, 0L, TickPlanStore.Feedback.none());
+        TickPlanStore store = new TickPlanStore(8);
+        store.publish(previousPlan);
+        store.publish(nextPlan);
+        List<CommitLog.Batch> held = new ArrayList<>();
+        held.add(batchOf(previous.tasks().get(1)));
+        held.add(batchOf(previous.tasks().get(0)));
+
+        CommitLog ordered = log(store);
+        ordered.beginTick(TICK);
+        EntityDomain.orderLandedBatches(held, previousPlan);
+        for (CommitLog.Batch batch : held) {
+            reachSeat(ordered, store, SEQUENCE, batch);
+        }
+        reachSeat(ordered, store, SEQUENCE + 1L, batchOf(next.tasks().get(0)));
+        CommitLog.Replay replay = ordered.closeTick();
+        assertEquals(3L, ordered.accepted());
+        assertEquals(0L, ordered.dropped());
+        assertEquals(0L, ordered.orderViolations(),
+            "the held old plan is reported in its own seat order before the new plan's line");
+        assertTrue(replay.orderMatches());
+
+        CommitLog inverted = log(store);
+        inverted.beginTick(TICK);
+        reachSeat(inverted, store, SEQUENCE + 1L, batchOf(next.tasks().get(0)));
+        for (CommitLog.Batch batch : held) {
+            reachSeat(inverted, store, SEQUENCE, batch);
+        }
+        inverted.closeTick();
+        assertEquals(1L, inverted.orderViolations(),
+            "reporting the new plan first turns the old plan's first line into a descending one");
+        assertEquals(1L, inverted.dropped());
+    }
+
     private static void reachSeat(CommitLog log, TickPlanStore store, CommitLog.Batch batch) {
-        TickPlanStore.StepRef seat = store.resolveIn(SEQUENCE, store.lifecycle(), batch.worldId(),
+        reachSeat(log, store, SEQUENCE, batch);
+    }
+
+    private static void reachSeat(CommitLog log, TickPlanStore store, long sequence,
+                                  CommitLog.Batch batch) {
+        TickPlanStore.StepRef seat = store.resolveIn(sequence, store.lifecycle(), batch.worldId(),
             batch.domainId(), batch.nodeKey());
         log.reach(batch, seat.planSequence(), seat.position(), store.lifecycle());
     }
