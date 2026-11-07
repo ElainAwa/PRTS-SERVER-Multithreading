@@ -27,6 +27,7 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
 import io.izzel.arclight.common.prts.kernel.observe.ScaleBudgetReadings;
+import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
 import io.izzel.arclight.common.prts.kernel.wiring.JobGraphAdapter;
 import io.izzel.arclight.common.prts.support.PrtsEntityCapability;
 import io.izzel.arclight.common.prts.support.PrtsEntityRescope;
@@ -85,14 +86,36 @@ public final class EntityDomain implements KernelDomain {
         this.writeBack = new DispatchWriteBack(module.intents(), module.payloads()::bind,
             module.payloads()::drop, module.guard().worldEpochs()::epochOf, readings,
             KernelSettings::dispatchTakeover);
-        // The entity domain owns one commit-ring producer: its landed takeover batch. Resolve the
-        // current log on every report; the commit-log gate keeps a log that never begins or closes a
-        // tick from being fed, so its rings cannot fill unseen.
-        this.writeBack.bindCommitSink(batch -> {
-            if (KernelSettings.commitLog()) {
-                module.commits().reach(batch);
+        // The entity domain owns one commit-ring producer: its landed takeover batch. The exact
+        // seat of the plan that ordered the batch is resolved on every report; a batch that plan
+        // does not seat is written as unplanned rather than resolved to the newest plan that reused
+        // its key. The commit-log gate keeps a log that never begins or closes a tick from being
+        // fed, so its rings cannot fill unseen.
+        this.writeBack.bindCommitSink(module::noteLandedEntityBatch);
+        // The landed batches settle in the order the plan that seats them published, not in the
+        // order the previous plan handed the dispatch out: the dispatch order is read from the plan
+        // of the tick before the seats are frozen, so a new region key or a changed entity count can
+        // put the two orders the other way round and the log would count a write that landed in the
+        // plan's own order as a violation. The lookup answers the same plan the report names.
+        this.writeBack.bindCommitSeats(task -> landedSeat(module.plans().latest(), task));
+    }
+
+    /** The place the plan being published gives one frozen task, or -1 when the plan seats it
+     * nowhere. The node key is the one the landed report is filed under, so the settlement walks
+     * the same places the commit log judges. */
+    static int landedSeat(TickPlan plan, WorkPlan.WorkTask task) {
+        if (plan == null || task == null) {
+            return -1;
+        }
+        String nodeKey = DispatchWriteBack.nodeKey(task);
+        for (TickPlan.CommitStep step : plan.commitOrder()) {
+            if (step.worldId().equals(task.worldId())
+                && step.domainId().equals(DispatchWriteBack.commitDomain())
+                && step.nodeKey().equals(nodeKey)) {
+                return step.position();
             }
-        });
+        }
+        return -1;
     }
 
     @Override

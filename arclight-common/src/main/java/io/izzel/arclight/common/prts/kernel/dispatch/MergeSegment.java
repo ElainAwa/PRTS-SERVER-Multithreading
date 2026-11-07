@@ -102,8 +102,16 @@ public final class MergeSegment {
         int executed = 0;
         int retried = 0;
         int fellback = 0;
-        for (int i = 0; i < pass.entries().size(); i++) {
-            DispatchPass.Entry entry = pass.entries().get(i);
+        // The settlement hands the batches over in the order the plan seated them, not in the order
+        // an earlier plan handed the dispatch out: a plan rebuilt from the same declarations orders
+        // its seats by the entity count of its own tick, so a dispatch order taken from the previous
+        // plan can descend against it. The commit log judges the landing sequence by the plan that
+        // seats the batch, and the payload order follows that sequence.
+        List<DispatchPass.Entry> entries = pass.entries();
+        int[] settlement = settlementOrder(entries, writeBack);
+        for (int at = 0; at < settlement.length; at++) {
+            int i = settlement[at];
+            DispatchPass.Entry entry = entries.get(i);
             TaskOutcome outcome = outcomes.get(i);
             switch (outcome.status()) {
                 case EXECUTED -> executed++;
@@ -213,6 +221,32 @@ public final class MergeSegment {
         pass.ledger().advanceEpoch();
         return new Frame(pass.plan().tickIndex(), commitSeq, committed, redone, cancelled, failed,
             closure.ok(), parallel.value(), serial.value(), equal);
+    }
+
+    /** The order the settlement hands the batches over: the plan's place for each batch when the
+     * write back knows one, the dispatch order otherwise. The sort is stable and an unseated batch
+     * goes last, so two batches the plan gives one place keep the order they were dispatched in and
+     * an unattributed one never moves a planned one. */
+    private static int[] settlementOrder(List<DispatchPass.Entry> entries,
+                                         DispatchWriteBack writeBack) {
+        int[] order = new int[entries.size()];
+        int[] places = new int[entries.size()];
+        for (int at = 0; at < order.length; at++) {
+            order[at] = at;
+            int seat = writeBack == null ? -1 : writeBack.commitSeat(entries.get(at).batch());
+            places[at] = seat < 0 ? Integer.MAX_VALUE : seat;
+        }
+        for (int at = 1; at < order.length; at++) {
+            int moving = order[at];
+            int place = places[moving];
+            int scan = at - 1;
+            while (scan >= 0 && places[order[scan]] > place) {
+                order[scan + 1] = order[scan];
+                scan--;
+            }
+            order[scan + 1] = moving;
+        }
+        return order;
     }
 
     /** One row with its flag bit flipped; only the parallel list is replaced, never the frame the

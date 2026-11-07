@@ -1402,6 +1402,37 @@ public final class KernelModule {
             report.rows()), report.planSequence(), report.position(), report.lifecycle());
     }
 
+    /** Reports one landed entity batch under the exact seat of the plan the reporting tick
+     * publishes. A plan that does not seat the batch is reported as unplanned rather than resolved
+     * by its node key: the newest plan that reused the key would judge the line against an order no
+     * plan gave it, which is the false order drop this entry replaces. The values are already in the
+     * intent channel, so the report is an observation and never an interception; every landed batch
+     * reports, so no observation is lost. */
+    public void noteLandedEntityBatch(CommitLog.Batch batch) {
+        if (batch == null || !KernelSettings.commitLog()) {
+            return;
+        }
+        reachLandedEntityBatch(commits, plans, planSequence, plans.lifecycle(), batch);
+    }
+
+    /** The exact-seat report of one entity batch. A batch the named plan and lifecycle do not seat
+     * is still written, but as an unplanned line: it is counted and dropped without asking the
+     * newest plan that reused its key, so no planned order is claimed for it. A planned batch is
+     * written at its exact seat; a report is never suppressed, so the log observes every landed
+     * batch. */
+    static CommitLog.Verdict reachLandedEntityBatch(CommitLog commits, TickPlanStore planStore,
+                                                    long planSequence, long lifecycle,
+                                                    CommitLog.Batch batch) {
+        TickPlanStore.StepRef seat = planStore.resolveIn(planSequence, lifecycle, batch.worldId(),
+            batch.domainId(), batch.nodeKey());
+        if (seat != null) {
+            return commits.reach(batch, seat.planSequence(), seat.position(), lifecycle);
+        }
+        // The attributed call names a place no plan holds, so the log answers through its unplanned
+        // branch; it never falls back to the newest plan that reused the key.
+        return commits.reach(batch, planSequence, -1, lifecycle);
+    }
+
     /** Settles one attributed batch: the typed fan-out writes the lines its inputs support, and the
      * seal obligations of its seat are settled whatever it wrote, so a refused batch cannot pin the
      * table. A settlement that names no seat settles nothing. */

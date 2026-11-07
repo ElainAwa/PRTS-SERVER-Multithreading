@@ -27,6 +27,7 @@ import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.ToIntFunction;
 
 /** There are two settlements and the tier decides which one runs. */
 public final class DispatchWriteBack {
@@ -87,6 +88,7 @@ public final class DispatchWriteBack {
     private final DispatchReadings readings;
     private final BooleanSupplier takeover;
     private volatile CommitLog.Sink commitSink;
+    private volatile ToIntFunction<WorkTask> commitSeats;
     private volatile String sample = "readback=none";
 
     /** The store is reached through two handles rather than through its type: the channel is the
@@ -109,6 +111,30 @@ public final class DispatchWriteBack {
      * it always walked; the report is a record, not an interception. */
     public void bindCommitSink(CommitLog.Sink sink) {
         this.commitSink = sink;
+    }
+
+    /** Binds where the place the plan gave one batch comes from. A merge settles the landed batches
+     * in that order, so the reports reach the log in the order the plan that seats them published,
+     * not in the order an earlier plan handed the dispatch out. A null binding keeps the dispatch
+     * order. */
+    public void bindCommitSeats(ToIntFunction<WorkTask> seats) {
+        this.commitSeats = seats;
+    }
+
+    /** The place the plan gave this batch, or -1 when the plan seats it nowhere or no lookup is
+     * bound; an unseated batch settles last and never moves a planned one. */
+    public int commitSeat(WorkBatch batch) {
+        ToIntFunction<WorkTask> seats = commitSeats;
+        if (seats == null || batch == null) {
+            return -1;
+        }
+        return seats.applyAsInt(batch.task());
+    }
+
+    /** The domain the commit log knows the batches of this leg by; a seat lookup names the same
+     * domain the report does. */
+    public static String commitDomain() {
+        return COMMIT_DOMAIN;
     }
 
     /** Settles one batch at the commit point: the tier decides whether the values become a write
