@@ -10,6 +10,13 @@ loom {
     accessWidenerPath = file('src/main/resources/arclight.accesswidener')
 }
 
+configurations {
+    paperApi {
+        canBeConsumed = false
+        canBeResolved = true
+    }
+}
+
 dependencies {
     modImplementation libs.fabric.loader
 
@@ -26,6 +33,9 @@ dependencies {
 
     // spigot
     implementation libs.spigot.api
+    // The 1.21.1 Paper API jar is vendored for tests. Resolving the snapshot
+    // from the network fails the offline build.
+    paperApi files('src/test/resources/paper/paper-api-1.21.1-R0.1-SNAPSHOT.jar')
     implementation libs.jline
     implementation libs.terminalconsoleappender
     implementation libs.specialsource
@@ -51,4 +61,10 @@ compileJava {
 
 test {
     useJUnitPlatform()
+    jvmArgumentProviders.add({
+        def serverFiles = configurations.runtimeClasspath.files + sourceSets.main.output.classesDirs.files
+        def server = serverFiles.collect { it.absolutePath }.join(File.pathSeparator)
+        def paper = configurations.paperApi.asPath
+        ["-Dpaper.inventory.serverClasspath=${server}", "-Dpaper.inventory.paperClasspath=${paper}"]
+    } as CommandLineArgumentProvider)
 }
