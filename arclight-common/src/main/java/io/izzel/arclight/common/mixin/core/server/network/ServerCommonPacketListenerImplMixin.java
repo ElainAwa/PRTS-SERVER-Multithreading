@@ -28,6 +28,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.CommonListenerCookie;
 import net.minecraft.server.network.ServerCommonPacketListenerImpl;
+import net.minecraft.Util;
 import net.minecraft.util.StringUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -42,9 +43,8 @@ import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.Constant;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.ModifyConstant;
+import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.nio.charset.StandardCharsets;
@@ -62,6 +62,7 @@ public abstract class ServerCommonPacketListenerImplMixin implements ServerCommo
     @Shadow @Final private boolean transferred;
     @Shadow public abstract void disconnect(DisconnectionDetails disconnectionDetails);
     @Shadow public abstract void onDisconnect(DisconnectionDetails disconnectionDetails);
+    @Shadow protected long keepAliveTime;
     @Shadow public abstract void disconnect(Component component);
     // @formatter:on
 
@@ -110,9 +111,18 @@ public abstract class ServerCommonPacketListenerImplMixin implements ServerCommo
         this.cserver = ((CraftServer) Bukkit.getServer());
     }
 
-    @ModifyConstant(method = "keepConnectionAlive", constant = @Constant(longValue = 15000L), require = 0)  // qyl27: No-op if conflicts.
-    private long arclight$incrKeepaliveTimeout(long l) {
-        return 25000L;
+    // PacketFixer rewrites the 15000L constant in this method, so a constant selector is spent by
+    // that mixin first. Keep the Bukkit minimum instead at the decision point: the vanilla branch
+    // still fires at PacketFixer's threshold, and the timeout disconnect is deferred until the
+    // 25000ms Bukkit minimum has elapsed. Alone this is 25s; combined it is max(peer threshold, 25s).
+    @Redirect(method = "keepConnectionAlive",
+        at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/server/network/ServerCommonPacketListenerImpl;disconnect(Lnet/minecraft/network/chat/Component;)V"))
+    private void arclight$delayKeepaliveDisconnect(ServerCommonPacketListenerImpl instance, Component message) {
+        if (Util.getMillis() - this.keepAliveTime < 25000L) {
+            return;
+        }
+        this.disconnect(message);
     }
 
     @Override

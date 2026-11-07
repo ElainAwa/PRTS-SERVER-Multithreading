@@ -1,5 +1,7 @@
 package io.izzel.arclight.common.mixin.core.world.level;
 
+import io.izzel.arclight.common.bridge.core.world.damagesource.DamageSourceBridge;
+import io.izzel.arclight.common.bridge.core.world.entity.monster.CreeperBridge;
 import io.izzel.arclight.common.bridge.core.world.level.WorldBridge;
 import io.izzel.arclight.common.bridge.core.world.level.border.WorldBorderBridge;
 import io.izzel.arclight.common.mod.ArclightConstants;
@@ -18,7 +20,9 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.FullChunkStatus;
 import net.minecraft.util.RandomSource;
 import net.minecraft.util.profiling.ProfilerFiller;
+import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.monster.Creeper;
 import net.minecraft.world.level.Explosion;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelAccessor;
@@ -53,6 +57,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import javax.annotation.Nullable;
@@ -324,6 +329,21 @@ public abstract class LevelMixin implements WorldBridge, LevelAccessor, LevelWri
     }
 
     private transient Explosion.BlockInteraction arclight$blockInteractionOverride;
+
+    @Inject(method = "explode(Lnet/minecraft/world/entity/Entity;DDDFZLnet/minecraft/world/level/Level$ExplosionInteraction;)Lnet/minecraft/world/level/Explosion;",
+        at = @At("HEAD"), cancellable = true)
+    private void arclight$explodeCreeperSevenArgument(Entity source, double x, double y, double z,
+                                                      float radius, boolean fire,
+                                                      Level.ExplosionInteraction interaction,
+                                                      CallbackInfoReturnable<Explosion> cir) {
+        if (source instanceof Creeper creeper) {
+            Entity igniter = ((CreeperBridge) creeper).arclight$creeperIgniter();
+            DamageSource custom = ((DamageSourceBridge) Explosion.getDefaultDamageSource(
+                (Level) (Object) this, creeper)).bridge$customCausingEntityDamager(igniter);
+            cir.setReturnValue(((Level) (Object) this).explode(creeper, custom, null, x, y, z,
+                radius, fire, Level.ExplosionInteraction.MOB));
+        }
+    }
 
     @ModifyVariable(method = "explode(Lnet/minecraft/world/entity/Entity;Lnet/minecraft/world/damagesource/DamageSource;Lnet/minecraft/world/level/ExplosionDamageCalculator;DDDFZLnet/minecraft/world/level/Level$ExplosionInteraction;ZLnet/minecraft/core/particles/ParticleOptions;Lnet/minecraft/core/particles/ParticleOptions;Lnet/minecraft/core/Holder;)Lnet/minecraft/world/level/Explosion;",
         ordinal = 0, at = @At("HEAD"), argsOnly = true)

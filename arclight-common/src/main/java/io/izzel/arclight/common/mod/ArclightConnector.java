@@ -15,6 +15,9 @@ public class ArclightConnector implements IMixinConnector {
     @Override
     public void connect() {
         MixinTools.setup();
+        Mixins.addConfiguration("mixins.arclight.railways.json");
+        Mixins.addConfiguration("mixins.arclight.creeper7.json");
+        Mixins.addConfiguration("mixins.arclight.creeperlate.json");
         Mixins.addConfiguration("mixins.arclight.core.json");
         Mixins.addConfiguration("mixins.arclight.bukkit.json");
         switch (ArclightPlatform.current()) {

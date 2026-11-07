@@ -46,9 +46,28 @@ dependencies {
 
 compileJava {
     options.compilerArgs << '-XDignore.symbol.file' << '-XDenableSunApiLintControl'
+    // Optional compatibility mixins target mod classes that are not a compile dependency; runtime
+    // Mixin still resolves and validates their targets, this only keeps javac's AP from requiring
+    // absent mod jars on the compile classpath.
     options.encoding = 'UTF-8'
 }
 
 test {
     useJUnitPlatform()
 }
+
+
+// Optional compatibility hooks target mod classes that are not a compile-time dependency. They are
+// compiled without the mixin annotation processor (which would otherwise demand those classes on the
+// compile classpath) and merged into the main output so the runtime configuration can apply them when
+// the target mod is present.
+sourceSets {
+    compatSourceSet {
+        java.srcDir 'src/compat/java'
+        compileClasspath += sourceSets.main.compileClasspath
+    }
+}
+tasks.named('compileCompatSourceSetJava') {
+    options.compilerArgs << '-proc:none'
+}
+sourceSets.main.output.classesDirs.from(sourceSets.compatSourceSet.output.classesDirs)

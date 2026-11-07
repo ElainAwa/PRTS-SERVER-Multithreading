@@ -49,6 +49,26 @@ public class ArclightMixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public void preApply(String targetClassName, ClassNode targetClass, String mixinClassName, IMixinInfo mixinInfo) {
+        if (CreeperSevenArgInjector.TARGET.equals(targetClassName)
+            && CreeperSevenArgInjector.HOOK.equals(mixinClassName)) {
+            CreeperSevenArgInjector.inject(targetClass);
+        }
+        if (RailwaysInjectors.ABSTRACT_BOGEY.equals(targetClassName)
+            && mixinClassName.endsWith("AbstractBogeyBlockHook")) {
+            RailwaysInjectors.injectAbstractBogey(targetClass);
+        } else if (RailwaysInjectors.TRACK_BLOCK.equals(targetClassName)
+            && mixinClassName.endsWith("TrackBlockHook")) {
+            RailwaysInjectors.injectTrackBlock(targetClass);
+        } else if (RailwaysInjectors.STATION_BLOCK.equals(targetClassName)
+            && mixinClassName.endsWith("StationBlockHook")) {
+            RailwaysInjectors.injectStationBlock(targetClass);
+        } else if (RailwaysInjectors.GLOBAL_STATION.equals(targetClassName)
+            && mixinClassName.endsWith("GlobalStationHook")) {
+            RailwaysInjectors.injectGlobalStation(targetClass);
+        } else if (RailwaysInjectors.CARRIAGE_CONTRAPTION_ENTITY.equals(targetClassName)
+            && mixinClassName.endsWith("CarriageContraptionEntityHook")) {
+            RailwaysInjectors.injectCarriageContraptionEntity(targetClass);
+        }
         for (var processor : this.preProcessors) {
             processor.accept(targetClassName, targetClass, mixinInfo);
         }

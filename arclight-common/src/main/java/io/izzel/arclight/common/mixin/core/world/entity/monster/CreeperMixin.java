@@ -89,18 +89,25 @@ public abstract class CreeperMixin extends PathfinderMobMixin implements Creeper
         DecorationOps.callsite().invoke(instance, value);
     }
 
-    // Use Redirect to preserve injection point
-    @Redirect(method = "explodeCreeper", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/Level;explode(Lnet/minecraft/world/entity/Entity;DDDFLnet/minecraft/world/level/Level$ExplosionInteraction;)Lnet/minecraft/world/level/Explosion;"))
-    private Explosion arclight$redirectExplode(Level instance, Entity arg, double d, double e, double f, float g, Level.ExplosionInteraction arg2) {
-        return this.level().explode((Creeper) (Object) this,
-                ((DamageSourceBridge) Explosion.getDefaultDamageSource(level(), (Creeper) (Object) this)).bridge$customCausingEntityDamager(entityIgniter), null,
-                this.getX(), this.getY(), this.getZ(), eventRadius, eventFire, Level.ExplosionInteraction.MOB);
-    }
-
     @Inject(method = "spawnLingeringCloud", locals = LocalCapture.CAPTURE_FAILHARD, at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/Level;addFreshEntity(Lnet/minecraft/world/entity/Entity;)Z"))
     private void arclight$creeperCloud(CallbackInfo ci, Collection<MobEffectInstance> collection, AreaEffectCloud areaeffectcloudentity) {
         areaeffectcloudentity.setOwner((Creeper) (Object) this);
         ((WorldBridge) this.level()).bridge$pushAddEntityReason(CreatureSpawnEvent.SpawnReason.EXPLOSION);
+    }
+
+    @Override
+    public net.minecraft.world.entity.player.Player arclight$creeperIgniter() {
+        return this.entityIgniter;
+    }
+
+    @Override
+    public float arclight$eventRadius() {
+        return this.eventRadius;
+    }
+
+    @Override
+    public boolean arclight$eventFire() {
+        return this.eventFire;
     }
 
     public void setPowered(boolean power) {
