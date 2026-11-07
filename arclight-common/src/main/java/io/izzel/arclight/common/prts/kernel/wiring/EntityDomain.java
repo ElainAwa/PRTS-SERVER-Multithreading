@@ -6,6 +6,7 @@ import io.izzel.arclight.common.prts.kernel.KernelDomain;
 import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
+import io.izzel.arclight.common.prts.kernel.commit.CommitLog;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
 import io.izzel.arclight.common.prts.kernel.diff.DomainHash;
@@ -36,7 +37,9 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.ToLongFunction;
 
 /** The entity domain of this build: it freezes the row view of one tick, hands the batches to the
@@ -69,6 +72,14 @@ public final class EntityDomain implements KernelDomain {
     private final DiffProbe probe = new DiffProbe();
     private final MergeSegment merge = new MergeSegment();
     private final DispatchWriteBack writeBack;
+    /** Landed reports grouped by the plan sequence that seats their pass, not by the tick they
+     * arrive in: one plan's reports are reported together, in its own seat order. */
+    private final Map<Long, List<CommitLog.Batch>> seatedReports = new LinkedHashMap<>();
+    private final Map<Long, Long> seatedLifecycles = new LinkedHashMap<>();
+    private long pendingSeatPlanSequence;
+    private long pendingSeatLifecycle;
+    private long mergingSeatPlanSequence;
+    private long mergingSeatLifecycle;
     private final SegmentFrames.Ledger frames = new SegmentFrames.Ledger();
 
     private long frameCursor;
@@ -91,7 +102,7 @@ public final class EntityDomain implements KernelDomain {
         // does not seat is written as unplanned rather than resolved to the newest plan that reused
         // its key. The commit-log gate keeps a log that never begins or closes a tick from being
         // fed, so its rings cannot fill unseen.
-        this.writeBack.bindCommitSink(module::noteLandedEntityBatch);
+        this.writeBack.bindCommitSink(this::bufferLandedEntityBatch);
         // The landed batches settle in the order the plan that seats them published, not in the
         // order the previous plan handed the dispatch out: the dispatch order is read from the plan
         // of the tick before the seats are frozen, so a new region key or a changed entity count can
@@ -118,6 +129,92 @@ public final class EntityDomain implements KernelDomain {
         return -1;
     }
 
+    /** Files one landed report under the plan that seats its pass; the payload order the merge
+     * produced is never retouched here. */
+    private void bufferLandedEntityBatch(CommitLog.Batch batch) {
+        if (batch == null) {
+            return;
+        }
+        seatedReports.computeIfAbsent(mergingSeatPlanSequence, key -> new ArrayList<>()).add(batch);
+        seatedLifecycles.putIfAbsent(mergingSeatPlanSequence, mergingSeatLifecycle);
+    }
+
+    /** Reports the groups whose seating plan the store already moved past; each group is reported
+     * in its own seat order, so a plan whose landed batches arrive over more than one tick still
+     * reports ascending. */
+    void flushLandedEntityBatches() {
+        if (seatedReports.isEmpty()) {
+            return;
+        }
+        if (!KernelSettings.commitLog()) {
+            seatedReports.clear();
+            seatedLifecycles.clear();
+            return;
+        }
+        long latest = module.plans().latest() == null ? -1L
+            : module.plans().latest().planSequence();
+        List<Long> closed = new ArrayList<>();
+        for (long sequence : seatedReports.keySet()) {
+            if (sequence < latest) {
+                closed.add(sequence);
+            }
+        }
+        closed.sort(Long::compareTo);
+        for (long sequence : closed) {
+            flushSeated(sequence);
+        }
+    }
+
+    /** Reports every buffered group now; the tick close and shutdown cannot wait for a newer plan.
+     * A plan the history no longer holds answers as unplanned instead of by a reused sequence. */
+    void flushAllLandedEntityBatches() {
+        if (seatedReports.isEmpty()) {
+            return;
+        }
+        if (!KernelSettings.commitLog()) {
+            seatedReports.clear();
+            seatedLifecycles.clear();
+            return;
+        }
+        List<Long> sequences = new ArrayList<>(seatedReports.keySet());
+        sequences.sort(Long::compareTo);
+        for (long sequence : sequences) {
+            flushSeated(sequence);
+        }
+    }
+
+    private void flushSeated(long sequence) {
+        List<CommitLog.Batch> reports = seatedReports.remove(sequence);
+        Long lifecycle = seatedLifecycles.remove(sequence);
+        orderLandedBatches(reports, module.plans().planOf(sequence));
+        for (CommitLog.Batch report : reports) {
+            module.noteLandedEntityBatch(report, sequence,
+                lifecycle == null ? module.plans().lifecycle() : lifecycle);
+        }
+    }
+
+    /** The place the plan gives one landed report, or the end of the order when it seats it nowhere. */
+    static int landedSeat(TickPlan plan, CommitLog.Batch batch) {
+        if (plan == null || batch == null) {
+            return Integer.MAX_VALUE;
+        }
+        for (TickPlan.CommitStep step : plan.commitOrder()) {
+            if (step.worldId().equals(batch.worldId())
+                && step.domainId().equals(batch.domainId())
+                && step.nodeKey().equals(batch.nodeKey())) {
+                return step.position();
+            }
+        }
+        return Integer.MAX_VALUE;
+    }
+
+    /** Sorts the reports of one tick by their seat in the named plan; the sort is stable, so two
+     * reports the plan does not seat keep the order the merge produced. */
+    static void orderLandedBatches(List<CommitLog.Batch> reports, TickPlan plan) {
+        reports.sort((left, right) -> Integer.compare(landedSeat(plan, left),
+            landedSeat(plan, right)));
+    }
+
     @Override
     public String id() {
         return ID;
@@ -125,6 +222,9 @@ public final class EntityDomain implements KernelDomain {
 
     @Override
     public void tick(long tick) {
+        // The kernel has published this tick's plan before the domain runs, so a group whose plan
+        // the store already moved past is complete and can be reported in its own seat order.
+        flushLandedEntityBatches();
         // The migrated face books what the host entry closed since the last adoption; it is read
         // here and nowhere else, so nothing this domain decides can depend on it.
         if (FRAME_MIGRATION) {
@@ -213,10 +313,15 @@ public final class EntityDomain implements KernelDomain {
             // here, so a pass that is closed without a merge must move it itself.
             long grace = policy.deadlineGraceMs();
             long deadline = System.nanoTime() + grace * 1_000_000L;
+            // The pass was dispatched before the plan that seats it was published; the reports of
+            // this merge carry that plan, not whichever plan is current when they are flushed.
+            mergingSeatPlanSequence = pendingSeatPlanSequence;
+            mergingSeatLifecycle = pendingSeatLifecycle;
             lastFrame = merge.merge(pending, deadline, arena, readings, probe, module.arms(),
                 HashWhitelist.bitexact(),
                 ID, writeBack);
             pending = null;
+            flushLandedEntityBatches();
             if (lastFrame == null) {
                 lastFrame = MergeSegment.Frame.empty();
                 merge.noteSkippedMerge();
@@ -313,11 +418,18 @@ public final class EntityDomain implements KernelDomain {
                 // the frozen order.
                 pending = DispatchPass.serialFallback(plan, readings, ledger, orderedTasks);
             }
+            // The declarations submitted here are taken by the next plan the kernel builds; that
+            // plan is the one that seats this pass, so its sequence is this module's next one.
+            pendingSeatPlanSequence = module.planSequence() + 1L;
+            pendingSeatLifecycle = module.plans().lifecycle();
         }
     }
 
     @Override
     public void shutdown() {
+        // A shutdown cannot wait for a newer plan to close the last group; report it now under the
+        // plan that seats it before the pool and the arena are released.
+        flushAllLandedEntityBatches();
         WorkerPool current = pool;
         pool = null;
         DispatchPass open = pending;
@@ -345,6 +457,12 @@ public final class EntityDomain implements KernelDomain {
         shutdown();
         readings.reset();
         ledger.reset();
+        seatedReports.clear();
+        seatedLifecycles.clear();
+        pendingSeatPlanSequence = 0L;
+        pendingSeatLifecycle = 0L;
+        mergingSeatPlanSequence = 0L;
+        mergingSeatLifecycle = 0L;
         merge.reset();
         probe.reset();
         PrtsEntityCapability.reset();

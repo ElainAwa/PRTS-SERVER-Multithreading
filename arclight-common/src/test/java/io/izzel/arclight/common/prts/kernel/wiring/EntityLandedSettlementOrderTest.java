@@ -155,6 +155,155 @@ class EntityLandedSettlementOrderTest {
         return builder.build();
     }
 
+    /** The same plan's seats arriving in two merges: the first merge reports the even seats and the
+     * second the odd ones, so each merge is ascending on its own and the log still sees the second
+     * merge start before the first merge's last seat. This pins the mechanism a tick-wide report
+     * order has to remove; it is not a claim about how often the production path produces it. */
+    @Test
+    void theSamePlansSeatsSplitAcrossTwoMergesLoseTheOrder() {
+        WorkPlan firstDispatched = WorkPlan.freeze(TICK, 1L, List.of(view()), 4, 1L);
+        WorkPlan secondDispatched = WorkPlan.freeze(TICK + 1L, 2L, List.of(farView()), 4, 10L);
+        TickPlanStore store = new TickPlanStore(8);
+        List<TickPlan.CommitStep> order = new ArrayList<>();
+        order.add(step(firstDispatched.tasks().get(0), 0, 1L));
+        order.add(step(secondDispatched.tasks().get(0), 1, 2L));
+        order.add(step(firstDispatched.tasks().get(1), 2, 3L));
+        order.add(step(secondDispatched.tasks().get(1), 3, 4L));
+        store.publish(new TickPlan(SEQUENCE, SEQUENCE, 1L, List.of(WORLD), null, List.of(), order,
+            null, List.of(), 0, 0, 0L, TickPlanStore.Feedback.none()));
+        CommitLog log = log(store);
+        log.beginTick(TICK);
+
+        mergeOnce(firstDispatched, store, log);
+        mergeOnce(secondDispatched, store, log);
+
+        assertEquals(4L, log.sequence(), "each landed batch keeps its own report");
+        assertEquals(3L, log.accepted());
+        assertEquals(1L, log.dropped(), "the second merge opens before the first merge's last seat");
+        assertEquals(1L, log.orderViolations(),
+            "a plan whose seats arrive in two merges is reported out of its own order");
+        assertEquals(0L, log.unplanned());
+    }
+
+    @Test
+    void theTickWideOrderRestoresAPlansSplitSeats() {
+        WorkPlan firstDispatched = WorkPlan.freeze(TICK, 1L, List.of(view()), 4, 1L);
+        WorkPlan secondDispatched = WorkPlan.freeze(TICK + 1L, 2L, List.of(farView()), 4, 10L);
+        List<TickPlan.CommitStep> order = new ArrayList<>();
+        order.add(step(firstDispatched.tasks().get(0), 0, 1L));
+        order.add(step(secondDispatched.tasks().get(0), 1, 2L));
+        order.add(step(firstDispatched.tasks().get(1), 2, 3L));
+        order.add(step(secondDispatched.tasks().get(1), 3, 4L));
+        TickPlan plan = new TickPlan(SEQUENCE, SEQUENCE, 1L, List.of(WORLD), null, List.of(), order,
+            null, List.of(), 0, 0, 0L, TickPlanStore.Feedback.none());
+        List<CommitLog.Batch> reports = new ArrayList<>();
+        reports.add(batchOf(firstDispatched.tasks().get(0)));
+        reports.add(batchOf(firstDispatched.tasks().get(1)));
+        reports.add(batchOf(secondDispatched.tasks().get(0)));
+        reports.add(batchOf(secondDispatched.tasks().get(1)));
+
+        EntityDomain.orderLandedBatches(reports, plan);
+
+        assertEquals(List.of(DispatchWriteBack.nodeKey(firstDispatched.tasks().get(0)),
+            DispatchWriteBack.nodeKey(secondDispatched.tasks().get(0)),
+            DispatchWriteBack.nodeKey(firstDispatched.tasks().get(1)),
+            DispatchWriteBack.nodeKey(secondDispatched.tasks().get(1))),
+            reports.stream().map(CommitLog.Batch::nodeKey).toList(),
+            "the tick-wide flush restores the plan's own seat order");
+    }
+
+    private static CommitLog.Batch batchOf(WorkPlan.WorkTask task) {
+        return new CommitLog.Batch(task.worldId(), DOMAIN, DispatchWriteBack.nodeKey(task),
+            CommitLog.Batch.Kind.APPLY, task.worldEpoch(), 1L, 1);
+    }
+
+    @Test
+    void aPlansReportsSpreadOverTwoTicksAreReportedTogetherInSeatOrder() {
+        WorkPlan firstDispatched = WorkPlan.freeze(TICK, 1L, List.of(view()), 4, 1L);
+        WorkPlan secondDispatched = WorkPlan.freeze(TICK + 1L, 2L, List.of(farView()), 4, 10L);
+        List<TickPlan.CommitStep> order = new ArrayList<>();
+        order.add(step(firstDispatched.tasks().get(0), 0, 1L));
+        order.add(step(secondDispatched.tasks().get(0), 1, 2L));
+        order.add(step(firstDispatched.tasks().get(1), 2, 3L));
+        order.add(step(secondDispatched.tasks().get(1), 3, 4L));
+        TickPlan plan = new TickPlan(SEQUENCE, SEQUENCE, 1L, List.of(WORLD), null, List.of(), order,
+            null, List.of(), 0, 0, 0L, TickPlanStore.Feedback.none());
+        TickPlanStore store = new TickPlanStore(8);
+        store.publish(plan);
+        List<CommitLog.Batch> firstTick = List.of(batchOf(firstDispatched.tasks().get(0)),
+            batchOf(firstDispatched.tasks().get(1)));
+        List<CommitLog.Batch> secondTick = List.of(batchOf(secondDispatched.tasks().get(0)),
+            batchOf(secondDispatched.tasks().get(1)));
+
+        CommitLog perTick = log(store);
+        perTick.beginTick(TICK);
+        for (CommitLog.Batch batch : firstTick) {
+            reachSeat(perTick, store, batch);
+        }
+        perTick.closeTick();
+        perTick.beginTick(TICK + 1L);
+        for (CommitLog.Batch batch : secondTick) {
+            reachSeat(perTick, store, batch);
+        }
+        perTick.closeTick();
+        assertEquals(1L, perTick.orderViolations(),
+            "reports of one plan spread over two ticks descend when each tick is sorted alone");
+
+        CommitLog aggregated = log(store);
+        aggregated.beginTick(TICK + 1L);
+        List<CommitLog.Batch> wholePlan = new ArrayList<>(firstTick);
+        wholePlan.addAll(secondTick);
+        EntityDomain.orderLandedBatches(wholePlan, plan);
+        for (CommitLog.Batch batch : wholePlan) {
+            reachSeat(aggregated, store, batch);
+        }
+        aggregated.closeTick();
+        assertEquals(4L, aggregated.accepted());
+        assertEquals(0L, aggregated.dropped());
+        assertEquals(0L, aggregated.orderViolations(),
+            "the whole plan reported together stays in its own seat order");
+    }
+
+    private static void reachSeat(CommitLog log, TickPlanStore store, CommitLog.Batch batch) {
+        TickPlanStore.StepRef seat = store.resolveIn(SEQUENCE, store.lifecycle(), batch.worldId(),
+            batch.domainId(), batch.nodeKey());
+        log.reach(batch, seat.planSequence(), seat.position(), store.lifecycle());
+    }
+
+    /** One merge of a pass whose landed batches are reported through a seat-ordered sink. */
+    private static void mergeOnce(WorkPlan work, TickPlanStore store, CommitLog log) {
+        IntentQueue intents = new IntentQueue(() -> 8, () -> 1);
+        Map<String, PrtsWorldWriteTaps.DeferredWrite> payloads = new LinkedHashMap<>();
+        AtomicInteger handles = new AtomicInteger();
+        DispatchWriteBack writeBack = new DispatchWriteBack(intents,
+            (prefix, write) -> {
+                String handle = prefix + ":" + handles.incrementAndGet();
+                payloads.put(handle, write);
+                return handle;
+            }, payloads::remove, world -> 1L, new DispatchReadings(), () -> true);
+        writeBack.bindCommitSink(batch -> {
+            TickPlanStore.StepRef seat = store.resolveIn(SEQUENCE, store.lifecycle(),
+                batch.worldId(), batch.domainId(), batch.nodeKey());
+            log.reach(batch, seat.planSequence(), seat.position(), store.lifecycle());
+        });
+        writeBack.bindCommitSeats(task -> EntityDomain.landedSeat(store.planOf(SEQUENCE), task));
+        DispatchPass pass = DispatchPass.serialFallback(work, new DispatchReadings(),
+            new TaskLedger(1L));
+        MergeSegment merge = new MergeSegment();
+        merge.bindOwnerThread(Thread.currentThread());
+        merge.merge(pass, System.nanoTime() + 2_000_000_000L, new ArenaLedger(),
+            new DispatchReadings(), new DiffProbe(), null, HashWhitelist.bitexact(), DOMAIN,
+            writeBack);
+    }
+
+    /** The same two-region shape at chunks that fall in the region keys of a second plan. */
+    private static EntityCandidateView farView() {
+        EntityCandidateView.Builder builder = EntityCandidateView.builder(WORLD, 1L);
+        builder.add(20L, 16, 0, 16.0, 64.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0L);
+        builder.add(21L, 24, 0, 24.0, 64.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0L);
+        return builder.build();
+    }
+
     /** One plan that seats the second dispatched task first and the first dispatched task after it. */
     private static TickPlan plan(WorkPlan.WorkTask seatedFirst, int firstPosition,
                                  WorkPlan.WorkTask seatedSecond, int secondPosition) {

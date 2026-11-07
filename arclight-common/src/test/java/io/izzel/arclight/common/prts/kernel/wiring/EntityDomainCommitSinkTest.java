@@ -96,12 +96,14 @@ class EntityDomainCommitSinkTest {
         configure(false, false);
         assertTrue(KernelSettings.dispatchTakeover(), "the takeover tier is the one this test drives");
         assertFalse(KernelSettings.commitLog());
-        DispatchWriteBack writeBack = writeBack(productionSink(KernelWiring.install()),
+        EntityDomain domain = KernelWiring.install();
+        DispatchWriteBack writeBack = writeBack(productionSink(domain),
             KernelSettings::dispatchTakeover);
         CommitLog log = module.commits();
         long unplanned = log.unplanned();
         long held = log.held();
         assertEquals(DispatchWriteBack.Settlement.ACCEPTED, writeBack.settle(batch(11L), rows(11L)));
+        domain.flushAllLandedEntityBatches();
         assertEquals(unplanned, log.unplanned(), "the switched-off commit log was fed a report");
         assertEquals(held, log.held(), "the switched-off commit log stored a line");
 
@@ -110,6 +112,7 @@ class EntityDomainCommitSinkTest {
         unplanned = log.unplanned();
         held = log.held();
         assertEquals(DispatchWriteBack.Settlement.ACCEPTED, writeBack.settle(batch(12L), rows(12L)));
+        domain.flushAllLandedEntityBatches();
         assertEquals(unplanned + 1L, log.unplanned(), "the switched-on commit log missed the report");
         assertEquals(held + 1L, log.held(), "the switched-on commit log did not store the line");
 
@@ -118,6 +121,7 @@ class EntityDomainCommitSinkTest {
         unplanned = log.unplanned();
         held = log.held();
         assertEquals(DispatchWriteBack.Settlement.ACCEPTED, writeBack.settle(batch(13L), rows(13L)));
+        domain.flushAllLandedEntityBatches();
         assertEquals(unplanned, log.unplanned(), "the gate kept a captured switch instead of the live one");
         assertEquals(held, log.held());
     }
@@ -126,7 +130,8 @@ class EntityDomainCommitSinkTest {
     void theSinkFollowsTheCurrentCommitLog() throws Exception {
         configure(true, false);
         CommitLog original = module.commits();
-        DispatchWriteBack writeBack = writeBack(productionSink(KernelWiring.install()),
+        EntityDomain domain = KernelWiring.install();
+        DispatchWriteBack writeBack = writeBack(productionSink(domain),
             KernelSettings::dispatchTakeover);
 
         CommitLog first = new CommitLog(() -> 1, module.commitOrderSource());
@@ -135,6 +140,7 @@ class EntityDomainCommitSinkTest {
         long firstHeld = first.held();
         long originalUnplanned = original.unplanned();
         assertEquals(DispatchWriteBack.Settlement.ACCEPTED, writeBack.settle(batch(21L), rows(21L)));
+        domain.flushAllLandedEntityBatches();
         assertEquals(firstUnplanned + 1L, first.unplanned(), "the replaced log missed the report");
         assertEquals(firstHeld + 1L, first.held());
         assertEquals(originalUnplanned, original.unplanned(), "the old log was fed after the replacement");
@@ -143,12 +149,14 @@ class EntityDomainCommitSinkTest {
         setCommits(second);
         long secondUnplanned = second.unplanned();
         assertEquals(DispatchWriteBack.Settlement.ACCEPTED, writeBack.settle(batch(22L), rows(22L)));
+        domain.flushAllLandedEntityBatches();
         assertEquals(secondUnplanned + 1L, second.unplanned());
 
         setCommits(original);
         long restoredUnplanned = original.unplanned();
         long restoredHeld = original.held();
         assertEquals(DispatchWriteBack.Settlement.ACCEPTED, writeBack.settle(batch(23L), rows(23L)));
+        domain.flushAllLandedEntityBatches();
         assertEquals(restoredUnplanned + 1L, original.unplanned(), "the restored log missed the report");
         assertEquals(restoredHeld + 1L, original.held());
         assertEquals(secondUnplanned + 1L, second.unplanned(), "the replaced log was fed after the restore");
@@ -187,6 +195,7 @@ class EntityDomainCommitSinkTest {
             KernelSettings::dispatchTakeover);
         assertEquals(DispatchWriteBack.Settlement.ACCEPTED, writeBack.settle(batch(41L), rows(41L)));
         assertEquals(DispatchWriteBack.Settlement.ACCEPTED, writeBack.settle(batch(42L), rows(42L)));
+        installed.flushAllLandedEntityBatches();
         assertEquals(1L, oneSlot.rings().stream().mapToLong(CommitRing::refusedFull).sum(),
             "the one-slot ring did not refuse the second landed batch");
 

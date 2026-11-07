@@ -1415,6 +1415,15 @@ public final class KernelModule {
         reachLandedEntityBatch(commits, plans, planSequence, plans.lifecycle(), batch);
     }
 
+    /** Reports one landed entity batch under the exact plan and lifecycle that seat its pass; the
+     * caller names the seating plan so a report held over a tick is never re-seated by a newer one. */
+    public void noteLandedEntityBatch(CommitLog.Batch batch, long seatPlanSequence, long seatLifecycle) {
+        if (batch == null || !KernelSettings.commitLog()) {
+            return;
+        }
+        reachLandedEntityBatch(commits, plans, seatPlanSequence, seatLifecycle, batch);
+    }
+
     /** The exact-seat report of one entity batch. A batch the named plan and lifecycle do not seat
      * is still written, but as an unplanned line: it is counted and dropped without asking the
      * newest plan that reused its key, so no planned order is claimed for it. A planned batch is
@@ -1863,6 +1872,12 @@ public final class KernelModule {
         long covered = started ? tickIndex - windowStartTick : 0L;
         return SelfTimers.snapshot(tickIndex, (int) Math.min(Integer.MAX_VALUE, covered),
             tickIndex <= KernelSettings.selfWarmupTicks());
+    }
+
+    /** The sequence of the newest plan this module built; the next plan seats the pass the
+     * domains dispatch now. */
+    public long planSequence() {
+        return planSequence;
     }
 
     public long tickIndex() {
