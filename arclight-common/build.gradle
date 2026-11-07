@@ -10,10 +10,6 @@ loom {
     accessWidenerPath = file('src/main/resources/arclight.accesswidener')
 }
 
-repositories {
-    maven { url = 'https://repo.papermc.io/repository/maven-public/' }
-}
-
 configurations {
     paperApi {
         canBeConsumed = false
@@ -37,12 +33,9 @@ dependencies {
 
     // spigot
     implementation libs.spigot.api
-    // Test-only 1.21.1 Paper API. Kept out of the version catalog because that
-    // catalog is part of the digest that rebuilds generated Spigot artifacts.
-    paperApi 'io.papermc.paper:paper-api:1.21.1-R0.1-SNAPSHOT'
-    // Adventure 4.17.0 is the bill of materials imported by paper-api 1.21.1.
-    implementation 'net.kyori:adventure-api:4.17.0'
-    implementation 'net.kyori:adventure-text-serializer-legacy:4.17.0'
+    // The 1.21.1 Paper API jar is vendored for tests. Resolving the snapshot
+    // from the network fails the offline build.
+    paperApi files('src/test/resources/paper/paper-api-1.21.1-R0.1-SNAPSHOT.jar')
     implementation libs.jline
     implementation libs.terminalconsoleappender
     implementation libs.specialsource

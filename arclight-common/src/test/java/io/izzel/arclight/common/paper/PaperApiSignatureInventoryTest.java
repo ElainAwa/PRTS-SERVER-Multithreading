@@ -19,15 +19,17 @@ import java.util.jar.JarFile;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
-// Compares paper-api 1.21.1 method signatures with the server classpath.
-// A present signature is not a behavior test.
+// Compares a vendored paper-api 1.21.1 jar with the untransformed server classpath.
+// A present signature is not a behavior test. Live mixin application is NOT_RUN.
 class PaperApiSignatureInventoryTest {
 
-    private static final String PAPER_REPO = "https://repo.papermc.io/repository/maven-public/";
     private static final String MISSING = "MISSING";
     private static final String PRESENT = "PRESENT_BEHAVIOR_UNTESTED";
+    private static final String LIVE_NOT_RUN = "NOT_RUN";
 
     private static final Map<String, String> EXPECTED = new LinkedHashMap<>();
+    private static final Map<String, String> LIVE = new LinkedHashMap<>();
+    private static final java.util.Set<String> OUTSIDE_VENDORED_JAR = new java.util.HashSet<>();
 
     static {
         expect("org/bukkit/plugin/PluginDescriptionFile", "getAPIVersion", "()Ljava/lang/String;", PRESENT);
@@ -39,7 +41,8 @@ class PaperApiSignatureInventoryTest {
         expect("org/bukkit/scheduler/BukkitScheduler", "runTask",
             "(Lorg/bukkit/plugin/Plugin;Ljava/lang/Runnable;)Lorg/bukkit/scheduler/BukkitTask;", PRESENT);
         expect("org/bukkit/command/PluginCommand", "getPlugin", "()Lorg/bukkit/plugin/Plugin;", PRESENT);
-        expect("net/kyori/adventure/text/Component", "text", "(Ljava/lang/String;)Lnet/kyori/adventure/text/TextComponent;", PRESENT);
+        expect("net/kyori/adventure/text/Component", "text", "(Ljava/lang/String;)Lnet/kyori/adventure/text/TextComponent;", MISSING);
+        outsideVendoredJar("net/kyori/adventure/text/Component", "text", "(Ljava/lang/String;)Lnet/kyori/adventure/text/TextComponent;");
         expect("org/bukkit/inventory/meta/components/FoodComponent", "getNutrition", "()I", PRESENT);
         expect("org/bukkit/entity/Player", "getPlayerProfile", "()Lcom/destroystokyo/paper/profile/PlayerProfile;", MISSING);
         expect("org/bukkit/World", "getChunkAtAsync", "(II)Ljava/util/concurrent/CompletableFuture;", MISSING);
@@ -52,7 +55,7 @@ class PaperApiSignatureInventoryTest {
     void paperApiSignaturesMatchTheInventory() throws Exception {
         List<Path> paper = classpath("paper.inventory.paperClasspath");
         List<Path> server = classpath("paper.inventory.serverClasspath");
-        assertFalse(paper.isEmpty(), "paper-api did not resolve from " + PAPER_REPO);
+        assertFalse(paper.isEmpty(), "vendored paper-api jar is missing");
         Map<String, List<String>> paperIndex = index(paper);
         Map<String, List<String>> serverIndex = index(server);
         Map<String, String> actual = new LinkedHashMap<>();
@@ -60,8 +63,9 @@ class PaperApiSignatureInventoryTest {
             int split = key.indexOf(' ');
             String type = key.substring(0, split);
             String member = key.substring(split + 1);
-            if (!paperIndex.getOrDefault(type, List.of()).contains(member)) {
-                throw new AssertionError("probe is not in paper-api 1.21.1 from " + PAPER_REPO + ": " + key);
+            boolean inPaperJar = paperIndex.getOrDefault(type, List.of()).contains(member);
+            if (!inPaperJar && !OUTSIDE_VENDORED_JAR.contains(key)) {
+                throw new AssertionError("probe is not in the vendored paper-api jar: " + key);
             }
             boolean onServer = serverIndex.getOrDefault(type, List.of()).contains(member);
             actual.put(key, onServer ? PRESENT : MISSING);
@@ -69,14 +73,33 @@ class PaperApiSignatureInventoryTest {
         assertEquals(EXPECTED, actual);
     }
 
+    @Test
+    void liveMergeWasNotRun() {
+        assertEquals(LIVE, liveMarks());
+    }
+
     private static void expect(String type, String name, String descriptor, String mark) {
-        EXPECTED.put(type + " " + name + descriptor, mark);
+        String key = type + " " + name + descriptor;
+        EXPECTED.put(key, mark);
+        LIVE.put(key, LIVE_NOT_RUN);
+    }
+
+    private static void outsideVendoredJar(String type, String name, String descriptor) {
+        OUTSIDE_VENDORED_JAR.add(type + " " + name + descriptor);
+    }
+
+    private static Map<String, String> liveMarks() {
+        Map<String, String> marks = new LinkedHashMap<>();
+        for (String key : EXPECTED.keySet()) {
+            marks.put(key, LIVE_NOT_RUN);
+        }
+        return marks;
     }
 
     private static List<Path> classpath(String property) {
         String raw = System.getProperty(property);
         if (raw == null || raw.isBlank()) {
-            throw new AssertionError("missing " + property + "; paper-api repository is " + PAPER_REPO);
+            throw new AssertionError("missing " + property);
         }
         List<Path> paths = new ArrayList<>();
         for (String part : raw.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator))) {
