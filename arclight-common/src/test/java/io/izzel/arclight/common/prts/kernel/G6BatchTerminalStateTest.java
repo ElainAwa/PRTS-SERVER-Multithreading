@@ -14,14 +14,19 @@ import io.izzel.arclight.common.prts.kernel.dispatch.TaskLedger;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityCandidateView;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
 import io.izzel.arclight.common.prts.kernel.intent.CommitSegment;
+import io.izzel.arclight.common.prts.config.PrtsConfigManager;
 import io.izzel.arclight.common.prts.kernel.intent.IntentPayload;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
+import io.izzel.arclight.common.prts.kernel.wiring.EntityDomain;
+import io.izzel.arclight.common.prts.kernel.wiring.KernelWiring;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlanStore;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -217,6 +222,148 @@ class G6BatchTerminalStateTest {
         // terminal evidence this case can assert without inventing a reset.
         assertEquals(4, harness.ledger.pendingCount(),
             "the stopped run's obligations are identified, not silently dropped");
+    }
+
+    @Test
+    void resetClearsHeldReportsAndKeepsUnfinishedObligationsExplicit() throws Exception {
+        KernelModule module = KernelModule.instance();
+        Field featuresField = PrtsConfigManager.class.getDeclaredField("FEATURES");
+        featuresField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Map<String, Map<String, Boolean>> features =
+            (Map<String, Map<String, Boolean>>) featuresField.get(null);
+        Map<String, Boolean> previous = features.get(PrtsConfigManager.KERNEL);
+        Map<String, Boolean> configured = new LinkedHashMap<>();
+        configured.put("commit-log", true);
+        configured.put("dispatch-takeover", true);
+        configured.put("dispatch-parallel", true);
+        configured.put("self-timers", false);
+        configured.put("share-table", false);
+        configured.put("wait-registry", false);
+        configured.put("write-path-guard", false);
+        features.put(PrtsConfigManager.KERNEL, configured);
+        String previousProperty = System.getProperty("arclight.prts.kernel");
+        System.setProperty("arclight.prts.kernel", "true");
+        EntityDomain domain = null;
+        Field commitsField = field(KernelModule.class, "commits");
+        CommitLog previousLog = (CommitLog) commitsField.get(module);
+        try {
+            module.resetReadings();
+            module.plans().reset();
+            setLong(module, "planSequence", 0L);
+            commitsField.set(module, new CommitLog(() -> 64, module.commitOrderSource()));
+            long epoch = module.guard().worldEpochs().epochOf(WORLD);
+            int depthBefore = module.intents().depth();
+            domain = KernelWiring.install();
+            WorkPlan work = WorkPlan.freeze(1L, epoch, List.of(moduleView(epoch)), 4, 1L);
+            Map<String, Long> nodeKeyBatch = new HashMap<>();
+            for (WorkPlan.WorkTask task : work.tasks()) {
+                nodeKeyBatch.put(DispatchWriteBack.nodeKey(task), task.batchId());
+            }
+            DispatchWriteBack writeBack = (DispatchWriteBack) field(EntityDomain.class, "writeBack")
+                .get(domain);
+            CommitLog.Sink buffered = (CommitLog.Sink) field(DispatchWriteBack.class, "commitSink")
+                .get(writeBack);
+            List<Long> bufferedBatches = new ArrayList<>();
+            writeBack.bindCommitSink(batch -> {
+                Long batchId = nodeKeyBatch.get(batch.nodeKey());
+                if (batchId != null) {
+                    bufferedBatches.add(batchId);
+                }
+                buffered.reach(batch);
+            });
+            TickPlan plan = seatPlan(work, 1L);
+            module.plans().publish(plan);
+            setLong(module, "planSequence", 1L);
+            domain.stage(DispatchPass.serialFallback(work, new DispatchReadings(),
+                new TaskLedger(1L)));
+            setLong(domain, "pendingSeatPlanSequence", 1L);
+            setLong(domain, "pendingSeatLifecycle", module.plans().lifecycle());
+            CommitLog log = (CommitLog) commitsField.get(module);
+            log.beginTick(1L);
+            domain.tick(1L);
+            assertEquals(depthBefore + 4, module.intents().depth(),
+                "the settlement enqueued one payload per landed batch");
+            assertEquals(4, bufferedBatches.size(), "the sink buffered one report per landed batch");
+            assertEquals(0L, log.sequence(), "the reports are held until the plan boundary");
+            domain.shutdown();
+            assertEquals(4L, log.sequence(), "shutdown flushed the held reports exactly once");
+            log.closeTick();
+            long entriesAfterShutdown = log.sequence();
+            assertTrue(((Map<?, ?>) field(EntityDomain.class, "seatedReports").get(domain)).isEmpty(),
+                "the boundary flush emptied the held groups");
+            domain.reset();
+            assertTrue(((Map<?, ?>) field(EntityDomain.class, "seatedReports").get(domain)).isEmpty(),
+                "reset leaves no held report behind");
+            assertEquals(depthBefore + 4, module.intents().depth(),
+                "reset does not consume or drop the unfinished payload obligations");
+            log.beginTick(2L);
+            domain.tick(2L);
+            log.closeTick();
+            assertEquals(entriesAfterShutdown, log.sequence(),
+                "a tick after reset does not re-report the old batches");
+            assertEquals(4L, log.accepted(), "the four held reports were accepted before the reset");
+        } finally {
+            if (domain != null) {
+                domain.shutdown();
+            }
+            commitsField.set(module, previousLog);
+            module.plans().reset();
+            setLong(module, "planSequence", 0L);
+            module.commits().reset();
+            module.resetReadings();
+            if (previous == null) {
+                features.remove(PrtsConfigManager.KERNEL);
+            } else {
+                features.put(PrtsConfigManager.KERNEL, previous);
+            }
+            if (previousProperty == null) {
+                System.clearProperty("arclight.prts.kernel");
+            } else {
+                System.setProperty("arclight.prts.kernel", previousProperty);
+            }
+        }
+    }
+
+    private static EntityCandidateView moduleView(long epoch) {
+        EntityCandidateView.Builder builder = EntityCandidateView.builder(WORLD, epoch);
+        builder.add(10L, 0, 0, 0.0, 64.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0L);
+        builder.add(11L, 8, 8, 8.0, 64.0, 8.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0L);
+        builder.add(12L, 16, 16, 16.0, 64.0, 16.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0L);
+        builder.add(13L, 24, 24, 24.0, 64.0, 24.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0L);
+        return builder.build();
+    }
+
+    private static TickPlan seatPlan(WorkPlan work, long sequence) {
+        List<TickPlan.CommitStep> order = new ArrayList<>();
+        int position = 0;
+        for (WorkPlan.WorkTask task : work.tasks()) {
+            order.add(new TickPlan.CommitStep(position++, WORLD, DOMAIN,
+                DispatchWriteBack.nodeKey(task), position, 0, 1, false));
+        }
+        return new TickPlan(sequence, sequence, 1L, List.of(WORLD), null, List.of(), order, null,
+            List.of(), 0, 0, 0L, TickPlanStore.Feedback.none());
+    }
+
+    private static Field field(Class<?> owner, String name) throws Exception {
+        Field field = owner.getDeclaredField(name);
+        field.setAccessible(true);
+        return field;
+    }
+
+    private static void setLong(Object target, String name, long value) throws Exception {
+        Class<?> owner = target.getClass();
+        while (owner != null) {
+            try {
+                Field field = owner.getDeclaredField(name);
+                field.setAccessible(true);
+                field.setLong(target, value);
+                return;
+            } catch (NoSuchFieldException missing) {
+                owner = owner.getSuperclass();
+            }
+        }
+        throw new NoSuchFieldException(name);
     }
 
     @Test
