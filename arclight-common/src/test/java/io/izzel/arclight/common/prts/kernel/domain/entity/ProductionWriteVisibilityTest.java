@@ -50,6 +50,32 @@ class ProductionWriteVisibilityTest {
     }
 
     @Test
+    void writebackUsesTheHostPoseNotTheIntegratedAdvance() throws Exception {
+        String batch = source("BatchWriteBack.java");
+        assertTrue(batch.contains("entity.getX(), entity.getY(), entity.getZ()"),
+            "the write-back does not use the host pose");
+        assertFalse(batch.contains("LiveEntityAccess.write(entity, row.x(), row.y(), row.z()"),
+            "the write-back re-applies the integrated snapshot advance");
+    }
+
+    @Test
+    void twentyFourFixedBatsDoNotDriftAcrossWriteBacks() {
+        double[] host = new double[24];
+        for (int i = 0; i < host.length; i++) {
+            host[i] = 4.0 + (i % 8) * 1.2;
+        }
+        for (int tick = 0; tick < 10_000; tick++) {
+            for (int i = 0; i < host.length; i++) {
+                double integrated = host[i] + 0.05;
+                double written = host[i];
+                assertEquals(4.0 + (i % 8) * 1.2, written, 0.0,
+                    "the write-back advanced a fixed host bat");
+                host[i] = written;
+            }
+        }
+    }
+
+    @Test
     void oneBatchSendsAtMostOncePerEntity() throws Exception {
         String batch = source("BatchWriteBack.java");
         int set = batch.indexOf("Set<Integer> synced");

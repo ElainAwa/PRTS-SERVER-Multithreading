@@ -61,8 +61,11 @@ public final class BatchWriteBack implements PrtsWorldWriteTaps.DeferredWrite {
                     }
                     continue;
                 }
-                LiveEntityAccess.write(entity, row.x(), row.y(), row.z(), row.yaw(), row.pitch(),
-                    row.velX(), row.velY(), row.velZ());
+                // The host tick already ran for this row. Write its current host pose rather than
+                // the integrator's snapshot+velocity, which would advance the row a second time on
+                // every write-back. Rotation and motion still come from the frozen row.
+                LiveEntityAccess.write(entity, entity.getX(), entity.getY(), entity.getZ(),
+                    row.yaw(), row.pitch(), row.velX(), row.velY(), row.velZ());
                 if (synced.add(entity.getId())) {
                     LiveEntityAccess.syncTracked(entity);
                 }
