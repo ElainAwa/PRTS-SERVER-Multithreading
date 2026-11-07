@@ -1,0 +1,15 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "io.izzel.arclight.common.mixin.core",
+  "target": "@env(DEFAULT)",
+  "setSourceFile": true,
+  "priority": 500,
+  "plugin": "io.izzel.arclight.common.mod.ArclightMixinPlugin",
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "mixins": [
+    "world.entity.monster.CreeperEarlyHook"
+  ]
+}

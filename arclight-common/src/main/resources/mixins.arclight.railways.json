@@ -1,0 +1,19 @@
+{
+  "required": false,
+  "minVersion": "0.8",
+  "package": "io.izzel.arclight.common.mixin.core",
+  "target": "@env(DEFAULT)",
+  "setSourceFile": true,
+  "priority": 500,
+  "plugin": "io.izzel.arclight.common.mod.ArclightMixinPlugin",
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "mixins": [
+    "compat.railways.AbstractBogeyBlockHook",
+    "compat.railways.CarriageContraptionEntityHook",
+    "compat.railways.GlobalStationHook",
+    "compat.railways.StationBlockHook",
+    "compat.railways.TrackBlockHook"
+  ]
+}
