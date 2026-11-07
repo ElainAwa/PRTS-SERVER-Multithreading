@@ -175,6 +175,51 @@ class G6BatchTerminalStateTest {
     }
 
     @Test
+    void aRefusedFreezePlanStillTerminatesEveryLandedBatchExplicitly() throws Exception {
+        Harness harness = new Harness(QUEUE_CAP);
+        WorkPlan work = WorkPlan.freeze(1L, 1L, List.of(view()), 4, 1L);
+        harness.dispatched(work);
+        // The kernel's refusal shape: the sequence advanced, the planner refused, the store recorded
+        // the failure and no plan was published for the new sequence.
+        harness.store.noteFailure(RejectCode.TICK_BUDGET_EXHAUSTED);
+        harness.currentPlanSequence = 2L;
+        harness.mergeTick(1L, null, work, work.tasks());
+        harness.drain(2L);
+
+        assertEquals(1L, harness.store.failures(), "the refused build is visible on the plan store");
+        assertEquals(null, harness.store.planOf(2L), "the refused plan was never published");
+        harness.ledger.assertExactlyOnce(harness.ledger.dispatched);
+        assertEquals(4, harness.ledger.appliedCount(), "the payload still lands exactly once");
+        assertEquals(4, harness.ledger.reportCount(), "each landed batch is still reported exactly once");
+        assertTrue(harness.log.unplanned() >= 4L,
+            "without a published plan the reports are recorded as unplanned, not miscounted as landed seats");
+    }
+
+    @Test
+    void stopBeforeDrainLeavesUnfinishedObligationsExplicit() throws Exception {
+        Harness harness = new Harness(QUEUE_CAP);
+        WorkPlan work = WorkPlan.freeze(1L, 1L, List.of(view()), 4, 1L);
+        TickPlan plan = harness.publishPlan(7L, work.tasks());
+        harness.dispatched(work);
+        harness.mergeTick(1L, plan, work, work.tasks());
+        // Stop: the process ends after the settlement, before the commit segment walks the channel.
+        assertEquals(4, harness.intents.depth(), "every accepted payload is still an explicit obligation");
+        assertEquals(4, harness.ledger.reportCount(), "every landed batch already has its one report");
+        assertEquals(0, harness.ledger.appliedCount(), "nothing was applied after the stop");
+        harness.ledger.assertPartition(harness.ledger.dispatched);
+        for (Long batchId : harness.ledger.dispatched) {
+            assertEquals(1, harness.ledger.enqueueCount(batchId),
+                "a stopped queue keeps one intent per landed batch and drops none");
+            assertEquals(0, harness.ledger.applies.getOrDefault(batchId, 0));
+        }
+        // No reset seam exists on the channel: IntentQueue has no clear/reset, and EntityDomain.reset()
+        // needs the KernelModule context. The obligations stay visible as queue depth, which is the
+        // terminal evidence this case can assert without inventing a reset.
+        assertEquals(4, harness.ledger.pendingCount(),
+            "the stopped run's obligations are identified, not silently dropped");
+    }
+
+    @Test
     void duplicateSettlementIsCaughtByTheExactlyOnceLedger() throws Exception {
         Harness harness = new Harness(QUEUE_CAP);
         WorkPlan work = WorkPlan.freeze(1L, 1L, List.of(view()), 4, 1L);
