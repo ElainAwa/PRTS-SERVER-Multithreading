@@ -31,5 +31,5 @@ public interface ChunkMapBridge {
     void bridge$setChunkGenerator(ChunkGenerator generator);
 
     /** Sends one tracked entity's pending changes now; the skipped ownership commit is the caller. */
-    void bridge$syncTrackedEntity(Entity entity);
+    boolean bridge$syncTrackedEntity(Entity entity);
 }

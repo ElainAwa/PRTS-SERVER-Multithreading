@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.domain.entity;
 
+import io.izzel.arclight.common.bridge.core.server.level.ChunkMapBridge;
 import io.izzel.arclight.common.prts.kernel.diff.StateHasher;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
@@ -45,6 +46,22 @@ public final class LiveEntityAccess {
         entity.setYRot((float) yaw);
         entity.setXRot((float) pitch);
         entity.setDeltaMovement(velX, velY, velZ);
+        // The write-back runs after the host tick and after the tracker's send pass; mark the
+        // impulse and drive the tracked entity's send so the row reaches the client in this pass.
+        entity.hasImpulse = true;
+    }
+
+    /** Drives the tracked entity's own send once for a written row; absent or untracked entities
+     * answer false and the next host pass remains the fallback. */
+    public static boolean syncTracked(Entity entity) {
+        try {
+            if (entity != null && entity.level() instanceof ServerLevel level) {
+                return ((ChunkMapBridge) level.getChunkSource().chunkMap).bridge$syncTrackedEntity(entity);
+            }
+        } catch (Throwable ignored) {
+            // A tracker edge must not turn a write-back into a tick fault.
+        }
+        return false;
     }
 
     /** Reads the whitelisted kinematics of one entity into a row; the identity fields of the row are

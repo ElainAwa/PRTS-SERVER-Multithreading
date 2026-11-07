@@ -90,14 +90,16 @@ public abstract class ChunkMapMixin implements ChunkMapBridge {
     }
 
     @Override
-    public void bridge$syncTrackedEntity(Entity entity) {
+    public boolean bridge$syncTrackedEntity(Entity entity) {
         if (entity == null) {
-            return;
+            return false;
         }
         Object tracked = entityMap.get(entity.getId());
         if (tracked instanceof ChunkMap_TrackedEntityBridge bridge) {
             bridge.bridge$getServerEntity().sendChanges();
+            return true;
         }
+        return false;
     }
 
     @Override
