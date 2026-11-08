@@ -33,6 +33,10 @@ public final class SendDelayAction {
     private static final Map<String, DelayState> STATES = new HashMap<>();
     private static final Map<String, DelayedCountState> COUNTS =
         new LinkedHashMap<>(16, 0.75f, true);
+    /** Worlds in the one-tick forced-send window after the max delay expired. The window is bounded
+     * by the same world cap and is dropped with the same lifecycle as the delay state. */
+    private static final Map<String, ForcedState> FORCED =
+        new LinkedHashMap<>(16, 0.75f, true);
     private static volatile boolean installed;
     private static LongSupplier tickSource = () -> 0L;
     private static ToLongFunction<String> epochSource = world -> WorldEpochs.UNTRACKED;
@@ -54,6 +58,7 @@ public final class SendDelayAction {
             if (!enabled) {
                 STATES.clear();
                 COUNTS.clear();
+                FORCED.clear();
             }
         }
     }
@@ -86,6 +91,16 @@ public final class SendDelayAction {
                     STATES.remove(worldId);
                     return false;
                 }
+                ForcedState forced = FORCED.get(worldId);
+                if (forced != null) {
+                    if (forced.epoch != epoch || now > forced.untilTick) {
+                        FORCED.remove(worldId);
+                    } else {
+                        // The max-delay window already forced a send; the next pass after the
+                        // window may arm again, but not the pass that closed the window.
+                        return false;
+                    }
+                }
                 DelayState state = STATES.get(worldId);
                 if (state == null || state.epoch != epoch) {
                     if (state != null) {
@@ -99,6 +114,13 @@ public final class SendDelayAction {
                 }
                 if (now - state.firstTick > MAX_DELAY_TICKS) {
                     STATES.remove(worldId);
+                    if (FORCED.size() >= MAX_WORLDS) {
+                        Iterator<String> oldest = FORCED.keySet().iterator();
+                        if (oldest.hasNext()) {
+                            FORCED.remove(oldest.next());
+                        }
+                    }
+                    FORCED.put(worldId, new ForcedState(epoch, now + 1L));
                     return false;
                 }
                 state.lastTick = now;
@@ -118,6 +140,7 @@ public final class SendDelayAction {
         synchronized (LOCK) {
             STATES.remove(worldId);
             COUNTS.remove(worldId);
+            FORCED.remove(worldId);
         }
     }
 
@@ -126,6 +149,7 @@ public final class SendDelayAction {
         synchronized (LOCK) {
             STATES.clear();
             COUNTS.clear();
+            FORCED.clear();
         }
     }
 
@@ -210,6 +234,17 @@ public final class SendDelayAction {
 
         private DelayedCountState(long epoch) {
             this.epoch = epoch;
+        }
+    }
+
+    private static final class ForcedState {
+
+        private final long epoch;
+        private final long untilTick;
+
+        private ForcedState(long epoch, long untilTick) {
+            this.epoch = epoch;
+            this.untilTick = untilTick;
         }
     }
 

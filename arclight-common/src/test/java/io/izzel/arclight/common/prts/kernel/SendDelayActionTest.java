@@ -148,6 +148,25 @@ class SendDelayActionTest {
     }
 
     @Test
+    void maxDelayForcesTheNextSendPassBeforeTheDelayCanArmAgain() {
+        arm();
+        budgets.set(List.of(budget(WORLD, 10L, 1L, true)));
+        assertTrue(SendDelayAction.shouldDefer(WORLD, 4), "the first pass is deferred");
+        tick.set(13L);
+        budgets.set(List.of(budget(WORLD, 13L, 1L, true)));
+        assertFalse(SendDelayAction.shouldDefer(WORLD, 4),
+            "the max delay must force a send pass");
+        tick.set(14L);
+        budgets.set(List.of(budget(WORLD, 14L, 1L, true)));
+        assertFalse(SendDelayAction.shouldDefer(WORLD, 4),
+            "the tick immediately after the forced pass must stay open");
+        tick.set(15L);
+        budgets.set(List.of(budget(WORLD, 15L, 1L, true)));
+        assertTrue(SendDelayAction.shouldDefer(WORLD, 4),
+            "after the forced window a fresh parent-over pass may arm again");
+    }
+
+    @Test
     void anUnreadableBudgetFallsOpenAndResetDropsTheState() {
         arm();
         budgets.set(List.of(budget(WORLD, 10L, 1L, true)));
