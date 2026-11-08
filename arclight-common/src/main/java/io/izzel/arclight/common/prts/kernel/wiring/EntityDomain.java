@@ -328,6 +328,7 @@ public final class EntityDomain implements KernelDomain {
             // this merge carry that plan, not whichever plan is current when they are flushed.
             mergingSeatPlanSequence = pendingSeatPlanSequence;
             mergingSeatLifecycle = pendingSeatLifecycle;
+            merge.hostFallbackOwned(EntityTickOwnership.hostTickAuthoritative());
             lastFrame = merge.merge(pending, deadline, arena, readings, probe, module.arms(),
                 HashWhitelist.bitexact(),
                 ID, writeBack);

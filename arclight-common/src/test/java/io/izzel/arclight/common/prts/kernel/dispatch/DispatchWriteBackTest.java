@@ -465,6 +465,47 @@ class DispatchWriteBackTest {
         assertEquals(1, seen.size(), "a refused batch must not be reported as landed");
     }
 
+    @Test
+    void aHostOwnedFallbackDoesNotEnqueueTheSameBatchAgain() {
+        DispatchReadings readings = new DispatchReadings();
+        ArenaLedger arena = new ArenaLedger();
+        TaskLedger ledger = new TaskLedger(1L);
+        IntentQueue intents = new IntentQueue(() -> 64, () -> 1);
+        Map<String, PrtsWorldWriteTaps.DeferredWrite> store = new LinkedHashMap<>();
+        AtomicInteger handles = new AtomicInteger();
+        DispatchWriteBack writeBack = new DispatchWriteBack(intents,
+            (prefix, write) -> {
+                String handle = prefix + ":" + handles.incrementAndGet();
+                store.put(handle, write);
+                return handle;
+            }, store::remove, world -> 1L, readings, () -> true);
+        WorkPlan plan = WorkPlan.freeze(TICK, 1L, List.of(view(4)), 4, 1L);
+        WorkerPool pool = pool(readings, arena, 4);
+        try {
+            MergeSegment merge = new MergeSegment();
+            merge.bindOwnerThread(Thread.currentThread());
+            merge.hostFallbackOwned(true);
+            DispatchPass pass = DispatchPass.dispatch(plan, pool, (batch, target, token) -> {
+                sleep(200L);
+                return EntityIntegrator.INSTANCE.run(batch, target, token);
+            }, arena, readings, ledger);
+            MergeSegment.Frame frame = merge.merge(pass, System.nanoTime() + 1_000_000L, arena,
+                readings, new DiffProbe(), HashWhitelist.bitexact(), "entity", writeBack);
+
+            assertTrue(frame.cancelled() > 0, "no batch was cancelled for this leg");
+            assertEquals(plan.taskCount(), frame.committed());
+            assertEquals(plan.taskCount(), readings.tasksOnMain());
+            assertEquals(0, intents.enqueuedCount(),
+                "the host already ran the fallback row; a second intent would duplicate it");
+            assertTrue(store.isEmpty(), "the host fallback must not create a second write payload");
+            assertTrue(readings.writeBackNotLanded() > 0L,
+                "the host fallback was not booked as not landed");
+        } finally {
+            pool.shutdown(true, true, 500L);
+            arena.reset();
+        }
+    }
+
     private static DispatchWriteBack takeoverLeg(DispatchReadings readings,
                                                  java.util.function.Function<String, Long> epoch) {
         IntentQueue intents = new IntentQueue(() -> 64, () -> 1);

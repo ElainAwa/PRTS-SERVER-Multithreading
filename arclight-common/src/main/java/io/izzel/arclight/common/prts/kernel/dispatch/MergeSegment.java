@@ -35,11 +35,19 @@ public final class MergeSegment {
     private List<StateHasher.Slice> lastCommitted = List.of();
     private DomainHash lastParallel;
     private boolean mergeSkipped;
+    private boolean hostFallbackOwned;
 
     /** Names a tick that closed without a merge: the frame the segment still holds belongs to an
      * older tick, so the next read back counts it as skipped instead of judging a world left running. */
     public void noteSkippedMerge() {
         mergeSkipped = true;
+    }
+
+    /** Marks the host tick as the owner of rows a worker could not answer. The product domain sets
+     * this while the ownership fixture is off; the merge then never hands a redone batch back to the
+     * write-back channel, because the host already ran that row. */
+    public void hostFallbackOwned(boolean owned) {
+        hostFallbackOwned = owned;
     }
 
     /** Names the thread the segment may merge on. */
@@ -168,13 +176,25 @@ public final class MergeSegment {
             // What was not handed over is not read back next merge - the world was never asked to
             // hold it - and its rows are counted as not landed instead.
             long settleStartedAt = System.nanoTime();
-            if (writeBack != null) {
+            if (writeBack != null && workerValue) {
+                if (writeBack.settle(entry.batch(), batchSlices).landed()) {
+                    landedSlices.addAll(batchSlices);
+                } else {
+                    readings.noteWriteBackNotLanded(batchSlices.size());
+                }
+            } else if (writeBack != null && !(hostFallbackOwned && !workerValue && entry.slot() != null)) {
+                // Legacy/test path: the tick-thread reference is handed back to the channel.
                 if (writeBack.settle(entry.batch(), batchSlices).landed()) {
                     landedSlices.addAll(batchSlices);
                 } else {
                     readings.noteWriteBackNotLanded(batchSlices.size());
                 }
             } else {
+                // A batch the worker could not answer (cancelled, expired, failed verification,
+                // queue refusal or unload) was already run by the host tick before this merge. The
+                // tick-thread reference above is the comparison arm; handing it to the write-back
+                // channel as well would write the same row a second time. The host path owns the
+                // fallback here, so the batch is booked as not landed and its host update stays.
                 readings.noteWriteBackNotLanded(batchSlices.size());
             }
             if (!pass.ledger().markCommitted(entry.batch().batchId())) {

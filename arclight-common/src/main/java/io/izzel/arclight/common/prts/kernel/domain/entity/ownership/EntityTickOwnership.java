@@ -76,6 +76,11 @@ public final class EntityTickOwnership {
     public static final int SKIP_HOST_TICK = 1;
 
     private static final boolean LIVE = Boolean.getBoolean("arclight.prts.entityOwnership");
+
+    /** True when the host tick, not this fixture, owns the rows of the current product path. */
+    public static boolean hostTickAuthoritative() {
+        return !LIVE;
+    }
     private static final int MAX_ROWS = Math.max(1,
         Math.min(65_536, Integer.getInteger("arclight.prts.entityOwnershipMax", 1_024)));
     /** Whether the observation face is declared, so the independent counter is read and written. */
