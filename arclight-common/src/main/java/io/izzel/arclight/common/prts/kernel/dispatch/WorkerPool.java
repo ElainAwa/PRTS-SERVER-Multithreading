@@ -10,6 +10,7 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.WorkBody;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan.WorkBatch;
 
 import java.util.List;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -70,6 +71,10 @@ public final class WorkerPool {
     private final DispatchReadings readings;
     private final ArenaLedger arena;
     private final Map<String, LinkedBlockingQueue<Item>> shards = new ConcurrentHashMap<>();
+    private final Object controlQuotaLock = new Object();
+    private final Map<String, Integer> controlByWorld = new HashMap<>();
+    private long controlTick = Long.MIN_VALUE;
+    private int controlTotal;
     private final Semaphore signals = new Semaphore(0);
     private final AtomicInteger inFlight = new AtomicInteger();
     private final AtomicLong newestEpoch = new AtomicLong();
@@ -125,15 +130,33 @@ public final class WorkerPool {
     }
 
     /** Offers one control task on the same world shard queue and under the same queue cap as a
-     * batch; the task follows the batches already queued for its world. The caller owns its result. */
-    public boolean submitControl(String worldId, Runnable task) {
+     * batch. A control task is additionally bounded per world and per tick by a fraction of the
+     * pool's queue capacity: at most a quarter of the queue for one world and half of it for all
+     * worlds together, so entity batches keep the remaining headroom. Over-quota controls fail
+     * open to the caller; the host path continues. The caller owns its result. */
+    public boolean submitControl(String worldId, long tick, Runnable task) {
         if (task == null || worldId == null || worldId.isEmpty()
             || !accepting.get() || active.get() <= 0) {
             return false;
         }
-        if (inFlight.incrementAndGet() > spec.queueCap()) {
-            inFlight.decrementAndGet();
-            return false;
+        synchronized (controlQuotaLock) {
+            if (tick != controlTick) {
+                controlTick = tick;
+                controlByWorld.clear();
+                controlTotal = 0;
+            }
+            int perWorld = Math.max(1, spec.queueCap() / 4);
+            int totalCap = Math.max(1, spec.queueCap() / 2);
+            int used = controlByWorld.getOrDefault(worldId, 0);
+            if (used >= perWorld || controlTotal >= totalCap) {
+                return false;
+            }
+            if (inFlight.incrementAndGet() > spec.queueCap()) {
+                inFlight.decrementAndGet();
+                return false;
+            }
+            controlByWorld.put(worldId, used + 1);
+            controlTotal++;
         }
         Item item = new Item(null, null, null, null, null, null, task);
         shards.computeIfAbsent(worldId, key -> new LinkedBlockingQueue<>()).offer(item);

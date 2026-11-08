@@ -22,7 +22,7 @@ class WorkerPoolControlTest {
         try {
             CountDownLatch started = new CountDownLatch(1);
             CountDownLatch release = new CountDownLatch(1);
-            assertTrue(pool.submitControl("minecraft:overworld", () -> {
+            assertTrue(pool.submitControl("minecraft:overworld", 1L, () -> {
                 started.countDown();
                 try {
                     release.await(2, TimeUnit.SECONDS);
@@ -31,11 +31,36 @@ class WorkerPoolControlTest {
                 }
             }));
             assertTrue(started.await(2, TimeUnit.SECONDS));
-            assertFalse(pool.submitControl("minecraft:overworld", () -> {
+            assertFalse(pool.submitControl("minecraft:overworld", 1L, () -> {
             }), "the shared queue cap must refuse a second control item");
             release.countDown();
         } finally {
             pool.shutdown(true, true, 200L);
+        }
+    }
+
+    @Test
+    void controlQuotaIsBoundedPerWorldAndPerTickWithBatchHeadroom() {
+        DispatchReadings readings = new DispatchReadings();
+        WorkerPool pool = WorkerPool.open(new WorkerPool.Spec(1, "prts-test-", Thread.NORM_PRIORITY,
+            8, 1), 1, readings, new ArenaLedger());
+        try {
+            for (int index = 0; index < 2; index++) {
+                assertTrue(pool.submitControl("world-a", 1L, () -> {
+                }));
+            }
+            assertFalse(pool.submitControl("world-a", 1L, () -> {
+            }), "one world cannot spend more than a quarter of the queue on controls");
+            for (int index = 0; index < 2; index++) {
+                assertTrue(pool.submitControl("world-b", 1L, () -> {
+                }));
+            }
+            assertFalse(pool.submitControl("world-b", 1L, () -> {
+            }), "all worlds together cannot spend more than half of the queue on controls");
+            assertTrue(pool.submitControl("world-a", 2L, () -> {
+            }), "a new tick starts a fresh quota");
+        } finally {
+            pool.shutdown(true, true, 500L);
         }
     }
 
@@ -45,7 +70,7 @@ class WorkerPoolControlTest {
         WorkerPool pool = WorkerPool.open(new WorkerPool.Spec(1, "prts-test-", Thread.NORM_PRIORITY,
             4, 1), 1, readings, new ArenaLedger());
         AtomicBoolean ran = new AtomicBoolean();
-        assertTrue(pool.submitControl("minecraft:overworld", () -> {
+        assertTrue(pool.submitControl("minecraft:overworld", 1L, () -> {
             ran.set(true);
             try {
                 Thread.sleep(20L);

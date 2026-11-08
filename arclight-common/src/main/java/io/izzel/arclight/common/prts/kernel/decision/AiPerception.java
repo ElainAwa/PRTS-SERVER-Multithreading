@@ -171,7 +171,7 @@ public final class AiPerception {
             mob.getX(), mob.getY(), mob.getZ(), range * range, List.copyOf(players), boundGeneration);
         CompletableFuture<Result> future = new CompletableFuture<>();
         WorkerPool current = pool;
-        if (current == null || !current.submitControl(request.worldId(), () -> future.complete(nearest(request)))) {
+        if (current == null || !current.submitControl(request.worldId(), request.tick(), () -> future.complete(nearest(request)))) {
             return;
         }
         PENDING.put(mob.getUUID(), new Pending(request, future, request.tick()));
