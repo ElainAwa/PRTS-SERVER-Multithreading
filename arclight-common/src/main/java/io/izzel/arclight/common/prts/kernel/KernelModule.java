@@ -818,7 +818,10 @@ public final class KernelModule {
     }
 
     private void syncPipelineRowTap(boolean wanted) {
-        syncPipelineOwnerTap(wanted && KernelSettings.pipelineJobs() && KernelSettings.tickPlan());
+        // B5 server-side batch identity only needs the existing tick plan and the sorter submit
+        // tap; it does not need the GUI-driven chunk send/claim path. The write-claim face is
+        // still gated by pipelineJobs below.
+        syncPipelineOwnerTap(wanted && KernelSettings.tickPlan());
         // The meter rides the existing row tap and follows the existing share-table switch on every
         // tick, so a reloaded switch needs no tap round trip; no seam of its own is installed.
         boolean childMeter = wanted && KernelSettings.shareTable();
@@ -1117,6 +1120,11 @@ public final class KernelModule {
             return;
         }
         planSequence++;
+        if (KernelSettings.tickPlan() && !KernelSettings.pipelineJobs()) {
+            // B5 server-side cut: the sorter tap minted the tasks; this freeze gives each mailbox
+            // its batch even when the GUI-dependent job/claim path is not present.
+            pipelineBatches.freezeAll(planSequence, tickIndex);
+        }
         if (KernelSettings.pipelineJobs() && KernelSettings.tickPlan()) {
             long c1Started = System.nanoTime();
             noteJobDeclarations(pipelineJobs.declareInto(jobIntake, planSequence, tickIndex));
