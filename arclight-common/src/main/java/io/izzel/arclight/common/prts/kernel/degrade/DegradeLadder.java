@@ -17,9 +17,11 @@ import java.util.function.BooleanSupplier;
  * has to meet before it may return; every rung counts how often the ladder entered it, how often
  * the action ran and how often it came back.
  *
- * <p>No action of this ladder runs in this build. The flag that would allow one is read on every
- * call and is off by default, so the effective count stays at zero next to a non-zero entered
- * count, and a rung that was reached is never read as a rung that acted. */
+ * <p>The flag that would allow an action is read on every call and is off by default, so a rung
+ * that was reached while the flag stays off reports a zero effective count and is never read as a
+ * rung that acted. Real consumers sit behind that flag: B2 counts an action when the bounded graph
+ * recompute reuses the newest graph, and B4 counts one when a deferred RCON command really takes
+ * effect; the return gate stays the only way back for either of them. */
 public final class DegradeLadder {
 
     /** The run of clean ticks a rung needs before it may return. A declared value, not a measured

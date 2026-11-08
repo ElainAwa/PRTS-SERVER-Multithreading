@@ -541,12 +541,15 @@ public final class KernelModule {
         waitPoints.progress().bind("xdomain", "intent.queue_depth", intents::depth);
         waitPoints.progress().bind("worldlife", "write.world_epochs_changes",
             () -> guard.worldEpochs().epochChanges());
-        // The two return conditions whose producer already exists are bound to the same values the
-        // readout publishes; the other three rungs stay unbound and say so instead of reporting a
-        // condition nothing observes.
+        // Every rung's second condition is bound to a producer this module already carries: the AI
+        // margin, the last share table's graph/entity/batch rows, the event row together with the
+        // real deferral hand-off, and the conservative conservation check. No binding reads a
+        // fixture queue or a placeholder value, so a condition that is met is a condition observed.
         ladder.bindSecondCondition(DegradeLevel.B1, "budget.margin.ai", this::aiMarginWithin);
         ladder.bindSecondCondition(DegradeLevel.B2, "budget.graph_over", () -> !hasOver(ShareClass.GRAPH));
         ladder.bindSecondCondition(DegradeLevel.B3, "budget.batch_over", this::b3ReturnCondition);
+        ladder.bindSecondCondition(DegradeLevel.B4, "budget.event_over",
+            () -> !hasOver(ShareClass.EVENT) && rconDeferral.idle());
         ladder.bindSecondCondition(DegradeLevel.B5, "budget.conservation_ok",
             () -> lastConservation.ok());
         // Every rung now answers on a producer this module already carries: A1 on the wait point
@@ -2769,7 +2772,7 @@ public final class KernelModule {
             return;
         }
         rconDeferral.pumpOwner();
-        maybeReturnRcon();
+        maybeReturnB4();
     }
 
     /** Rejects requests the owner has not started; a started command finishes and is not reported
@@ -2855,24 +2858,45 @@ public final class KernelModule {
         }
     }
 
-    /** B4 returns before the lower rungs: once the event queue is idle and the gate is clear, no
-     * queued command is still being served, so the deepest event rung can drop first. */
+    /** Real B4 rollback: only after the rung is the deepest one, the real event pressure behind it
+     * cleared (the EVENT row is back inside its margin and the deferral hand-off is idle) and the
+     * ladder's declared clean/second gate is ready. A rung entered while no deferred command ever
+     * took effect returns through this same gate: its effective count stays zero, and the counted
+     * return clears the pending flag only when a deferred action really happened. */
     private void maybeReturnB4() {
-        if (ladder.sign().deepest() != DegradeLevel.B4
-            || rconDeferralWanted() || !rconDeferral.idle()) {
-            return;
-        }
-        if (ladder.noteReturned(DegradeLevel.B4)) {
+        if (B4Return.apply(ladder, ladder.sign().deepest(), rconDeferralWanted(),
+            rconDeferral.idle(), KernelSettings.degradeRollbackTicks())) {
             rconActionPending = false;
         }
     }
 
-    private void maybeReturnRcon() {
-        if (!rconActionPending || !rconDeferral.idle() || rconDeferralWanted()) {
-            return;
+    /** The one B4 return decision. Kept apart from the module instance so the contract can be
+     * exercised without a server: the ladder has to stand exactly on the event rung, the real
+     * pressure behind the rung has to be cleared (no deferred command wanted and the hand-off
+     * idle), and the declared clean/second gate has to be ready. The pending flag decides only
+     * what a counted return clears; it never turns a return into an effective action. */
+    static final class B4Return {
+
+        private B4Return() {
         }
-        if (ladder.noteReturned(DegradeLevel.B4)) {
-            rconActionPending = false;
+
+        static boolean ready(DegradeLevel deepest, boolean deferralWanted, boolean handoffIdle,
+                             DegradeLadder.Gate gate) {
+            return deepest == DegradeLevel.B4
+                && !deferralWanted
+                && handoffIdle
+                && gate != null
+                && gate.ready();
+        }
+
+        static boolean apply(DegradeLadder ladder, DegradeLevel deepest, boolean deferralWanted,
+                             boolean handoffIdle, int windowTicks) {
+            if (ladder == null
+                || !ready(deepest, deferralWanted, handoffIdle,
+                    ladder.gate(DegradeLevel.B4, windowTicks))) {
+                return false;
+            }
+            return ladder.noteReturned(DegradeLevel.B4);
         }
     }
 

@@ -16,6 +16,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Static wiring contract for the one existing dedicated-server mixin: the overwrite asks the
@@ -193,11 +194,20 @@ class P3B03GRconWiringTest {
             deferred.toString());
         assertTrue(fields(method(kernel, "noteRconDeferred"))
             .contains("io/izzel/arclight/common/prts/kernel/codes/DegradeLevel#B4"));
-        List<String> returned = calls(method(kernel, "maybeReturnRcon"));
+        // One return decision: the shared holder asks the ladder gate before it counts the return,
+        // and the old second entry point is gone; the pump runs the same decision.
+        ClassNode decision = read("io/izzel/arclight/common/prts/kernel/KernelModule$B4Return");
+        List<String> returned = calls(method(decision, "apply"));
+        assertTrue(returned.contains("io/izzel/arclight/common/prts/kernel/degrade/DegradeLadder#gate"),
+            returned.toString());
         assertTrue(returned.contains("io/izzel/arclight/common/prts/kernel/degrade/DegradeLadder#noteReturned"),
             returned.toString());
-        assertTrue(fields(method(kernel, "maybeReturnRcon"))
+        assertTrue(fields(method(decision, "apply"))
             .contains("io/izzel/arclight/common/prts/kernel/codes/DegradeLevel#B4"));
+        assertNull(method(kernel, "maybeReturnRcon"));
+        assertTrue(calls(method(kernel, "pumpRconDeferrals"))
+            .contains("io/izzel/arclight/common/prts/kernel/KernelModule#maybeReturnB4"),
+            calls(method(kernel, "pumpRconDeferrals")).toString());
     }
 
     @Test
