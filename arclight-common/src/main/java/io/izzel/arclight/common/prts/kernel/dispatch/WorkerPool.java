@@ -62,7 +62,7 @@ public final class WorkerPool {
     }
 
     private record Item(WorkBatch batch, CancelToken token, WorkBody body, ArenaSlot slot,
-                        ArenaSlot.Lease lease, WorkerHandle handle) {
+                        ArenaSlot.Lease lease, WorkerHandle handle, Runnable control) {
     }
 
     private final Spec spec;
@@ -124,6 +124,24 @@ public final class WorkerPool {
         }
     }
 
+    /** Offers one control task on the same world shard queue and under the same queue cap as a
+     * batch; the task follows the batches already queued for its world. The caller owns its result. */
+    public boolean submitControl(String worldId, Runnable task) {
+        if (task == null || worldId == null || worldId.isEmpty()
+            || !accepting.get() || active.get() <= 0) {
+            return false;
+        }
+        if (inFlight.incrementAndGet() > spec.queueCap()) {
+            inFlight.decrementAndGet();
+            return false;
+        }
+        Item item = new Item(null, null, null, null, null, null, task);
+        shards.computeIfAbsent(worldId, key -> new LinkedBlockingQueue<>()).offer(item);
+        readings.noteQueueDepth(inFlight.get());
+        signals.release();
+        return true;
+    }
+
     /** Offers one batch to the pool. */
     public WorkerHandle submit(WorkBatch batch, CancelToken token, WorkBody body, ArenaSlot slot,
                                ArenaSlot.Lease lease) {
@@ -137,7 +155,7 @@ public final class WorkerPool {
         WorkerHandle handle = new WorkerHandle(batch.batchId(), batch.batchEpoch());
         newestEpoch.accumulateAndGet(batch.batchEpoch(), Math::max);
         tokens.add(token);
-        Item item = new Item(batch, token, body, slot, lease, handle);
+        Item item = new Item(batch, token, body, slot, lease, handle, null);
         shards.computeIfAbsent(batch.task().worldId(), key -> new LinkedBlockingQueue<>())
             .offer(item);
         readings.noteQueueDepth(inFlight.get());
@@ -183,6 +201,17 @@ public final class WorkerPool {
         // the worker cost row.
         FaultInjection.pauseWorker();
         long startedAt = System.nanoTime();
+        if (item.control() != null) {
+            try {
+                item.control().run();
+            } catch (Throwable ignored) {
+                // A control task owns its failure reporting; the worker keeps serving the pool.
+            } finally {
+                inFlight.decrementAndGet();
+                readings.noteQueueDepth(inFlight.get());
+            }
+            return;
+        }
         TaskOutcome outcome;
         int attempts = 0;
         try {

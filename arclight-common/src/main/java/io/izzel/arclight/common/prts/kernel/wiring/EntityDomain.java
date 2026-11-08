@@ -10,6 +10,7 @@ import io.izzel.arclight.common.prts.kernel.commit.CommitLog;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
 import io.izzel.arclight.common.prts.kernel.diff.DomainHash;
+import io.izzel.arclight.common.prts.kernel.decision.AiPerception;
 import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchPass;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchPass.DispatchSettings;
@@ -416,6 +417,7 @@ public final class EntityDomain implements KernelDomain {
                     pool = WorkerPool.open(new WorkerPool.Spec(policy.workerCount(), THREAD_PREFIX,
                         Thread.NORM_PRIORITY, policy.queueCap(), policy.batchChunks()),
                         policy.retryBudget(), readings, arena);
+                    AiPerception.bind(pool);
                 } catch (Throwable t) {
                     readings.notePoolOpenFailed();
                     pool = null;
@@ -443,6 +445,7 @@ public final class EntityDomain implements KernelDomain {
         // plan that seats it before the pool and the arena are released.
         flushAllLandedEntityBatches();
         WorkerPool current = pool;
+        AiPerception.unbind(current);
         pool = null;
         DispatchPass open = pending;
         pending = null;
