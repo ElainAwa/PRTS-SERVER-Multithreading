@@ -10,7 +10,6 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.WorkBody;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan.WorkBatch;
 
 import java.util.List;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -63,7 +62,7 @@ public final class WorkerPool {
     }
 
     private record Item(WorkBatch batch, CancelToken token, WorkBody body, ArenaSlot slot,
-                        ArenaSlot.Lease lease, WorkerHandle handle, Runnable control) {
+                        ArenaSlot.Lease lease, WorkerHandle handle) {
     }
 
     private final Spec spec;
@@ -71,10 +70,6 @@ public final class WorkerPool {
     private final DispatchReadings readings;
     private final ArenaLedger arena;
     private final Map<String, LinkedBlockingQueue<Item>> shards = new ConcurrentHashMap<>();
-    private final Object controlQuotaLock = new Object();
-    private final Map<String, Integer> controlByWorld = new HashMap<>();
-    private long controlTick = Long.MIN_VALUE;
-    private int controlTotal;
     private final Semaphore signals = new Semaphore(0);
     private final AtomicInteger inFlight = new AtomicInteger();
     private final AtomicLong newestEpoch = new AtomicLong();
@@ -129,42 +124,6 @@ public final class WorkerPool {
         }
     }
 
-    /** Offers one control task on the same world shard queue and under the same queue cap as a
-     * batch. A control task is additionally bounded per world and per tick by a fraction of the
-     * pool's queue capacity: at most a quarter of the queue for one world and half of it for all
-     * worlds together, so entity batches keep the remaining headroom. Over-quota controls fail
-     * open to the caller; the host path continues. The caller owns its result. */
-    public boolean submitControl(String worldId, long tick, Runnable task) {
-        if (task == null || worldId == null || worldId.isEmpty()
-            || !accepting.get() || active.get() <= 0) {
-            return false;
-        }
-        synchronized (controlQuotaLock) {
-            if (tick != controlTick) {
-                controlTick = tick;
-                controlByWorld.clear();
-                controlTotal = 0;
-            }
-            int perWorld = Math.max(1, spec.queueCap() / 4);
-            int totalCap = Math.max(1, spec.queueCap() / 2);
-            int used = controlByWorld.getOrDefault(worldId, 0);
-            if (used >= perWorld || controlTotal >= totalCap) {
-                return false;
-            }
-            if (inFlight.incrementAndGet() > spec.queueCap()) {
-                inFlight.decrementAndGet();
-                return false;
-            }
-            controlByWorld.put(worldId, used + 1);
-            controlTotal++;
-        }
-        Item item = new Item(null, null, null, null, null, null, task);
-        shards.computeIfAbsent(worldId, key -> new LinkedBlockingQueue<>()).offer(item);
-        readings.noteQueueDepth(inFlight.get());
-        signals.release();
-        return true;
-    }
-
     /** Offers one batch to the pool. */
     public WorkerHandle submit(WorkBatch batch, CancelToken token, WorkBody body, ArenaSlot slot,
                                ArenaSlot.Lease lease) {
@@ -178,7 +137,7 @@ public final class WorkerPool {
         WorkerHandle handle = new WorkerHandle(batch.batchId(), batch.batchEpoch());
         newestEpoch.accumulateAndGet(batch.batchEpoch(), Math::max);
         tokens.add(token);
-        Item item = new Item(batch, token, body, slot, lease, handle, null);
+        Item item = new Item(batch, token, body, slot, lease, handle);
         shards.computeIfAbsent(batch.task().worldId(), key -> new LinkedBlockingQueue<>())
             .offer(item);
         readings.noteQueueDepth(inFlight.get());
@@ -224,17 +183,6 @@ public final class WorkerPool {
         // the worker cost row.
         FaultInjection.pauseWorker();
         long startedAt = System.nanoTime();
-        if (item.control() != null) {
-            try {
-                item.control().run();
-            } catch (Throwable ignored) {
-                // A control task owns its failure reporting; the worker keeps serving the pool.
-            } finally {
-                inFlight.decrementAndGet();
-                readings.noteQueueDepth(inFlight.get());
-            }
-            return;
-        }
         TaskOutcome outcome;
         int attempts = 0;
         try {

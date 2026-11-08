@@ -58,7 +58,6 @@
     "observation.PrtsBlockEntityTickCostMixin",
     "observation.PrtsNeighborUpdateCostMixin",
     "observation.PrtsMobAiDecisionMixin",
-    "observation.PrtsMobAiPerceptionMixin",
     "observation.PrtsGoalSelectorDecisionMixin",
     "observation.PrtsPacketEncodeCostMixin",
     "observation.PrtsPacketDecodeCostMixin",
