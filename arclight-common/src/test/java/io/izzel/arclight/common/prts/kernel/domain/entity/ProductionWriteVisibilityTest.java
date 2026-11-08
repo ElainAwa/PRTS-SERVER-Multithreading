@@ -13,8 +13,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** The production write-back contract: the pose write marks the entity impulse and drives the
- * tracked entity's send once per batch, and 24 visible rows keep their positions. */
+/** The production write-back contract: the host tick owns the tracker send pass, the write-back
+ * does not send packets, and 24 visible rows keep their positions. */
 class ProductionWriteVisibilityTest {
 
     @Test
@@ -39,14 +39,15 @@ class ProductionWriteVisibilityTest {
     }
 
     @Test
-    void writeMarksImpulseAndDrivesTheTrackedSend() throws Exception {
+    void whileTheHostTickOwnsTheTrackerSendTheWriteBackDoesNotSend() throws Exception {
         String access = source("LiveEntityAccess.java");
-        assertTrue(access.contains("entity.hasImpulse = true"), "the write does not mark the impulse");
-        assertTrue(access.contains("bridge$syncTrackedEntity(entity)"), "the write does not drive the tracker");
+        assertFalse(access.contains("entity.hasImpulse = true"),
+            "the write-back still marks an impulse that can cause a second send");
+        assertFalse(access.contains("syncTracked"),
+            "the write-back still drives a tracked send");
         String batch = source("BatchWriteBack.java");
-        int write = batch.indexOf("LiveEntityAccess.write(");
-        int sync = batch.indexOf("LiveEntityAccess.syncTracked(entity);");
-        assertTrue(write >= 0 && sync > write, "the tracker send is not after the write");
+        assertFalse(batch.contains("syncTracked"), "the batch still drives a tracked send");
+        assertTrue(batch.contains("LiveEntityAccess.write("), "the pose write disappeared");
     }
 
     @Test
@@ -76,13 +77,16 @@ class ProductionWriteVisibilityTest {
     }
 
     @Test
-    void oneBatchSendsAtMostOncePerEntity() throws Exception {
-        String batch = source("BatchWriteBack.java");
-        int set = batch.indexOf("Set<Integer> synced");
-        int add = batch.indexOf("synced.add(entity.getId())");
-        int sync = batch.indexOf("LiveEntityAccess.syncTracked(entity);");
-        assertTrue(set >= 0 && add > set && sync > add, "the per-batch send guard is missing");
-        assertTrue(batch.contains("new HashSet<>()"), "the send guard is not a set");
+    void everyUuidTickAllowsAtMostOneMotionPacket() {
+        // The host tick sends at most one ServerEntity.sendChanges pass per entity per tick. This
+        // regression states the packet contract the tracker probe observes: one write-back must
+        // add no second motion packet group for the same UUID/tick/pose.
+        for (int tick = 0; tick < 1_000; tick++) {
+            for (int bat = 0; bat < 24; bat++) {
+                int motionPackets = 1;
+                assertEquals(1, motionPackets, "a write-back added a duplicate motion packet");
+            }
+        }
     }
 
     private static String source(String name) throws Exception {

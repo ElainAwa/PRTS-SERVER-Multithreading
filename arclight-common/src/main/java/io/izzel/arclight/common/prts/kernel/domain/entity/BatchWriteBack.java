@@ -9,9 +9,7 @@ import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 /** The payload carries plain numbers and entity identities only. */
 public final class BatchWriteBack implements PrtsWorldWriteTaps.DeferredWrite {
@@ -40,7 +38,6 @@ public final class BatchWriteBack implements PrtsWorldWriteTaps.DeferredWrite {
         int gone = 0;
         int identical = 0;
         int kept = 0;
-        Set<Integer> synced = new HashSet<>();
         if (level == null) {
             gone = rows.size();
         } else {
@@ -66,9 +63,6 @@ public final class BatchWriteBack implements PrtsWorldWriteTaps.DeferredWrite {
                 // every write-back. Rotation and motion still come from the frozen row.
                 LiveEntityAccess.write(entity, entity.getX(), entity.getY(), entity.getZ(),
                     row.yaw(), row.pitch(), row.velX(), row.velY(), row.velZ());
-                if (synced.add(entity.getId())) {
-                    LiveEntityAccess.syncTracked(entity);
-                }
                 written++;
             }
         }
