@@ -6,6 +6,7 @@ import net.minecraft.core.Direction;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -139,6 +140,25 @@ public final class MachineTickDeferral {
                                               Replay replay) {
         Plan plan = level == null ? null : OPEN.remove(level);
         return plan == null ? 0 : drainPlan(plan, worldEpoch, replay);
+    }
+
+    /** Drops every plan of one world at its unload; a deferred call of an unloaded level is not
+     * replayed and is booked as dropped. */
+    public static synchronized int forgetWorld(String worldId) {
+        int dropped = 0;
+        if (worldId == null) {
+            return 0;
+        }
+        Iterator<Map.Entry<Object, Plan>> plans = OPEN.entrySet().iterator();
+        while (plans.hasNext()) {
+            Plan plan = plans.next().getValue();
+            if (worldId.equals(plan.worldId)) {
+                dropped += plan.queue.size();
+                plans.remove();
+            }
+        }
+        totalDropped += dropped;
+        return dropped;
     }
 
     /** Fallback safe point: replays every waiting plan a level tick RETURN did not drain. */

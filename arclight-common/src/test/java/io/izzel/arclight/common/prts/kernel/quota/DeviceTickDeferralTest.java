@@ -272,6 +272,22 @@ class DeviceTickDeferralTest {
         return worldId -> epoch;
     }
 
+    @Test
+    void forgetWorldDropsOnlyThatWorldAtUnload() {
+        assertTrue(DeviceTickDeferral.begin(SCOPE, WORLD, TICK, EPOCH, 1L, true));
+        FakeTicker ticker = new FakeTicker("deferred");
+        DeviceTickDeferral.noteInline(SCOPE, 2L);
+        assertTrue(DeviceTickDeferral.defer(SCOPE, ticker));
+        DeviceTickDeferral.end(SCOPE, TICK, EPOCH);
+        assertTrue(DeviceTickDeferral.hasWaiting(SCOPE));
+
+        assertEquals(1, DeviceTickDeferral.forgetWorld(WORLD));
+        assertFalse(DeviceTickDeferral.hasWaiting(SCOPE));
+        assertEquals(0, DeviceTickDeferral.drain(epochs(EPOCH)));
+        assertTrue(ticker.ticks == 0, "an unloaded level cannot run its deferred tick");
+        assertEquals(1L, DeviceTickDeferral.droppedCount());
+    }
+
     private static final class FakeTicker implements TickingBlockEntity {
 
         private static final List<String> log = new ArrayList<>();

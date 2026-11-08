@@ -3115,6 +3115,8 @@ public final class KernelModule {
         worldResLedger.forgetWorld(named);
         ChunkPipelineProgress.forgetWorld(named);
         SendDelayAction.forgetWorld(named);
+        DeviceTickDeferral.forgetWorld(named);
+        MachineTickDeferral.forgetWorld(named);
         genMinWatermark.clear(waitPoints.progress());
         tickDigest.forgetMailboxPlacement(named);
         if (recordSession) {

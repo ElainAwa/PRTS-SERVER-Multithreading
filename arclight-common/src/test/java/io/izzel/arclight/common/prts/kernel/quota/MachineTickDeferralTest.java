@@ -220,6 +220,18 @@ class MachineTickDeferralTest {
         assertEquals(MachineTickDeferral.RECEIPT_LIMIT, MachineTickDeferral.receipts().size());
     }
 
+    @Test
+    void forgetWorldDropsOnlyThatWorldAtUnload() {
+        assertTrue(defer(level, 0));
+        assertTrue(MachineTickDeferral.hasWaiting(level));
+
+        assertEquals(1, MachineTickDeferral.forgetWorld(WORLD));
+        assertFalse(MachineTickDeferral.hasWaiting(level));
+        assertEquals(0, MachineTickDeferral.drain(epochs(EPOCH), replay));
+        assertTrue(replayed.isEmpty(), "an unloaded level cannot replay its deferred calls");
+        assertEquals(1L, MachineTickDeferral.droppedCount());
+    }
+
     private boolean defer(Object scope, int index) {
         return defer(scope, index, true);
     }

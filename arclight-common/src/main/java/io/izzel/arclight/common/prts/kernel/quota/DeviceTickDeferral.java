@@ -5,6 +5,7 @@ import net.minecraft.world.level.block.entity.TickingBlockEntity;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -174,6 +175,33 @@ public final class DeviceTickDeferral {
     public static synchronized int drainScope(Object scope, ToLongFunction<String> worldEpoch) {
         Plan plan = scope == null ? null : WAITING.remove(scope);
         return plan == null ? 0 : drainPlan(plan, worldEpoch);
+    }
+
+    /** Drops every plan of one world at its unload; a deferred tick of an unloaded level is not
+     * run and is booked as dropped, so a later safe point cannot execute it on a dead level. */
+    public static synchronized int forgetWorld(String worldId) {
+        int dropped = 0;
+        if (worldId == null) {
+            return 0;
+        }
+        Iterator<Map.Entry<Object, Plan>> open = OPEN.entrySet().iterator();
+        while (open.hasNext()) {
+            Plan plan = open.next().getValue();
+            if (worldId.equals(plan.worldId)) {
+                dropped += plan.deferred.size();
+                open.remove();
+            }
+        }
+        Iterator<Map.Entry<Object, Plan>> waiting = WAITING.entrySet().iterator();
+        while (waiting.hasNext()) {
+            Plan plan = waiting.next().getValue();
+            if (worldId.equals(plan.worldId)) {
+                dropped += plan.deferred.size();
+                waiting.remove();
+            }
+        }
+        droppedTicks += dropped;
+        return dropped;
     }
 
     /** Fallback safe point: runs every waiting plan a level RETURN did not drain. */
