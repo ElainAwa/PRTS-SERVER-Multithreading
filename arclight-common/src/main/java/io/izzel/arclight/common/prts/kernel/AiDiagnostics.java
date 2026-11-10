@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
 
 /** Internal AI slice diagnostics; disabled unless the private diagnostic property is set. These
