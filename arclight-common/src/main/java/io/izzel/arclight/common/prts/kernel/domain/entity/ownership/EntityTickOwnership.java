@@ -237,6 +237,10 @@ public final class EntityTickOwnership {
     private static ServerLevel[] traceLevelsWrite = new ServerLevel[TRACE_START];
     private static int traceReadRows;
     private static int traceWriteRows;
+    private static final java.util.concurrent.atomic.LongAdder PLAN_ENTRIES = new java.util.concurrent.atomic.LongAdder();
+    private static final java.util.concurrent.atomic.LongAdder DIAG_NONNULL_LEVELS = new java.util.concurrent.atomic.LongAdder();
+    private static final java.util.concurrent.atomic.LongAdder DIAG_NULL_LEVELS = new java.util.concurrent.atomic.LongAdder();
+    private static final java.util.concurrent.atomic.LongAdder DIAG_NULL_ENTITIES = new java.util.concurrent.atomic.LongAdder();
 
     private static final Int2LongOpenHashMap ENTITY_EPOCH = new Int2LongOpenHashMap();
     private static final Int2IntOpenHashMap ENTITY_EPOCH_TICK = new Int2IntOpenHashMap();
@@ -333,6 +337,14 @@ public final class EntityTickOwnership {
     }
 
     /** Whether this process declares the fixture; false means every entry point returns at once. */
+    public static String planDiagnostic() {
+        return "planEntries=" + PLAN_ENTRIES.sum() + " live=" + live() + " armed=" + armed()
+            + " testPlanProvider=" + (testPlanProvider != null) + " windowOpen=" + windowOpen
+            + " traceReadRows=" + traceReadRows + " traceLevelsRead=" + traceLevelsRead
+            + " nonNullLevels=" + DIAG_NONNULL_LEVELS.sum() + " nullLevels=" + DIAG_NULL_LEVELS.sum()
+            + " nullEntities=" + DIAG_NULL_ENTITIES.sum();
+    }
+
     public static boolean live() {
         return LIVE;
     }
@@ -367,8 +379,127 @@ public final class EntityTickOwnership {
         }
     }
 
+    /** A frozen row descriptor for the test-only plan seam; no live Entity/ServerLevel is read. */
+    public record TestRow(int entityId, long entityEpoch, long worldEpoch, int hostTickVersion,
+                          boolean pureKinematics, boolean eligibleForTakeover, byte fingerprint,
+                          double x, double y, double z, long segmentEpoch, int hostOrdinal,
+                          WholeTickModel model, TickState state) {
+    }
+
+    /** Test-only plan provider: real lease/publish path over frozen descriptors. */
+    @FunctionalInterface
+    public interface TestPlanProvider {
+        java.util.List<TestRow> rows();
+    }
+
+    /** The executor and chunk count the provider publishes with; null executor means direct. */
+    public interface TestPlanConfig {
+        java.util.concurrent.Executor executor();
+        int chunks();
+    }
+
+    private static volatile TestPlanProvider testPlanProvider;
+    private static volatile TestPlanConfig testPlanConfig;
+    private static volatile TestPlan testPlan;
+
+    /** Installs the test-only provider; production never installs one. */
+    public static void installTestPlanProviderForTests(TestPlanProvider provider, TestPlanConfig config) {
+        testPlanProvider = provider;
+        testPlanConfig = config;
+        testPlan = null;
+    }
+
+    public static void clearTestPlanProviderForTests() {
+        testPlanProvider = null;
+        testPlanConfig = null;
+        testPlan = null;
+    }
+
+    /** The plan produced by the last seam call; tests read lease rows/answers from it. */
+    public static TestPlan currentTestPlan() {
+        return testPlan;
+    }
+
+    private static void planTestRows() {
+        TestPlanProvider provider = testPlanProvider;
+        if (provider == null) {
+            return;
+        }
+        java.util.List<TestRow> rows = provider.rows();
+        OwnershipLease lease = new OwnershipLease(0L, Math.max(1, rows.size()), 1L);
+        for (int index = 0; index < rows.size(); index++) {
+            TestRow row = rows.get(index);
+            OwnershipLease.EntityCapability capability = new OwnershipLease.EntityCapability(
+                row.entityId(), row.entityEpoch(), row.worldEpoch(), row.hostTickVersion(),
+                row.pureKinematics(), row.eligibleForTakeover(), row.fingerprint(), row.x(), row.y(),
+                row.z(), row.segmentEpoch(), row.hostOrdinal());
+            lease.issue(capability, row.model(), row.state());
+        }
+        TestPlanConfig config = testPlanConfig;
+        java.util.concurrent.Executor executor = config == null || config.executor() == null
+            ? Runnable::run : config.executor();
+        lease.publish(executor, config == null ? 1 : Math.max(1, config.chunks()));
+        testPlan = new TestPlan(lease, rows);
+    }
+
+    /** Test-only host-side adapter: same one-apply/one-consume rules, no live Entity. */
+    public static final class TestPlan {
+        private final OwnershipLease lease;
+        private final java.util.List<TestRow> rows;
+
+        private TestPlan(OwnershipLease lease, java.util.List<TestRow> rows) {
+            this.lease = lease;
+            this.rows = rows;
+        }
+
+        public int rows() { return rows.size(); }
+        public OwnershipLease lease() { return lease; }
+        public java.util.List<TestRow> descriptors() { return rows; }
+        public void close() { lease.close(); }
+
+        /** Applies a settled answer once and skips the row; second call/host path returns host. */
+        public int commitOnce(int entityId) {
+            int index = lease.indexOf(entityId);
+            if (index < 0 || lease.state(index) != OwnershipLease.SETTLED) {
+                return RUN_HOST_TICK;
+            }
+            WholeTickModel model = lease.model(index);
+            TickState answer = lease.answer(index);
+            try {
+                model.apply(null, answer);
+                model.commitHostSteps(null, answer);
+                model.noteApplied();
+            } catch (Throwable ignored) {
+                return RUN_HOST_TICK;
+            }
+            lease.consume(index);
+            return SKIP_HOST_TICK;
+        }
+
+        /** Host fallback for a row that is not settled; the token is withdrawn once. */
+        public int fallbackOnce(int entityId) {
+            int index = lease.indexOf(entityId);
+            if (index < 0) {
+                return RUN_HOST_TICK;
+            }
+            lease.revoke(index);
+            return RUN_HOST_TICK;
+        }
+    }
+
     /** The plan point of one tick: freeze the eligible rows, issue their tokens, dispatch them. */
     public static void onServerTickPre(MinecraftServer server) {
+        PLAN_ENTRIES.increment();
+        if (Boolean.getBoolean("arclight.prts.perTickDiag")) {
+            System.out.println("[PRTS] plan-entry live=" + live() + " armed=" + armed()
+                + " testPlanProvider=" + (testPlanProvider != null)
+                + " windowOpenBefore=" + windowOpen + " traceReadRows=" + traceReadRows
+                + " traceLevelsRead=" + traceLevelsRead + " entries=" + PLAN_ENTRIES.sum());
+        }
+        if (testPlanProvider != null) {
+            planTestRows();
+            return;
+        }
         if (!armed()) {
             return;
         }
@@ -384,10 +515,13 @@ public final class EntityTickOwnership {
         for (int row = 0; row < traceReadRows; row++) {
             ServerLevel level = traceLevelsRead[row];
             if (level == null) {
+                DIAG_NULL_LEVELS.increment();
                 continue;
             }
+            DIAG_NONNULL_LEVELS.increment();
             Entity entity = level.getEntity(traceIdsRead[row]);
             if (entity == null) {
+                DIAG_NULL_ENTITIES.increment();
                 continue;
             }
             long rowStartedAt = System.nanoTime();
@@ -1341,6 +1475,9 @@ public final class EntityTickOwnership {
     public static void shutdown() {
         dumpTimeline();
         dumpSegments();
+        // Preserve the observation census before the readout reset clears it; the JVM shutdown
+        // hook then skips its second dump so the file is the pre-reset evidence.
+        C1Census.dump();
         reset();
         synchronized (EntityTickOwnership.class) {
             ThreadPoolExecutor open = pool;

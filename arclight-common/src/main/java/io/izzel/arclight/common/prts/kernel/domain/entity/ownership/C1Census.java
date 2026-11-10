@@ -19,17 +19,33 @@ public final class C1Census {
     }
 
     private static final int MAX_KEYS = 128;
+    private static final String DUMP_PATH = System.getProperty("arclight.prts.c1CensusPath");
     private static final Map<String, Counters> BY_KEY = new Object2ObjectOpenHashMap<>();
     private static long c0Rows;
     private static long otherRows;
+
+    static {
+        if (DUMP_PATH != null && !DUMP_PATH.isEmpty()) {
+            System.out.println("[PRTS] c1-census dump path=" + DUMP_PATH);
+            Runtime.getRuntime().addShutdownHook(new Thread(C1Census::dump, "prts-c1-census-dump"));
+        }
+    }
 
     private C1Census() {
     }
 
     /** Counts one row that reached the plan point; C0 players are counted separately. */
     public static void observe(Entity entity) {
+        OBSERVE_CALLS.increment();
         EntityTraitClassifier.Profile profile = profileOf(entity);
         if (profile == null) {
+            PROFILE_NULL.increment();
+            // Observation-only fallback: an unclassifiable row still gets a C1 row and is booked
+            // as refused, so the census stays accounted without changing any claim/decision.
+            String key = entity.getClass().getName() + "|unresolved|0";
+            Counters counters = counters(key);
+            counters.observed++;
+            counters.refused++;
             return;
         }
         if ((profile.traits() & EntityTraitClassifier.T_C0_PLAYER) != 0L) {
@@ -71,7 +87,29 @@ public final class C1Census {
         }
     }
 
+    private static final java.util.concurrent.atomic.LongAdder RECORD_CALLS = new java.util.concurrent.atomic.LongAdder();
+    private static final java.util.concurrent.atomic.LongAdder OBSERVE_CALLS = new java.util.concurrent.atomic.LongAdder();
+    private static final java.util.concurrent.atomic.LongAdder PROFILE_NULL = new java.util.concurrent.atomic.LongAdder();
+    private static final java.util.concurrent.atomic.LongAdder CLASSIFY_THROW = new java.util.concurrent.atomic.LongAdder();
+    private static final java.util.concurrent.atomic.LongAdder SNAPSHOT_CALLS = new java.util.concurrent.atomic.LongAdder();
+    private static final java.util.concurrent.atomic.LongAdder RESET_CALLS = new java.util.concurrent.atomic.LongAdder();
+    private static volatile String FIRST_CLASSIFY_ERROR;
+    private static volatile boolean DUMPED;
+
+    public static long recordCalls() {
+        return RECORD_CALLS.sum();
+    }
+
+    /** Test-only observe/profile diagnostic line; no formal reading key. */
+    public static String observeDiagnostic() {
+        return "observeCalls=" + OBSERVE_CALLS.sum() + " profileNull=" + PROFILE_NULL.sum()
+            + " classifyThrow=" + CLASSIFY_THROW.sum() + " recordCalls=" + RECORD_CALLS.sum()
+            + " snapshotCalls=" + SNAPSHOT_CALLS.sum() + " resetCalls=" + RESET_CALLS.sum()
+            + " firstClassifyError=" + FIRST_CLASSIFY_ERROR;
+    }
+
     public static void record(Class<?> type, String modId, long traits, Outcome outcome, long hostNanos) {
+        RECORD_CALLS.increment();
         if ((traits & EntityTraitClassifier.T_C0_PLAYER) != 0L) {
             c0Rows++;
             return;
@@ -98,6 +136,7 @@ public final class C1Census {
     }
 
     public static Snapshot snapshot() {
+        SNAPSHOT_CALLS.increment();
         long observed = 0L, claimed = 0L, refused = 0L, fallback = 0L, hostRuns = 0L, hostNanos = 0L;
         java.util.List<Row> rows = new java.util.ArrayList<>();
         for (Map.Entry<String, Counters> entry : BY_KEY.entrySet()) {
@@ -132,7 +171,41 @@ public final class C1Census {
         return builder.toString();
     }
 
+    /** Test-only snapshot dump; enabled by a JVM property, no DomainReadings key. */
+    public static void dump() {
+        if (DUMP_PATH == null || DUMP_PATH.isEmpty() || DUMPED) {
+            return;
+        }
+        DUMPED = true;
+        try {
+            Snapshot s = snapshot();
+            StringBuilder b = new StringBuilder("{\"observed\":").append(s.observed())
+                .append(",\"claimed\":").append(s.claimed())
+                .append(",\"refused\":").append(s.refused())
+                .append(",\"fallback\":").append(s.fallback())
+                .append(",\"hostRuns\":").append(s.hostRuns())
+                .append(",\"hostNanos\":").append(s.hostNanos())
+                .append(",\"unaccounted\":").append(s.unaccounted())
+                .append(",\"c0\":").append(s.c0())
+                .append(",\"other\":").append(s.other())
+                .append(",\"observeDiag\":\"").append(observeDiagnostic().replace("\"","'")).append("\",\"rows\":[");
+            int i = 0;
+            for (Row r : s.rows()) {
+                if (i++ > 0) b.append(',');
+                b.append("{\"key\":\"").append(r.key().replace("\"","'")).append("\",\"observed\":")
+                    .append(r.observed()).append(",\"claimed\":").append(r.claimed())
+                    .append(",\"refused\":").append(r.refused()).append(",\"fallback\":")
+                    .append(r.fallback()).append(",\"hostRuns\":").append(r.hostRuns())
+                    .append(",\"hostNanos\":").append(r.hostNanos()).append('}');
+            }
+            b.append("]}\n");
+            java.nio.file.Files.writeString(java.nio.file.Path.of(DUMP_PATH), b.toString());
+        } catch (Throwable ignored) {
+        }
+    }
+
     public static void reset() {
+        RESET_CALLS.increment();
         BY_KEY.clear();
         c0Rows = 0L;
         otherRows = 0L;
@@ -141,7 +214,11 @@ public final class C1Census {
     private static EntityTraitClassifier.Profile profileOf(Entity entity) {
         try {
             return EntityTraitClassifier.classify(entity);
-        } catch (Throwable ignored) {
+        } catch (Throwable throwable) {
+            CLASSIFY_THROW.increment();
+            if (FIRST_CLASSIFY_ERROR == null) {
+                FIRST_CLASSIFY_ERROR = throwable.getClass().getName() + ": " + String.valueOf(throwable.getMessage());
+            }
             return null;
         }
     }
