@@ -28,6 +28,8 @@
  */
 package io.izzel.arclight.common.prts.kernel.domain.entity.ownership;
 
+import java.util.concurrent.atomic.LongAdder;
+
 import io.izzel.arclight.common.prts.kernel.DomainReadings;
 import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
@@ -61,7 +63,6 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.LongAdder;
 import java.util.function.IntUnaryOperator;
 
 /**
@@ -237,10 +238,10 @@ public final class EntityTickOwnership {
     private static ServerLevel[] traceLevelsWrite = new ServerLevel[TRACE_START];
     private static int traceReadRows;
     private static int traceWriteRows;
-    private static final java.util.concurrent.atomic.LongAdder PLAN_ENTRIES = new java.util.concurrent.atomic.LongAdder();
-    private static final java.util.concurrent.atomic.LongAdder DIAG_NONNULL_LEVELS = new java.util.concurrent.atomic.LongAdder();
-    private static final java.util.concurrent.atomic.LongAdder DIAG_NULL_LEVELS = new java.util.concurrent.atomic.LongAdder();
-    private static final java.util.concurrent.atomic.LongAdder DIAG_NULL_ENTITIES = new java.util.concurrent.atomic.LongAdder();
+    private static final LongAdder PLAN_ENTRIES = new LongAdder();
+    private static final LongAdder DIAG_NONNULL_LEVELS = new LongAdder();
+    private static final LongAdder DIAG_NULL_LEVELS = new LongAdder();
+    private static final LongAdder DIAG_NULL_ENTITIES = new LongAdder();
 
     private static final Int2LongOpenHashMap ENTITY_EPOCH = new Int2LongOpenHashMap();
     private static final Int2IntOpenHashMap ENTITY_EPOCH_TICK = new Int2IntOpenHashMap();
@@ -529,15 +530,15 @@ public final class EntityTickOwnership {
             long entityEpoch = entityEpochOf(entityId, tick);
             int slot = TickModels.slotOf(entity);
             TakeoverWhitelist.noteSeen(slot, entity.getClass());
-            C1Census.observe(entity);
+            EntityOwnershipCensus.observe(entity);
             long worldEpoch = worldEpochOf(level);
             SegmentWork segment = SEGMENTS.of(level, worldIdOf(level), worldEpoch, tick);
             if (worldEpoch <= 0L) {
                 // The lifecycle guard does not track this world, so the row is not a row this
                 // takeover may answer for: it is watched, never claimed.
                 WORLD_NOT_LIVE.increment();
-                C1Census.fallback(entity);
-                C1Census.hostRun(entity, System.nanoTime() - rowStartedAt);
+                EntityOwnershipCensus.fallback(entity);
+                EntityOwnershipCensus.hostRun(entity, System.nanoTime() - rowStartedAt);
                 observe(segment, entityId, entityEpoch, OwnershipEligibility.LIFECYCLE);
                 continue;
             }
@@ -547,16 +548,16 @@ public final class EntityTickOwnership {
             }
             if (reason != OwnershipEligibility.WIDENED) {
                 REASON_COUNTS[reason].increment();
-                C1Census.refused(entity);
-                C1Census.fallback(entity);
-                C1Census.hostRun(entity, System.nanoTime() - rowStartedAt);
+                EntityOwnershipCensus.refused(entity);
+                EntityOwnershipCensus.fallback(entity);
+                EntityOwnershipCensus.hostRun(entity, System.nanoTime() - rowStartedAt);
                 // A refused row is watched, not owned: booked as observed, it carries no token.
                 observe(segment, entityId, entityEpoch, reason);
                 continue;
             }
             WholeTickModel model = EntityModelRegistry.modelOf(entity);
             if (model == null || lease.rows() >= MAX_ROWS || lease.indexOf(entityId) >= 0) {
-                C1Census.hostRun(entity, System.nanoTime() - rowStartedAt);
+                EntityOwnershipCensus.hostRun(entity, System.nanoTime() - rowStartedAt);
                 observe(segment, entityId, entityEpoch, OwnershipEligibility.MODEL);
                 continue;
             }
@@ -581,8 +582,8 @@ public final class EntityTickOwnership {
                 ISSUED.increment();
                 CLAIMED.increment();
                 TakeoverWhitelist.noteClaimed(slot);
-                C1Census.claimed(entity);
-                C1Census.hostRun(entity, System.nanoTime() - rowStartedAt);
+                EntityOwnershipCensus.claimed(entity);
+                EntityOwnershipCensus.hostRun(entity, System.nanoTime() - rowStartedAt);
                 segment.book(ordinal, lease.token(index));
                 if (FaultInjection.ownershipObserveClaims()) {
                     // The declared fault: the frame has to report one row in both sets.
@@ -1248,7 +1249,7 @@ public final class EntityTickOwnership {
 
     /** Clears every counter and forgets the trace; the readout reset and the tests use it. */
     public static void reset() {
-        C1Census.reset();
+        EntityOwnershipCensus.reset();
         ISSUED.reset();
         CANDIDATES.reset();
         ELIGIBLE.reset();
@@ -1477,7 +1478,7 @@ public final class EntityTickOwnership {
         dumpSegments();
         // Preserve the observation census before the readout reset clears it; the JVM shutdown
         // hook then skips its second dump so the file is the pre-reset evidence.
-        C1Census.dump();
+        EntityOwnershipCensus.dump();
         reset();
         synchronized (EntityTickOwnership.class) {
             ThreadPoolExecutor open = pool;

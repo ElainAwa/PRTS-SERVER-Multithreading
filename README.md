@@ -41,11 +41,7 @@ Status: `0.1.0-SNAPSHOT` — work in progress, no stability guarantees. The kern
 ./gradlew collect          # full build; the server jar lands in bootstrap/build/libs/
 ```
 
-Tests:
-
-```bash
-./gradlew :arclight-common:test --offline
-```
+Regression sources are not shipped in this public repository.
 
 ## Run
 

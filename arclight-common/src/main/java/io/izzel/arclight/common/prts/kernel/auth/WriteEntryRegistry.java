@@ -4,7 +4,7 @@ package io.izzel.arclight.common.prts.kernel.auth;
 import java.util.List;
 
 /** The audited write entry points of the kernel. This is a registry, not a new write path: it names
- * where the existing guard/authority are reached so I4 can report which entries are still unwired. */
+ * where the existing guard/authority are reached so the registry can report which entries are still unwired. */
 public final class WriteEntryRegistry {
 
     /** The write family of one audited entry. */

@@ -1,37 +1,41 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
- * Observation-only C1 census: one row per class/modid/trait key with observed, claimed, refused,
+ * Observation-only entity ownership census: one row per class/modid/trait key with observed, claimed, refused,
  * fallback and host-time counters. It is written on the tick thread and read as evidence only;
  * it changes no decision and adds no formal reading key.
  */
+
 package io.izzel.arclight.common.prts.kernel.domain.entity.ownership;
+
+import java.util.concurrent.atomic.LongAdder;
 
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import net.minecraft.world.entity.Entity;
 
 import java.util.Map;
 
-/** Per-class/modid/trait C1 counters; class-level recording is also the test seam. */
-public final class C1Census {
+/** Per-class/modid/trait entity ownership counters; class-level recording is also the test seam. */
+public final class EntityOwnershipCensus {
 
     public enum Outcome {
         OBSERVED, CLAIMED, REFUSED, FALLBACK, HOST_RUN
     }
 
     private static final int MAX_KEYS = 128;
-    private static final String DUMP_PATH = System.getProperty("arclight.prts.c1CensusPath");
+    private static final String DUMP_PATH = System.getProperty("arclight.prts.entityOwnershipCensusPath");
     private static final Map<String, Counters> BY_KEY = new Object2ObjectOpenHashMap<>();
     private static long c0Rows;
     private static long otherRows;
 
     static {
         if (DUMP_PATH != null && !DUMP_PATH.isEmpty()) {
-            System.out.println("[PRTS] c1-census dump path=" + DUMP_PATH);
-            Runtime.getRuntime().addShutdownHook(new Thread(C1Census::dump, "prts-c1-census-dump"));
+            System.out.println("[PRTS] entity-ownership-census dump path=" + DUMP_PATH);
+            Runtime.getRuntime().addShutdownHook(
+                new Thread(EntityOwnershipCensus::dump, "prts-entity-ownership-census-dump"));
         }
     }
 
-    private C1Census() {
+    private EntityOwnershipCensus() {
     }
 
     /** Counts one row that reached the plan point; C0 players are counted separately. */
@@ -87,12 +91,12 @@ public final class C1Census {
         }
     }
 
-    private static final java.util.concurrent.atomic.LongAdder RECORD_CALLS = new java.util.concurrent.atomic.LongAdder();
-    private static final java.util.concurrent.atomic.LongAdder OBSERVE_CALLS = new java.util.concurrent.atomic.LongAdder();
-    private static final java.util.concurrent.atomic.LongAdder PROFILE_NULL = new java.util.concurrent.atomic.LongAdder();
-    private static final java.util.concurrent.atomic.LongAdder CLASSIFY_THROW = new java.util.concurrent.atomic.LongAdder();
-    private static final java.util.concurrent.atomic.LongAdder SNAPSHOT_CALLS = new java.util.concurrent.atomic.LongAdder();
-    private static final java.util.concurrent.atomic.LongAdder RESET_CALLS = new java.util.concurrent.atomic.LongAdder();
+    private static final LongAdder RECORD_CALLS = new LongAdder();
+    private static final LongAdder OBSERVE_CALLS = new LongAdder();
+    private static final LongAdder PROFILE_NULL = new LongAdder();
+    private static final LongAdder CLASSIFY_THROW = new LongAdder();
+    private static final LongAdder SNAPSHOT_CALLS = new LongAdder();
+    private static final LongAdder RESET_CALLS = new LongAdder();
     private static volatile String FIRST_CLASSIFY_ERROR;
     private static volatile boolean DUMPED;
 
@@ -152,7 +156,7 @@ public final class C1Census {
 
     /** One evidence line; no formal reading key is added to DomainReadings. */
     public static String evidenceLine() {
-        StringBuilder builder = new StringBuilder("[PRTS] entity-c1:");
+        StringBuilder builder = new StringBuilder("[PRTS] entity-ownership:");
         int count = 0;
         for (Map.Entry<String, Counters> entry : BY_KEY.entrySet()) {
             if (count++ > 0) {

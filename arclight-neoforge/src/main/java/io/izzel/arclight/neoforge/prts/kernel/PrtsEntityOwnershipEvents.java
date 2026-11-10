@@ -1,7 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* The platform bindings of the ownership fixture; the verdict of its host entry decides the cancel
  * flag here, so the row counted as skipped is the row that is cancelled. */
+
 package io.izzel.arclight.neoforge.prts.kernel;
+
+import java.util.concurrent.atomic.LongAdder;
 
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
@@ -19,9 +22,9 @@ public final class PrtsEntityOwnershipEvents {
 
     private static final PrtsEntityOwnershipEvents INSTANCE = new PrtsEntityOwnershipEvents();
     private static boolean subscribed;
-    private static final java.util.concurrent.atomic.LongAdder SERVER_PRE = new java.util.concurrent.atomic.LongAdder();
-    private static final java.util.concurrent.atomic.LongAdder ENTITY_PRE = new java.util.concurrent.atomic.LongAdder();
-    private static final java.util.concurrent.atomic.LongAdder ENTITY_POST = new java.util.concurrent.atomic.LongAdder();
+    private static final LongAdder SERVER_PRE = new LongAdder();
+    private static final LongAdder ENTITY_PRE = new LongAdder();
+    private static final LongAdder ENTITY_POST = new LongAdder();
 
     private PrtsEntityOwnershipEvents() {
     }
@@ -75,7 +78,7 @@ public final class PrtsEntityOwnershipEvents {
         if (Boolean.getBoolean("arclight.prts.perTickDiag") && SERVER_PRE.sum() % 20L == 0L) {
             System.out.println("[PRTS] per-tick server_pre=" + SERVER_PRE.sum()
                 + " entity_pre=" + ENTITY_PRE.sum() + " entity_post=" + ENTITY_POST.sum()
-                + " c1Records=" + io.izzel.arclight.common.prts.kernel.domain.entity.ownership.C1Census.recordCalls()
+                + " ownershipRecords=" + io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityOwnershipCensus.recordCalls()
                 + " " + EntityTickOwnership.planDiagnostic());
         }
         EntityTickOwnership.onServerTickPre(event.getServer());
@@ -109,7 +112,7 @@ public final class PrtsEntityOwnershipEvents {
         if (Boolean.getBoolean("arclight.prts.perTickDiag")) {
             System.out.println("[PRTS] per-tick final server_pre=" + SERVER_PRE.sum()
                 + " entity_pre=" + ENTITY_PRE.sum() + " entity_post=" + ENTITY_POST.sum()
-                + " c1Records=" + io.izzel.arclight.common.prts.kernel.domain.entity.ownership.C1Census.recordCalls()
+                + " ownershipRecords=" + io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityOwnershipCensus.recordCalls()
                 + " " + EntityTickOwnership.planDiagnostic());
         }
         EntityTickOwnership.shutdown();

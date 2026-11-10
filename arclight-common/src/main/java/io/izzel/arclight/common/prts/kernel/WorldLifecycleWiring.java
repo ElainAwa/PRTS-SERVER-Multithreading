@@ -22,7 +22,8 @@ public final class WorldLifecycleWiring {
             return;
         }
         if (!WorldLifecycleWriteTap.INSTANCE.allows(
-            new io.izzel.arclight.common.prts.kernel.sites.WriteTapContext(worldId, null, 0L, 0L, "world-lifecycle", "world-lifecycle"), null)) {
+            new io.izzel.arclight.common.prts.kernel.sites.WriteTapContext(
+                worldId, null, 0L, 0L, "world-lifecycle", "world-lifecycle"), null)) {
             return;
         }
         WorldLifecycleOwner owner = KernelModule.instance().worldLifecycle();

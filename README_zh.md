@@ -41,11 +41,7 @@
 ./gradlew collect          # 完整构建；产出的服务端 jar 在 bootstrap/build/libs/
 ```
 
-测试：
-
-```bash
-./gradlew :arclight-common:test --offline
-```
+回归测试源码不在本公开仓库中分发。
 
 ## 运行
 
