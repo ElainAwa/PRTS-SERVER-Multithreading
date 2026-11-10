@@ -3,6 +3,7 @@ package io.izzel.arclight.common.prts.kernel.domain.entity;
 
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.diff.StateHasher;
+import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership;
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers;
 import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
@@ -42,6 +43,12 @@ public final class BatchWriteBack implements PrtsWorldWriteTaps.DeferredWrite {
             gone = rows.size();
         } else {
             for (StateHasher.Slice row : rows) {
+                if (EntityTickOwnership.live()
+                    && EntityTickOwnership.claimedForDispatch((int) row.entitySeq())) {
+                    // The row is owned by the ownership takeover and was committed by its host entry.
+                    // Writing the old host pose here would be the second write of the same row.
+                    continue;
+                }
                 Entity entity = LiveEntityAccess.entity(level, (int) row.entitySeq());
                 if (entity == null) {
                     gone++;

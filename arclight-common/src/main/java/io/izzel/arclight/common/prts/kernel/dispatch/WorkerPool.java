@@ -17,6 +17,8 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -62,7 +64,7 @@ public final class WorkerPool {
     }
 
     private record Item(WorkBatch batch, CancelToken token, WorkBody body, ArenaSlot slot,
-                        ArenaSlot.Lease lease, WorkerHandle handle) {
+                        ArenaSlot.Lease lease, WorkerHandle handle, Runnable task) {
     }
 
     private final Spec spec;
@@ -137,12 +139,46 @@ public final class WorkerPool {
         WorkerHandle handle = new WorkerHandle(batch.batchId(), batch.batchEpoch());
         newestEpoch.accumulateAndGet(batch.batchEpoch(), Math::max);
         tokens.add(token);
-        Item item = new Item(batch, token, body, slot, lease, handle);
+        Item item = new Item(batch, token, body, slot, lease, handle, null);
         shards.computeIfAbsent(batch.task().worldId(), key -> new LinkedBlockingQueue<>())
             .offer(item);
         readings.noteQueueDepth(inFlight.get());
         signals.release();
         return handle;
+    }
+
+    /** The existing worker threads and shard queues as a generic executor. A task is enqueued on
+     * one live shard, so no extra queue or thread is created; if no shard exists (the pool has not
+     * dispatched a world yet) the caller gets a rejection and falls back to its own path. */
+    public Executor executor() {
+        return task -> {
+            if (!submitRunnable(task)) {
+                throw new RejectedExecutionException("no live dispatch shard");
+            }
+        };
+    }
+
+    private boolean submitRunnable(Runnable task) {
+        if (task == null || !accepting.get() || active.get() <= 0) {
+            return false;
+        }
+        if (inFlight.incrementAndGet() > spec.queueCap()) {
+            inFlight.decrementAndGet();
+            return false;
+        }
+        LinkedBlockingQueue<Item> shard = null;
+        for (LinkedBlockingQueue<Item> candidate : shards.values()) {
+            shard = candidate;
+            break;
+        }
+        if (shard == null) {
+            inFlight.decrementAndGet();
+            return false;
+        }
+        shard.offer(new Item(null, null, null, null, null, null, task));
+        readings.noteQueueDepth(inFlight.get());
+        signals.release();
+        return true;
     }
 
     private void work() {
@@ -179,6 +215,18 @@ public final class WorkerPool {
 
     private void runItem(Item item) {
         Thread self = Thread.currentThread();
+        if (item.task() != null) {
+            try {
+                item.task().run();
+            } catch (Throwable ignored) {
+                // The ownership lease marks a task that never answered as pending, so the host
+                // entry runs the row; a failed executor task must not kill the worker.
+            } finally {
+                inFlight.decrementAndGet();
+                readings.noteQueueDepth(inFlight.get());
+            }
+            return;
+        }
         // A declared fault sleeps here, before the execution clock, so a fault leg never lands in
         // the worker cost row.
         FaultInjection.pauseWorker();

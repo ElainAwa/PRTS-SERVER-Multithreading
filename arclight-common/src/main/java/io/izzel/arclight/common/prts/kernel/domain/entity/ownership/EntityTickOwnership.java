@@ -55,6 +55,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Locale;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -80,6 +81,20 @@ public final class EntityTickOwnership {
     /** True when the host tick, not this fixture, owns the rows of the current product path. */
     public static boolean hostTickAuthoritative() {
         return !LIVE;
+    }
+
+    /** Test-only binding of the existing executor used by the dispatch pool; null keeps the
+     * fixture's own existing pool. The fixture binds the dispatch pool so no second thread set
+     * is opened. */
+    public static void bindSharedExecutor(Executor executor) {
+        sharedExecutor = executor;
+    }
+
+    /** Whether this entity id was claimed for the current tick; the dispatch snapshot must not
+     * also freeze a claimed row, or the same row would be computed and written twice. */
+    public static boolean claimedForDispatch(int entityId) {
+        OwnershipLease lease = current;
+        return lease != null && lease.indexOf(entityId) >= 0;
     }
     private static final int MAX_ROWS = Math.max(1,
         Math.min(65_536, Integer.getInteger("arclight.prts.entityOwnershipMax", 1_024)));
@@ -237,6 +252,7 @@ public final class EntityTickOwnership {
         new java.util.LinkedHashMap<>();
 
     private static volatile ThreadPoolExecutor pool;
+    private static volatile Executor sharedExecutor;
 
     private static int[] entryIds = new int[TRACE_START];
     private static byte[] entrySkips = new byte[TRACE_START];
@@ -431,7 +447,8 @@ public final class EntityTickOwnership {
             }
         }
         nextToken = lease.lastToken();
-        lease.publish(pool(), Math.max(1, workerCount() * 4));
+        Executor target = sharedExecutor;
+        lease.publish(target != null ? target : pool(), Math.max(1, workerCount() * 4));
         PLAN_NANOS.add(System.nanoTime() - startedAt);
         current = lease;
     }

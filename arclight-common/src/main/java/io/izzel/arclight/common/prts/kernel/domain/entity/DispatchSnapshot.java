@@ -11,6 +11,7 @@ import org.bukkit.entity.Player;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.IntPredicate;
 import net.minecraft.server.level.ServerLevel;
 
 /** Takes the read-only entity view of one tick, on the tick thread: it copies plain numbers out of
@@ -21,6 +22,12 @@ public final class DispatchSnapshot {
     }
 
     public static List<EntityCandidateView> capture(WorldEpochSource worldEpochs) {
+        return capture(worldEpochs, entityId -> false);
+    }
+
+    /** Captures the frame while leaving out entity ids another owner already claimed this tick. */
+    public static List<EntityCandidateView> capture(WorldEpochSource worldEpochs,
+                                                    IntPredicate skip) {
         List<EntityCandidateView> views = new ArrayList<>();
         List<World> worlds;
         try {
@@ -33,7 +40,7 @@ public final class DispatchSnapshot {
         for (World world : worlds) {
             try {
                 String worldId = WorldKey.id(world);
-                views.add(capture(world, worldId, worldEpochs.epochOf(worldId)));
+                views.add(capture(world, worldId, worldEpochs.epochOf(worldId), skip));
             } catch (Throwable ignored) {
                 // A world that cannot be read contributes no candidates; the tick continues.
             }
@@ -46,9 +53,13 @@ public final class DispatchSnapshot {
         return views;
     }
 
-    private static EntityCandidateView capture(World world, String worldId, long worldEpoch) {
+    private static EntityCandidateView capture(World world, String worldId, long worldEpoch,
+                                               IntPredicate skip) {
         EntityCandidateView.Builder builder = EntityCandidateView.builder(worldId, worldEpoch);
         for (Entity entity : world.getEntities()) {
+            if (skip.test(entity.getEntityId())) {
+                continue;
+            }
             if (entity instanceof Player) {
                 PrtsEntityCapability.playerRow();
                 continue;

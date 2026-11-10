@@ -346,7 +346,9 @@ public final class EntityDomain implements KernelDomain {
         // write-right guard tracks, so the write-back can freeze it and the commit can compare the
         // very same number.
         List<EntityCandidateView> views =
-            DispatchSnapshot.capture(module.guard().worldEpochs()::epochOf);
+            DispatchSnapshot.capture(module.guard().worldEpochs()::epochOf,
+                entityId -> EntityTickOwnership.live()
+                    && EntityTickOwnership.claimedForDispatch(entityId));
         DispatchWriteBack.noteSnapshot(readings, RUNTIME_WORLD, "snapshot",
             System.nanoTime() - snapshotStart);
         long entityCount = 0L;
@@ -422,6 +424,9 @@ public final class EntityDomain implements KernelDomain {
                 }
             }
             if (pool != null) {
+                if (EntityTickOwnership.live()) {
+                    EntityTickOwnership.bindSharedExecutor(pool.executor());
+                }
                 pending = DispatchPass.dispatch(plan, pool, EntityIntegrator.INSTANCE, arena, readings,
                     ledger, orderedTasks);
             } else {
@@ -444,6 +449,9 @@ public final class EntityDomain implements KernelDomain {
         flushAllLandedEntityBatches();
         WorkerPool current = pool;
         pool = null;
+        if (EntityTickOwnership.live()) {
+            EntityTickOwnership.bindSharedExecutor(null);
+        }
         DispatchPass open = pending;
         pending = null;
         if (open != null) {
