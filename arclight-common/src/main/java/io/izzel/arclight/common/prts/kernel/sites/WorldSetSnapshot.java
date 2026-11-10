@@ -7,14 +7,14 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-/** An immutable world-set view for the internal P2 planning path; it carries identity, generation,
- * lifecycle and pinning, never a world handle or a loaded chunk. The class is not wired into the
- * production tick path; it is the data shape a later authorized world-set leaf will consume. */
-final class WorldSetSnapshot {
+/** An immutable world-set view for the planning path; it carries identity, generation, lifecycle
+ * and pinning, never a world handle or a loaded chunk. The kernel's plan freeze builds it from the
+ * host world ids and passes its ids/generation into the plan input. */
+public final class WorldSetSnapshot {
 
     /** The lifecycle states a world-set view may name. The transition rules belong to the later
      * lifecycle owner; this type only carries the state. */
-    enum Lifecycle {
+    public enum Lifecycle {
         CREATING,
         LOADING,
         READY,
@@ -25,9 +25,9 @@ final class WorldSetSnapshot {
     }
 
     /** One world at one generation. The pinning flag is valid only for an online state. */
-    record World(String worldId, long generation, Lifecycle lifecycle, boolean pinned) {
+    public record World(String worldId, long generation, Lifecycle lifecycle, boolean pinned) {
 
-        World {
+        public World {
             if (worldId == null || worldId.isEmpty()) {
                 throw new IllegalArgumentException("world id is empty");
             }
@@ -45,9 +45,9 @@ final class WorldSetSnapshot {
 
     /** The immutable set at one world-set generation. The list is sorted by world id and copied, so
      * a reader cannot mutate the view behind the generation. */
-    record Snapshot(long generation, List<World> worlds) {
+    public record Snapshot(long generation, List<World> worlds) {
 
-        Snapshot {
+        public Snapshot {
             if (generation < 0L) {
                 throw new IllegalArgumentException("world-set generation is negative");
             }
@@ -72,7 +72,7 @@ final class WorldSetSnapshot {
         }
     }
 
-    enum EventKind {
+    public enum EventKind {
         CREATED,
         CHANGED,
         REMOVED
@@ -80,9 +80,9 @@ final class WorldSetSnapshot {
 
     /** One difference between two snapshots, with both sides kept so a consumer can tell a state
      * change from a generation change without consulting either snapshot again. */
-    record Event(EventKind kind, World previous, World current, long tick) {
+    public record Event(EventKind kind, World previous, World current, long tick) {
 
-        Event {
+        public Event {
             if (kind == null || tick < 0L) {
                 throw new IllegalArgumentException("invalid world-set event");
             }
@@ -99,13 +99,13 @@ final class WorldSetSnapshot {
 
     /** Captures one immutable view. Reading it only sorts ids and copies records; it never asks a
      * world for a chunk or a handle. */
-    static Snapshot capture(long generation, List<World> worlds) {
+    public static Snapshot capture(long generation, List<World> worlds) {
         return new Snapshot(generation, worlds);
     }
 
     /** The deterministic event list between two snapshots. A generation change and a lifecycle
      * change are one changed event per world; a new or absent id is created or removed. */
-    static List<Event> diff(Snapshot previous, Snapshot current, long tick) {
+    public static List<Event> diff(Snapshot previous, Snapshot current, long tick) {
         List<Event> events = new ArrayList<>();
         if (previous == null && current == null) {
             return List.of();
@@ -140,7 +140,7 @@ final class WorldSetSnapshot {
     /** The ids a plan, the arena or the commit path names that the snapshot does not carry. The
      * answer is sorted and duplicate-free; an empty list is the internal world-id coherence result.
      * This is a test/internal assertion, not a production reading. */
-    static List<String> missingWorldIds(Snapshot snapshot, List<String> planWorldIds,
+    public static List<String> missingWorldIds(Snapshot snapshot, List<String> planWorldIds,
                                         List<String> arenaWorldIds, List<String> commitWorldIds) {
         Set<String> missing = new HashSet<>();
         addMissing(missing, snapshot, planWorldIds);

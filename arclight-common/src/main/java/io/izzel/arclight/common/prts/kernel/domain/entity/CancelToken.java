@@ -1,11 +1,13 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.domain.entity;
 
+import io.izzel.arclight.common.prts.kernel.generic.GenericCancel;
+
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** The cooperative cancellation flag of one batch: a thread cannot be stopped safely, so the merge
  * sets the token when the deadline passes and the body checks it at its bounded checkpoints. */
-public final class CancelToken {
+public final class CancelToken implements GenericCancel {
 
     private final long batchEpoch;
     private final AtomicBoolean cancelled = new AtomicBoolean();

@@ -6,10 +6,18 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.Whol
 import net.minecraft.world.entity.Entity;
 
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.LongAdder;
 
 /** Test-only minimal AI whole-tick scaffold. The read-set and answer live on the row state. */
 final class MobAiTickModel implements WholeTickModel {
+
+    /** A capture-driven frozen row: string fields copied from the plan capture JSON. */
+    record CaptureRow(Map<String, String> fields) {
+        CaptureRow {
+            fields = Map.copyOf(fields);
+        }
+    }
 
     /** The host-side frozen view. Any mutation/unknown behavior invalidates the row. */
     record ReadSet(long fingerprint, List<String> blocks, List<String> entities, List<String> pois,
@@ -30,6 +38,11 @@ final class MobAiTickModel implements WholeTickModel {
 
     void captureReadSet(ReadSet readSet, TickState state) {
         state.modelState = readSet;
+        state.modelAnswer = null;
+    }
+
+    void captureCaptureRow(CaptureRow row, TickState state) {
+        state.modelState = row;
         state.modelAnswer = null;
     }
 
@@ -59,7 +72,35 @@ final class MobAiTickModel implements WholeTickModel {
     }
 
     @Override
+    @SuppressWarnings("unchecked")
     public boolean compute(TickState state) {
+        if (state.modelState instanceof CaptureRow row) {
+            java.util.Map<String, String> predicted = new java.util.LinkedHashMap<>(row.fields());
+            predicted.put("kind", "predicted");
+            try {
+                predicted.put("tick", Long.toString(Long.parseLong(row.fields().getOrDefault("tick", "0")) + 1L));
+            } catch (NumberFormatException ignored) {
+                predicted.put("tick", row.fields().getOrDefault("tick", "0"));
+            }
+            // Deterministic delta rule for the only field the capture supports: a zero plan
+            // motion and no world read grow by one gravity step; all other fields stay identity
+            // and are marked fallback in the capability table.
+            String motion = row.fields().get("motion");
+            if (motion != null) {
+                String cleaned = motion.replace("(", "").replace(")", "").replace(" ", "");
+                String[] parts = cleaned.split(",");
+                try {
+                    if (parts.length == 3 && Double.parseDouble(parts[0]) == 0.0D
+                        && Double.parseDouble(parts[1]) == 0.0D && Double.parseDouble(parts[2]) == 0.0D) {
+                        predicted.put("motion", "(0.0, -0.0784000015258789, 0.0)");
+                    }
+                } catch (NumberFormatException ignored) {
+                }
+            }
+            state.modelAnswer = predicted;
+            computeRows.increment();
+            return true;
+        }
         if (!(state.modelState instanceof ReadSet readSet) || !readSet.valid()) {
             refusals.increment();
             return false;
@@ -80,9 +121,7 @@ final class MobAiTickModel implements WholeTickModel {
 
     @Override
     public void apply(Entity entity, TickState state) {
-        if (state.modelAnswer != null) {
-            applied.increment();
-        }
+        // The host apply seam is counted by noteApplied; this method only observes the answer.
     }
 
     @Override

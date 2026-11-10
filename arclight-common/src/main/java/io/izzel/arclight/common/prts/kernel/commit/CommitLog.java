@@ -351,6 +351,7 @@ public final class CommitLog {
     private long firstDivergencePosition = -1L;
     private final EffectStore effects;
     private final IdentityWitness.Source identitySource;
+    private CommitTrace trace;
     private final long lifetime = CommitNamespaces.Lifetimes.mint();
     private final Object ringKey = new Object();
     /** What the rings still owe: a stored typed line holds the freeze it was judged against until read. */
@@ -402,6 +403,11 @@ public final class CommitLog {
 
     /** Opens one tick. The rings keep what a previous tick did not read, so a slow reader never loses
      * an entry to a new tick. */
+    /** Binds the optional seat trace; null keeps the previous behaviour. */
+    public void bindTrace(CommitTrace trace) {
+        this.trace = trace;
+    }
+
     public void beginTick(long tick) {
         this.tickIndex = tick;
         firstDivergencePosition = -1L;
@@ -423,6 +429,9 @@ public final class CommitLog {
     }
 
     private Verdict reach(Batch batch, Attribution attribution) {
+        if (trace != null && batch != null && attribution != null) {
+            trace.record(attribution.planSequence(), attribution.position(), batch.worldId());
+        }
         if (batch == null) {
             return new Verdict(false, Entry.Disposition.DROPPED, RejectCode.COUNTER_MISSING, 0L, -1);
         }

@@ -52,6 +52,7 @@
     "pipeline.PrtsPipelineMailboxMixin",
     "pipeline.PrtsChunkFlowMailboxMixin",
     "pipeline.PrtsChunkSorterSubmitMixin",
+    "be.PrtsBlockEntityWriteTapMixin",
     "pipeline.PrtsChunkSorterMessageAccessor",
     "observation.PrtsEntitySelfCostMixin",
     "observation.PrtsBlockEntitySelfCostMixin",

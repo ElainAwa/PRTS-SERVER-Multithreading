@@ -6,6 +6,7 @@ import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.domain.entity.CancelToken;
+import io.izzel.arclight.common.prts.kernel.generic.GenericCancel;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkBody;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan.WorkBatch;
 
@@ -72,13 +73,14 @@ public final class WorkerPool {
     private final DispatchReadings readings;
     private final ArenaLedger arena;
     private final Map<String, LinkedBlockingQueue<Item>> shards = new ConcurrentHashMap<>();
+    private final LinkedBlockingQueue<Item> genericQueue = new LinkedBlockingQueue<>();
     private final Semaphore signals = new Semaphore(0);
     private final AtomicInteger inFlight = new AtomicInteger();
     private final AtomicLong newestEpoch = new AtomicLong();
     private final AtomicInteger active = new AtomicInteger();
     private final AtomicBoolean accepting = new AtomicBoolean(true);
     private final AtomicBoolean shuttingDown = new AtomicBoolean();
-    private final Set<CancelToken> tokens = ConcurrentHashMap.newKeySet();
+    private final Set<GenericCancel> tokens = ConcurrentHashMap.newKeySet();
     private final List<Thread> threads = new CopyOnWriteArrayList<>();
     private final List<ThreadClass> threadClasses = new CopyOnWriteArrayList<>();
 
@@ -158,6 +160,47 @@ public final class WorkerPool {
         };
     }
 
+    /** A domain-neutral job executed on the existing worker threads. */
+    @FunctionalInterface
+    public interface GenericJob {
+        void run(GenericCancel token) throws Exception;
+    }
+
+    /** One submitted generic job: its completion future and cancellation token. */
+    public record GenericHandle(CompletableFuture<Void> future, GenericCancel token) {
+        public boolean cancel() { return token.cancel(); }
+        public void await(long timeout, TimeUnit unit) throws Exception {
+            future.get(timeout, unit);
+        }
+    }
+
+    /** Submits a generic job into the same pool/threads and the same backpressure budget. */
+    public GenericHandle submitGeneric(GenericJob job, GenericCancel token) {
+        if (job == null || token == null || !accepting.get() || active.get() <= 0) {
+            return null;
+        }
+        if (inFlight.incrementAndGet() > spec.queueCap()) {
+            inFlight.decrementAndGet();
+            return null;
+        }
+        tokens.add(token);
+        CompletableFuture<Void> future = new CompletableFuture<>();
+        genericQueue.offer(new Item(null, null, null, null, null, null, () -> {
+            try {
+                if (token.cancelled()) throw new WorkBody.CancelledFault();
+                job.run(token);
+                future.complete(null);
+            } catch (Throwable t) {
+                future.completeExceptionally(t);
+            } finally {
+                tokens.remove(token);
+            }
+        }));
+        readings.noteQueueDepth(inFlight.get());
+        signals.release();
+        return new GenericHandle(future, token);
+    }
+
     private boolean submitRunnable(Runnable task) {
         if (task == null || !accepting.get() || active.get() <= 0) {
             return false;
@@ -204,6 +247,10 @@ public final class WorkerPool {
     }
 
     private Item poll() {
+        Item generic = genericQueue.poll();
+        if (generic != null) {
+            return generic;
+        }
         for (LinkedBlockingQueue<Item> shard : shards.values()) {
             Item item = shard.poll();
             if (item != null) {
@@ -309,7 +356,7 @@ public final class WorkerPool {
             accepting.set(false);
         }
         int cancelled = 0;
-        for (CancelToken token : tokens) {
+        for (GenericCancel token : tokens) {
             if (token.cancel()) {
                 cancelled++;
             }

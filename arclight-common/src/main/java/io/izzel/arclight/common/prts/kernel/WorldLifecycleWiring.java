@@ -3,6 +3,7 @@ package io.izzel.arclight.common.prts.kernel;
 
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.sites.WorldLifecycleOwner;
+import io.izzel.arclight.common.prts.kernel.sites.WorldLifecycleWriteTap;
 
 import java.util.List;
 
@@ -18,6 +19,10 @@ public final class WorldLifecycleWiring {
     /** Called after the host inserted one level; the level id is the dimension location. */
     public static void onLevelLoaded(String worldId) {
         if (!KernelSettings.worldSetReadouts()) {
+            return;
+        }
+        if (!WorldLifecycleWriteTap.INSTANCE.allows(
+            new io.izzel.arclight.common.prts.kernel.sites.WriteTapContext(worldId, null, 0L, 0L, "world-lifecycle", "world-lifecycle"), null)) {
             return;
         }
         WorldLifecycleOwner owner = KernelModule.instance().worldLifecycle();

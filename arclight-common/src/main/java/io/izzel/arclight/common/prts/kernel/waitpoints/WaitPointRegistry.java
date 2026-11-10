@@ -210,6 +210,16 @@ public final class WaitPointRegistry {
         return new WaitObservation(current, overrun, wouldConverge, entry, rejection);
     }
 
+    /** Observes one wait and, when its row would converge, asks the caller's materializer whether the
+     * action really ran; only a true answer moves the effective count. */
+    public WaitObservation observeWait(String wpId, WaitSpan span, BooleanSupplier materializer) {
+        WaitObservation observation = observeWait(wpId, span);
+        if (observation.wouldConverge() && materializer != null && materializer.getAsBoolean()) {
+            convergence.noteEffective();
+        }
+        return observation;
+    }
+
     /** Counts a wait at a call site no row covers and puts it on the todo list. */
     public void noteUnregisteredWait(WaitSpan span) {
         String key = span.callSiteRef() == null || span.callSiteRef().isBlank()

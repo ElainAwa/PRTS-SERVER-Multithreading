@@ -39,8 +39,19 @@ public final class EntityModelRegistry {
         WholeTickModel model(Class<?> type, EntityTraitClassifier.Profile profile);
     }
 
+    private static final boolean TRAIT_C2_TEST = Boolean.getBoolean("arclight.prts.traitC2Test");
     private static volatile TraitProvider traitProvider;
     private static volatile TraitModelProvider traitModelProvider;
+
+    static {
+        if (TRAIT_C2_TEST) {
+            System.out.println("[PRTS] traitC2Test provider installed");
+            traitModelProvider = (type, profile) -> {
+                long required = EntityTraitClassifier.T_LIVING | EntityTraitClassifier.T_AI_OFF;
+                return (profile.traits() & required) == required ? TickModels.modelForClass(type) : null;
+            };
+        }
+    }
 
     private EntityModelRegistry() {
     }

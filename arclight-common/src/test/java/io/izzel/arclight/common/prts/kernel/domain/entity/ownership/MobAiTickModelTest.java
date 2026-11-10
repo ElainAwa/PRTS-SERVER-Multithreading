@@ -37,6 +37,7 @@ class MobAiTickModelTest {
         assertEquals(1L, model.computeRows());
         assertTrue(model.computeNanos() >= 0L);
         model.apply(null, state);
+        model.noteApplied();
         assertEquals(1L, model.appliedCount());
     }
 

@@ -45,6 +45,11 @@ public abstract class PrtsChunkSorterSubmitMixin {
                                              ProcessorHandle<T> processor,
                                              Function<ProcessorHandle<Unit>, T> task,
                                              long chunkPos, IntSupplier level, boolean flush) {
+        if (!io.izzel.arclight.common.prts.kernel.sites.ChunkPipelineWriteTap.INSTANCE
+            .allows(new io.izzel.arclight.common.prts.kernel.sites.WriteTapContext(
+                "", null, 0L, 0L, "chunk", "chunk.sorter.submit"), null)) {
+            return;
+        }
         this.submit(processor, PrtsChunkSorterSubmit.wrap(sorter, processor, task, chunkPos),
             chunkPos, level, flush);
     }

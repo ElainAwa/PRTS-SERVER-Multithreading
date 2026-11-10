@@ -6,6 +6,7 @@ import io.izzel.arclight.common.prts.kernel.arena.ArenaPassthrough;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry.OwnershipDomain;
 import io.izzel.arclight.common.prts.kernel.auth.WriteAuthority;
+import io.izzel.arclight.common.prts.kernel.auth.SystemOwnerSource;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLedger;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLevel;
 import io.izzel.arclight.common.prts.kernel.auth.WriteVersionSlots;
@@ -44,6 +45,8 @@ import io.izzel.arclight.common.prts.kernel.jobs.PipelineRunSeal;
 import io.izzel.arclight.common.prts.kernel.jobs.RecomputeUnbounded;
 import io.izzel.arclight.common.prts.kernel.jobs.ShareMeterPoint;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
+import io.izzel.arclight.common.prts.kernel.plan.WorldSetPlanInput;
+import io.izzel.arclight.common.prts.kernel.sites.WorldSetSnapshot;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlanPlanner;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlanStore;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.MeterWindow;
@@ -519,6 +522,7 @@ public final class KernelModule {
     private long planSequence;
     private long worldGeneration;
     private List<String> plannedWorlds = List.of();
+    private WorldSetPlanInput plannedWorldSet = WorldSetPlanInput.capture(List.of(), 0L);
 
     private KernelModule() {
         intents.bindPayload(guard);
@@ -1111,9 +1115,25 @@ public final class KernelModule {
         List<String> worlds = worldIds == null ? List.of() : worldIds;
         List<String> sorted = new ArrayList<>(worlds);
         sorted.sort(String::compareTo);
-        if (!sorted.equals(plannedWorlds)) {
-            plannedWorlds = List.copyOf(sorted);
-            worldGeneration++;
+        java.util.ArrayList<WorldSetSnapshot.World> snapshotWorlds = new java.util.ArrayList<>();
+        for (String worldId : sorted) {
+            snapshotWorlds.add(new WorldSetSnapshot.World(worldId, worldGeneration,
+                WorldSetSnapshot.Lifecycle.READY, false));
+        }
+        WorldSetSnapshot.Snapshot worldSetSnapshot =
+            WorldSetSnapshot.capture(worldGeneration, snapshotWorlds);
+        java.util.ArrayList<String> snapshotIds = new java.util.ArrayList<>();
+        for (WorldSetSnapshot.World world : worldSetSnapshot.worlds()) {
+            snapshotIds.add(world.worldId());
+        }
+        WorldSetPlanInput observedSet = WorldSetPlanInput.capture(snapshotIds,
+            worldSetSnapshot.generation());
+        if (observedSet.invalidates(plannedWorldSet)) {
+            WorldSetPlanInput nextSet = observedSet.sameWorlds(plannedWorldSet)
+                ? observedSet : observedSet.nextGeneration();
+            plannedWorldSet = nextSet;
+            plannedWorlds = nextSet.worldIds();
+            worldGeneration = nextSet.generation();
         }
         if (!previousControl.observed()) {
             plans.noteBootstrapSkip();
@@ -1935,6 +1955,11 @@ public final class KernelModule {
 
     public WriteAuthority authority() {
         return authority;
+    }
+
+    /** The kernel-owned token source of the system write domains. */
+    public SystemOwnerSource systemOwnerSource() {
+        return new SystemOwnerSource(owners, versionSlots);
     }
 
     public WorldWriteGuard guard() {

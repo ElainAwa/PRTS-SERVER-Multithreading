@@ -91,6 +91,11 @@ public final class DegradeLadder {
         this.actionsEnabled = actionsEnabled == null ? () -> false : actionsEnabled;
     }
 
+    /** Whether the ladder may run a real action; default off. */
+    public boolean actionsEnabled() {
+        return actionsEnabled.getAsBoolean();
+    }
+
     public List<Rung> rungs() {
         return RUNGS;
     }

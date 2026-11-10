@@ -7,6 +7,7 @@ import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.commit.CommitLog;
+import io.izzel.arclight.common.prts.kernel.commit.CommitTrace;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
 import io.izzel.arclight.common.prts.kernel.diff.DomainHash;
@@ -74,6 +75,7 @@ public final class EntityDomain implements KernelDomain {
     private final DispatchWriteBack writeBack;
     /** Landed reports grouped by the plan sequence that seats their pass, not by the tick they
      * arrive in: one plan's reports are reported together, in its own seat order. */
+    private final CommitTrace commitTrace = new CommitTrace(64, 256, 16);
     private final Map<Long, List<CommitLog.Batch>> seatedReports = new LinkedHashMap<>();
     private final Map<Long, Long> seatedLifecycles = new LinkedHashMap<>();
     private long pendingSeatPlanSequence;
@@ -132,11 +134,20 @@ public final class EntityDomain implements KernelDomain {
     /** Files one landed report under the plan that seats its pass; the payload order the merge
      * produced is never retouched here. */
     private void bufferLandedEntityBatch(CommitLog.Batch batch) {
+        bufferLandedEntityBatch(batch, -1, batch == null ? null : batch.worldId());
+    }
+
+    /** The seat-aware overload: a caller that already knows the plan position keeps it with the
+     * report; the default call leaves position absent and the flush resolves it from the plan. */
+    private void bufferLandedEntityBatch(CommitLog.Batch batch, int position, String worldId) {
         if (batch == null) {
             return;
         }
         seatedReports.computeIfAbsent(mergingSeatPlanSequence, key -> new ArrayList<>()).add(batch);
         seatedLifecycles.putIfAbsent(mergingSeatPlanSequence, mergingSeatLifecycle);
+        if (position >= 0 && worldId != null) {
+            commitTrace.record(mergingSeatPlanSequence, position, worldId);
+        }
     }
 
     /** Reports the groups whose seating plan the store already moved past; each group is reported
@@ -200,8 +211,10 @@ public final class EntityDomain implements KernelDomain {
     private void flushSeated(long sequence) {
         List<CommitLog.Batch> reports = seatedReports.remove(sequence);
         Long lifecycle = seatedLifecycles.remove(sequence);
-        orderLandedBatches(reports, module.plans().planOf(sequence));
+        TickPlan seatPlan = module.plans().planOf(sequence);
+        orderLandedBatches(reports, seatPlan);
         for (CommitLog.Batch report : reports) {
+            commitTrace.record(sequence, landedSeat(seatPlan, report), report.worldId());
             module.noteLandedEntityBatch(report, sequence,
                 lifecycle == null ? module.plans().lifecycle() : lifecycle);
         }

@@ -29,6 +29,11 @@ public abstract class PrtsChunkFlowMailboxMixin {
 
     @Inject(method = "tell", at = @At("HEAD"))
     private void prts$countSubmission(Object task, CallbackInfo ci) {
+        if (!io.izzel.arclight.common.prts.kernel.sites.ChunkPipelineWriteTap.INSTANCE
+            .allows(new io.izzel.arclight.common.prts.kernel.sites.WriteTapContext(
+                "", null, 0L, 0L, "chunk", "chunk.flow.mailbox"), null)) {
+            return;
+        }
         if (PrtsChunkFlow.installed()) {
             PrtsChunkFlow.submitted(name(), size());
         }

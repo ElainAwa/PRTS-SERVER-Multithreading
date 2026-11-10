@@ -92,6 +92,57 @@ import java.util.function.ToLongFunction;
  * counter table. */
 public final class KernelReadings {
 
+    /** Internal two-view split of the readout sections; package-private and not a production key. */
+    record DualExitView(java.util.Map<String, Object> controlView,
+                        java.util.Map<String, Object> criteriaView) {
+        boolean clean() {
+            return controlView.keySet().stream().noneMatch(criteriaView::containsKey);
+        }
+
+        static DualExitView of(java.util.Map<String, Object> control,
+                               java.util.Map<String, Object> criteria) {
+            return new DualExitView(java.util.Map.copyOf(control), java.util.Map.copyOf(criteria));
+        }
+
+        static DualExitView empty() {
+            return of(java.util.Map.of(), java.util.Map.of());
+        }
+    }
+
+    static DualExitView dualExitView(java.util.Map<String, Object> control,
+                                     java.util.Map<String, Object> criteria) {
+        return DualExitView.of(control, criteria);
+    }
+
+    /** Composes the two fixed sections from the exported readings of the kernel instance. */
+    static DualExitView dualExitView() {
+        return dualExitView(io.izzel.arclight.common.prts.kernel.KernelModule.instance());
+    }
+
+    static DualExitView dualExitView(io.izzel.arclight.common.prts.kernel.KernelModule module) {
+        java.util.Map<String, Object> control = new java.util.LinkedHashMap<>();
+        java.util.Map<String, Object> criteria = new java.util.LinkedHashMap<>();
+        if (module == null) {
+            return DualExitView.empty();
+        }
+        for (String line : export(module)) {
+            int eq = line.indexOf('=');
+            if (eq <= 0) continue;
+            String key = line.substring(0, eq);
+            String value = line.substring(eq + 1);
+            if (key.startsWith("plan.") || key.startsWith("budget.") || key.startsWith("degrade.")
+                || key.startsWith("self.") || key.startsWith("kernel.")) {
+                control.put(key, value);
+            } else if (key.startsWith("wait.") || key.startsWith("world.") || key.startsWith("entity.")
+                || key.startsWith("ai.") || key.startsWith("event.") || key.startsWith("chunk.")
+                || key.startsWith("commit.") || key.startsWith("arena.")) {
+                criteria.put(key, value);
+            }
+        }
+        return DualExitView.of(control, criteria);
+    }
+
+
     private KernelReadings() {
     }
 
@@ -945,7 +996,8 @@ public final class KernelReadings {
         SharePlanner shares = module.shares();
         ShareTable table = shares.lastTable();
         ConservationCheck conservation = module.conservation();
-        add(lines, "budget.share_rows", table == null ? 0 : table.rows().size());
+        add(lines, "budget.share_rows",
+            table == null ? 0 : ShareClass.ASSERTED.size());
         add(lines, "budget.dim_rows", 2);
         add(lines, "budget.overrun_dims", 2);
         add(lines, "budget.conservation_ok", conservation.ok() ? 1 : 0);
@@ -1782,6 +1834,7 @@ public final class KernelReadings {
         DegradeLadder.Sign sign = ladder.sign();
         add(lines, "degrade.observation_only", 1);
         add(lines, "degrade.levels", ladder.rungs().size());
+        add(lines, "degrade.level_rows", ladder.rungs().size());
         add(lines, "degrade.actions_enabled", sign.actionsEnabled() ? 1 : 0);
         add(lines, "degrade.rollback_ticks", KernelSettings.degradeRollbackTicks());
         add(lines, "degrade.deepest", sign.deepest().name().toLowerCase(Locale.ROOT));
