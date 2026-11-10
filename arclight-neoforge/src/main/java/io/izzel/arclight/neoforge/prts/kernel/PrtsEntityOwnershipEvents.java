@@ -78,7 +78,8 @@ public final class PrtsEntityOwnershipEvents {
         if (Boolean.getBoolean("arclight.prts.perTickDiag") && SERVER_PRE.sum() % 20L == 0L) {
             System.out.println("[PRTS] per-tick server_pre=" + SERVER_PRE.sum()
                 + " entity_pre=" + ENTITY_PRE.sum() + " entity_post=" + ENTITY_POST.sum()
-                + " ownershipRecords=" + io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityOwnershipCensus.recordCalls()
+                + " ownershipRecords="
+                + io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityOwnershipCensus.recordCalls()
                 + " " + EntityTickOwnership.planDiagnostic());
         }
         EntityTickOwnership.onServerTickPre(event.getServer());
@@ -112,7 +113,8 @@ public final class PrtsEntityOwnershipEvents {
         if (Boolean.getBoolean("arclight.prts.perTickDiag")) {
             System.out.println("[PRTS] per-tick final server_pre=" + SERVER_PRE.sum()
                 + " entity_pre=" + ENTITY_PRE.sum() + " entity_post=" + ENTITY_POST.sum()
-                + " ownershipRecords=" + io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityOwnershipCensus.recordCalls()
+                + " ownershipRecords="
+                + io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityOwnershipCensus.recordCalls()
                 + " " + EntityTickOwnership.planDiagnostic());
         }
         EntityTickOwnership.shutdown();
