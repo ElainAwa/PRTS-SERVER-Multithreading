@@ -121,6 +121,10 @@ public final class TickState {
     public boolean radiusStepped;
     /** Whether the tick changed the wait flag, so the commit repeats the data write. */
     public boolean waitingChanged;
+    /** Test-only model payload; no production model reads it. */
+    public Object modelState;
+    /** Test-only worker answer; the host commit seam may read it once. */
+    public Object modelAnswer;
 
     /** Copies another state over this one; the worker answers on a copy of the captured row. */
     public void copyFrom(TickState other) {
@@ -204,6 +208,8 @@ public final class TickState {
         duration = other.duration;
         radiusStepped = other.radiusStepped;
         waitingChanged = other.waitingChanged;
+        modelState = other.modelState;
+        modelAnswer = other.modelAnswer;
     }
 
     /** Clears every field, so a reused row cannot carry the answer of another row. */
@@ -288,5 +294,7 @@ public final class TickState {
         duration = 0;
         radiusStepped = false;
         waitingChanged = false;
+        modelState = null;
+        modelAnswer = null;
     }
 }

@@ -70,12 +70,14 @@ final class OwnershipEligibility {
             return RIDING;
         }
         if (entity instanceof Mob mob && !mob.isNoAi()) {
-            return AI;
+            if (EntityModelRegistry.modelOf(entity) == null) {
+                return AI;
+            }
         }
         if (entity instanceof ItemEntity || entity instanceof Projectile) {
             return CALLBACK;
         }
-        WholeTickModel model = TickModels.of(entity);
+        WholeTickModel model = EntityModelRegistry.modelOf(entity);
         if (model == null) {
             return UNMODELED;
         }

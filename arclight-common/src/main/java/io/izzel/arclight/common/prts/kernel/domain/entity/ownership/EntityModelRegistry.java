@@ -27,7 +27,67 @@ public final class EntityModelRegistry {
         Decision special(Class<?> type, EntityTraitClassifier.Profile profile);
     }
 
+    /** Trait-composite decision provider; no provider is registered in production. */
+    @FunctionalInterface
+    public interface TraitProvider {
+        Decision trait(Class<?> type, EntityTraitClassifier.Profile profile);
+    }
+
+    /** Trait-composite model provider; the ownership path asks this for a model to claim. */
+    @FunctionalInterface
+    public interface TraitModelProvider {
+        WholeTickModel model(Class<?> type, EntityTraitClassifier.Profile profile);
+    }
+
+    private static volatile TraitProvider traitProvider;
+    private static volatile TraitModelProvider traitModelProvider;
+
     private EntityModelRegistry() {
+    }
+
+    /** Test-only installation; production never installs a provider in this batch. */
+    public static void installTraitProviderForTests(TraitProvider provider) {
+        traitProvider = provider;
+    }
+
+    public static void clearTraitProviderForTests() {
+        traitProvider = null;
+        traitModelProvider = null;
+    }
+
+    /** Test-only model provider installation; production never installs one. */
+    public static void installTraitModelProviderForTests(TraitModelProvider provider) {
+        traitModelProvider = provider;
+    }
+
+    public static void clearTraitModelProviderForTests() {
+        traitModelProvider = null;
+    }
+
+    /** Class-level model resolution for tests; uses the same trait provider shape. */
+    public static WholeTickModel modelOf(Class<?> type, EntityTraitClassifier.Facts facts, String modId,
+                                         TraitModelProvider provider) {
+        if (provider == null) {
+            return null;
+        }
+        return provider.model(type, EntityTraitClassifier.classify(type, facts, modId));
+    }
+
+    /** The model the ownership path may claim for this row; null leaves it to C1. */
+    public static WholeTickModel modelOf(Entity entity) {
+        WholeTickModel special = TickModels.of(entity);
+        if (special != null) {
+            return special;
+        }
+        TraitModelProvider provider = traitModelProvider;
+        if (provider != null) {
+            try {
+                return provider.model(entity.getClass(), EntityTraitClassifier.classify(entity));
+            } catch (Throwable ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     /** Production decision; existing five special models keep priority, everything else is C1. */
@@ -38,6 +98,13 @@ public final class EntityModelRegistry {
             return new Decision(Kind.SPECIAL_TYPE, model.name(), profile.traits(), "special_model");
         }
         EntityTraitClassifier.Profile profile = EntityTraitClassifier.classify(entity);
+        TraitProvider provider = traitProvider;
+        if (provider != null) {
+            Decision chosen = provider.trait(entity.getClass(), profile);
+            if (chosen != null) {
+                return chosen;
+            }
+        }
         return new Decision(Kind.C1_FALLBACK, null, profile.traits(), "no_trait_model");
     }
 
@@ -48,6 +115,23 @@ public final class EntityModelRegistry {
         Decision chosen = special == null ? null : special.special(type, profile);
         if (chosen != null) {
             return chosen;
+        }
+        return new Decision(Kind.C1_FALLBACK, null, profile.traits(), "no_trait_model");
+    }
+
+    /** Class-level decision with both test seams; no production provider is installed here. */
+    public static Decision decide(Class<?> type, EntityTraitClassifier.Facts facts, String modId,
+                                  SpecialLookup special, TraitProvider trait) {
+        EntityTraitClassifier.Profile profile = EntityTraitClassifier.classify(type, facts, modId);
+        Decision chosen = special == null ? null : special.special(type, profile);
+        if (chosen != null) {
+            return chosen;
+        }
+        if (trait != null) {
+            chosen = trait.trait(type, profile);
+            if (chosen != null) {
+                return chosen;
+            }
         }
         return new Decision(Kind.C1_FALLBACK, null, profile.traits(), "no_trait_model");
     }

@@ -420,7 +420,7 @@ public final class EntityTickOwnership {
                 observe(segment, entityId, entityEpoch, reason);
                 continue;
             }
-            WholeTickModel model = TickModels.of(entity);
+            WholeTickModel model = EntityModelRegistry.modelOf(entity);
             if (model == null || lease.rows() >= MAX_ROWS || lease.indexOf(entityId) >= 0) {
                 C1Census.hostRun(entity, System.nanoTime() - rowStartedAt);
                 observe(segment, entityId, entityEpoch, OwnershipEligibility.MODEL);
