@@ -66,6 +66,17 @@ public final class TickModels {
         return slot == OUTSIDE ? null : ALL.get(slot);
     }
 
+    /** Trait-composite lookup by assignability; special exact slotOf keeps its priority. */
+    public static WholeTickModel modelForClass(Class<?> type) {
+        for (int slot = 0; slot < SLOTS; slot++) {
+            Class<?> modeled = classOf(slot);
+            if (modeled != null && modeled.isAssignableFrom(type)) {
+                return ALL.get(slot);
+            }
+        }
+        return null;
+    }
+
     /** The name of one slot, for the evidence line of the census. */
     public static String nameOf(int slot) {
         return slot >= 0 && slot < ALL.size() ? ALL.get(slot).name() : "outside";

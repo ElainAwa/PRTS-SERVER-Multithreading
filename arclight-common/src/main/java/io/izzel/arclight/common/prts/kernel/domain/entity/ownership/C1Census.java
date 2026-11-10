@@ -88,6 +88,29 @@ public final class C1Census {
         counters.hostNanos += Math.max(0L, hostNanos);
     }
 
+    /** One immutable snapshot of the census; used by the test/evidence harness. */
+    public record Row(String key, long observed, long claimed, long refused, long fallback,
+                      long hostRuns, long hostNanos) {
+    }
+
+    public record Snapshot(long observed, long claimed, long refused, long fallback, long hostRuns,
+                           long hostNanos, long unaccounted, long c0, long other, java.util.List<Row> rows) {
+    }
+
+    public static Snapshot snapshot() {
+        long observed = 0L, claimed = 0L, refused = 0L, fallback = 0L, hostRuns = 0L, hostNanos = 0L;
+        java.util.List<Row> rows = new java.util.ArrayList<>();
+        for (Map.Entry<String, Counters> entry : BY_KEY.entrySet()) {
+            Counters c = entry.getValue();
+            observed += c.observed; claimed += c.claimed; refused += c.refused;
+            fallback += c.fallback; hostRuns += c.hostRuns; hostNanos += c.hostNanos;
+            rows.add(new Row(entry.getKey(), c.observed, c.claimed, c.refused, c.fallback,
+                c.hostRuns, c.hostNanos));
+        }
+        return new Snapshot(observed, claimed, refused, fallback, hostRuns, hostNanos,
+            Math.max(0L, observed - claimed - refused), c0Rows, otherRows, java.util.List.copyOf(rows));
+    }
+
     /** One evidence line; no formal reading key is added to DomainReadings. */
     public static String evidenceLine() {
         StringBuilder builder = new StringBuilder("[PRTS] entity-c1:");
