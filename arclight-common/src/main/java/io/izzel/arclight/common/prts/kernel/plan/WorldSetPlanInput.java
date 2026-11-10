@@ -22,15 +22,18 @@ public record WorldSetPlanInput(List<String> worldIds, long generation) {
         return new WorldSetPlanInput(worldIds, generation);
     }
 
+    /** True when the two inputs carry the same world ids. */
     public boolean sameWorlds(WorldSetPlanInput other) {
         return other != null && worldIds.equals(other.worldIds);
     }
 
+    /** True when ids or generation changed against the previous input. */
     public boolean invalidates(WorldSetPlanInput previous) {
         return previous == null || generation != previous.generation
             || !worldIds.equals(previous.worldIds);
     }
 
+    /** Returns the same ids at the next generation. */
     public WorldSetPlanInput nextGeneration() {
         return new WorldSetPlanInput(worldIds, generation + 1L);
     }

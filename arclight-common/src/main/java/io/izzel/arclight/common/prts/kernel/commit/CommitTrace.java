@@ -39,12 +39,15 @@ public final class CommitTrace {
         return true;
     }
 
+    /** True when all three retained sets stay inside their capacities. */
     public synchronized boolean selfCheck() {
         return plans.size() <= planCapacity && seats.size() <= seatCapacity
             && worlds.size() <= worldCapacity;
     }
 
+    /** Number of seats accepted into the trace. */
     public synchronized long recorded() { return recorded; }
+    /** Number of seats refused after a capacity was exceeded. */
     public synchronized long dropped() { return dropped; }
     public synchronized Set<String> worlds() { return Set.copyOf(worlds); }
     public synchronized int planCapacity() { return planCapacity; }

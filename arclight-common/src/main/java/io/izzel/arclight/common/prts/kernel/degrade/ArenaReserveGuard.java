@@ -9,6 +9,7 @@ import io.izzel.arclight.common.prts.kernel.shares.ShareTable;
  * overdrawing. */
 public final class ArenaReserveGuard {
 
+    /** Draws the reserve; an insufficient reserve enters B5 and returns false. */
     public boolean consume(SharePlanner planner, DegradeLadder ladder,
                            ShareTable.ReservePurpose purpose, double millis, long tick) {
         if (planner == null || ladder == null || purpose == null || !ladder.actionsEnabled()) {
