@@ -25,13 +25,15 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class PrtsOutboundAcceptanceMixin {
 
     @WrapOperation(method = "doSendPacket",
-        at = @At(value = "INVOKE", target = "Lio/netty/channel/Channel;write(Ljava/lang/Object;)Lio/netty/channel/ChannelFuture;"))
+        at = @At(value = "INVOKE", target =
+            "Lio/netty/channel/Channel;write(Ljava/lang/Object;)Lio/netty/channel/ChannelFuture;"))
     private ChannelFuture prts$write(Channel instance, Object message, Operation<ChannelFuture> original) {
         return prts$accept(instance, message, false, original);
     }
 
     @WrapOperation(method = "doSendPacket",
-        at = @At(value = "INVOKE", target = "Lio/netty/channel/Channel;writeAndFlush(Ljava/lang/Object;)Lio/netty/channel/ChannelFuture;"))
+        at = @At(value = "INVOKE", target =
+            "Lio/netty/channel/Channel;writeAndFlush(Ljava/lang/Object;)Lio/netty/channel/ChannelFuture;"))
     private ChannelFuture prts$writeAndFlush(Channel instance, Object message, Operation<ChannelFuture> original) {
         return prts$accept(instance, message, true, original);
     }

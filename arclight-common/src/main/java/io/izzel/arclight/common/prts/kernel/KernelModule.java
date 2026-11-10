@@ -613,6 +613,7 @@ public final class KernelModule {
         if (!started) {
             started = true;
             windowStartTick = tickIndex;
+            AiHostInstall.noteServer(liveServer);
         }
         commitSegment.bindOwnerThread(Thread.currentThread());
         if (!guard.serverThreadBound()) {
@@ -662,6 +663,8 @@ public final class KernelModule {
             // a tick lands before the next plan can report a line.
             notePlanBoundary();
             freezePlan(worldIds);
+        } else {
+            AiDiagnostics.freezeSkipped("tick_plan_off");
         }
         if (KernelSettings.dualExits()) {
             exits.noteTick(exitSample(), List.of());
@@ -767,6 +770,7 @@ public final class KernelModule {
     }
 
     public void noteTickSource(net.minecraft.server.MinecraftServer server) {
+        AiHostInstall.noteServer(server);
         liveServer = server;
         LiveLevels.refresh(server);
         saveIdentity.source(server);
@@ -1162,6 +1166,7 @@ public final class KernelModule {
         // The demands of this freeze are read once, before the plan is built, and the declarations of
         // that one window are handed to the same intake the plan takes from below: a capture the
         // window handed over declares the node its candidate is matched at, and no other key is made.
+        AiPlanFreezeHook.freeze(jobIntake, worlds, planSequence);
         List<DemandShadowCandidates.Shadow> window = demandShadows.readFor(
             new DemandShadowCandidates.Freeze(planSequence, worldGeneration,
                 new FrozenDeclarations.FreezeKey(declarationLifecycleKey(), declarationGeneration)
@@ -1225,6 +1230,7 @@ public final class KernelModule {
             // the interval authorizes nothing because the pair is told apart by the plan sequence.
             sealDeclarations(result.plan());
             plans.publish(result.plan());
+            AiLiveCommitHook.afterFreeze(plans, commits, intents, plans.lifecycle());
             grantVersionSlots(result.plan());
             ownerGrants.apply(result.plan().graph(), tickIndex);
             if (claimsEnabled()) {
@@ -1900,6 +1906,7 @@ public final class KernelModule {
     }
 
     private void shutdownDomains() {
+        AiHostInstall.stop();
         for (KernelDomain domain : domains) {
             domain.shutdown();
         }

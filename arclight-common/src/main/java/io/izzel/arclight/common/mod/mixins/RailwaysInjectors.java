@@ -23,16 +23,33 @@ public final class RailwaysInjectors {
     public static final String ABSTRACT_BOGEY = "com.simibubi.create.content.trains.bogey.AbstractBogeyBlock";
     public static final String TRACK_BLOCK = "com.simibubi.create.content.trains.track.TrackBlock";
     public static final String GLOBAL_STATION = "com.simibubi.create.content.trains.station.GlobalStation";
-    public static final String CARRIAGE_CONTRAPTION_ENTITY = "com.simibubi.create.content.trains.entity.CarriageContraptionEntity";
+    public static final String CARRIAGE_CONTRAPTION_ENTITY =
+        "com.simibubi.create.content.trains.entity.CarriageContraptionEntity";
     public static final String STATION_BLOCK = "com.simibubi.create.content.trains.station.StationBlock";
     private static final String BHR = "Lnet/minecraft/world/phys/BlockHitResult;";
-    private static final String OLD_USE_DESC = "(Lnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/world/level/Level;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/entity/player/Player;Lnet/minecraft/world/InteractionHand;" + BHR + ")Lnet/minecraft/world/InteractionResult;";
-    private static final String NEW_USE_DESC = "(Lnet/minecraft/world/item/ItemStack;Lnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/world/level/Level;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/entity/player/Player;Lnet/minecraft/world/InteractionHand;" + BHR + ")Lnet/minecraft/world/ItemInteractionResult;";
-    private static final String OLD_READ_DESC = "(Lnet/minecraft/nbt/CompoundTag;ZLcom/simibubi/create/content/trains/graph/DimensionPalette;)V";
-    private static final String NEW_READ_DESC = "(Lnet/minecraft/nbt/CompoundTag;Lnet/minecraft/core/HolderLookup$Provider;ZLcom/simibubi/create/content/trains/graph/DimensionPalette;)V";
-    private static final String OLD_WRITE_DESC = "(Lnet/minecraft/nbt/CompoundTag;Lcom/simibubi/create/content/trains/graph/DimensionPalette;)V";
-    private static final String NEW_WRITE_DESC = "(Lnet/minecraft/nbt/CompoundTag;Lnet/minecraft/core/HolderLookup$Provider;Lcom/simibubi/create/content/trains/graph/DimensionPalette;)V";
-    private static final String USE_WITHOUT_ITEM_DESC = "(Lnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/world/level/Level;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/entity/player/Player;Lnet/minecraft/world/phys/BlockHitResult;)Lnet/minecraft/world/InteractionResult;";
+    private static final String OLD_USE_DESC =
+        "(Lnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/world/level/Level;"
+            + "Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/entity/player/Player;"
+            + "Lnet/minecraft/world/InteractionHand;" + BHR + ")Lnet/minecraft/world/InteractionResult;";
+    private static final String NEW_USE_DESC =
+        "(Lnet/minecraft/world/item/ItemStack;Lnet/minecraft/world/level/block/state/BlockState;"
+            + "Lnet/minecraft/world/level/Level;Lnet/minecraft/core/BlockPos;"
+            + "Lnet/minecraft/world/entity/player/Player;Lnet/minecraft/world/InteractionHand;"
+            + BHR + ")Lnet/minecraft/world/ItemInteractionResult;";
+    private static final String OLD_READ_DESC =
+        "(Lnet/minecraft/nbt/CompoundTag;ZLcom/simibubi/create/content/trains/graph/DimensionPalette;)V";
+    private static final String NEW_READ_DESC =
+        "(Lnet/minecraft/nbt/CompoundTag;Lnet/minecraft/core/HolderLookup$Provider;"
+            + "ZLcom/simibubi/create/content/trains/graph/DimensionPalette;)V";
+    private static final String OLD_WRITE_DESC =
+        "(Lnet/minecraft/nbt/CompoundTag;Lcom/simibubi/create/content/trains/graph/DimensionPalette;)V";
+    private static final String NEW_WRITE_DESC =
+        "(Lnet/minecraft/nbt/CompoundTag;Lnet/minecraft/core/HolderLookup$Provider;"
+            + "Lcom/simibubi/create/content/trains/graph/DimensionPalette;)V";
+    private static final String USE_WITHOUT_ITEM_DESC =
+        "(Lnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/world/level/Level;"
+            + "Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/entity/player/Player;"
+            + "Lnet/minecraft/world/phys/BlockHitResult;)Lnet/minecraft/world/InteractionResult;";
 
     private RailwaysInjectors() {
     }
@@ -147,7 +164,8 @@ public final class RailwaysInjectors {
         if (node == null) {
             return false;
         }
-        String desc = "(Lnet/minecraft/core/BlockPos;Ljava/util/Collection;Lnet/minecraft/world/entity/player/Player;)Z";
+        String desc =
+            "(Lnet/minecraft/core/BlockPos;Ljava/util/Collection;Lnet/minecraft/world/entity/player/Player;)Z";
         MethodNode control = method(node, "control", desc);
         if (control == null) {
             return false;

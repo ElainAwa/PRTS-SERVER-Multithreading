@@ -15,7 +15,9 @@ public abstract class CreeperSixArgNoOpMixin {
 
     @Redirect(method = "explodeCreeper",
         at = @At(value = "INVOKE",
-            target = "Lnet/minecraft/world/level/Level;explode(Lnet/minecraft/world/entity/Entity;DDDFLnet/minecraft/world/level/Level$ExplosionInteraction;)Lnet/minecraft/world/level/Explosion;"))
+            target = "Lnet/minecraft/world/level/Level;explode(Lnet/minecraft/world/entity/Entity;"
+                + "DDDFLnet/minecraft/world/level/Level$ExplosionInteraction;)"
+                + "Lnet/minecraft/world/level/Explosion;"))
     private Explosion arclight$noOpSixArgumentExplode(Level instance, Entity source, double x, double y,
                                                       double z, float radius,
                                                       Level.ExplosionInteraction interaction) {

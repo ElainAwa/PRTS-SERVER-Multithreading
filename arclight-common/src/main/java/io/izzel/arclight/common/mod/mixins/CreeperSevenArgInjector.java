@@ -18,8 +18,12 @@ public final class CreeperSevenArgInjector {
     private static final String ENTITY = "net/minecraft/world/entity/Entity";
     private static final String CREEPER = "net/minecraft/world/entity/monster/Creeper";
     private static final String BRIDGE = "io/izzel/arclight/common/bridge/core/world/entity/monster/CreeperBridge";
-    private static final String SIX = "(Lnet/minecraft/world/entity/Entity;DDDFLnet/minecraft/world/level/Level$ExplosionInteraction;)Lnet/minecraft/world/level/Explosion;";
-    private static final String SEVEN = "(Lnet/minecraft/world/entity/Entity;DDDFZLnet/minecraft/world/level/Level$ExplosionInteraction;)Lnet/minecraft/world/level/Explosion;";
+    private static final String SIX =
+        "(Lnet/minecraft/world/entity/Entity;DDDFLnet/minecraft/world/level/"
+            + "Level$ExplosionInteraction;)Lnet/minecraft/world/level/Explosion;";
+    private static final String SEVEN =
+        "(Lnet/minecraft/world/entity/Entity;DDDFZLnet/minecraft/world/level/"
+            + "Level$ExplosionInteraction;)Lnet/minecraft/world/level/Explosion;";
 
     private CreeperSevenArgInjector() {
     }
