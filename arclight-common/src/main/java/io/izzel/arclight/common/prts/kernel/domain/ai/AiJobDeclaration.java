@@ -15,6 +15,11 @@ public final class AiJobDeclaration {
     }
 
     public static JobDeclaration of(String worldId, String actorKey, int batchBound) {
+        return of(worldId, actorKey, batchBound, 1L);
+    }
+
+    /** The same declaration with an explicit handle, for a multi-actor batch graph. */
+    public static JobDeclaration of(String worldId, String actorKey, int batchBound, long handle) {
         if (worldId == null || actorKey == null) {
             throw new IllegalArgumentException("AI job needs world and actor");
         }
@@ -22,7 +27,7 @@ public final class AiJobDeclaration {
         JobDeclaration.DomainRef write = new JobDeclaration.DomainRef(worldId, "ai", 0);
         JobDeclaration.OwnerDemand demand = new JobDeclaration.OwnerDemand(worldId, WriteLevel.REGION,
             "ai", HolderKind.REGISTERED, "ai.owner", 1);
-        return new JobDeclaration("ai/" + actorKey, 1L, worldId, "ai", 0, List.of(), 0,
+        return new JobDeclaration("ai/" + actorKey, handle, worldId, "ai", 0, List.of(), 0,
             "ai", "ai", List.of(read), List.of(write), ShareClass.AI,
             JobDeclaration.SiteClass.PARALLEL, 0, batchBound, List.of(demand), null);
     }

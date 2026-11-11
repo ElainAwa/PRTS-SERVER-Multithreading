@@ -68,35 +68,50 @@ final class AiHostInstall {
             List<Villager> list = new ArrayList<>();
             MinecraftServer current = server;
             if (current == null) return list;
+            int limit = AiScaleConfig.actors();
             for (ServerLevel candidate : current.getAllLevels()) {
                 if (candidate == null) continue;
-                AABB box = new AABB(candidate.getSharedSpawnPos()).inflate(64.0);
-                list.addAll(candidate.getEntitiesOfClass(Villager.class, box,
-                    entity -> entity != null && entity.isAlive()));
-                if (list.size() >= 8) break;
+                for (net.minecraft.world.entity.Entity entity : candidate.getEntities().getAll()) {
+                    if (entity instanceof Villager villager && villager.isAlive()) {
+                        list.add(villager);
+                        if (list.size() >= limit) break;
+                    }
+                }
+                if (list.size() >= limit) break;
             }
-            return list.size() > 8 ? list.subList(0, 8) : list;
+            return list.size() > limit ? list.subList(0, limit) : list;
         };
         AiLiveProducer.install(captureLevel, actors, 1L, 1L);
         aiLedger = new ArenaLedger();
         aiSlot = aiLedger.claim(1L, "w", "ai", 1, 32);
-        aiPool = WorkerPool.open(new WorkerPool.Spec(2, "ai-worker-", Thread.NORM_PRIORITY, 8, 4),
+        aiPool = WorkerPool.open(new WorkerPool.Spec(AiScaleConfig.workers(), "ai-worker-",
+            Thread.NORM_PRIORITY, Math.max(8, AiScaleConfig.batch() * 2), 4),
             1, new DispatchReadings(), aiLedger);
         aiExecutor = new GenericJobExecutor(aiPool, new JobExecutionContext(Set.of("ai"),
             Set.of("ai"), Set.of("ai"), 1L, 100.0));
         AiDiagnostics.installSuccess();
         AiLiveCommitHook.setHook((plans, commits, intents, lifecycle) -> {
+            long captureStarted = System.nanoTime();
             List<Villager> current = actors.get();
             if (current == null || current.isEmpty() || plans == null || plans.latest() == null) return;
             AiArenaPayload.Snapshot captured = ServerLevelAiHostCapture.capture(captureLevel, current,
                 lifecycle, 1L, lifecycle);
+            long captureNanos = System.nanoTime() - captureStarted;
+            long workerStarted = System.nanoTime();
             List<Long> visible = captured.rows().stream()
                 .filter(row -> (row.kind() == AiArenaPayload.Kind.TARGET
                     || row.kind() == AiArenaPayload.Kind.NEIGHBOUR) && row.visible())
                 .map(AiArenaPayload.Row::entityId).distinct().toList();
+            for (int from = 0; from < current.size(); from += AiScaleConfig.batch()) {
+                int to = Math.min(current.size(), from + AiScaleConfig.batch());
+                runWorkerBatch(current.subList(from, to), lifecycle);
+            }
+            long workerNanos = System.nanoTime() - workerStarted;
+            long commitStarted = System.nanoTime();
+            int commitBudget = AiScaleConfig.commitBatch();
+            int committedThisFreeze = 0;
             for (Villager actor : current) {
                 if (actor == null || !actor.isAlive()) continue;
-                runWorker(actor, lifecycle);
                 AiDiagnostics.hookCandidate();
                 LivingEntity target = candidateOf(actor);
                 long targetId;
@@ -111,6 +126,11 @@ final class AiHostInstall {
                     AiDiagnostics.candidateSkip("no_visible_target", actor.getType().toString());
                     continue;
                 }
+                if (committedThisFreeze >= commitBudget) {
+                    AiDiagnostics.commitDeferred();
+                    continue;
+                }
+                committedThisFreeze++;
                 AiDiagnostics.commitAttempt();
                 long version = lifecycle <= 0L ? 1L : lifecycle;
                 AiOwnerCommit owner = new AiOwnerCommit(version);
@@ -122,39 +142,42 @@ final class AiHostInstall {
                     AiDiagnostics.commitFallback();
                 }
             }
+            AiDiagnostics.timing(captureNanos, workerNanos, System.nanoTime() - commitStarted,
+                current.size());
         });
         installed = true;
     }
 
     private static LivingEntity candidateOf(Villager actor) {
         LivingEntity current = actor.getTarget();
-        if (current != null && current.isAlive()) return current;
-        net.minecraft.world.phys.AABB box = actor.getBoundingBox().inflate(16.0, 8.0, 16.0);
-        return actor.level().getEntitiesOfClass(LivingEntity.class, box,
-                entity -> entity != actor && entity.isAlive()
-                    && (entity instanceof Monster || entity instanceof Player)
-                    && actor.hasLineOfSight(entity))
-            .stream()
-            .min(Comparator.comparingDouble(entity -> entity.distanceToSqr(actor)))
-            .orElse(null);
+        return current != null && current.isAlive() ? current : null;
     }
 
-    private static void runWorker(Villager actor, long lifecycle) {
-        if (aiExecutor == null || aiSlot == null) return;
+    private static void runWorkerBatch(List<Villager> actors, long lifecycle) {
+        if (aiExecutor == null || aiSlot == null || actors.isEmpty()) return;
         try {
-            JobDeclaration declaration = AiJobDeclaration.of("w", "actor-" + actor.getId(), 1);
-            var freeze = AiJobGraph.freeze(java.util.List.of(declaration), lifecycle,
-                lifecycle, lifecycle, 2);
-            if (!freeze.ok()) return;
+            List<JobDeclaration> declarations = new ArrayList<>();
+            Map<String, Runnable> bodies = new java.util.LinkedHashMap<>();
             var arena = aiSlot.lease(lifecycle <= 0L ? 1L : lifecycle);
-            var handles = aiExecutor.execute(freeze.graph(), Map.of(declaration.key(), () -> {
-                try {
-                    new AiWorkBody().run(null, arena.scratch(), new CancelToken(lifecycle));
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
-            }));
-            for (var handle : handles) handle.await(2, TimeUnit.SECONDS);
+            long handle = 1L;
+            for (Villager actor : actors) {
+                if (actor == null) continue;
+                JobDeclaration declaration = AiJobDeclaration.of("w", "actor-" + actor.getId(), 1, handle++);
+                declarations.add(declaration);
+                bodies.put(declaration.key(), () -> {
+                    try {
+                        new AiWorkBody().run(null, arena.scratch(), new CancelToken(lifecycle));
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+            }
+            if (declarations.isEmpty()) return;
+            var freeze = AiJobGraph.freeze(declarations, lifecycle, lifecycle, lifecycle,
+                Math.max(2, declarations.size()));
+            if (!freeze.ok()) return;
+            var handles = aiExecutor.execute(freeze.graph(), bodies);
+            for (var result : handles) result.await(5, TimeUnit.SECONDS);
         } catch (Throwable ignored) {
         }
     }

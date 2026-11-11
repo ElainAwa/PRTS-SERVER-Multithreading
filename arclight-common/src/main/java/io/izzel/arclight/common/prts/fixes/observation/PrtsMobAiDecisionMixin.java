@@ -8,6 +8,7 @@ import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import io.izzel.arclight.api.ArclightPlatform;
 import io.izzel.arclight.common.mod.mixins.annotation.OnlyInPlatform;
+import io.izzel.arclight.common.prts.kernel.AiSensorCounters;
 import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.decision.B1DecisionGate;
@@ -36,6 +37,7 @@ public abstract class PrtsMobAiDecisionMixin {
 
     @Inject(method = "serverAiStep", at = @At("HEAD"))
     private void prts$openAiDecision(CallbackInfo ci) {
+        AiSensorCounters.mobServerAiStep();
         prts$aiStartedAt = System.nanoTime();
     }
 

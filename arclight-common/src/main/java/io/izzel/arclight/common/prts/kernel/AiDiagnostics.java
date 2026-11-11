@@ -21,6 +21,9 @@ final class AiDiagnostics {
     static final LongAdder SKIPPED_NO_TARGET = new LongAdder();
     static final LongAdder CANDIDATE_SKIP = new LongAdder();
     static final LongAdder CANDIDATE_ACCEPT = new LongAdder();
+    static final LongAdder COMMIT_DEFERRED = new LongAdder();
+    static final LongAdder CAPTURE_SHARDS = new LongAdder();
+    private static final java.util.concurrent.atomic.AtomicLong FREEZES = new java.util.concurrent.atomic.AtomicLong();
     private static final AtomicInteger CANDIDATE_SKIP_LOGS = new AtomicInteger();
     private static final AtomicInteger COMMIT_BRANCH_LOGS = new AtomicInteger();
     private static final AtomicBoolean SKIP_TICK_PLAN_LOGGED = new AtomicBoolean();
@@ -40,6 +43,18 @@ final class AiDiagnostics {
     static void commitAttempt() { add(COMMIT_ATTEMPT, "commit_attempt"); }
     static void commitSuccess() { add(COMMIT_SUCCESS, "commit_success"); }
     static void commitFallback() { add(COMMIT_FALLBACK, "commit_fallback"); }
+    static void commitDeferred() { add(COMMIT_DEFERRED, "commit_deferred"); }
+    static void captureShard() { add(CAPTURE_SHARDS, "capture_shards"); }
+
+    static void timing(long captureNanos, long workerNanos, long commitNanos, int actors) {
+        long count = FREEZES.incrementAndGet();
+        if (enabled() && count % 100L == 0L) {
+            System.out.println("[PRTS] ai-diag ai_timing freezes=" + count
+                + " actors=" + actors + " capture_ms=" + (captureNanos / 1_000_000L)
+                + " worker_ms=" + (workerNanos / 1_000_000L)
+                + " commit_ms=" + (commitNanos / 1_000_000L));
+        }
+    }
     static void hookCandidate() { add(HOOK_CANDIDATES, "hook_candidates"); }
     static void skippedNoTarget() { add(SKIPPED_NO_TARGET, "skipped_no_target"); }
 
@@ -91,6 +106,7 @@ final class AiDiagnostics {
         AI_NODES.reset(); COMMIT_ATTEMPT.reset(); COMMIT_SUCCESS.reset();
         COMMIT_FALLBACK.reset(); HOOK_CANDIDATES.reset(); SKIPPED_NO_TARGET.reset();
         CANDIDATE_SKIP.reset(); CANDIDATE_ACCEPT.reset(); CANDIDATE_SKIP_LOGS.set(0);
+        COMMIT_DEFERRED.reset(); CAPTURE_SHARDS.reset(); FREEZES.set(0);
         COMMIT_BRANCH_LOGS.set(0);
         SKIP_TICK_PLAN_LOGGED.set(false); SKIP_NO_PRODUCER_LOGGED.set(false);
     }
