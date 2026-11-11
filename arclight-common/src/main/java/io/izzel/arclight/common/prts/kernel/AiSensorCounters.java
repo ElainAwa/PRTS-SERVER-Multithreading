@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel;
 
-import AtomicLong;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
 /** Internal counters for the single-method sensor carrier; no formal readout key is published. */
