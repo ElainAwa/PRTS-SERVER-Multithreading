@@ -5,12 +5,14 @@ import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
 import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicInteger;
 
-/** Domain-neutral executor: one body per JobGraph node, supplied by the owner of that domain. */
+/** Domain-neutral executor: one body per JobGraph node, supplied by the owner of that domain. A
+ * node is submitted only after all of its true predecessors reached their terminal point. */
 public final class GenericJobExecutor {
 
     private final WorkerPool pool;
@@ -31,59 +33,117 @@ public final class GenericJobExecutor {
         this.metering = metering;
     }
 
-    public List<WorkerPool.GenericHandle> execute(JobGraph graph, Map<String, Runnable> bodies) {
-        List<WorkerPool.GenericHandle> handles = new ArrayList<>();
-        java.util.Map<Long, JobGraph.Node> byId = new java.util.HashMap<>();
-        for (JobGraph.Node node : graph.nodes()) byId.put(node.nodeId(), node);
-        List<JobGraph.Node> ordered = new ArrayList<>();
-        for (long nodeId : graph.order()) {
-            JobGraph.Node node = byId.get(nodeId);
-            if (node != null) ordered.add(node);
+    /** One accepted graph execution: all node handles, including nodes not submitted yet. */
+    public record Execution(ExecutionCohort cohort, List<WorkerPool.GenericHandle> handles) {
+        public Execution {
+            handles = List.copyOf(handles);
         }
-        if (ordered.isEmpty()) ordered.addAll(graph.nodes());
+    }
+
+    /** Compatibility entry point: returns the handles of the accepted cohort. */
+    public List<WorkerPool.GenericHandle> execute(JobGraph graph, Map<String, Runnable> bodies) {
+        return executeCohort(graph, bodies).handles();
+    }
+
+    /**
+     * Starts one graph execution and returns its cohort immediately. Roots are submitted here;
+     * successors are submitted by their last completed predecessor, never by the caller thread.
+     */
+    public Execution executeCohort(JobGraph graph, Map<String, Runnable> bodies) {
+        if (graph == null) throw new IllegalArgumentException("graph");
+        if (bodies == null) throw new IllegalArgumentException("bodies");
+        for (JobGraph.Node node : graph.nodes()) {
+            if (!bodies.containsKey(node.key())) {
+                throw new RejectedExecutionException("no body for job " + node.key());
+            }
+            if (context != null) validate(node);
+        }
         if (context != null && context.exhausted()) {
             throw new RejectedExecutionException("share budget exhausted");
         }
-        for (JobGraph.Node node : ordered) {
-            Runnable body = bodies.get(node.key());
-            if (body == null) {
-                throw new RejectedExecutionException("no body for job " + node.key());
-            }
-            if (context != null) {
-                validate(node);
-            }
-            WorkerPool.GenericHandle handle = pool.submitGeneric(token -> {
-                long started = System.nanoTime();
-                try {
-                    body.run();
-                } finally {
-                    double millis = (System.nanoTime() - started) / 1_000_000.0;
-                    if (context != null && !context.charge(millis)) {
-                        throw new RejectedExecutionException("share budget exhausted");
-                    }
-                    if (metering != null) {
-                        metering.charge(node.worldId(), node.domainId(), millis);
-                    }
-                }
-            }, new NodeCancel(node.nodeId()));
-            if (handle == null) {
-                throw new RejectedExecutionException("pool refused job " + node.key());
-            }
-            handles.add(handle);
+        ExecutionCohort cohort = new ExecutionCohort(graph);
+        Map<String, AtomicInteger> remaining = new ConcurrentHashMap<>();
+        for (JobGraph.Node node : graph.nodes()) {
+            remaining.put(node.key(), new AtomicInteger(node.predecessors().size()));
         }
-        return handles;
+        Map<String, Runnable> bodyView = Map.copyOf(bodies);
+        for (JobGraph.Node node : graph.nodes()) {
+            cohort.handle(node.key()).future().whenComplete((ignored, error) ->
+                completed(cohort, remaining, node.key(), error, bodyView));
+        }
+        for (long nodeId : graph.ready()) {
+            JobGraph.Node node = graph.node(nodeId);
+            if (node != null) submit(cohort, remaining, node.key(), bodyView);
+        }
+        return new Execution(cohort, cohort.handles());
     }
 
-    private static final class NodeCancel implements GenericCancel {
-        private final java.util.concurrent.atomic.AtomicBoolean cancelled =
-            new java.util.concurrent.atomic.AtomicBoolean();
-
-        private NodeCancel(long nodeId) {
+    private void completed(ExecutionCohort cohort, Map<String, AtomicInteger> remaining, String key,
+                           Throwable error, Map<String, Runnable> bodies) {
+        JobGraph.Node node = cohort.graph().nodeByKey(key);
+        if (node == null) return;
+        if (error != null) {
+            for (Long successor : node.successors()) {
+                JobGraph.Node next = cohort.graph().node(successor);
+                if (next != null) cohort.cancel(next.key());
+            }
+            return;
         }
+        for (Long successor : node.successors()) {
+            JobGraph.Node next = cohort.graph().node(successor);
+            if (next == null) continue;
+            AtomicInteger count = remaining.get(next.key());
+            if (count != null && count.decrementAndGet() == 0) {
+                submit(cohort, remaining, next.key(), bodies);
+            }
+        }
+    }
 
-        public boolean cancelled() { return cancelled.get(); }
+    private void submit(ExecutionCohort cohort, Map<String, AtomicInteger> remaining, String key,
+                        Map<String, Runnable> bodies) {
+        JobGraph.Node node = cohort.graph().nodeByKey(key);
+        if (node == null) return;
+        ExecutionCohort.State state = cohort.state(key);
+        if (state != ExecutionCohort.State.PENDING && state != ExecutionCohort.State.READY) return;
+        cohort.markReady(key);
+        Runnable body = bodies.get(key);
+        if (body == null) {
+            cohort.markRejected(key);
+            return;
+        }
+        WorkerPool.GenericHandle handle = pool.submitGeneric(token -> run(cohort, node, body),
+            cohort.token(key));
+        if (handle == null) {
+            cohort.markRejected(key);
+            return;
+        }
+        cohort.markAccepted(key);
+        cohort.registerWorkerHandle(key, handle);
+        cohort.markRunning(key);
+    }
 
-        public boolean cancel() { return cancelled.compareAndSet(false, true); }
+    private void run(ExecutionCohort cohort, JobGraph.Node node, Runnable body) {
+        cohort.markRunning(node.key());
+        long started = System.nanoTime();
+        try {
+            if (cohort.token(node.key()).cancelled()) {
+                cohort.cancel(node.key());
+                return;
+            }
+            body.run();
+            double millis = (System.nanoTime() - started) / 1_000_000.0;
+            if (context != null && !context.charge(millis)) {
+                cohort.markFailedAfterEffect(node.key(),
+                    new RejectedExecutionException("share budget exhausted"));
+                return;
+            }
+            if (metering != null) {
+                metering.charge(node.worldId(), node.domainId(), millis);
+            }
+            cohort.markDone(node.key());
+        } catch (Throwable t) {
+            cohort.markFailed(node.key(), t);
+        }
     }
 
     private void validate(JobGraph.Node node) {
