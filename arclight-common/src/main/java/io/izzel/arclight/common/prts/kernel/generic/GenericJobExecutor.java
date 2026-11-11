@@ -68,8 +68,9 @@ public final class GenericJobExecutor {
         }
         Map<String, Runnable> bodyView = Map.copyOf(bodies);
         for (JobGraph.Node node : graph.nodes()) {
-            cohort.handle(node.key()).future().whenComplete((ignored, error) ->
-                completed(cohort, remaining, node.key(), error, bodyView));
+            cohort.handle(node.key()).future().whenComplete((ignored, error) -> {
+                if (error != null) completed(cohort, remaining, node.key(), bodyView);
+            });
         }
         for (long nodeId : graph.ready()) {
             JobGraph.Node node = graph.node(nodeId);
@@ -79,10 +80,10 @@ public final class GenericJobExecutor {
     }
 
     private void completed(ExecutionCohort cohort, Map<String, AtomicInteger> remaining, String key,
-                           Throwable error, Map<String, Runnable> bodies) {
+                           Map<String, Runnable> bodies) {
         JobGraph.Node node = cohort.graph().nodeByKey(key);
         if (node == null) return;
-        if (error != null) {
+        if (cohort.state(key) != ExecutionCohort.State.DONE) {
             for (Long successor : node.successors()) {
                 JobGraph.Node next = cohort.graph().node(successor);
                 if (next != null) cohort.cancel(next.key());
@@ -112,38 +113,34 @@ public final class GenericJobExecutor {
             return;
         }
         WorkerPool.GenericHandle handle = pool.submitGeneric(token -> run(cohort, node, body),
-            cohort.token(key));
+            cohort.token(key), () -> completed(cohort, remaining, key, bodies));
         if (handle == null) {
             cohort.markRejected(key);
             return;
         }
         cohort.markAccepted(key);
         cohort.registerWorkerHandle(key, handle);
-        cohort.markRunning(key);
     }
 
     private void run(ExecutionCohort cohort, JobGraph.Node node, Runnable body) {
-        cohort.markRunning(node.key());
+        if (!cohort.markStarted(node.key())) return;
         long started = System.nanoTime();
+        Throwable failure = null;
         try {
-            if (cohort.token(node.key()).cancelled()) {
-                cohort.cancel(node.key());
-                return;
-            }
             body.run();
-            double millis = (System.nanoTime() - started) / 1_000_000.0;
-            if (context != null && !context.charge(millis)) {
-                cohort.markFailedAfterEffect(node.key(),
-                    new RejectedExecutionException("share budget exhausted"));
-                return;
-            }
-            if (metering != null) {
-                metering.charge(node.worldId(), node.domainId(), millis);
-            }
-            cohort.markDone(node.key());
         } catch (Throwable t) {
-            cohort.markFailed(node.key(), t);
+            failure = t;
         }
+        double millis = (System.nanoTime() - started) / 1_000_000.0;
+        boolean chargeFailed = false;
+        try {
+            if (context != null) chargeFailed = !context.charge(millis);
+            if (metering != null) metering.charge(node.worldId(), node.domainId(), millis);
+        } catch (Throwable t) {
+            chargeFailed = true;
+            if (failure == null) failure = t;
+        }
+        cohort.markOutcome(node.key(), failure, chargeFailed);
     }
 
     private void validate(JobGraph.Node node) {

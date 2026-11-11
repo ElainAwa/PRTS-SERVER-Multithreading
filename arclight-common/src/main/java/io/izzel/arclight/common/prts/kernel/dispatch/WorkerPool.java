@@ -65,7 +65,8 @@ public final class WorkerPool {
     }
 
     private record Item(WorkBatch batch, CancelToken token, WorkBody body, ArenaSlot slot,
-                        ArenaSlot.Lease lease, WorkerHandle handle, Runnable task) {
+                        ArenaSlot.Lease lease, WorkerHandle handle, Runnable task,
+                        Runnable afterRelease) {
     }
 
     private final Spec spec;
@@ -141,7 +142,7 @@ public final class WorkerPool {
         WorkerHandle handle = new WorkerHandle(batch.batchId(), batch.batchEpoch());
         newestEpoch.accumulateAndGet(batch.batchEpoch(), Math::max);
         tokens.add(token);
-        Item item = new Item(batch, token, body, slot, lease, handle, null);
+        Item item = new Item(batch, token, body, slot, lease, handle, null, null);
         shards.computeIfAbsent(batch.task().worldId(), key -> new LinkedBlockingQueue<>())
             .offer(item);
         readings.noteQueueDepth(inFlight.get());
@@ -176,6 +177,11 @@ public final class WorkerPool {
 
     /** Submits a generic job into the same pool/threads and the same backpressure budget. */
     public GenericHandle submitGeneric(GenericJob job, GenericCancel token) {
+        return submitGeneric(job, token, null);
+    }
+
+    /** Submits one generic job and runs a completion hook after its in-flight slot is released. */
+    public GenericHandle submitGeneric(GenericJob job, GenericCancel token, Runnable afterRelease) {
         if (job == null || token == null || !accepting.get() || active.get() <= 0) {
             return null;
         }
@@ -195,7 +201,7 @@ public final class WorkerPool {
             } finally {
                 tokens.remove(token);
             }
-        }));
+        }, afterRelease));
         readings.noteQueueDepth(inFlight.get());
         signals.release();
         return new GenericHandle(future, token);
@@ -218,7 +224,7 @@ public final class WorkerPool {
             inFlight.decrementAndGet();
             return false;
         }
-        shard.offer(new Item(null, null, null, null, null, null, task));
+        shard.offer(new Item(null, null, null, null, null, null, task, null));
         readings.noteQueueDepth(inFlight.get());
         signals.release();
         return true;
@@ -271,6 +277,13 @@ public final class WorkerPool {
             } finally {
                 inFlight.decrementAndGet();
                 readings.noteQueueDepth(inFlight.get());
+            }
+            if (item.afterRelease() != null) {
+                try {
+                    item.afterRelease().run();
+                } catch (Throwable ignored) {
+                    // A completion hook is not allowed to kill the worker that released the slot.
+                }
             }
             return;
         }
