@@ -13,6 +13,7 @@ import net.minecraft.world.level.ChunkPos;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,7 +42,14 @@ public final class WriteControlledSlots {
         EMPTY_KEY,
         EMPTY_WRITE_SET,
         PLAN_SEQUENCE_INVALID,
-        DUPLICATE_KEY
+        DUPLICATE_KEY,
+        OVERLAP,
+        NOT_QUIESCENT
+    }
+
+    /** The identity of one seated slot generation: a caller that captured a slot keeps it and checks
+     * it before a write, and a transfer or retirement makes the older handle stale. */
+    public record SlotHandle(SlotKey key, long generation) {
     }
 
     /** The granularity a declared range is named at: a section is the 16x16x16 block volume. */
@@ -304,6 +312,11 @@ public final class WriteControlledSlots {
         }
     }
 
+    /** One published seat: the slot and the generation that covers it leave the table's hands in a
+     * single map write, so no reader can see one without the other. */
+    private record Seat(Slot slot, long generation) {
+    }
+
     private static final long FOLD_BASIS = 0xcbf29ce484222325L;
     private static final long FOLD_PRIME = 0x100000001b3L;
     private static final String REASON_UNREADABLE_POSITION = "segment";
@@ -325,10 +338,10 @@ public final class WriteControlledSlots {
     private final WorldEpochs epochs;
     private final Source source;
     private volatile LazySeat lazySeat = (level, domain, position, tick) -> 0;
-    private final Map<SlotKey, Slot> slots = new ConcurrentHashMap<>();
+    private final Map<SlotKey, Seat> seats = new ConcurrentHashMap<>();
+    private final Map<SlotKey, Long> openUses = new ConcurrentHashMap<>();
     private final Set<SlotKey> declarationHeld = ConcurrentHashMap.newKeySet();
     private final Map<SlotKey, OwnerToken> declarationOwners = new ConcurrentHashMap<>();
-    private final Map<SlotKey, Long> generations = new ConcurrentHashMap<>();
     private final AtomicLong registered = new AtomicLong();
     private final AtomicLong renewed = new AtomicLong();
     private final AtomicLong advanced = new AtomicLong();
@@ -341,9 +354,9 @@ public final class WriteControlledSlots {
     private final AtomicLong notExecutable = new AtomicLong();
     private volatile boolean enabled;
     private volatile Decision lastDecision;
-    private volatile WriteRefusal lastRefusal;
+    private final ThreadLocal<WriteRefusal> lastRefusal = new ThreadLocal<>();
     private volatile Slot lastRefusingSlot;
-    private volatile Slot lastCoveredSlot;
+    private final ThreadLocal<Slot> lastCoveredSlot = new ThreadLocal<>();
 
     public WriteControlledSlots(OwnerRegistry owners, WriteVersionSlots versions, WorldEpochs epochs,
                                 Source source) {
@@ -369,7 +382,8 @@ public final class WriteControlledSlots {
     }
 
     /** Declares one slot. A slot that names no usable range, or whose key does not spell the range
-     * it carries, is refused here and not repaired when a write arrives. */
+     * it carries, is refused here and not repaired when a write arrives. A newer generation of a key
+     * replaces the seated one as a transfer, but only while no captured write still holds it. */
     public Refusal register(Slot slot) {
         return registerInternal(slot, false, null);
     }
@@ -385,6 +399,64 @@ public final class WriteControlledSlots {
         return registerInternal(slot, true, declarationOwner);
     }
 
+    /** Registers a batch of manual slots all or none: the keys are visited in the table's own stable
+     * order, and a refusal restores every seat the call changed, so a batch never leaves half of its
+     * ranges seated. */
+    public Refusal registerAll(List<Slot> batch) {
+        if (batch == null || batch.isEmpty()) {
+            return Refusal.NONE;
+        }
+        List<Slot> ordered = new ArrayList<>(batch);
+        ordered.sort(Comparator.comparing(slot ->
+            slot == null || slot.key() == null ? "" : slot.key().rank()));
+        Map<SlotKey, Seat> previousSeats = new LinkedHashMap<>();
+        Map<SlotKey, Boolean> previousHeld = new LinkedHashMap<>();
+        Map<SlotKey, OwnerToken> previousOwners = new LinkedHashMap<>();
+        List<SlotKey> touched = new ArrayList<>();
+        int seated = 0;
+        int renewedNow = 0;
+        for (Slot slot : ordered) {
+            SlotKey key = slot == null ? null : slot.key();
+            if (key != null && !previousSeats.containsKey(key)) {
+                previousSeats.put(key, seats.get(key));
+                previousHeld.put(key, declarationHeld.contains(key));
+                previousOwners.put(key, declarationOwners.get(key));
+                touched.add(key);
+            }
+            boolean wasSeated = key != null && seats.get(key) != null;
+            Refusal refusal = registerInternal(slot, false, null);
+            if (refusal != Refusal.NONE) {
+                for (SlotKey changed : touched) {
+                    Seat old = previousSeats.get(changed);
+                    if (old == null) {
+                        seats.remove(changed);
+                    } else {
+                        seats.put(changed, old);
+                    }
+                    if (previousHeld.get(changed)) {
+                        declarationHeld.add(changed);
+                    } else {
+                        declarationHeld.remove(changed);
+                    }
+                    OwnerToken owner = previousOwners.get(changed);
+                    if (owner == null) {
+                        declarationOwners.remove(changed);
+                    } else {
+                        declarationOwners.put(changed, owner);
+                    }
+                }
+                registered.addAndGet(-(long) seated);
+                renewed.addAndGet(-(long) renewedNow);
+                return refusal;
+            }
+            seated++;
+            if (wasSeated) {
+                renewedNow++;
+            }
+        }
+        return Refusal.NONE;
+    }
+
     private Refusal registerInternal(Slot slot, boolean fromDeclaration, OwnerToken declarationOwner) {
         Refusal refusal = refusalOf(slot);
         if (refusal != Refusal.NONE) {
@@ -392,16 +464,26 @@ public final class WriteControlledSlots {
             return refusal;
         }
         SlotKey key = slot.key();
-        Long seated = generations.get(key);
-        if (seated != null && seated == slot.slotGeneration()) {
-            noteRefusal(Refusal.DUPLICATE_KEY);
-            return Refusal.DUPLICATE_KEY;
+        Seat seated = seats.get(key);
+        if (seated != null && seated.slot() != null) {
+            if (seated.generation() == slot.slotGeneration()) {
+                noteRefusal(Refusal.DUPLICATE_KEY);
+                return Refusal.DUPLICATE_KEY;
+            }
+            // A newer generation replaces the seated one only when no captured write still holds
+            // it: a transfer that overlapped a write would change the right under that write.
+            if (!quiescent(key)) {
+                noteRefusal(Refusal.NOT_QUIESCENT);
+                return Refusal.NOT_QUIESCENT;
+            }
+        }
+        if (overlapsAnotherHolder(slot)) {
+            noteRefusal(Refusal.OVERLAP);
+            return Refusal.OVERLAP;
         }
         if (seated != null) {
             renewed.incrementAndGet();
         }
-        slots.put(key, slot);
-        generations.put(key, slot.slotGeneration());
         if (fromDeclaration) {
             declarationHeld.add(key);
             if (declarationOwner != null) {
@@ -413,6 +495,9 @@ public final class WriteControlledSlots {
             declarationHeld.remove(key);
             declarationOwners.remove(key);
         }
+        // The seat and its declaration face are published only after both are ready; the seat is
+        // the one write a reader of the ranges sees, so it goes last.
+        seats.put(key, new Seat(slot, slot.slotGeneration()));
         registered.incrementAndGet();
         return Refusal.NONE;
     }
@@ -425,18 +510,60 @@ public final class WriteControlledSlots {
 
     /** Retires the slot of one key: the writes it covered fall back to the default path. */
     public boolean retire(SlotKey key) {
-        generations.remove(key);
         declarationHeld.remove(key);
         declarationOwners.remove(key);
-        return slots.remove(key) != null;
+        openUses.remove(key);
+        return seats.remove(key) != null;
     }
 
     /** Retires the generation of one key without seating a new slot: what the seated slot covers is
      * refused from here on. */
     public long advance(SlotKey key) {
-        long minted = generations.merge(key, 1L, Long::sum);
+        long[] minted = new long[1];
+        seats.compute(key, (ignored, current) -> {
+            long generation = (current == null ? 0L : current.generation()) + 1L;
+            minted[0] = generation;
+            return new Seat(current == null ? null : current.slot(), generation);
+        });
         advanced.incrementAndGet();
-        return minted;
+        return minted[0];
+    }
+
+    /** Opens one captured use of a key: while a use is open the table will not transfer the slot to
+     * another generation, because the write that captured it still names the seated one. */
+    public void beginUse(SlotKey key) {
+        if (key != null) {
+            openUses.merge(key, 1L, Long::sum);
+        }
+    }
+
+    /** Closes one captured use opened by {@link #beginUse(SlotKey)}. */
+    public void endUse(SlotKey key) {
+        if (key != null) {
+            openUses.computeIfPresent(key, (ignored, uses) -> uses > 1L ? uses - 1L : null);
+        }
+    }
+
+    /** Whether no captured write still holds the seated slot of one key. */
+    public boolean quiescent(SlotKey key) {
+        Long uses = key == null ? null : openUses.get(key);
+        return uses == null || uses <= 0L;
+    }
+
+    /** The handle of the seated generation of one key, or null while the key has no slot. */
+    public SlotHandle seated(SlotKey key) {
+        Seat seat = key == null ? null : seats.get(key);
+        return seat == null || seat.slot() == null ? null
+            : new SlotHandle(key, seat.generation());
+    }
+
+    /** Whether one handle still names the seated generation of its key. */
+    public boolean holds(SlotHandle handle) {
+        if (handle == null || handle.key() == null) {
+            return false;
+        }
+        Seat seat = seats.get(handle.key());
+        return seat != null && seat.slot() != null && seat.generation() == handle.generation();
     }
 
     /** Judges one write of one write path against the table. A caller that cannot name the position
@@ -490,7 +617,7 @@ public final class WriteControlledSlots {
                 covering.size(), tickIndex);
         }
         Slot slot = covering.values().iterator().next();
-        lastCoveredSlot = slot;
+        lastCoveredSlot.set(slot);
         String world = source.worldOf(levelRef);
         Source.Step step = source.stepOf(slot.key().worldId(), slot.key().domainId(),
             slot.planNodeKey());
@@ -500,9 +627,9 @@ public final class WriteControlledSlots {
         WriteRefusal refusal = inspect(slot, world, step, tickIndex, covering.size());
         if (refusal != null) {
             rejected.incrementAndGet();
-            lastRefusal = refusal;
+            lastRefusal.set(refusal);
             lastRefusingSlot = slot;
-            lastCoveredSlot = null;
+            lastCoveredSlot.remove();
             return lastDecision = new Decision(Verdict.REJECTED, slot.key(), slot.planNodeKey(), 0L,
                 -1, slot.pathDigest(), slot.spaceDigest(), covering.size(), refusal.reason());
         }
@@ -530,7 +657,11 @@ public final class WriteControlledSlots {
     private List<Slot> candidates(Object levelRef, String domainKey) {
         List<Slot> found = new ArrayList<>();
         String world = levelRef == null ? "" : source.worldOf(levelRef);
-        for (Slot slot : slots.values()) {
+        for (Seat seat : seats.values()) {
+            Slot slot = seat.slot();
+            if (slot == null) {
+                continue;
+            }
             boolean sameLevel = slot.levelRef() == levelRef;
             boolean sameWorld = !world.isEmpty() && slot.key().worldId().equals(world);
             if ((sameLevel || sameWorld) && slot.writeSet().contains(domainKey)
@@ -546,11 +677,83 @@ public final class WriteControlledSlots {
         return slot.key().rank() + "#" + slot.slotGeneration();
     }
 
+    /** Whether a slot's range intersects the range of a slot another holder seated for a domain the
+     * two write sets share. The check runs when a slot is declared, so an overlap is refused before a
+     * write has to pick between two covering ranges. */
+    private boolean overlapsAnotherHolder(Slot candidate) {
+        for (Seat seat : seats.values()) {
+            Slot other = seat.slot();
+            if (other == null || other.key().equals(candidate.key())
+                || !other.key().worldId().equals(candidate.key().worldId())
+                || sameHolder(other, candidate)
+                || java.util.Collections.disjoint(other.writeSet(), candidate.writeSet())) {
+                continue;
+            }
+            if (spaceOverlaps(other.space(), candidate.space())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean sameHolder(Slot first, Slot second) {
+        return first.holderKind() == second.holderKind()
+            && first.holderSiteId().equals(second.holderSiteId());
+    }
+
+    private static boolean spaceOverlaps(WriteSpace first, WriteSpace second) {
+        if (first == null || second == null
+            || !first.wellFormed() || !second.wellFormed()) {
+            return false;
+        }
+        for (long firstCell : first.cells()) {
+            for (long secondCell : second.cells()) {
+                if (cellsOverlap(first.kind(), firstCell, second.kind(), secondCell)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean cellsOverlap(CellKind firstKind, long firstCell,
+                                        CellKind secondKind, long secondCell) {
+        long[] first = bounds(firstKind, firstCell);
+        long[] second = bounds(secondKind, secondCell);
+        return first[0] <= second[1] && second[0] <= first[1]
+            && first[2] <= second[3] && second[2] <= first[3]
+            && first[4] <= second[5] && second[4] <= first[5];
+    }
+
+    // The inclusive block bounds of one cell: the chunk covers every height, the section a 16-cube
+    // and the block a single point.
+    private static long[] bounds(CellKind kind, long cell) {
+        return switch (kind) {
+            case CHUNK -> {
+                long x = (long) ChunkPos.getX(cell) << 4;
+                long z = (long) ChunkPos.getZ(cell) << 4;
+                yield new long[]{x, x + 15L, Long.MIN_VALUE, Long.MAX_VALUE, z, z + 15L};
+            }
+            case SECTION -> {
+                long x = (long) SectionPos.x(cell) << 4;
+                long y = (long) SectionPos.y(cell) << 4;
+                long z = (long) SectionPos.z(cell) << 4;
+                yield new long[]{x, x + 15L, y, y + 15L, z, z + 15L};
+            }
+            case BLOCK -> {
+                long x = BlockPos.getX(cell);
+                long y = BlockPos.getY(cell);
+                long z = BlockPos.getZ(cell);
+                yield new long[]{x, x, y, y, z, z};
+            }
+        };
+    }
+
     /** The exact range one seat was declared with, so a reader can verify membership against the
      * cells instead of the fold. */
     public WriteSpace spaceOf(SlotKey key) {
-        Slot slot = key == null ? null : slots.get(key);
-        return slot == null ? WriteSpace.NONE : slot.space();
+        Seat seat = key == null ? null : seats.get(key);
+        return seat == null || seat.slot() == null ? WriteSpace.NONE : seat.slot().space();
     }
 
     private Decision refuse(Slot slot, String reason, int covering, long tickIndex) {
@@ -558,9 +761,9 @@ public final class WriteControlledSlots {
         long carried = versions.carried(key.worldId(), key.level(), key.domainId());
         WriteRefusal refusal = refusal(slot, reason, carried, tickIndex, covering);
         rejected.incrementAndGet();
-        lastRefusal = refusal;
+        lastRefusal.set(refusal);
         lastRefusingSlot = slot;
-        lastCoveredSlot = null;
+        lastCoveredSlot.remove();
         return lastDecision = new Decision(Verdict.REJECTED, key, slot.planNodeKey(), 0L, -1,
             slot.pathDigest(), slot.spaceDigest(), covering, reason);
     }
@@ -581,8 +784,14 @@ public final class WriteControlledSlots {
         }
         OwnerToken liveToken = owners.lookup(key.worldId(), key.level(), key.domainId()).orElse(null);
         if (token != null) {
-            if (liveToken != null && (liveToken.holderKind() != token.holderKind()
-                || !liveToken.holderSiteId().equals(token.holderSiteId()))) {
+            // The declared credential has to still name the installed right, generation included:
+            // a released, retired or replaced one leaves the write without an owner.
+            if (liveToken == null
+                || liveToken.holderKind() != token.holderKind()
+                || !liveToken.holderSiteId().equals(token.holderSiteId())
+                || liveToken.epoch() != token.epoch()
+                || liveToken.planSequence() != token.planSequence()
+                || liveToken.worldEpoch() != token.worldEpoch()) {
                 return refusal(slot, "owner", carried, tickIndex, covering);
             }
         } else {
@@ -605,8 +814,9 @@ public final class WriteControlledSlots {
             || token.expectedVersion() != slot.expectedVersion()) {
             return refusal(slot, "version", carried, tickIndex, covering);
         }
-        Long generation = generations.get(key);
-        if (generation == null || generation != slot.slotGeneration()) {
+        Seat seated = seats.get(key);
+        if (seated == null || seated.slot() == null
+            || seated.generation() != slot.slotGeneration()) {
             return refusal(slot, "generation", carried, tickIndex, covering);
         }
         long live = epochs.epochOf(key.worldId());
@@ -667,7 +877,13 @@ public final class WriteControlledSlots {
     }
 
     public int slots() {
-        return slots.size();
+        int count = 0;
+        for (Seat seat : seats.values()) {
+            if (seat.slot() != null) {
+                count++;
+            }
+        }
+        return count;
     }
 
     public long registeredCount() {
@@ -724,7 +940,7 @@ public final class WriteControlledSlots {
     }
 
     public WriteRefusal lastRefusal() {
-        return lastRefusal;
+        return lastRefusal.get();
     }
 
     public Slot lastRefusingSlot() {
@@ -734,12 +950,12 @@ public final class WriteControlledSlots {
     /** The slot the newest judgement was taken against, captured or refused: the thread that made
      * the write reads it to carry the claim it just handed on. */
     public Slot lastCoveredSlot() {
-        return lastCoveredSlot;
+        return lastCoveredSlot.get();
     }
 
     public void reset() {
-        slots.clear();
-        generations.clear();
+        seats.clear();
+        openUses.clear();
         declarationHeld.clear();
         declarationOwners.clear();
         registered.set(0L);
@@ -753,8 +969,8 @@ public final class WriteControlledSlots {
         rejected.set(0L);
         notExecutable.set(0L);
         lastDecision = null;
-        lastRefusal = null;
+        lastRefusal.remove();
         lastRefusingSlot = null;
-        lastCoveredSlot = null;
+        lastCoveredSlot.remove();
     }
 }

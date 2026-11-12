@@ -2,7 +2,7 @@
 package io.izzel.arclight.common.prts.kernel.auth;
 
 /** Issues and installs the kernel-owned token of one system domain. The version comes from the
- * plan's WriteVersionSlots grant, so a system write carries the same expected version a plan does. */
+ * plan's grant; the authorization generation is drawn from the registry and survives a renewal. */
 public final class SystemOwnerSource {
 
     private final OwnerRegistry owners;
@@ -16,8 +16,12 @@ public final class SystemOwnerSource {
     /** Acquires the token for one world/domain between two ticks; null when another holder owns it. */
     public OwnerToken acquire(String worldId, String domainId, long tick, long expireTick) {
         long version = versions.grant(worldId, WriteLevel.REGION, domainId);
-        OwnerToken token = new OwnerToken(worldId, WriteLevel.REGION, domainId, version, version,
-            tick, expireTick, HolderKind.KERNEL, "system:" + domainId);
+        String site = "system:" + domainId;
+        OwnerToken installed = owners.lookup(worldId, WriteLevel.REGION, domainId).orElse(null);
+        long epoch = installed != null && installed.holderSiteId().equals(site)
+            ? installed.epoch() : owners.mintEpoch();
+        OwnerToken token = new OwnerToken(worldId, WriteLevel.REGION, domainId, epoch, version,
+            tick, expireTick, HolderKind.KERNEL, site, 0L, owners.worldEpochOf(worldId));
         return owners.acquire(token) ? token : null;
     }
 

@@ -214,7 +214,8 @@ public final class KernelModule {
     private final WorldWriteGuard guard = new WorldWriteGuard(pathCounters, authority, intents,
         payloads, ledger);
     private final WriteVersionSlots versionSlots = new WriteVersionSlots();
-    private final OwnerGrantPoint ownerGrants = new OwnerGrantPoint(owners, versionSlots);
+    private final OwnerGrantPoint ownerGrants = new OwnerGrantPoint(owners, versionSlots,
+        guard.worldEpochs()::epochOf);
     private final WriteControlledSlots controlledSlots = new WriteControlledSlots(owners, versionSlots,
         guard.worldEpochs(), new ClaimSource());
     private final WaitPointRegistry waitPoints = new WaitPointRegistry(KernelSettings::waitBoundMs,
@@ -620,6 +621,11 @@ public final class KernelModule {
             guard.bindServerThread(Thread.currentThread(), SERVER_SITE);
         }
         guard.noteLiveWorlds(worldIds);
+        for (String worldId : worldIds) {
+            if (worldId != null) {
+                owners.noteWorldEpoch(worldId, guard.worldEpochs().epochOf(worldId));
+            }
+        }
         versionSlots.refresh(KernelSettings.writeVersionSlots());
         versionSlots.noteWorlds(worldIds);
         ownerGrants.refresh(KernelSettings.writeOwnerGrants());
@@ -4103,6 +4109,7 @@ public final class KernelModule {
         versionSlots.reset();
         ownerGrants.reset();
         controlledSlots.reset();
+        owners.resetLifecycle();
         commitBindingRefusal = "";
         declarationGeneration++;
         declarationHistory.retire();

@@ -79,10 +79,15 @@ public final class WriteAuthority {
             return WriteVerdict.deny(RejectCode.VERSION_MISMATCH, ConflictClass.REJECT,
                 "a write without an expected version does not exist");
         }
+        long liveWorldEpoch = owners.worldEpochOf(attempt.worldId());
+        if (liveWorldEpoch > 0L && liveWorldEpoch != attempt.worldEpoch()) {
+            return WriteVerdict.deny(RejectCode.WORLD_LIFECYCLE_DENIED, ConflictClass.REJECT,
+                RejectTrigger.WORLD_LIFECYCLE_VIOLATION.description());
+        }
         OwnerToken declared = attempt.declaredOwner();
-        OwnerToken token = declared;
         OwnerToken live = owners.lookup(attempt.worldId(), attempt.level(), attempt.domainId())
             .orElse(null);
+        OwnerToken token;
         if (declared != null) {
             if (!declared.worldId().equals(attempt.worldId())
                 || declared.level() != attempt.level()
@@ -92,15 +97,28 @@ public final class WriteAuthority {
                 return WriteVerdict.deny(RejectCode.WRITE_DENIED_NOT_OWNER, ConflictClass.DEGRADE,
                     RejectTrigger.OWNER_MISMATCH.description());
             }
-            if (live != null && (live.holderKind() != declared.holderKind()
-                || !live.holderSiteId().equals(declared.holderSiteId()))) {
+            // A declared credential is a record of what the registry installed, not a right of its
+            // own: a released, retired or replaced one names no live right and cannot grant.
+            if (live == null) {
                 return WriteVerdict.deny(RejectCode.WRITE_DENIED_NOT_OWNER, ConflictClass.DEGRADE,
                     RejectTrigger.OWNER_MISMATCH.description());
             }
-            if (live != null && live.expectedVersion() != attempt.expectedVersion()) {
+            if (live.holderKind() != declared.holderKind()
+                || !live.holderSiteId().equals(declared.holderSiteId())
+                || live.epoch() != declared.epoch()
+                || live.planSequence() != declared.planSequence()
+                || live.worldEpoch() != declared.worldEpoch()
+                || live.expectedVersion() != declared.expectedVersion()
+                || live.holdStartTick() != declared.holdStartTick()
+                || live.expireTick() != declared.expireTick()) {
+                return WriteVerdict.deny(RejectCode.WRITE_DENIED_NOT_OWNER, ConflictClass.DEGRADE,
+                    RejectTrigger.OWNER_MISMATCH.description());
+            }
+            if (live.expectedVersion() != attempt.expectedVersion()) {
                 return WriteVerdict.deny(RejectCode.VERSION_MISMATCH, ConflictClass.REJECT,
                     RejectTrigger.VERSION_SLOT_MISMATCH.description());
             }
+            token = live;
         } else {
             if (live == null || !live.holderSiteId().equals(attempt.holderSiteId())) {
                 return WriteVerdict.deny(RejectCode.WRITE_DENIED_NOT_OWNER, ConflictClass.DEGRADE,
@@ -108,13 +126,17 @@ public final class WriteAuthority {
             }
             token = live;
         }
-        if (token == null) {
-            return WriteVerdict.deny(RejectCode.WRITE_DENIED_NOT_OWNER, ConflictClass.DEGRADE,
-                RejectTrigger.OWNER_MISMATCH.description());
+        if (token.worldEpoch() > 0L && token.worldEpoch() != attempt.worldEpoch()) {
+            return WriteVerdict.deny(RejectCode.WORLD_LIFECYCLE_DENIED, ConflictClass.REJECT,
+                RejectTrigger.WORLD_LIFECYCLE_VIOLATION.description());
         }
-        // OwnerToken.epoch is the ownership generation, while attempt.worldEpoch is the world
-        // lifecycle; they are different clocks, so the declaration branch does not compare them.
-        // The ownership generation is carried by the registry lifecycle and by expectedVersion.
+        if (declared != null && attempt.planOrder() > 0L && token.planSequence() > 0L
+            && token.planSequence() != attempt.planOrder()) {
+            // The declaration was frozen for a plan the registry has since moved past; the value it
+            // carries belongs to that older plan and not to the write in front of the decision point.
+            return WriteVerdict.deny(RejectCode.VERSION_MISMATCH, ConflictClass.REJECT,
+                RejectTrigger.VERSION_SLOT_MISMATCH.description());
+        }
         if (token.expiredAt(attempt.tickIndex())) {
             owners.reclaimExpired(attempt.tickIndex());
             return WriteVerdict.deny(RejectCode.VERSION_MISMATCH, ConflictClass.REJECT,

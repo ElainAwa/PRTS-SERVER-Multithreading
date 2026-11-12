@@ -9,11 +9,16 @@ import io.izzel.arclight.common.prts.kernel.codes.RejectTrigger;
 import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.ToLongFunction;
 
 /** Turns the write right a frozen job declares into the one credential a writer may hold. There is no
  * entry that hands a right out by itself: the only call takes the graph the planning period froze, and
@@ -25,9 +30,9 @@ public final class OwnerGrantPoint {
 
     private final OwnerRegistry owners;
     private final WriteVersionSlots versions;
-    private final Set<OwnershipDomain> held = new HashSet<>();
+    private final ToLongFunction<String> worldEpochs;
+    private final Map<OwnershipDomain, OwnerToken> held = new HashMap<>();
 
-    private final AtomicLong nextEpoch = new AtomicLong(1L);
     private final AtomicLong declared = new AtomicLong();
     private final AtomicLong granted = new AtomicLong();
     private final AtomicLong releasedByPlan = new AtomicLong();
@@ -43,8 +48,17 @@ public final class OwnerGrantPoint {
     private volatile String lastRefusedDomain = "";
 
     public OwnerGrantPoint(OwnerRegistry owners, WriteVersionSlots versions) {
+        this(owners, versions, worldId -> 0L);
+    }
+
+    /** Creates the point with the world incarnation a granted token is bound to. A supplier that
+     * answers no incarnation leaves the token unbound, which is the shape it had before the binding
+     * existed. */
+    public OwnerGrantPoint(OwnerRegistry owners, WriteVersionSlots versions,
+                           ToLongFunction<String> worldEpochs) {
         this.owners = owners;
         this.versions = versions;
+        this.worldEpochs = worldEpochs == null ? worldId -> 0L : worldEpochs;
     }
 
     /** Decides whether declared write rights are granted at all. */
@@ -58,7 +72,9 @@ public final class OwnerGrantPoint {
 
     /** Grants the rights the frozen graph declares and releases the ones its declarations dropped. The
      * graph is frozen once per tick and handed over here once, so the whole face is a function of the
-     * declarations of that tick and of the tokens the ticks before it left behind. */
+     * declarations of that tick and of the tokens the ticks before it left behind. One node's demand
+     * set is taken as a whole: the demands are visited in a stable key order, every one of them is
+     * checked before the first is installed, and a refused set releases the reservations it made. */
     public void apply(JobGraph graph, long tickIndex) {
         if (!enabled) {
             return;
@@ -66,75 +82,119 @@ public final class OwnerGrantPoint {
         Set<OwnershipDomain> declaredNow = new HashSet<>();
         List<JobGraph.Node> nodes = graph == null ? List.of() : graph.nodes();
         for (JobGraph.Node node : nodes) {
+            List<JobDeclaration.OwnerDemand> demands = new ArrayList<>();
             for (JobDeclaration.OwnerDemand demand : node.ownerDemands()) {
-                declared.incrementAndGet();
-                grant(node, demand, tickIndex, declaredNow);
+                if (!demands.contains(demand)) {
+                    demands.add(demand);
+                }
             }
+            if (demands.isEmpty()) {
+                continue;
+            }
+            demands.sort(Comparator.comparing(JobDeclaration.OwnerDemand::key)
+                .thenComparing(demand -> demand.holderKind().name())
+                .thenComparing(JobDeclaration.OwnerDemand::holderSiteId));
+            declared.addAndGet(demands.size());
+            hold(node, demands, graph.planSequence(), tickIndex, declaredNow);
         }
         releaseUndeclared(declaredNow);
     }
 
-    private void grant(JobGraph.Node node, JobDeclaration.OwnerDemand demand, long tickIndex,
-                       Set<OwnershipDomain> declaredNow) {
-        if (!demand.worldId().equals(node.worldId())) {
-            refusedCrossWorld.incrementAndGet();
-            refuse(RejectTrigger.CROSS_WORLD_DIRECT_WRITE, demand, tickIndex);
-            return;
+    private void hold(JobGraph.Node node, List<JobDeclaration.OwnerDemand> demands,
+                      long planSequence, long tickIndex, Set<OwnershipDomain> declaredNow) {
+        long[] carried = new long[demands.size()];
+        for (int index = 0; index < demands.size(); index++) {
+            JobDeclaration.OwnerDemand demand = demands.get(index);
+            RejectTrigger invalid = check(node, demand);
+            if (invalid == null) {
+                carried[index] = versions.carried(demand.worldId(), demand.level(),
+                    demand.domainId());
+                if (carried[index] == WriteVersionSlots.NOT_CARRIED) {
+                    invalid = RejectTrigger.VERSION_SLOT_MISMATCH;
+                }
+            }
+            if (invalid != null) {
+                countRefusal(invalid);
+                refuse(invalid, demand, tickIndex);
+                return;
+            }
         }
-        if (!declared(node, demand)) {
-            refusedUndeclared.incrementAndGet();
-            refuse(RejectTrigger.DOMAIN_SET_NOT_SPLIT, demand, tickIndex);
-            return;
+        List<OwnerToken> candidates = new ArrayList<>();
+        List<OwnershipDomain> domains = new ArrayList<>();
+        long newInstalls = 0L;
+        for (int index = 0; index < demands.size(); index++) {
+            JobDeclaration.OwnerDemand demand = demands.get(index);
+            long version = carried[index];
+            long worldEpoch = worldEpochOf(demand.worldId());
+            OwnershipDomain domain = new OwnershipDomain(demand.worldId(), demand.level(),
+                demand.domainId());
+            OwnerToken previous = owners.lookup(demand.worldId(), demand.level(), demand.domainId())
+                .orElse(null);
+            long epoch = previous == null ? owners.mintEpoch() : previous.epoch();
+            OwnerToken candidate = new OwnerToken(demand.worldId(), demand.level(),
+                demand.domainId(), epoch, version, tickIndex, tickIndex + demand.holdTicks(),
+                demand.holderKind(), demand.holderSiteId(), planSequence, worldEpoch);
+            candidates.add(candidate);
+            domains.add(domain);
+            if (previous == null) {
+                newInstalls++;
+            }
         }
-        if (demand.holdTicks() <= 0) {
-            refusedExpired.incrementAndGet();
-            refuse(RejectTrigger.TOKEN_EXPIRED, demand, tickIndex);
-            return;
-        }
-        long version = versions.carried(demand.worldId(), demand.level(), demand.domainId());
-        if (version == WriteVersionSlots.NOT_CARRIED) {
-            refusedNoVersion.incrementAndGet();
-            refuse(RejectTrigger.VERSION_SLOT_MISMATCH, demand, tickIndex);
-            return;
-        }
-        OwnershipDomain domain = new OwnershipDomain(demand.worldId(), demand.level(),
-            demand.domainId());
-        OwnerToken installed = owners.lookup(demand.worldId(), demand.level(), demand.domainId())
-            .orElse(null);
-        if (installed != null && installed.expiredAt(tickIndex)) {
-            owners.release(domain, installed.holderSiteId());
-            installed = null;
-        }
-        // The holder that already holds the domain keeps its generation, so the registry reads the
-        // ask of the same holder as the same holder asking again and the ask of any other one as the
-        // second holder it is. The registry is the only place either is decided.
-        long epoch = installed == null ? nextEpoch.getAndIncrement() : installed.epoch();
-        OwnerToken candidate = new OwnerToken(demand.worldId(), demand.level(), demand.domainId(),
-            epoch, version, tickIndex, tickIndex + demand.holdTicks(), demand.holderKind(),
-            demand.holderSiteId());
-        boolean first = installed == null;
-        if (!owners.acquire(candidate)) {
+        if (!owners.acquireAll(candidates)) {
             refusedDoubleHolder.incrementAndGet();
-            refuse(RejectTrigger.OWNER_MISMATCH, demand, tickIndex);
+            refuse(RejectTrigger.OWNER_MISMATCH, demands.get(0), tickIndex);
             return;
         }
-        held.add(domain);
-        declaredNow.add(domain);
-        if (first) {
-            granted.incrementAndGet();
+        for (int index = 0; index < candidates.size(); index++) {
+            held.put(domains.get(index), candidates.get(index));
+        }
+        granted.addAndGet(newInstalls);
+        for (JobDeclaration.OwnerDemand demand : demands) {
+            declaredNow.add(new OwnershipDomain(demand.worldId(), demand.level(),
+                demand.domainId()));
         }
     }
 
+    private RejectTrigger check(JobGraph.Node node, JobDeclaration.OwnerDemand demand) {
+        if (!demand.worldId().equals(node.worldId())) {
+            return RejectTrigger.CROSS_WORLD_DIRECT_WRITE;
+        }
+        if (!declared(node, demand)) {
+            return RejectTrigger.DOMAIN_SET_NOT_SPLIT;
+        }
+        if (demand.holdTicks() <= 0) {
+            return RejectTrigger.TOKEN_EXPIRED;
+        }
+        return null;
+    }
+
+    private void countRefusal(RejectTrigger trigger) {
+        switch (trigger) {
+            case CROSS_WORLD_DIRECT_WRITE -> refusedCrossWorld.incrementAndGet();
+            case DOMAIN_SET_NOT_SPLIT -> refusedUndeclared.incrementAndGet();
+            case TOKEN_EXPIRED -> refusedExpired.incrementAndGet();
+            case VERSION_SLOT_MISMATCH -> refusedNoVersion.incrementAndGet();
+            default -> {
+            }
+        }
+    }
+
+    private long worldEpochOf(String worldId) {
+        return Math.max(0L, worldEpochs.applyAsLong(worldId));
+    }
+
     private void releaseUndeclared(Set<OwnershipDomain> declaredNow) {
-        Iterator<OwnershipDomain> iterator = held.iterator();
+        Iterator<Map.Entry<OwnershipDomain, OwnerToken>> iterator = held.entrySet().iterator();
         while (iterator.hasNext()) {
-            OwnershipDomain domain = iterator.next();
+            Map.Entry<OwnershipDomain, OwnerToken> entry = iterator.next();
+            OwnershipDomain domain = entry.getKey();
             if (declaredNow.contains(domain)) {
                 continue;
             }
             OwnerToken token = owners.lookup(domain.worldId(), domain.level(), domain.domainId())
                 .orElse(null);
-            if (token != null && owners.release(domain, token.holderSiteId())) {
+            if (token != null && token.equals(entry.getValue())
+                && owners.release(domain, token.holderSiteId())) {
                 releasedByPlan.incrementAndGet();
             }
             iterator.remove();
@@ -217,10 +277,17 @@ public final class OwnerGrantPoint {
         return lastRefusedDomain;
     }
 
-    /** Forgets what this point holds without touching the registry: a token the registry still keeps
-     * outlives a reading reset, and the next plan either re-acquires it for its holder or leaves it to
-     * the sweep. */
+    /** Ends this point's grants: every right it installed is released, so a reset reading cannot be
+     * followed by a write that still names the retired credential. */
     public void reset() {
+        for (Map.Entry<OwnershipDomain, OwnerToken> entry : held.entrySet()) {
+            OwnershipDomain domain = entry.getKey();
+            OwnerToken token = owners.lookup(domain.worldId(), domain.level(), domain.domainId())
+                .orElse(null);
+            if (token != null && token.equals(entry.getValue())) {
+                owners.release(domain, token.holderSiteId());
+            }
+        }
         held.clear();
         declared.set(0L);
         granted.set(0L);

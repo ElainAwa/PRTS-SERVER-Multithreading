@@ -60,6 +60,11 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
     /** The block position the caller named for the write it is about to hand to the judged path,
      * held on the thread that made it. A caller that names no position leaves it empty. */
     private final ThreadLocal<WriteControlledSlots.WritePosition> pendingPosition = new ThreadLocal<>();
+    /** The refusal the claim face took for the write this thread is about to hand to the judged path:
+     * a refused claim cannot fall back to the write it would have covered. */
+    private final ThreadLocal<RejectCode> pendingClaimRefusal = new ThreadLocal<>();
+    /** The key whose captured use the short path opened; the judged path closes it. */
+    private final ThreadLocal<WriteControlledSlots.SlotKey> pendingClaimUse = new ThreadLocal<>();
     private final LongAdder claimedWrites = new LongAdder();
     private final LongAdder landedWrites = new LongAdder();
 
@@ -163,6 +168,12 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
      * or not the segment is walking, so the two switches answer different questions - which writes
      * are deferred, and when a deferred write lands. */
     public void refresh(boolean active, boolean enforce, boolean routeIntents, long tickIndex) {
+        // A write that reached the judged path and never returned leaves its captured use behind;
+        // the tick boundary is the point after which such a use can no longer belong to a live write.
+        closePendingUse();
+        pendingClaim.remove();
+        pendingPosition.remove();
+        pendingClaimRefusal.remove();
         this.active = active;
         this.enforce = enforce;
         this.routing = routeIntents;
@@ -236,7 +247,7 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
     }
 
     private int classifyBlockWrite(Object levelRef, WriteControlledSlots.WritePosition position) {
-        if (!active) {
+        if (!active && !rightsActive()) {
             return PASS;
         }
         if (Thread.currentThread() == serverThread && serverHolder.registered()) {
@@ -252,15 +263,33 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
             if (decision.verdict() != WriteControlledSlots.Verdict.DEFAULT_PATH) {
                 // A captured claim is handed to the judged path on this thread, so the attempt that
                 // follows is built from the claim and not from the write path it arrived on. A claim
-                // that was refused carries no identity: its write is judged as the write path write
-                // it was, and the refusal stays readable on the claim face.
+                // that was refused is handed over as a refusal: the write it covered may not fall
+                // back to the default path.
                 pendingClaim.remove();
                 pendingPosition.remove();
+                pendingClaimRefusal.remove();
+                closePendingUse();
                 if (decision.verdict() == WriteControlledSlots.Verdict.CAPTURED) {
-                    pendingClaim.set(controlled.lastCoveredSlot());
+                    WriteControlledSlots.Slot claim = controlled.lastCoveredSlot();
+                    pendingClaim.set(claim);
                     pendingPosition.set(position);
                     claimedWrites.increment();
+                    if (claim != null) {
+                        controlled.beginUse(claim.key());
+                        pendingClaimUse.set(claim.key());
+                    }
+                } else {
+                    pendingClaimRefusal.set(refusalCode(controlled.lastRefusal()));
                 }
+                return JUDGE;
+            }
+            if (rightsActive()) {
+                // With rights active the host thread is not a special writer: an uncovered write is
+                // judged like any other write instead of being granted by the short path.
+                pendingClaim.remove();
+                pendingPosition.remove();
+                pendingClaimRefusal.remove();
+                closePendingUse();
                 return JUDGE;
             }
             counters.noteAttempt(WritePath.BLOCK_WRITE, ThreadOrigin.MAIN, serverHolder.kind());
@@ -284,9 +313,25 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
     @Override
     public boolean admitBlockWriteLazy(Object levelRef, String worldId,
                                        Supplier<PrtsWorldWriteTaps.DeferredWrite> deferredSupplier) {
-        if (!active) {
+        if (!active && !rightsActive()) {
             return true;
         }
+        WriteControlledSlots.SlotKey useKey = pendingClaimUse.get();
+        pendingClaimUse.remove();
+        RejectCode claimRefusal = pendingClaimRefusal.get();
+        pendingClaimRefusal.remove();
+        try {
+            return admitJudged(levelRef, worldId, deferredSupplier, claimRefusal);
+        } finally {
+            if (useKey != null) {
+                controlled.endUse(useKey);
+            }
+        }
+    }
+
+    private boolean admitJudged(Object levelRef, String worldId,
+                                Supplier<PrtsWorldWriteTaps.DeferredWrite> deferredSupplier,
+                                RejectCode claimRefusal) {
         Thread thread = Thread.currentThread();
         ThreadOrigin origin = thread == serverThread ? ThreadOrigin.MAIN : ThreadOrigin.WORKER;
         HolderIdentity holder = holderOf(thread);
@@ -306,7 +351,11 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
         WriteDisposition disposition;
         RejectCode code = null;
         boolean handedOver = false;
-        if (!holder.registered()) {
+        if (claimRefusal != null) {
+            // The claim face already refused the write this attempt would have covered.
+            disposition = WriteDisposition.DENY;
+            code = claimRefusal;
+        } else if (!holder.registered()) {
             if (enforce) {
                 disposition = WriteDisposition.DENY;
                 code = RejectCode.WRITE_DENIED_NOT_OWNER;
@@ -359,7 +408,12 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
         }
         lastDecision = new WriteDecision(path, origin, decidedHolder, disposition, code, decidedSite,
             thread.getName(), worldId, tickIndex);
-        return !handedOver && !(enforce && disposition == WriteDisposition.DENY);
+        boolean rights = rightsActive();
+        boolean blocked = handedOver
+            || claimRefusal != null
+            || (disposition == WriteDisposition.DENY && (enforce || rights))
+            || (rights && disposition == WriteDisposition.INTENT);
+        return !blocked;
     }
 
     @Override
@@ -441,8 +495,36 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
         lastDecision = null;
         pendingClaim.remove();
         pendingPosition.remove();
+        pendingClaimRefusal.remove();
+        closePendingUse();
         claimedWrites.reset();
         landedWrites.reset();
+    }
+
+    // Whether either existing write-right switch is on: under active rights the guard judges the
+    // host thread too and a denial or an intent may not let the original write through.
+    private boolean rightsActive() {
+        return versions.enabled() || controlled.enabled();
+    }
+
+    private void closePendingUse() {
+        WriteControlledSlots.SlotKey key = pendingClaimUse.get();
+        pendingClaimUse.remove();
+        if (key != null) {
+            controlled.endUse(key);
+        }
+    }
+
+    private static RejectCode refusalCode(WriteControlledSlots.WriteRefusal refusal) {
+        if (refusal == null) {
+            return RejectCode.WRITE_DENIED_NOT_OWNER;
+        }
+        return switch (refusal.reason()) {
+            case "version", "expiry", "generation", "plan", "plan_sequence" ->
+                RejectCode.VERSION_MISMATCH;
+            case "world", "world_epoch" -> RejectCode.WORLD_LIFECYCLE_DENIED;
+            default -> RejectCode.WRITE_DENIED_NOT_OWNER;
+        };
     }
 
     private HolderIdentity holderOf(Thread thread) {
