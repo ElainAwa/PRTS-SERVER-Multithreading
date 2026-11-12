@@ -897,6 +897,18 @@ public final class CommitLog {
         return ascending(worldId, domainId, planSequence, position);
     }
 
+    /** Whether a line of this place was already stored by the pair. Read-only: a stored line
+     * consumes its seat, so a reservation for the same place can only end in a refusal. */
+    public boolean placeSpent(String worldId, String domainId, long planSequence, int position) {
+        String key = key(worldId, domainId);
+        Long plan = lastPlanOfRing.get(key);
+        Integer lastPosition = lastPositionOfRing.get(key);
+        if (plan == null || lastPosition == null) {
+            return false;
+        }
+        return planSequence < plan || (planSequence == plan && position <= lastPosition);
+    }
+
     /** Whether this place is the next one the pair may hand to a side effect: no reservation of the
      * pair holds a place before it. Read-only, like the check above: the side effect of a later place
      * waits until the earlier one ended. */

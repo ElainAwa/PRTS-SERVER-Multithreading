@@ -195,6 +195,13 @@ public final class CommitReservation {
             requestRefusals++;
             return new ReserveResult(false, RejectCode.COMMIT_ORDER_VIOLATION, "place-passed", null);
         }
+        if (log.placeSpent(request.worldId(), request.domainId(), request.planSequence(),
+            request.position())) {
+            // A stored line owns its seat for the rest of the lifecycle: a second request for the
+            // same place is refused before the effect can run twice.
+            requestRefusals++;
+            return new ReserveResult(false, RejectCode.COMMIT_ORDER_VIOLATION, "place-spent", null);
+        }
         CommitTicket.Covered covered = covered(request);
         CommitLog.RingSlot ringSlot = log.reserveSlot(request.worldId(), request.domainId(),
             request.planSequence(), request.position());
