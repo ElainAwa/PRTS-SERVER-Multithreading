@@ -73,25 +73,35 @@ public final class ExecutionCohort {
         if (graph.nodes().isEmpty()) done.countDown();
     }
 
+    /** The graph this cohort was built from. */
     public JobGraph graph() { return graph; }
 
+    /** All node handles in graph order, including nodes not submitted yet. */
     public List<WorkerPool.GenericHandle> handles() { return List.copyOf(handles); }
 
+    /** The handle for one node key, or null when the graph has no such node. */
     public WorkerPool.GenericHandle handle(String key) {
         return handlesByKey.get(key);
     }
 
+    /** The current state of one node key, or null for an unknown key. */
     public State state(String key) { return states.get(key); }
 
+    /** True once every node has reached a terminal state. */
     public boolean done() { return done.getCount() == 0L; }
 
+    /** Waits up to the timeout for every node to reach a terminal state. */
     public boolean awaitDone(long timeout, TimeUnit unit) throws InterruptedException {
         return done.await(timeout, unit);
     }
 
+    /** Number of nodes submitted to the pool. */
     public int accepted() { return accepted.get(); }
+    /** Number of nodes rejected before execution. */
     public int rejected() { return rejected.get(); }
+    /** Number of nodes that failed, including failed-after-effect. */
     public int failed() { return failed.get(); }
+    /** Number of nodes cancelled before or after execution started. */
     public int cancelled() { return cancelled.get(); }
 
     /** Requests cancellation of one node. A node that has not started is terminal immediately; a
