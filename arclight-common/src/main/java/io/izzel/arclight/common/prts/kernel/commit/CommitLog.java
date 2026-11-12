@@ -333,6 +333,7 @@ public final class CommitLog {
     private final IntSupplier ringCapacity;
     private final OrderSource source;
     private final Map<String, CommitRing> rings = new LinkedHashMap<>();
+    private final Map<String, Long> worldEpochs = new LinkedHashMap<>();
     private final Map<String, Long> lastPlanOfRing = new LinkedHashMap<>();
     private final Map<String, Integer> lastPositionOfRing = new LinkedHashMap<>();
     private long sequence;
@@ -461,14 +462,18 @@ public final class CommitLog {
             unplanned++;
             disposition = Entry.Disposition.DROPPED;
             code = RejectCode.COMMIT_ORDER_VIOLATION;
-        } else if (resolved != null && !ascending(batch.worldId(), batch.domainId(), planSequence,
-            position)) {
+        } else if (resolved != null && placeSpent(batch.worldId(), batch.domainId(), planSequence,
+            (int) position)) {
+            // A stored line owns its place: the frozen seat a typed line already carries does not take
+            // a second plain line, and a place the pair has passed is not written again. The attempt is
+            // counted where the order was contradicted and takes no line with it.
             orderViolations++;
+            dropped++;
             if (firstDivergencePosition < 0L) {
                 firstDivergencePosition = position;
             }
-            disposition = Entry.Disposition.DROPPED;
-            code = RejectCode.COMMIT_ORDER_VIOLATION;
+            return new Verdict(false, Entry.Disposition.DROPPED, RejectCode.COMMIT_ORDER_VIOLATION,
+                sequence, (int) position);
         } else {
             disposition = dispositionOf(batch.kind());
         }
@@ -915,6 +920,96 @@ public final class CommitLog {
     public boolean placeRunnable(String worldId, String domainId, long planSequence, int position) {
         long[] floor = reservedFloors.get(key(worldId, domainId));
         return floor == null || (floor[0] == planSequence && floor[1] == position);
+    }
+
+    /** The incarnation of one world this log currently holds, or {@link #NO_WORLD_EPOCH} while it
+     * holds none. Read-only: nothing is counted and no state is touched. */
+    public long worldEpochOf(String worldId) {
+        Long epoch = worldId == null ? null : worldEpochs.get(worldId);
+        return epoch == null ? NO_WORLD_EPOCH : epoch;
+    }
+
+    /** Starts a new incarnation of one world under the next generation this log mints, and returns
+     * it; {@link #NO_WORLD_EPOCH} means no boundary was started. */
+    public long beginWorldIncarnation(String worldId) {
+        if (worldId == null || worldId.isEmpty()) {
+            return NO_WORLD_EPOCH;
+        }
+        long next = worldEpochOf(worldId) + 1L;
+        return beginWorldIncarnation(worldId, next) ? next : NO_WORLD_EPOCH;
+    }
+
+    /** Starts a new incarnation of one world at the given generation. A generation that is not live
+     * or does not rise above the one this log holds is refused and changes nothing, so a repeated
+     * call is no boundary. The boundary clears only that world's rings, and the order, instance and
+     * held-slot memory of its pairs: the new incarnation starts at its own lower places, while the
+     * other worlds and the log's lifecycle are untouched. The ring key stays (world, domain): this is
+     * a reset boundary of that world's state, not a ring-key expansion, so the two incarnations never
+     * share a ring at the same time. Like every other control operation, it is confined to the owner
+     * thread that serves the world. */
+    public boolean beginWorldIncarnation(String worldId, long worldEpoch) {
+        if (worldId == null || worldId.isEmpty() || !liveWorldEpoch(worldEpoch)
+            || worldEpoch <= worldEpochOf(worldId)) {
+            return false;
+        }
+        clearWorld(worldId);
+        worldEpochs.put(worldId, worldEpoch);
+        return true;
+    }
+
+    /** Drops everything this log holds for one world alone. What the world's rings still carried is
+     * read first so the records its typed lines pointed at are copied and released, and their read
+     * obligations end with the next traversal; the steps themselves are not kept, because the
+     * incarnation they came from ended at this boundary. */
+    private void clearWorld(String worldId) {
+        List<String> pairKeys = new ArrayList<>();
+        for (CommitRing ring : rings.values()) {
+            if (ring.worldId().equals(worldId)) {
+                pairKeys.add(ring.key());
+            }
+        }
+        for (RingSlot slot : heldSlots.values()) {
+            if (slot.worldId().equals(worldId)) {
+                String pairKey = key(slot.worldId(), slot.domainId());
+                if (!pairKeys.contains(pairKey)) {
+                    pairKeys.add(pairKey);
+                }
+            }
+        }
+        for (String pairKey : pairKeys) {
+            CommitRing ring = rings.remove(pairKey);
+            if (ring != null) {
+                drainRing(ring);
+                ring.reset(clear(ring));
+            }
+            lastPlanOfRing.remove(pairKey);
+            lastPositionOfRing.remove(pairKey);
+            reservedFloors.remove(pairKey);
+            slotsByKey.remove(pairKey);
+        }
+        List<Long> slotTickets = new ArrayList<>();
+        for (RingSlot slot : heldSlots.values()) {
+            if (slot.worldId().equals(worldId)) {
+                slotTickets.add(slot.ticket());
+            }
+        }
+        for (Long ticket : slotTickets) {
+            heldSlots.remove(ticket);
+            heldPlans.remove(ticket);
+        }
+        instanceNamespaces.keySet().removeIf(instanceKey ->
+            pairKeys.stream().anyMatch(pairKey -> instanceKey.startsWith(pairKey + "/")));
+    }
+
+    /** Reads one ring before it is cleared, copying and releasing the record of every typed line. */
+    private void drainRing(CommitRing ring) {
+        RingAuthority permission = read(ring);
+        Entry entry;
+        while ((entry = ring.pop(permission)) != null) {
+            if (entry.identity().effectRef() != NO_EFFECT) {
+                typedStep(entry);
+            }
+        }
     }
 
     private void raiseFloor(String key, long planSequence, int position) {
@@ -1376,6 +1471,7 @@ public final class CommitLog {
             ring.reset(clear(ring));
         }
         rings.clear();
+        worldEpochs.clear();
         lastPlanOfRing.clear();
         lastPositionOfRing.clear();
         sequence = 0L;
