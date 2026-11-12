@@ -117,6 +117,11 @@ public final class ControlledEffect {
                 : outcome(CommitTicket.Terminal.FAILED, failed, "");
         } catch (RuntimeException thrown) {
             outcome = outcome(CommitTicket.Terminal.PARTIAL, partial, "publisher-threw");
+        } catch (Error thrown) {
+            // An error after the write still leaves the effect entered; keep the partial outcome so a
+            // second call reports it instead of re-entering an action that already wrote the cell.
+            outcome = outcome(CommitTicket.Terminal.PARTIAL, partial, "publisher-threw");
+            throw thrown;
         }
         return outcome;
     }
@@ -133,38 +138,31 @@ public final class ControlledEffect {
             EffectStore.normalizedRows(effect.rows()), units, note);
     }
 
-    /** Whether the action was entered. */
-    public synchronized boolean applied() {
+    synchronized boolean applied() {
         return applied;
     }
 
-    /** How often the action was entered: one or zero. */
-    public synchronized int applyCount() {
+    synchronized int applyCount() {
         return applied ? 1 : 0;
     }
 
-    /** The outcome of the first call, or null before it. */
-    public synchronized CommitTicket.Outcome outcome() {
+    synchronized CommitTicket.Outcome outcome() {
         return outcome;
     }
 
-    /** The state object this effect writes. */
-    public Cell cell() {
+    Cell cell() {
         return cell;
     }
 
-    /** The terminal recorded when the action publishes. */
-    public EffectStore.Effect published() {
+    EffectStore.Effect published() {
         return published;
     }
 
-    /** The terminal recorded when the action throws. */
-    public EffectStore.Effect partial() {
+    EffectStore.Effect partial() {
         return partial;
     }
 
-    /** The terminal recorded when the action reports no publish. */
-    public EffectStore.Effect failed() {
+    EffectStore.Effect failed() {
         return failed;
     }
 }

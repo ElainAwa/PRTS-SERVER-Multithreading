@@ -197,8 +197,7 @@ public final class CommitReservation {
         }
         if (log.placeSpent(request.worldId(), request.domainId(), request.planSequence(),
             request.position())) {
-            // A stored line owns its seat for the rest of the lifecycle: a second request for the
-            // same place is refused before the effect can run twice.
+            // A stored line owns its seat: a second request for the same place cannot run twice.
             requestRefusals++;
             return new ReserveResult(false, RejectCode.COMMIT_ORDER_VIOLATION, "place-spent", null);
         }
