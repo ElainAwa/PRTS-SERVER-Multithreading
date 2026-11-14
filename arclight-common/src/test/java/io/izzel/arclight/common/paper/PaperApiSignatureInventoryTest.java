@@ -34,7 +34,7 @@ class PaperApiSignatureInventoryTest {
     static {
         expect("org/bukkit/plugin/PluginDescriptionFile", "getAPIVersion", "()Ljava/lang/String;", PRESENT);
         expect("io/papermc/paper/plugin/bootstrap/PluginBootstrap", "bootstrap",
-            "(Lio/papermc/paper/plugin/bootstrap/BootstrapContext;)V", MISSING);
+            "(Lio/papermc/paper/plugin/bootstrap/BootstrapContext;)V", PRESENT);
         expect("org/bukkit/event/player/PlayerJoinEvent", "joinMessage", "()Lnet/kyori/adventure/text/Component;", MISSING);
         expect("io/papermc/paper/event/player/AsyncChatEvent", "getHandlers", "()Lorg/bukkit/event/HandlerList;", MISSING);
         expect("org/bukkit/event/block/BlockBreakEvent", "isCancelled", "()Z", PRESENT);
