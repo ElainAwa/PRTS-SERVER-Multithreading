@@ -31,7 +31,13 @@ public record EntityUpdateProgram(ProgramKind kind, Input input, RwSet rw,
         GOAL_SELECTOR,
         SENSOR_TICK,
         NAVIGATION,
-        MOVE_CONTROL
+        MOVE_CONTROL,
+        LOOK_CONTROL,
+        JUMP_CONTROL,
+        ATTACK,
+        COLLISION,
+        POI_TAKE,
+        POI_RELEASE
     }
 
     /** What a program needs before it may run. */
@@ -56,7 +62,9 @@ public record EntityUpdateProgram(ProgramKind kind, Input input, RwSet rw,
         AIR,
         HEALTH,
         TARGET,
-        INVENTORY
+        INVENTORY,
+        DAMAGE,
+        POI_OCCUPANCY
     }
 
     /** The frozen input of one update: the row identity and the state the program was frozen at. */
@@ -104,9 +112,13 @@ public record EntityUpdateProgram(ProgramKind kind, Input input, RwSet rw,
         public RwSet {
             reads = sorted(reads);
             writes = sorted(writes);
-            if (!java.util.Collections.disjoint(reads, writes)) {
-                throw new IllegalArgumentException("a resource cannot be read and written at once");
-            }
+        }
+
+        /** The resources this program reads before it writes them in the controlled phase. */
+        public List<Resource> readThenWrite() {
+            List<Resource> shared = new ArrayList<>(reads);
+            shared.retainAll(writes);
+            return List.copyOf(shared);
         }
 
         private static List<Resource> sorted(List<Resource> resources) {
@@ -199,6 +211,12 @@ public record EntityUpdateProgram(ProgramKind kind, Input input, RwSet rw,
         if (effects.isEmpty() != rw.writes().isEmpty() || effects.isEmpty() == hasOwnedWrite) {
             throw new IllegalArgumentException(
                 "the allowed effects, the write set and the write capability must agree");
+        }
+        if (!rw.readThenWrite().isEmpty()
+            && (!phases.contains(ProgramPhase.READ_COMPUTE)
+                || !phases.contains(ProgramPhase.CONTROLLED_WRITE))) {
+            throw new IllegalArgumentException(
+                "a resource read before its own write needs both the read and the controlled phase");
         }
         for (AllowedEffect effect : effects) {
             if (effect.phase() != ProgramPhase.CONTROLLED_WRITE) {

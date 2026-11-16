@@ -37,13 +37,18 @@ public final class AiStepProgram {
     public static final String GOAL_SELECTOR_TICK = "goalSelector.tick";
     /** The host segment of one move-control tick. */
     public static final String MOVE_CONTROL_TICK = "moveControl.tick";
+    /** The host segment of one look-control tick. */
+    public static final String LOOK_CONTROL_TICK = "lookControl.tick";
+    /** The host segment of one jump-control tick. */
+    public static final String JUMP_CONTROL_TICK = "jumpControl.tick";
 
     private AiStepProgram() {
     }
 
-    /** The three steps of one mob AI update, in the order the host runs them. */
+    /** The steps of one mob AI update, in the order the host runs them. */
     public static List<Node> defaultSteps(EntityUpdateProgram.Input input) {
-        return List.of(serverAiStep(input), goalSelector(input), moveControl(input));
+        return List.of(serverAiStep(input), goalSelector(input), moveControl(input),
+            lookControl(input), jumpControl(input));
     }
 
     /** The mob AI step entry: a read-only program around the host step. */
@@ -80,5 +85,17 @@ public final class AiStepProgram {
             List.of(new EntityUpdateProgram.Successor(EntityUpdateProgram.ProgramKind.MOVE_CONTROL,
                 ProgramPhase.SUCCESSOR, "after-move")));
         return new Node(program, MOVE_CONTROL_TICK);
+    }
+
+    /** The look-control step: a read-only program around the host control tick. */
+    public static Node lookControl(EntityUpdateProgram.Input input) {
+        return new Node(EntityUpdateProgram.dormant(EntityUpdateProgram.ProgramKind.LOOK_CONTROL,
+            input), LOOK_CONTROL_TICK);
+    }
+
+    /** The jump-control step: a read-only program around the host control tick. */
+    public static Node jumpControl(EntityUpdateProgram.Input input) {
+        return new Node(EntityUpdateProgram.dormant(EntityUpdateProgram.ProgramKind.JUMP_CONTROL,
+            input), JUMP_CONTROL_TICK);
     }
 }

@@ -57,6 +57,7 @@ public final class ReadScope {
     private final Set<EntityObjectKey> foreignWrites = new LinkedHashSet<>();
     private final Set<EntityObjectKey> writerRows = new LinkedHashSet<>();
     private boolean closed;
+    private boolean readPhaseClosed;
     private boolean writeStarted;
     private int allowed;
     private int refused;
@@ -147,6 +148,11 @@ public final class ReadScope {
         writeStarted = true;
     }
 
+    /** Whether the read phase already settled its permits and handed the rights to the write wave. */
+    public boolean readPhaseClosed() {
+        return readPhaseClosed;
+    }
+
     /** Ends the writer's hold of one row. */
     public void endWrite(EntityRowIdentity identity) {
         writerRows.remove(key(identity));
@@ -160,13 +166,26 @@ public final class ReadScope {
 
     /** Closes the wave; a later read is refused instead of being served from stale state. */
     public Result close() {
+        return closeReadPhase();
+    }
+
+    /**
+     * Closes the read phase: every active permit is settled and retires, so the read phase and the
+     * write wave hand over atomically - a writer may begin after this call and no stale permit can
+     * read once the phase is closed. A second call returns the same witness.
+     */
+    public Result closeReadPhase() {
         if (closed) {
             return new Result(waveId, permits.size(), allowed, refused, foreignWrites.size(),
                 lastRevision);
         }
-        closed = true;
-        return new Result(waveId, permits.size(), allowed, refused, foreignWrites.size(),
+        Result result = new Result(waveId, permits.size(), allowed, refused, foreignWrites.size(),
             lastRevision);
+        permits.clear();
+        readRevisions.clear();
+        readPhaseClosed = true;
+        closed = true;
+        return result;
     }
 
     public boolean closed() {

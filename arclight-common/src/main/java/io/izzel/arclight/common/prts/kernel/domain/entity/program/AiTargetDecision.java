@@ -45,9 +45,9 @@ public final class AiTargetDecision {
             return outcome.status() == Outcome.Status.REFUSED_BEFORE_EFFECT;
         }
 
-        /** No target is ever reported as applied: the owner-local consumption is not implemented. */
+        /** Whether the target path actually applied its decision and wrote the target. */
         public boolean applied() {
-            return false;
+            return outcome.status() == Outcome.Status.APPLIED;
         }
     }
 
@@ -80,5 +80,20 @@ public final class AiTargetDecision {
             hostTargetWrite.run();
         }
         return consumption;
+    }
+
+    /**
+     * The owner-local consumption of one target decision: the owner-synced admission admits the
+     * node and the declared target write runs exactly once inside it, so the decision is applied
+     * once and no second path writes the target.
+     */
+    public static Consumption consumeOwned(ExceptionPolicy policy, Runnable targetWrite) {
+        Objects.requireNonNull(targetWrite, "targetWrite");
+        Outcome outcome = NODE.run(EventAdmission.ownerSync(), List.of(), null, policy,
+            context -> {
+                targetWrite.run();
+                return Outcome.applied(DecisionKind.TARGET, 1, "target-consumed");
+            });
+        return new Consumption(outcome);
     }
 }

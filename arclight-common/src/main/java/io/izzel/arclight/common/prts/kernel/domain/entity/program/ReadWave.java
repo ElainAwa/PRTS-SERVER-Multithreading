@@ -100,11 +100,9 @@ public final class ReadWave {
         return staged.get(owner);
     }
 
-    /** Declares that a writer holds one row; no permit may be issued or read until it ends. */
+    /** Declares that a writer holds one row; after the read phase closed, the write wave begins. */
     public void beginWrite(EntityRowIdentity identity) {
-        if (!closed) {
-            scope.beginWrite(identity);
-        }
+        scope.beginWrite(identity);
     }
 
     /** Ends a writer's hold of one row. */
@@ -117,10 +115,10 @@ public final class ReadWave {
         scope.noteForeignWrite(identity);
     }
 
-    /** Closes the read phase and returns its witness. */
+    /** Closes the read phase, settling its permits, and returns its witness. */
     public ReadScope.Result close() {
         closed = true;
-        return scope.close();
+        return scope.closeReadPhase();
     }
 
     public boolean closed() {

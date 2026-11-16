@@ -48,9 +48,9 @@ public final class PoiAdmission {
             return outcome.status() == Outcome.Status.REFUSED_BEFORE_EFFECT;
         }
 
-        /** No single winner is decided here, so no operation is ever reported as applied. */
+        /** Whether this admission decided the single winner of its record. */
         public boolean singleWinner() {
-            return false;
+            return outcome.status() == Outcome.Status.APPLIED;
         }
     }
 
@@ -71,6 +71,37 @@ public final class PoiAdmission {
             : DecisionKind.POI_RELEASE;
         Outcome outcome = node.run(admission, List.of(), null, policy,
             context -> Outcome.refusedBeforeEffect(kind, "poi-single-winner-out-of-scope"));
+        return new Verdict(operation, outcome);
+    }
+
+    /**
+     * The owner-local point-of-interest operation: a take claims the record in the claim store and
+     * a release hands it back, both under the owner-synced admission. The first claim winner is the
+     * only winner; a second claim is refused with the holder, and no server-wide barrier is used.
+     */
+    public static Verdict admitOwned(io.izzel.arclight.common.prts.kernel.domain.entity.interaction
+                                         .PoiClaimStore store,
+                                     Operation operation, String recordKey, String ownerSite,
+                                     ExceptionPolicy policy) {
+        Objects.requireNonNull(store, "store");
+        Objects.requireNonNull(recordKey, "recordKey");
+        Objects.requireNonNull(ownerSite, "ownerSite");
+        DecisionNode node = operation == Operation.TAKE ? TAKE : RELEASE;
+        DecisionKind kind = operation == Operation.TAKE ? DecisionKind.POI_TAKE
+            : DecisionKind.POI_RELEASE;
+        Outcome outcome = node.run(EventAdmission.ownerSync(), List.of(), null, policy,
+            context -> {
+                if (operation == Operation.TAKE) {
+                    var claim = store.claim(recordKey, ownerSite);
+                    return claim.granted()
+                        ? Outcome.applied(kind, 1, "poi-claimed")
+                        : Outcome.refusedBeforeEffect(kind, "poi-held:" + claim.holderSite());
+                }
+                var release = store.release(recordKey, ownerSite);
+                return release.granted()
+                    ? Outcome.applied(kind, 1, "poi-released")
+                    : Outcome.refusedBeforeEffect(kind, "poi-not-held");
+            });
         return new Verdict(operation, outcome);
     }
 }

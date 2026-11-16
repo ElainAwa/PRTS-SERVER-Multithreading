@@ -8,11 +8,11 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * The declared order of one brain tick: the sensors tick first and produce the memories, then each
- * activity is started, ticked while it runs and stopped when it ends. The witness keeps one digest
- * per step and maps the sequence onto the phase marks of the brain-tick program, so the existing
- * phase witness and read-only host parity reference compare it. The order is pure contract: it
- * observes nothing by itself and runs nothing.
+ * The declared order of one brain tick: the sensors tick first and produce the memories, then the
+ * activities consume them - each activity is started, ticked while it runs and stopped when it
+ * ends, and one brain tick may fold several sensors and several activities. The witness folds the
+ * sub-steps into the phase marks of the brain-tick program; the order is pure contract and runs
+ * nothing.
  */
 public final class BrainStepOrder {
 
@@ -46,14 +46,14 @@ public final class BrainStepOrder {
     private BrainStepOrder() {
     }
 
-    /** The canonical order of one brain tick. */
+    /** The canonical order of one sensor-then-activity step. */
     public static List<Step> canonical() {
         return CANONICAL;
     }
 
     /**
-     * Checks one observed sequence: at least one sensor tick first, then one activity start, then
-     * any number of activity ticks, then one activity stop; every deviation names its step.
+     * Checks one observed sequence: at least one sensor tick first, then one or more activity
+     * cycles (start, at least one tick, stop); every deviation names the step that broke the order.
      */
     public static Verdict verify(List<Step> steps) {
         Objects.requireNonNull(steps, "steps");
@@ -66,60 +66,54 @@ public final class BrainStepOrder {
         if (sensors == 0) {
             return new Verdict(false, steps.isEmpty() ? null : steps.get(0), "missing-sensor-tick");
         }
-        if (index >= steps.size() || steps.get(index) != Step.ACTIVITY_START) {
-            return new Verdict(false, index < steps.size() ? steps.get(index) : null,
-                "missing-activity-start");
+        if (index >= steps.size()) {
+            return new Verdict(false, null, "missing-activity-start");
         }
-        index++;
-        if (index >= steps.size() || steps.get(index) != Step.ACTIVITY_TICK) {
-            return new Verdict(false, index < steps.size() ? steps.get(index) : null,
-                "missing-activity-tick");
-        }
-        while (index < steps.size() && steps.get(index) == Step.ACTIVITY_TICK) {
+        while (index < steps.size()) {
+            if (steps.get(index) != Step.ACTIVITY_START) {
+                return new Verdict(false, steps.get(index), "missing-activity-start");
+            }
             index++;
-        }
-        if (index >= steps.size() || steps.get(index) != Step.ACTIVITY_STOP) {
-            return new Verdict(false, index < steps.size() ? steps.get(index) : null,
-                "missing-activity-stop");
-        }
-        index++;
-        if (index != steps.size()) {
-            return new Verdict(false, steps.get(index), "step-after-stop");
+            if (index >= steps.size() || steps.get(index) != Step.ACTIVITY_TICK) {
+                return new Verdict(false, index < steps.size() ? steps.get(index) : null,
+                    "missing-activity-tick");
+            }
+            while (index < steps.size() && steps.get(index) == Step.ACTIVITY_TICK) {
+                index++;
+            }
+            if (index >= steps.size() || steps.get(index) != Step.ACTIVITY_STOP) {
+                return new Verdict(false, index < steps.size() ? steps.get(index) : null,
+                    "missing-activity-stop");
+            }
+            index++;
         }
         return new Verdict(true, null, "ordered");
     }
 
     /**
-     * Maps one ordered brain tick onto the brain-tick program witness: the first sensor tick is the
-     * input mark, the activity start the read mark, the first activity tick the decision mark and the
-     * activity stop the successor mark. A sequence without a tick cannot be one witness.
+     * Folds one ordered brain tick into the brain-tick program witness: the sensor ticks fold into
+     * the input mark, the activity starts into the read mark, the activity ticks into the decision
+     * mark and the activity stops into the successor mark.
      */
-    public static ProgramWitness toProgramWitness(List<Entry> entries, EntityUpdateProgram.Input input) {
+    public static ProgramWitness toProgramWitness(List<Entry> entries,
+                                                  EntityUpdateProgram.Input input) {
         Objects.requireNonNull(entries, "entries");
         Objects.requireNonNull(input, "input");
-        List<Step> steps = stepList(entries);
-        Verdict verdict = verify(steps);
+        Verdict verdict = verify(stepList(entries));
         if (!verdict.ordered()) {
             throw new IllegalArgumentException("the brain tick is not ordered: " + verdict.detail());
         }
-        if (count(entries, Step.SENSOR_TICK) != 1 || count(entries, Step.ACTIVITY_TICK) != 1) {
-            throw new IllegalArgumentException("one witness holds one sensor tick and one activity tick");
-        }
-        long sensor = digestOf(entries, Step.SENSOR_TICK);
-        long start = digestOf(entries, Step.ACTIVITY_START);
-        long tick = digestOf(entries, Step.ACTIVITY_TICK);
-        long stop = digestOf(entries, Step.ACTIVITY_STOP);
         EntityUpdateProgram program = EntityUpdateProgram.dormant(
             EntityUpdateProgram.ProgramKind.BRAIN_TICK, input);
         return ProgramWitness.builder(program)
-            .mark(ProgramPhase.INPUT, 1L, sensor, false)
-            .mark(ProgramPhase.READ_COMPUTE, 2L, start, false)
-            .mark(ProgramPhase.DECISION, 3L, tick, false)
-            .mark(ProgramPhase.SUCCESSOR, 4L, stop, false)
+            .mark(ProgramPhase.INPUT, 1L, fold(entries, Step.SENSOR_TICK), false)
+            .mark(ProgramPhase.READ_COMPUTE, 2L, fold(entries, Step.ACTIVITY_START), false)
+            .mark(ProgramPhase.DECISION, 3L, fold(entries, Step.ACTIVITY_TICK), false)
+            .mark(ProgramPhase.SUCCESSOR, 4L, fold(entries, Step.ACTIVITY_STOP), false)
             .build();
     }
 
-    /** The read-only host reference segments of one ordered brain tick. */
+    /** The read-only host reference segments of one folded brain tick. */
     public static List<ProgramHostParity.HostSegment> hostSegments(List<Entry> entries) {
         Objects.requireNonNull(entries, "entries");
         ProgramWitness witness = toProgramWitness(entries, defaultInput());
@@ -139,23 +133,16 @@ public final class BrainStepOrder {
         return steps;
     }
 
-    private static long digestOf(List<Entry> entries, Step step) {
+    private static long fold(List<Entry> entries, Step step) {
+        long folded = 0xcbf29ce484222325L;
+        int ordinal = 0;
         for (Entry entry : entries) {
             if (entry.step() == step) {
-                return entry.digest();
+                folded = (folded ^ entry.digest()) * 0x100000001b3L;
+                folded = (folded ^ ++ordinal) * 0x100000001b3L;
             }
         }
-        return Long.MIN_VALUE;
-    }
-
-    private static int count(List<Entry> entries, Step step) {
-        int count = 0;
-        for (Entry entry : entries) {
-            if (entry.step() == step) {
-                count++;
-            }
-        }
-        return count;
+        return folded;
     }
 
     /** The placeholder input the witness mapping needs; only the program kind matters here. */
