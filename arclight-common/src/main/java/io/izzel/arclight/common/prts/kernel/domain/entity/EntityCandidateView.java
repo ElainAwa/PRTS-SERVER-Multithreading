@@ -12,7 +12,8 @@ import java.util.Objects;
  * of the world. Every row carries its full identity and the eligibility reason the census reached. */
 public final class EntityCandidateView {
 
-    /** Most rows one world contributes to a single tick; a row beyond it is kept as a refusal. */
+    /** The legacy selection cap of one world; a row beyond it is kept as a refusal. The due path
+     * declares its own bound instead, so a world's due rows are never cut at this number. */
     public static final int MAX_CANDIDATES = 4096;
 
     /** One row of a world above the selection cap: the frame keeps it instead of dropping it. */
@@ -27,6 +28,7 @@ public final class EntityCandidateView {
 
     private final String worldId;
     private final long worldEpoch;
+    private final int maxRows;
     private final int count;
     private final long[] entitySeq;
     private final long[] uuidHigh;
@@ -49,6 +51,7 @@ public final class EntityCandidateView {
     private EntityCandidateView(Builder builder) {
         this.worldId = builder.worldId;
         this.worldEpoch = builder.worldEpoch;
+        this.maxRows = builder.maxRows;
         this.count = builder.count;
         this.entitySeq = java.util.Arrays.copyOf(builder.entitySeq, builder.count);
         this.uuidHigh = java.util.Arrays.copyOf(builder.uuidHigh, builder.count);
@@ -161,7 +164,7 @@ public final class EntityCandidateView {
         java.util.Arrays.sort(order, java.util.Comparator
             .comparing((Integer i) -> regionKey(chunkX[i], chunkZ[i], side))
             .thenComparingLong(i -> entitySeq[i]));
-        Builder builder = builder(worldId, worldEpoch);
+        Builder builder = builder(worldId, worldEpoch, maxRows);
         for (int i = 0; i < count; i++) {
             int row = order[i];
             builder.add(identity(row), reason(row), chunkX[row], chunkZ[row], posX[row],
@@ -180,8 +183,14 @@ public final class EntityCandidateView {
         return "r" + Math.floorDiv(chunkX, side) + "." + Math.floorDiv(chunkZ, side);
     }
 
+    /** A builder with the legacy selection cap. */
     public static Builder builder(String worldId, long worldEpoch) {
-        return new Builder(worldId, worldEpoch);
+        return new Builder(worldId, worldEpoch, MAX_CANDIDATES);
+    }
+
+    /** A builder bounded by the caller's declared row limit; the due path passes its own bound. */
+    public static Builder builder(String worldId, long worldEpoch, int maxRows) {
+        return new Builder(worldId, worldEpoch, maxRows);
     }
 
     /** Collects the entity rows of one world before they are frozen into a view. */
@@ -189,6 +198,7 @@ public final class EntityCandidateView {
 
         private final String worldId;
         private final long worldEpoch;
+        private final int maxRows;
         private int count;
         private long[] entitySeq = new long[16];
         private long[] uuidHigh = new long[16];
@@ -208,13 +218,17 @@ public final class EntityCandidateView {
         private long[] flags = new long[16];
         private final List<Refused> refused = new ArrayList<>();
 
-        private Builder(String worldId, long worldEpoch) {
+        private Builder(String worldId, long worldEpoch, int maxRows) {
+            if (maxRows <= 0) {
+                throw new IllegalArgumentException("a row limit must be positive");
+            }
             this.worldId = worldId;
             this.worldEpoch = worldEpoch;
+            this.maxRows = maxRows;
         }
 
         public boolean full() {
-            return count >= MAX_CANDIDATES;
+            return count >= maxRows;
         }
 
         public int size() {
@@ -284,7 +298,7 @@ public final class EntityCandidateView {
         }
 
         private void grow() {
-            int next = Math.min(MAX_CANDIDATES, this.entitySeq.length * 2);
+            int next = Math.min(this.maxRows, this.entitySeq.length * 2);
             this.entitySeq = java.util.Arrays.copyOf(this.entitySeq, next);
             this.uuidHigh = java.util.Arrays.copyOf(this.uuidHigh, next);
             this.uuidLow = java.util.Arrays.copyOf(this.uuidLow, next);

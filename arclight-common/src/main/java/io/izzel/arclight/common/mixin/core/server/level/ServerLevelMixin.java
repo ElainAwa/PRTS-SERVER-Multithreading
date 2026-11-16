@@ -27,6 +27,7 @@ import io.izzel.arclight.common.mod.server.world.WorldSymlink;
 import io.izzel.arclight.common.mod.util.ArclightCaptures;
 import io.izzel.arclight.common.mod.util.DelegateWorldInfo;
 import io.izzel.arclight.common.mod.util.DistValidate;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityDueCapture;
 import io.izzel.arclight.i18n.ArclightConfig;
 import io.izzel.arclight.mixin.Decorate;
 import io.izzel.arclight.mixin.DecorationOps;
@@ -62,6 +63,7 @@ import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.dimension.LevelStem;
 import net.minecraft.world.level.dimension.end.EndDragonFight;
+import net.minecraft.world.level.entity.EntityTickList;
 import net.minecraft.world.level.entity.PersistentEntitySectionManager;
 import net.minecraft.world.level.gameevent.GameEvent;
 import net.minecraft.world.level.levelgen.FlatLevelSource;
@@ -108,6 +110,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Executor;
+import java.util.function.BooleanSupplier;
 
 @Mixin(ServerLevel.class)
 public abstract class ServerLevelMixin extends LevelMixin implements ServerLevelBridge {
@@ -124,6 +127,7 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
     @Shadow @Final private ServerChunkCache chunkSource;
     @Shadow @Final public ServerLevelData serverLevelData;
     @Shadow @Final private PersistentEntitySectionManager<Entity> entityManager;
+    @Shadow @Final private EntityTickList entityTickList;
     @Shadow public abstract DimensionDataStorage getDataStorage();
     @Shadow protected abstract void addPlayer(ServerPlayer serverPlayer);
     @Shadow @Nullable public abstract Entity getEntity(int i);
@@ -316,6 +320,34 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
     @Inject(method = "tickPassenger", at = @At(value = "INVOKE", shift = At.Shift.AFTER, target = "Lnet/minecraft/world/entity/Entity;rideTick()V"))
     private void arclight$tickPortalPassenger(Entity ridingEntity, Entity passengerEntity, CallbackInfo ci) {
         ((EntityBridge) passengerEntity).bridge$postTick();
+    }
+
+    /**
+     * Freezes the level's native entity tick set immediately before the host iterates it. The
+     * kernel's dispatch work source must be the rows the host itself will tick in this tick rather
+     * than a whole-world scan, and the set must be frozen before any row of it ticks. The forEach
+     * call is the iteration the host runs, so injecting at that call sees exactly the rows this
+     * tick's iteration will visit; a tick head would run before other tick phases and an iteration
+     * callback would freeze rows after earlier rows had already ticked. The capture does nothing
+     * unless the kernel, its plan switch and its job graph are all declared, so a process that does
+     * not run the kernel keeps the host loop unchanged; a failed freeze is dropped and the kernel
+     * keeps its legacy work source for the tick instead of planning a partial window.
+     */
+    @Inject(method = "tick", at = @At(value = "INVOKE", shift = At.Shift.BEFORE,
+        target = "Lnet/minecraft/world/level/entity/EntityTickList;forEach(Ljava/util/function/Consumer;)V"))
+    private void prts$freezeEntityDueWindow(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
+        if (!EntityDueCapture.armed()) {
+            return;
+        }
+        try {
+            ServerLevel level = (ServerLevel) (Object) this;
+            EntityDueCapture.begin(level.getServer().getTickCount(),
+                level.dimension().location().toString(), this.entityManager.count());
+            this.entityTickList.forEach(EntityDueCapture::row);
+            EntityDueCapture.end();
+        } catch (Throwable failure) {
+            EntityDueCapture.fail(failure);
+        }
     }
 
     @Decorate(method = "tickChunk", at = @At(value = "INVOKE", ordinal = 0, target = "Lnet/minecraft/util/RandomSource;nextInt(I)I"))

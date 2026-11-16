@@ -31,6 +31,17 @@ public final class DispatchSnapshot {
         return LAST_LEDGER.get();
     }
 
+    /** Builds one tick's frame from the due window the host froze in that same server tick: the
+     * work source is the window's identity set, no world is listed and no loaded set is scanned;
+     * the ledger is published under the same accessor as a legacy capture. */
+    public static EntityDueWindow.Result captureDue(long tick, EntityDueCapture.Window window,
+                                                    WorldEpochSource worldEpochs, int maxRows) {
+        EntityDueWindow.Result result =
+            EntityDueWindow.compile(tick, window.worlds(), worldEpochs, maxRows);
+        LAST_LEDGER.set(result.ledger());
+        return result;
+    }
+
     public static List<EntityCandidateView> capture(WorldEpochSource worldEpochs) {
         return capture(worldEpochs, entityId -> false);
     }
@@ -117,7 +128,8 @@ public final class DispatchSnapshot {
             handle.getId(), handle.tickCount);
     }
 
-    private static long hostStep(net.minecraft.world.entity.Entity handle) {
+    /** The kinematic step the host would take for one row; read before the row's tick runs. */
+    public static long hostStep(net.minecraft.world.entity.Entity handle) {
         if (handle instanceof net.minecraft.world.entity.decoration.ArmorStand armorStand) {
             // The host lets an armour stand travel only while it has physics, which is exactly the
             // negation of the two flags below; a stand without it is dragged and never moved.

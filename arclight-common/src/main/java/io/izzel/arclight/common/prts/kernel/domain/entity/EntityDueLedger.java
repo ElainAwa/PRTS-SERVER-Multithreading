@@ -1,10 +1,4 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/*
- * The per-tick, per-identity ledger of the rows a tick offers: every observed row keeps its full
- * identity and eligibility reason, every identity the tick promised is reconciled against the
- * observed set, and a row a declared capacity cannot hold is retained in a refusal list instead of
- * being dropped. The ledger holds plain values only and the tick thread owns one instance per tick.
- */
 package io.izzel.arclight.common.prts.kernel.domain.entity;
 
 import io.izzel.arclight.common.prts.support.EntityEligibility;
@@ -27,15 +21,15 @@ import java.util.Set;
 public final class EntityDueLedger {
 
     /** The tracked lifecycle state of one ledger row. */
-    public enum State { LOADED, ELIGIBLE, MISSING, EXTRA, OVER_CAPACITY }
+    public enum State { LOADED, ELIGIBLE, DUE, ADMITTED, REFUSED, MISSING, EXTRA, OVER_CAPACITY }
 
-    /** One retained row; only a missing row has no reason. */
+    /** One retained row; a missing row and a capacity refusal carry no eligibility reason. */
     public record Row(EntityRowIdentity identity, EntityEligibility.Reason reason, State state) {
 
         public Row {
             Objects.requireNonNull(identity, "identity");
             Objects.requireNonNull(state, "state");
-            if (state != State.MISSING) {
+            if (state != State.MISSING && state != State.OVER_CAPACITY) {
                 Objects.requireNonNull(reason, "reason");
             }
         }
@@ -55,8 +49,15 @@ public final class EntityDueLedger {
     private final Map<IdKey, EntityRowIdentity.ObjectKey> observedIds = new HashMap<>();
     private final List<Row> missing = new ArrayList<>();
     private final List<Row> extra = new ArrayList<>();
+    private final Map<String, Integer> loadedByWorld = new LinkedHashMap<>();
     private long duplicateObservations;
     private long idReuses;
+    private long dueCount;
+    private long admittedCount;
+    private long passengerDue;
+    private long nonPassengerDue;
+    private long removedDue;
+    private long overCapacityDue;
     private boolean closed;
 
     private EntityDueLedger(long tick, int capacity) {
@@ -111,11 +112,7 @@ public final class EntityDueLedger {
             duplicateObservations++;
             return false;
         }
-        IdKey idKey = new IdKey(identity.worldId(), identity.worldEpoch(), identity.entityId());
-        EntityRowIdentity.ObjectKey first = observedIds.putIfAbsent(idKey, key);
-        if (first != null && !first.equals(key)) {
-            idReuses++;
-        }
+        noteId(identity);
         State state = EntityEligibility.admitted(reason) ? State.ELIGIBLE : State.LOADED;
         Row row = new Row(identity, reason, state);
         if (rows.size() < capacity) {
@@ -124,6 +121,124 @@ public final class EntityDueLedger {
         }
         overflow.add(new Row(identity, reason, State.OVER_CAPACITY));
         return false;
+    }
+
+    /** Books one level's loaded entity total; the due rows of that level are booked apart. */
+    public void noteLoaded(String worldId, int loaded) {
+        requireOpen("note loaded");
+        Objects.requireNonNull(worldId, "worldId");
+        if (loaded < 0) {
+            throw new IllegalArgumentException("a loaded total cannot be negative");
+        }
+        loadedByWorld.put(worldId, loaded);
+    }
+
+    /**
+     * Books one identity the host entity tick list carried at the start of the tick, with its
+     * passenger split and the reason the census reached. A row the host will skip because it is
+     * already removed is retained as a refusal; a row beyond the declared capacity is retained as
+     * an explicit capacity refusal, so no due identity is dropped.
+     *
+     * @return whether the row entered the tracked table
+     */
+    public boolean due(EntityRowIdentity identity, boolean passenger, boolean removed,
+                       EntityEligibility.Reason reason) {
+        requireOpen("book due");
+        Objects.requireNonNull(identity, "identity");
+        Objects.requireNonNull(reason, "reason");
+        EntityRowIdentity.ObjectKey key = identity.objectKey();
+        if (rows.containsKey(key) || retained(key)) {
+            duplicateObservations++;
+            return false;
+        }
+        noteId(identity);
+        dueCount++;
+        if (passenger) {
+            passengerDue++;
+        } else {
+            nonPassengerDue++;
+        }
+        if (removed) {
+            rows.put(key, new Row(identity, EntityEligibility.Reason.LIFECYCLE, State.REFUSED));
+            removedDue++;
+            return true;
+        }
+        if (rows.size() < capacity) {
+            rows.put(key, new Row(identity, reason, State.DUE));
+            return true;
+        }
+        overflow.add(new Row(identity, null, State.OVER_CAPACITY));
+        overCapacityDue++;
+        return false;
+    }
+
+    /** Marks one due row as admitted to the tick's work plan; only a tracked due row advances. */
+    public boolean admit(EntityRowIdentity identity) {
+        requireOpen("admit");
+        Objects.requireNonNull(identity, "identity");
+        EntityRowIdentity.ObjectKey key = identity.objectKey();
+        Row row = rows.get(key);
+        if (row == null || row.state() != State.DUE) {
+            return false;
+        }
+        rows.put(key, new Row(identity, row.reason(), State.ADMITTED));
+        admittedCount++;
+        return true;
+    }
+
+    /** The loaded entity total of one level, or zero when the caller did not name one. */
+    public int loaded(String worldId) {
+        Integer loaded = loadedByWorld.get(worldId);
+        return loaded == null ? 0 : loaded;
+    }
+
+    /** The loaded entity total over every level this ledger booked. */
+    public int loaded() {
+        int total = 0;
+        for (int loaded : loadedByWorld.values()) {
+            total += loaded;
+        }
+        return total;
+    }
+
+    /** The identities the host tick list carried at the start of the tick. */
+    public long dueCount() {
+        return dueCount;
+    }
+
+    /** The due identities that reached the tick's work plan. */
+    public long admittedCount() {
+        return admittedCount;
+    }
+
+    /** The due identities that never reached the work plan: removed, or beyond the bound. */
+    public long refusedDueCount() {
+        return dueCount - admittedCount;
+    }
+
+    /** The due identities whose host tick runs as a passenger ride tick. */
+    public long passengerDueCount() {
+        return passengerDue;
+    }
+
+    /** The due identities whose host tick runs as a non-passenger tick. */
+    public long nonPassengerDueCount() {
+        return nonPassengerDue;
+    }
+
+    /** The due identities the host would already have skipped because they were removed. */
+    public long removedDueCount() {
+        return removedDue;
+    }
+
+    /** The due identities the declared memory bound kept out of the work plan. */
+    public long overCapacityDueCount() {
+        return overCapacityDue;
+    }
+
+    /** Whether every due identity ended admitted or explicitly refused. */
+    public boolean dueAccounted() {
+        return dueCount == admittedCount + removedDue + overCapacityDue;
     }
 
     /**
@@ -245,6 +360,14 @@ public final class EntityDueLedger {
     /** Numeric ids this ledger observed under more than one object lifecycle. */
     public long idReuses() {
         return idReuses;
+    }
+
+    private void noteId(EntityRowIdentity identity) {
+        IdKey idKey = new IdKey(identity.worldId(), identity.worldEpoch(), identity.entityId());
+        EntityRowIdentity.ObjectKey first = observedIds.putIfAbsent(idKey, identity.objectKey());
+        if (first != null && !first.equals(identity.objectKey())) {
+            idReuses++;
+        }
     }
 
     private boolean retained(EntityRowIdentity.ObjectKey key) {

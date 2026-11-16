@@ -27,6 +27,8 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.DispatchSnapshot;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.TakeoverWhitelist;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityCandidateView;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityDueCapture;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityDueWindow;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
@@ -258,6 +260,10 @@ public final class EntityDomain implements KernelDomain {
 
     @Override
     public void tick(long tick) {
+        // The due window of this server tick was frozen by the level ticks that just ran; it is
+        // taken before any early return, so a tick this domain does not dispatch leaves no window
+        // behind for the next one.
+        EntityDueCapture.Window dueWindow = EntityDueCapture.take();
         // The migrated face books what the host entry closed since the last adoption; it is read
         // here and nowhere else, so nothing this domain decides can depend on it.
         if (FRAME_MIGRATION) {
@@ -369,10 +375,21 @@ public final class EntityDomain implements KernelDomain {
         // One epoch source for the freeze and the commit: the task carries the generation the
         // write-right guard tracks, so the write-back can freeze it and the commit can compare the
         // very same number.
-        List<EntityCandidateView> views =
-            DispatchSnapshot.capture(module.guard().worldEpochs()::epochOf,
+        List<EntityCandidateView> views;
+        if (dueWindow != null) {
+            // The due path consumes the window the host froze in the same server tick: the rows are
+            // the ones the host itself iterated, so the work source scans no world and applies no
+            // fixed selection cap. Its only bound is the declared memory guard, which keeps every
+            // row it refuses in the identity ledger.
+            EntityDueWindow.Result due = DispatchSnapshot.captureDue(tick, dueWindow,
+                module.guard().worldEpochs()::epochOf, EntityDueWindow.ROW_BOUND);
+            views = due.views();
+        } else {
+            // The legacy path keeps the loaded scan and its selection cap untouched.
+            views = DispatchSnapshot.capture(module.guard().worldEpochs()::epochOf,
                 entityId -> EntityTickOwnership.live()
                     && EntityTickOwnership.claimedForDispatch(entityId));
+        }
         DispatchWriteBack.noteSnapshot(readings, RUNTIME_WORLD, "snapshot",
             System.nanoTime() - snapshotStart);
         long entityCount = 0L;
