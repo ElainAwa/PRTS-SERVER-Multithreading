@@ -3,6 +3,7 @@ package io.izzel.arclight.common.prts.kernel.decision;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * One owner-local decision node: the admission of the whole chain is asked before any prefix, the
@@ -68,10 +69,13 @@ public final class DecisionNode {
     private final String entry;
     private final long registeredEpoch;
     private final int reentryBound;
-    private long passthroughs;
-    private long admitted;
-    private long refusals;
-    private long faults;
+    // One node is shared by every host entry of its kind (the air and damage glue keep static
+    // nodes), so the counters are thread-safe: several owner threads may run the same node and the
+    // sums are read by the evidence paths without a lock on the decision path.
+    private final LongAdder passthroughs = new LongAdder();
+    private final LongAdder admitted = new LongAdder();
+    private final LongAdder refusals = new LongAdder();
+    private final LongAdder faults = new LongAdder();
 
     private DecisionNode(DecisionKind kind, String entry, long registeredEpoch, int reentryBound) {
         this.kind = Objects.requireNonNull(kind, "kind");
@@ -106,11 +110,11 @@ public final class DecisionNode {
             ? new EventAdmission.Verdict(EventAdmission.Mode.LEGACY, "no-admission-table", 0, 0)
             : admission.admit(listeners);
         if (!verdict.ownerSync()) {
-            passthroughs++;
+            passthroughs.increment();
             return Outcome.passthrough(kind, "legacy-whole-event:" + verdict.reason());
         }
         if (epochs != null && epochs.admits(registeredEpoch) == RegistrationEpoch.Verdict.MISMATCH) {
-            refusals++;
+            refusals.increment();
             return Outcome.refusedBeforeEffect(kind, "epoch-mismatch-before-prefix");
         }
         BoundedReentry.Scope scope = BoundedReentry.reserve(reentryBound).open();
@@ -119,19 +123,19 @@ public final class DecisionNode {
         try {
             outcome = body.decide(context);
         } catch (BoundedReentry.OverBound over) {
-            faults++;
+            faults.increment();
             return Outcome.faultKeepPrefix(kind, context.applied(), "reentry-over-bound");
         } catch (Throwable thrown) {
             switch (policy.decide(entry, thrown)) {
                 case RECORD_AND_CONTINUE:
-                    faults++;
+                    faults.increment();
                     return Outcome.faultRecorded(kind, context.applied(), "recorded:" + thrown);
                 case FAULT_KEEP_PREFIX:
-                    faults++;
+                    faults.increment();
                     return Outcome.faultKeepPrefix(kind, context.applied(), "fault:" + thrown);
                 case PROPAGATE_TO_CALLER:
                 default:
-                    faults++;
+                    faults.increment();
                     if (thrown instanceof RuntimeException runtime) {
                         throw runtime;
                     }
@@ -149,10 +153,10 @@ public final class DecisionNode {
         if (epochs != null && epochs.admits(registeredEpoch) == RegistrationEpoch.Verdict.MISMATCH) {
             // The nodes of the older registration may have applied a prefix; the newer one does not
             // re-dispatch it. The fault keeps the prefix and names the boundary.
-            faults++;
+            faults.increment();
             return Outcome.faultKeepPrefix(kind, context.applied(), "epoch-mismatch-mid-update");
         }
-        admitted++;
+        admitted.increment();
         return outcome;
     }
 
@@ -173,18 +177,18 @@ public final class DecisionNode {
     }
 
     public long passthroughs() {
-        return passthroughs;
+        return passthroughs.sum();
     }
 
     public long admitted() {
-        return admitted;
+        return admitted.sum();
     }
 
     public long refusals() {
-        return refusals;
+        return refusals.sum();
     }
 
     public long faults() {
-        return faults;
+        return faults.sum();
     }
 }
