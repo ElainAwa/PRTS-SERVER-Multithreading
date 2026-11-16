@@ -66,13 +66,23 @@ public final class WorldLifecycleOwner {
         return true;
     }
 
-    /** Advances one world along the one legal edge out of its current state. */
+    /** Advances one world along the one legal edge out of its current state. A caller that cannot
+     * show every obligation drained may not declare the world reclaimed. */
     public synchronized boolean transition(String worldId, State target) {
+        return transition(worldId, target, false);
+    }
+
+    /** Advances one world, gating the reclaim on the caller's drained report: a world whose intents
+     * or arena slots are still owed may reach no further than its current state. */
+    public synchronized boolean transition(String worldId, State target, boolean obligationsDrained) {
         if (!ownerThread()) {
             return deny();
         }
         State current = worlds.get(worldId);
         if (current == null || target == null || !legal(current, target)) {
+            return deny();
+        }
+        if (target == State.GONE && !obligationsDrained) {
             return deny();
         }
         worlds.put(worldId, target);

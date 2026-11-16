@@ -5,19 +5,24 @@ import io.izzel.arclight.common.prts.kernel.codes.RejectTrigger.Diag5;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 
 /** The result of one commit step. A step either commits the head, or releases it with a final
- * refusal, or refuses it and leaves it where it is. */
+ * refusal that provably happened before the effect, or faults it after the effect became unknown
+ * and keeps it, or refuses it and leaves it where it is. */
 public record CommitOrder(boolean committed, long commitSeq, RejectCode code, Diag5 diag,
-                          boolean released) {
+                          boolean released, boolean faulted) {
 
     public static CommitOrder committed(long commitSeq) {
-        return new CommitOrder(true, commitSeq, null, null, false);
+        return new CommitOrder(true, commitSeq, null, null, false, false);
     }
 
     public static CommitOrder refused(RejectCode code, Diag5 diag) {
-        return new CommitOrder(false, 0L, code, diag, false);
+        return new CommitOrder(false, 0L, code, diag, false, false);
     }
 
     public static CommitOrder released(RejectCode code, Diag5 diag) {
-        return new CommitOrder(false, 0L, code, diag, true);
+        return new CommitOrder(false, 0L, code, diag, true, false);
+    }
+
+    public static CommitOrder faulted(RejectCode code, Diag5 diag) {
+        return new CommitOrder(false, 0L, code, diag, false, true);
     }
 }

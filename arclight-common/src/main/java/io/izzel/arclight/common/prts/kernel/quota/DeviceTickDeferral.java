@@ -257,6 +257,16 @@ public final class DeviceTickDeferral {
         return List.copyOf(RECEIPTS);
     }
 
+    /** Clears the receipts and totals only while no plan is open or waiting; a busy deferral keeps
+     * its state so a reset cannot drop a tick that the current tick still owes. */
+    public static synchronized boolean resetIfIdle() {
+        if (!OPEN.isEmpty() || !WAITING.isEmpty()) {
+            return false;
+        }
+        reset();
+        return true;
+    }
+
     public static synchronized void reset() {
         OPEN.clear();
         WAITING.clear();

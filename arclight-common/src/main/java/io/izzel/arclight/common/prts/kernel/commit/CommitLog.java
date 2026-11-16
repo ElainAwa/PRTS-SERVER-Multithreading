@@ -283,6 +283,9 @@ public final class CommitLog {
             MERGED,
             INTENT,
             PARTIAL,
+            /** The effect may have run and its record is not written: the line keeps the identity and
+             * the ticket keeps its room until the fault is settled. */
+            FAULT,
             DROPPED,
             RETRIED
         }
@@ -352,6 +355,9 @@ public final class CommitLog {
     // Stored lines whose effect reached only a part of its write, counted apart from the dropped
     // ones. No read key is added: the reservation holder already counts its own partial terminals.
     private long partial;
+    // Stored fault lines: the effect may have run and its record is not written. Counted apart from
+    // the partial and dropped ones and read through the line, so no key is added.
+    private long fault;
     private long orderViolations;
     private long refusedFull;
     private long unplanned;
@@ -534,6 +540,7 @@ public final class CommitLog {
             case MERGED -> merged++;
             case INTENT -> intents++;
             case PARTIAL -> partial++;
+            case FAULT -> fault++;
             case RETRIED -> retried++;
             case DROPPED -> dropped++;
         }
@@ -727,6 +734,7 @@ public final class CommitLog {
             case MERGED -> merged++;
             case INTENT -> intents++;
             case PARTIAL -> partial++;
+            case FAULT -> fault++;
             case RETRIED -> retried++;
             case DROPPED -> dropped++;
         }
@@ -829,12 +837,77 @@ public final class CommitLog {
             case MERGED -> merged++;
             case INTENT -> intents++;
             case PARTIAL -> partial++;
+            case FAULT -> fault++;
             case RETRIED -> retried++;
             case DROPPED -> dropped++;
         }
         ticketStored++;
         watermarks = Math.max(watermarks, ring.depth());
         return new Verdict(true, disposition, null, sequence, ticket.position());
+    }
+
+    /** Records the fault line of a ticket whose terminal record is not written: the frozen place, the
+     * identity and the effect reference are kept, and the fault code is written with them. The room
+     * the ticket holds is not released here; the holder gives it back after this line is stored. A
+     * ticket of another log or store, or one whose slot this log no longer holds, is refused. */
+    public Verdict recordFault(CommitTicket ticket, RejectCode code) {
+        if (ticket == null || effects == null) {
+            return ticketRefusal(RejectCode.COUNTER_MISSING, -1);
+        }
+        if (ticket.logLifetime() != lifetime || ticket.effectSlot().storeId() != effects.storeId()) {
+            crossLogRefusals++;
+            return ticketRefusal(RejectCode.COUNTER_MISSING, ticket.position());
+        }
+        RingSlot ringSlot = ticket.ringSlot();
+        RingSlot held = heldSlots.get(ringSlot.ticket());
+        if (held == null || !held.equals(ringSlot) || held.lifetime() != lifetime
+            || held.resetEpoch() != resetEpoch) {
+            staleTicketRefusals++;
+            return ticketRefusal(RejectCode.COUNTER_MISSING, ticket.position());
+        }
+        String pairKey = key(ticket.batch().worldId(), ticket.batch().domainId());
+        if (!ringSlot.worldId().equals(ticket.batch().worldId())
+            || !ringSlot.domainId().equals(ticket.batch().domainId())) {
+            crossLogRefusals++;
+            return ticketRefusal(RejectCode.COUNTER_MISSING, ticket.position());
+        }
+        long[] frozen = heldPlans.get(ringSlot.ticket());
+        if (frozen == null || frozen[0] != ticket.planSequence() || frozen[1] != ticket.position()
+            || !ascending(ticket.batch().worldId(), ticket.batch().domainId(), ticket.planSequence(),
+                ticket.position())
+            || holdsAnEarlierPlace(pairKey, ticket.planSequence(), ticket.position())) {
+            orderViolations++;
+            return ticketRefusal(RejectCode.COMMIT_ORDER_VIOLATION, ticket.position());
+        }
+        FrozenDeclarations.Seat seat = new FrozenDeclarations.Seat(ticket.batch().worldId(),
+            ticket.batch().domainId(), ticket.planSequence(), ticket.position());
+        FrozenDeclarations.RangeSeal range = identitySource.range(seat,
+            ticket.identity().chunkPos());
+        if (range == null && identitySource.hasRange(seat)) {
+            return ticketRefusal(RejectCode.VERSION_MISMATCH, ticket.position());
+        }
+        RejectCode faultCode = code == null ? RejectCode.COUNTER_MISSING : code;
+        Entry entry = new Entry(++sequence, tickIndex, ticket.planSequence(), ticket.position(),
+            ticket.batch().worldId(), ticket.batch().domainId(), ticket.batch().nodeKey(), 0L,
+            ticket.batch().kind(), ticket.batch().expectedVersion(), ticket.batch().writeSetDigest(),
+            ticket.batch().rows(), Entry.Disposition.FAULT, faultCode, false, ticket.identity());
+        CommitRing ring = ring(ticket.batch().worldId(), ticket.batch().domainId());
+        CommitRing.Push push = store(ring, ringSlot.ticket(), entry);
+        if (!push.stored()) {
+            // No fault line was stored, so the ticket keeps its slot and its room.
+            return ticketRefusal(push.code(), ticket.position());
+        }
+        consumeSlot(ringSlot);
+        lastPlanOfRing.put(pairKey, ticket.planSequence());
+        lastPositionOfRing.put(pairKey, ticket.position());
+        noteStoredSeat(ticket.batch().worldId(), ticket.batch().domainId(), ticket.planSequence(),
+            ticket.position());
+        instanceNamespaces.put(instanceKeyOf(ticket.batch().worldId(), ticket.batch().domainId(),
+            ticket.identity().instanceId()), instanceOf(ticket.identity(), range));
+        fault++;
+        ticketStored++;
+        watermarks = Math.max(watermarks, ring.depth());
+        return new Verdict(true, Entry.Disposition.FAULT, faultCode, sequence, ticket.position());
     }
 
     /** Whether this instance number is already held by another lifecycle, chunk or published state.
@@ -1383,6 +1456,12 @@ public final class CommitLog {
             unresolvedOf(typed));
     }
 
+    /** The tick the log was last opened at, read by the holder to age an obligation. Internal to the
+     * package: no read key is added for it. */
+    long tickIndex() {
+        return tickIndex;
+    }
+
     public long sequence() {
         return sequence;
     }
@@ -1566,6 +1645,7 @@ public final class CommitLog {
         dropped = 0L;
         retried = 0L;
         partial = 0L;
+        fault = 0L;
         orderViolations = 0L;
         refusedFull = 0L;
         unplanned = 0L;

@@ -68,6 +68,20 @@ final class GenMinWatermark {
         }
     }
 
+    /** Drops one world from the tracked set at its unload. The row is unbound rather than cleared
+     * globally, so the remaining worlds are re-derived from their own snapshot on the next sync. */
+    synchronized void forgetWorld(WaitProgress progress, String worldId) {
+        if (worldId == null || worlds == null || !worlds.containsKey(worldId)) {
+            return;
+        }
+        worlds.remove(worldId);
+        unbind(progress);
+        watermark = 0L;
+        if (worlds.isEmpty()) {
+            worlds = null;
+        }
+    }
+
     /** Removes the binding and forgets the world generation; a later bind starts a fresh watermark. */
     synchronized void clear(WaitProgress progress) {
         if (progress != null && bound) {

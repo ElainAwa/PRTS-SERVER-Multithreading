@@ -123,6 +123,7 @@ import java.util.Deque;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Set;
 import java.util.Locale;
@@ -505,6 +506,7 @@ public final class KernelModule {
     private final List<WorldStopFlush> stopFlushRows = new ArrayList<>();
     private final List<WorldUnloadDelivery> unloadRows = new ArrayList<>();
     private final Map<String, Long> stopFlushEntries = new HashMap<>();
+    private final Map<String, WorldDrain> worldDrains = new LinkedHashMap<>();
     private long unloadStopEntry;
     private long unloadDuplicateCount;
     private long unloadEpochAdvances;
@@ -2578,6 +2580,11 @@ public final class KernelModule {
      * world of one stop is what a diagnostic reads back. */
     private static final int STOP_FLUSH_ROW_CAP = 64;
 
+    /** Most intents one world's stop flush may walk, and the wall time it may spend doing it. The
+     * drain is bounded so a busy or stuck world cannot hold the stopping path open. */
+    private static final int STOP_DRAIN_ITEMS = 1024;
+    private static final long STOP_DRAIN_NANOS = 50_000_000L;
+
 
     public long commitSealedTurn() {
         return commitSealedTurn;
@@ -3119,12 +3126,13 @@ public final class KernelModule {
     }
 
 
-    /** One world's turn in the stop flush: the four steps taken in one session on the owner thread,
-     * each stamped with the step it was taken as, so the order of a run is read and not assumed. A world
-     * whose generation is absent or was never tracked is refused whole. */
+    /** One world's turn in the stop flush: the steps it reached in one session on the owner thread,
+     * each stamped with the step it was taken as, so the order of a run is read and not assumed. An
+     * incomplete session stops with zero stamps at the steps it could not take. A world whose
+     * generation is absent or was never tracked is refused whole. */
     public record WorldStopFlush(String worldId, long worldEpoch, String refusal, long dispatchStep,
                                  long flushStep, long unloadRowStep, long reclaimStep, int flushed,
-                                 int reclaimed) {
+                                 int reclaimed, boolean complete) {
 
         /** The four step stamps of this row, in the order the session took them. */
         public String steps() {
@@ -3141,8 +3149,9 @@ public final class KernelModule {
 
     /** Flushes one world through the four step set because the server is stopping: the unload event is
      * not delivered on this path and this tree calls removeLevel nowhere, so a world is walked here or
-     * nowhere. The world stops taking new work, its waiting writes are handed to the payload, the row of
-     * its unload is written, and what the flush could not land goes back. */
+     * nowhere. The world stops taking new work and its waiting intents are drained within one bounded
+     * budget. Only a world whose drain is complete and whose arena slots are all returned gives up its
+     * epoch, shard and segments; an incomplete one keeps all three and stays reclaimable later. */
     public WorldStopFlush flushWorldAtStop(String worldId) {
         String named = worldId == null || worldId.isEmpty() ? "unnamed" : worldId;
         boolean record = KernelSettings.worldSetReadouts() && worldLifecycle.holdsUnload(named);
@@ -3165,37 +3174,61 @@ public final class KernelModule {
         if (epoch == WorldEpochs.UNLIVE || epoch == WorldEpochs.UNTRACKED) {
             commitStopFlushRefusals++;
             commitStopFlushRefusal = epoch == WorldEpochs.UNLIVE ? "world-not-live" : "world-untracked";
+            rememberWorldDrain(named, new WorldDrain(named, 0, 0, 0L, 0, 0, 0, intents.depth(named),
+                0, 0, 0, SAVE_WATERMARK_NOT_APPLIED, DURABILITY_NOT_VERIFIED, false));
             return noteStopFlush(new WorldStopFlush(named, epoch, commitStopFlushRefusal, 0L, 0L, 0L,
-                0L, 0, 0));
+                0L, 0, 0, false));
         }
         long dispatchStep = ++stopStepSequence;
-        guard.worldEpochs().forget(named);
+        intents.closeWorld(named);
         long flushStep = ++stopStepSequence;
-        int flushed = flushWorldIntents(named);
-        long unloadRowStep = ++stopStepSequence;
-        commitStopFlushSessions++;
-        if (stopFlushWorlds.size() < STOP_FLUSH_ROW_CAP) {
-            stopFlushWorlds.add(named);
+        IntentQueue.DrainResult drained = intents.drainWorld(named, STOP_DRAIN_ITEMS,
+            System.nanoTime() + STOP_DRAIN_NANOS, tickIndex);
+        commitSegment.advanceWorld(named, drained.consumedOrders());
+        long unloadRowStep = 0L;
+        long reclaimStep = 0L;
+        int reclaimed = 0;
+        boolean complete = false;
+        int arenaPinned = arena.pinnedWorldCount(named);
+        if (drained.complete()) {
+            // The arena is the second gate: a segment with a held slot stays even when the intent
+            // shard is empty, so an in-flight batch is never reclaimed from under its writer.
+            ArenaLedger.WorldReturn arenaReturn = arena.returnWorld(named);
+            arenaPinned = arenaReturn.pinned();
+            complete = arenaReturn.complete();
+            if (complete) {
+                unloadRowStep = ++stopStepSequence;
+                guard.worldEpochs().forget(named);
+                commitStopFlushSessions++;
+                if (stopFlushWorlds.size() < STOP_FLUSH_ROW_CAP) {
+                    stopFlushWorlds.add(named);
+                }
+                reclaimStep = ++stopStepSequence;
+                reclaimed = intents.releaseWorld(named);
+                commitSegment.forgetWorld(named);
+                shares.forgetWorld(named);
+                worldResMeter.forgetWorld(named);
+                worldResLedger.forgetWorld(named);
+                ChunkPipelineProgress.forgetWorld(named);
+                SendDelayAction.forgetWorld(named);
+                DeviceTickDeferral.forgetWorld(named);
+                MachineTickDeferral.forgetWorld(named);
+                genMinWatermark.forgetWorld(waitPoints.progress(), named);
+                tickDigest.forgetMailboxPlacement(named);
+                if (recordSession) {
+                    recordUnloadSession();
+                } else if (trackPending) {
+                    pendingUncountedUnloads.add(named);
+                }
+            }
         }
-        long reclaimStep = ++stopStepSequence;
-        int reclaimed = intents.releaseWorld(named);
-        arena.returnWorld(named);
-        shares.forgetWorld(named);
-        worldResMeter.forgetWorld(named);
-        worldResLedger.forgetWorld(named);
-        ChunkPipelineProgress.forgetWorld(named);
-        SendDelayAction.forgetWorld(named);
-        DeviceTickDeferral.forgetWorld(named);
-        MachineTickDeferral.forgetWorld(named);
-        genMinWatermark.clear(waitPoints.progress());
-        tickDigest.forgetMailboxPlacement(named);
-        if (recordSession) {
-            recordUnloadSession();
-        } else if (trackPending) {
-            pendingUncountedUnloads.add(named);
-        }
-        return noteStopFlush(new WorldStopFlush(named, epoch, "", dispatchStep, flushStep, unloadRowStep,
-            reclaimStep, flushed, reclaimed));
+        rememberWorldDrain(named, new WorldDrain(named, drained.calls(), drained.items(),
+            drained.nanos(), drained.applied(), drained.cancelled(), drained.faultUnknown(),
+            drained.remaining(), drained.consumedOrders(), arenaPinned, reclaimed,
+            complete ? SAVE_WATERMARK_APPLIED : SAVE_WATERMARK_NOT_APPLIED,
+            DURABILITY_NOT_VERIFIED, complete));
+        return noteStopFlush(new WorldStopFlush(named, epoch, "", dispatchStep, flushStep,
+            unloadRowStep, reclaimStep, drained.applied(), reclaimed, complete));
     }
 
     /** Counts one A04 session at the owner-accepted entry; the flush/returns may already have run
@@ -3221,17 +3254,32 @@ public final class KernelModule {
         unloadCountedCount++;
     }
 
-    /** Step two of the set: the intents still waiting for one world are handed to the payload in the
-     * frozen order of its shard; what is left is what step four takes back. */
-    private int flushWorldIntents(String worldId) {
-        int flushed = 0;
-        for (long head = intents.headOrder(worldId); head >= 0L; head = intents.headOrder(worldId)) {
-            if (!intents.commit(worldId, head, tickIndex).committed()) {
-                break;
-            }
-            flushed++;
+    /** The save this path applied to the live world, and the durability it explicitly does not
+     * claim. A completed world records the first and never the second. */
+    public static final String SAVE_WATERMARK_APPLIED = "APPLIED";
+    public static final String SAVE_WATERMARK_NOT_APPLIED = "NOT_APPLIED";
+    public static final String DURABILITY_NOT_VERIFIED = "NOT_VERIFIED";
+
+    /** One world's bounded drain as it finished: what the intent channel walked, what it kept and
+     * whether the world could be reclaimed. The save watermark and durability are recorded apart
+     * from completion, so a durable save is never claimed by a drain. */
+    public record WorldDrain(String worldId, int calls, int items, long nanos, int applied,
+                             int cancelled, int faultUnknown, int remaining, int consumedOrders,
+                             int arenaPinned, int reclaimed, String saveWatermark, String durability,
+                             boolean complete) {
+    }
+
+    /** The newest bounded drain of one world, or null when the stopping path never reached it. */
+    WorldDrain worldDrain(String worldId) {
+        return worldId == null ? null : worldDrains.get(worldId);
+    }
+
+    private void rememberWorldDrain(String worldId, WorldDrain drain) {
+        worldDrains.remove(worldId);
+        worldDrains.put(worldId, drain);
+        while (worldDrains.size() > STOP_FLUSH_ROW_CAP) {
+            worldDrains.remove(worldDrains.keySet().iterator().next());
         }
-        return flushed;
     }
 
     private WorldStopFlush noteStopFlush(WorldStopFlush row) {
@@ -3242,13 +3290,14 @@ public final class KernelModule {
         return row;
     }
 
-    /** Whether every flush row took the four steps in order; a dash means no world was flushed yet. */
+    /** Whether every flush row took the four steps in order and returned the world whole; a dash
+     * means no world was flushed yet, and an incomplete row answers 0. */
     public String commitStopFlushOrdered() {
         int served = 0;
         for (WorldStopFlush row : stopFlushRows) {
             if (row.refusal().isEmpty()) {
                 served++;
-                if (!row.ordered()) {
+                if (!row.ordered() || !row.complete()) {
                     return "0";
                 }
             }
@@ -4032,8 +4081,8 @@ public final class KernelModule {
         QuotaEntityWindow.reset();
         QuotaNetWindow.reset();
         QuotaMachineWindow.reset();
-        MachineTickDeferral.reset();
-        DeviceTickDeferral.reset();
+        MachineTickDeferral.resetIfIdle();
+        DeviceTickDeferral.resetIfIdle();
         BukkitEventOrderProbe.reset();
         rconDeferral.resetQueued();
         rconActionPending = false;
@@ -4061,7 +4110,7 @@ public final class KernelModule {
         planC1NanosTotal = 0L;
         planC1NanosMax = 0L;
         planC1NanosBuilds = 0L;
-        arena.reset();
+        arena.resetIfIdle();
         passthrough.reset();
         arms.reset();
         planClock.reset();
@@ -4109,7 +4158,7 @@ public final class KernelModule {
         versionSlots.reset();
         ownerGrants.reset();
         controlledSlots.reset();
-        owners.resetLifecycle();
+        owners.resetLifecycleIfIdle();
         commitBindingRefusal = "";
         declarationGeneration++;
         declarationHistory.retire();

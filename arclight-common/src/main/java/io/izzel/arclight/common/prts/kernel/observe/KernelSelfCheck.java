@@ -439,21 +439,23 @@ public final class KernelSelfCheck {
         lines.add("selftest.shard_applied=" + payloads.appliedCount());
         lines.add("selftest.shard_abandoned=" + payloads.abandonedCount());
 
-        if (first.code() != RejectCode.VERSION_MISMATCH || first.steps() != 2
-            || first.released() != 1 || depthAfterFirst != 0) {
-            failures.add("a write that entered its native action was not released at once"
-                + " (code=" + first.code() + " steps=" + first.steps()
+        if (first.code() != RejectCode.VERSION_MISMATCH || first.steps() != 0
+            || first.released() != 0 || depthAfterFirst != 2) {
+            failures.add("a write that entered its native action was not kept as an unknown-effect"
+                + " fault (code=" + first.code() + " steps=" + first.steps()
                 + " released=" + first.released() + " depth=" + depthAfterFirst + ")");
         }
-        if (second.code() != null || second.steps() != 0 || segment.released() != 1L
-            || queue.retryExhaustedCount() != 0L) {
-            failures.add("a final refusal was retried, or the writes behind it were not drained");
+        if (second.code() != RejectCode.VERSION_MISMATCH || second.steps() != 0
+            || segment.released() != 0L || queue.retryExhaustedCount() != 0L
+            || queue.faultUnknownCount() != 1L) {
+            failures.add("a faulted write was retried or its handle was released");
         }
-        if (queue.depth("world-a") != 0 || queue.depth("world-b") != 0) {
-            failures.add("a failing write held the shard behind it");
+        if (queue.depth("world-a") != 2 || queue.depth("world-b") != 1) {
+            failures.add("a faulted write did not hold its own shard and the work behind it");
         }
-        if (payloads.appliedCount() != 2L || payloads.abandonedCount() != 1L) {
-            failures.add("the shard did not apply the intents behind the released one");
+        if (payloads.appliedCount() != 0L || payloads.abandonedCount() != 0L
+            || payloads.pendingCount() != 3) {
+            failures.add("a faulted write was applied or silently abandoned");
         }
 
         WritePathCounters counters = new WritePathCounters();

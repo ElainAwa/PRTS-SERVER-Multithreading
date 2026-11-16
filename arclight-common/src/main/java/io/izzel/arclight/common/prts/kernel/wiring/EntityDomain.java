@@ -487,7 +487,8 @@ public final class EntityDomain implements KernelDomain {
 
     @Override
     public void reset() {
-        shutdown();
+        // A reset clears the readout; it does not stop the pool or abort a pass that is still in
+        // flight. Shutdown is the only path that may end the workers.
         readings.reset();
         ledger.reset();
         seatedReports.clear();

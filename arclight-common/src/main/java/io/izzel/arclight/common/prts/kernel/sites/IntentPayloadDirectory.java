@@ -45,8 +45,9 @@ public final class IntentPayloadDirectory implements IntentPayload {
             return Outcome.rejected(RejectCode.NATIVE_UNDECLARED);
         }
         // Entering the native action makes its effect unknown even when it reports failure or
-        // throws, so a second call could repeat an effect that already happened; this refusal is
-        // final and the channel forgets the write through release().
+        // throws, so a second call could repeat an effect that already happened. The refusal is a
+        // fault: it is final and keeps the handle, because releasing it would silently forget an
+        // effect that may have landed.
         try {
             if (write.apply()) {
                 pending.remove(intent.payloadHandle());
@@ -57,7 +58,7 @@ public final class IntentPayloadDirectory implements IntentPayload {
         } catch (Throwable thrown) {
             this.threw.increment();
         }
-        return Outcome.rejected(RejectCode.VERSION_MISMATCH);
+        return Outcome.fault(RejectCode.VERSION_MISMATCH);
     }
 
     @Override

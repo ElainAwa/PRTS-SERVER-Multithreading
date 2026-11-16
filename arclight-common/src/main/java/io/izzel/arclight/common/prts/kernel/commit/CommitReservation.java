@@ -30,6 +30,11 @@ public final class CommitReservation {
     public record ReleaseResult(boolean released, String diagnostic) {
     }
 
+    /** What one fault settlement did. */
+    public record FaultResult(boolean settled, RejectCode code, String diagnostic, long ticketId,
+                              long effectRef) {
+    }
+
     /** What a reset of the lifecycle did: how many reservations were voided, and how many lines
      * were publishing and were left alone. */
     public record ResetResult(int voided, int publishing) {
@@ -39,6 +44,12 @@ public final class CommitReservation {
      * in and the units it published. */
     public record TerminalEntry(long ticketId, long effectRef, String state, long planSequence,
                                 int position, int unitCount, int successBatch, String note) {
+    }
+
+    /** One settled fault: the ticket, the effect reference it kept, the place it held, the code it
+     * was settled with and the refusal that had been waiting on it. */
+    public record Fault(long ticketId, long effectRef, long planSequence, int position,
+                        RejectCode code, String diagnostic, int attempts) {
     }
 
     private enum Phase {
@@ -51,10 +62,10 @@ public final class CommitReservation {
     }
 
     /** One item whose terminal line is not written: the ticket, the place it holds, why the record
-     * was refused and how often it was tried. The table is bounded by the reservations still in
-     * flight, and an entry leaves it when the ticket ends. */
+     * was refused, how often it was tried and the log tick it started waiting at. The table is
+     * bounded by the reservations still in flight, and an entry leaves it when the ticket ends. */
     public record Pending(long ticketId, long effectRef, long planSequence, int position,
-                          RejectCode code, String diagnostic, int attempts) {
+                          RejectCode code, String diagnostic, int attempts, long sinceTick) {
     }
 
     /** What closing the holder did: the items it gave back, the ones whose side effect has run and
@@ -107,6 +118,9 @@ public final class CommitReservation {
     private final Map<Long, IdentityWitness.Obligation> obligations = new LinkedHashMap<>();
     private final Deque<TerminalEntry> ledger = new ArrayDeque<>();
     private final Deque<Long> finished = new ArrayDeque<>();
+    /** The bounded record of settled faults: an obligation that could not be discharged stays
+     * readable after its room and its ticket are gone. */
+    private final Deque<Fault> faults = new ArrayDeque<>();
     private Thread ownerThread = Thread.currentThread();
     private long ticketIds;
     private long reserveSuccess;
@@ -115,6 +129,9 @@ public final class CommitReservation {
     private long publishedTotal;
     private long partialTotal;
     private long failedTotal;
+    private long faultSettled;
+    private long faultDeferred;
+    private long faultEvicted;
     private long unitTotal;
     private long partialUnits;
     private long failedUnits;
@@ -613,6 +630,97 @@ public final class CommitReservation {
             outcome.unitCount());
     }
 
+    /** Settles one ticket whose side effect may have run and whose terminal line is not written: one
+     * fault line is stored with the fault code and the identity of the ticket, and only after that
+     * line is stored are its effect room and its place given back. A ticket that is not waiting, is
+     * stale against this lifecycle, or whose effect is still publishing is refused and keeps its
+     * room; a settled ticket leaves its obligation in the bounded fault ledger. */
+    public FaultResult settleFault(CommitTicket ticket, RejectCode code) {
+        return settleFault(ticket, code, "");
+    }
+
+    /** The same settlement with a diagnostic kept in the fault ledger. The fault line carries the
+     * code; the diagnostic is the holder's own note and is never a line column. */
+    public FaultResult settleFault(CommitTicket ticket, RejectCode code, String diagnostic) {
+        if (Thread.currentThread() != ownerThread) {
+            offThreadRefusals++;
+            return faultRefused(RejectCode.COUNTER_MISSING, "off-owner-thread", ticket);
+        }
+        if (ticket == null) {
+            unknownTicket++;
+            return faultRefused(RejectCode.COUNTER_MISSING, "unknown-ticket", null);
+        }
+        if (tickets.get(ticket.ticketId()) != ticket) {
+            if (finished.contains(ticket.ticketId())) {
+                doubleFinalize++;
+                return faultRefused(RejectCode.COUNTER_MISSING, "already-finalized", ticket);
+            }
+            unknownTicket++;
+            return faultRefused(RejectCode.COUNTER_MISSING, "unknown-ticket", ticket);
+        }
+        if (ticket.logLifetime() != log.logLifetime() || ticket.effectSlot().storeId() != store.storeId()
+            || ticket.controller().lifetime() != controller.lifetime()) {
+            crossLogRefusals++;
+            return faultRefused(RejectCode.COUNTER_MISSING, "cross-log-handle", ticket);
+        }
+        if (ticket.controller().resetEpoch() != epochs.current()) {
+            staleRefusals++;
+            return faultRefused(RejectCode.COUNTER_MISSING, "stale-ticket", ticket);
+        }
+        Phase phase = phases.get(ticket.ticketId());
+        if (phase == Phase.PUBLISHING) {
+            // The side effect is still running: the same safe point that gates a reset gates this
+            // record, so the fault waits instead of writing over a publish that has not ended.
+            faultDeferred++;
+            return faultRefused(RejectCode.QUEUE_CAP_EXCEEDED, "publishing", ticket);
+        }
+        if (phase != Phase.UNRECORDED) {
+            requestRefusals++;
+            return faultRefused(RejectCode.COMMIT_ORDER_VIOLATION, "not-unrecorded", ticket);
+        }
+        if (code == null) {
+            requestRefusals++;
+            return faultRefused(RejectCode.COUNTER_MISSING, "fault-code-missing", ticket);
+        }
+        if (publishing() > 0) {
+            faultDeferred++;
+            return faultRefused(RejectCode.QUEUE_CAP_EXCEEDED, "publishing-in-flight", ticket);
+        }
+        Pending pending = pendings.get(ticket.ticketId());
+        if (pending == null) {
+            unknownTicket++;
+            return faultRefused(RejectCode.COUNTER_MISSING, "unknown-ticket", ticket);
+        }
+        CommitLog.Verdict verdict;
+        try {
+            verdict = log.recordFault(ticket, code);
+        } catch (RuntimeException | Error thrown) {
+            return faultRefused(RejectCode.COUNTER_MISSING, "fault-record-threw", ticket);
+        }
+        if (!verdict.logged()) {
+            RejectCode refusedCode = verdict.code() == null ? RejectCode.COUNTER_MISSING
+                : verdict.code();
+            return faultRefused(refusedCode, "fault-record-refused", ticket);
+        }
+        // The fault line is stored first: only now does the room go back, and the obligation the
+        // ticket could not discharge stays readable in the fault ledger rather than with the room.
+        boolean released = store.releaseCapacity(ticket.effectSlot());
+        phases.remove(ticket.ticketId());
+        tickets.remove(ticket.ticketId());
+        pendings.remove(ticket.ticketId());
+        handOver(ticket.ticketId());
+        remember(ticket.ticketId());
+        finalized++;
+        faultSettled++;
+        append(new TerminalEntry(ticket.ticketId(), ticket.identity().effectRef(), "FAULT",
+            ticket.planSequence(), ticket.position(), 0, 0,
+            code.name() + (diagnostic == null || diagnostic.isEmpty() ? "" : "|" + diagnostic)));
+        recall(new Fault(ticket.ticketId(), ticket.identity().effectRef(), ticket.planSequence(),
+            ticket.position(), code, pending.diagnostic(), pending.attempts()));
+        return new FaultResult(true, null, released ? "fault-recorded" : "fault-recorded-room-kept",
+            ticket.ticketId(), ticket.identity().effectRef());
+    }
+
     /** Gives a reservation back without a line. Only a ticket that never published can go back. */
     public ReleaseResult release(CommitTicket ticket, CommitTicket.ReleaseReason reason) {
         if (Thread.currentThread() != ownerThread) {
@@ -695,7 +803,7 @@ public final class CommitReservation {
         Pending held = pendings.get(ticket.ticketId());
         pendings.put(ticket.ticketId(), new Pending(ticket.ticketId(), ticket.identity().effectRef(),
             ticket.planSequence(), ticket.position(), code, diagnostic,
-            held == null ? 1 : held.attempts() + 1));
+            held == null ? 1 : held.attempts() + 1, held == null ? log.tickIndex() : held.sinceTick()));
     }
 
     /** Why a terminal cannot be read as one, or null when it can. A unit count is a number of
@@ -725,8 +833,22 @@ public final class CommitReservation {
         }
     }
 
+    /** Keeps one settled fault readable inside the same bound as the terminal ledger. */
+    private void recall(Fault fault) {
+        faults.addLast(fault);
+        while (faults.size() > LEDGER_LIMIT) {
+            faults.removeFirst();
+            faultEvicted++;
+        }
+    }
+
     private FinalizeResult refused(RejectCode code, String diagnostic, CommitTicket.Terminal terminal) {
         return new FinalizeResult(false, code, diagnostic, terminal, 0, 0L);
+    }
+
+    private FaultResult faultRefused(RejectCode code, String diagnostic, CommitTicket ticket) {
+        return new FaultResult(false, code, diagnostic, ticket == null ? 0L : ticket.ticketId(),
+            ticket == null ? 0L : ticket.identity().effectRef());
     }
 
     private void append(TerminalEntry entry) {
@@ -816,6 +938,22 @@ public final class CommitReservation {
         return pendings.size();
     }
 
+    /** The oldest item still waiting for a terminal line, or null when nothing waits. Internal
+     * reading: it is not published as a read key. */
+    public Pending oldestPending() {
+        for (Pending pending : pendings.values()) {
+            return pending;
+        }
+        return null;
+    }
+
+    /** How many log ticks the oldest pending obligation has waited: zero when nothing waits. The
+     * holder reads the log's own tick column; no read key is added. */
+    public long oldestPendingAge() {
+        Pending oldest = oldestPending();
+        return oldest == null ? 0L : Math.max(0L, log.tickIndex() - oldest.sinceTick());
+    }
+
     /** The ticket one item is carried under, or null once it has ended. A disposed item leaves
      * nothing behind, so the identity a caller held is only good while the item waits. */
     public CommitTicket ticket(long ticketId) {
@@ -845,6 +983,31 @@ public final class CommitReservation {
 
     public List<TerminalEntry> terminalLedger() {
         return List.copyOf(ledger);
+    }
+
+    /** The settled faults this holder still keeps, oldest first, at most the ledger bound. */
+    public List<Fault> faultLedger() {
+        return List.copyOf(faults);
+    }
+
+    /** The settled faults this holder still keeps in the bounded ledger. */
+    public int faultCount() {
+        return faults.size();
+    }
+
+    /** How many tickets this holder settled with a fault line. */
+    public long faultSettled() {
+        return faultSettled;
+    }
+
+    /** How often a fault waited because a side effect of this holder was still publishing. */
+    public long faultDeferred() {
+        return faultDeferred;
+    }
+
+    /** How many settled faults left the bounded ledger at its cap. */
+    public long faultEvicted() {
+        return faultEvicted;
     }
 
     public long reserveSuccess() {

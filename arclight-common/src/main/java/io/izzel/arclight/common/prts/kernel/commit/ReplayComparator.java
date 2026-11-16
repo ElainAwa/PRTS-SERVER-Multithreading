@@ -24,6 +24,7 @@ public final class ReplayComparator {
     public static final String REFUSED_ORPHAN_EFFECT = "orphan-effect";
     public static final String REFUSED_EFFECT_MISSING = "effect-missing";
     public static final String REFUSED_PARTIAL_STEP = "partial-step";
+    public static final String REFUSED_FAULT_STEP = "fault-step";
     public static final String REFUSED_INSTANCE_COLLISION = "instance-collision";
     public static final String REFUSED_EMPTY_SAMPLE = "empty-sample";
     public static final String REFUSED_ILLEGAL_IDENTITY = "illegal-identity";
@@ -117,6 +118,12 @@ public final class ReplayComparator {
     public Verdict compare(Evidence left, Evidence right) {
         if (left == null || right == null || left.replay() == null || right.replay() == null) {
             return refuse(REFUSED_SIDE_MISSING, "");
+        }
+        if (faultOf(left.replay())) {
+            return refuse(REFUSED_FAULT_STEP, "left");
+        }
+        if (faultOf(right.replay())) {
+            return refuse(REFUSED_FAULT_STEP, "right");
         }
         if (partialOf(left.replay())) {
             return refuse(REFUSED_PARTIAL_STEP, "left");
@@ -312,6 +319,12 @@ public final class ReplayComparator {
         if (!left.plainSteps().isEmpty() || !right.plainSteps().isEmpty()) {
             return refuse(REFUSED_MIXED_WITHIN_SIDE, "a version 1 side carries plain steps");
         }
+        if (faultOf(left)) {
+            return refuse(REFUSED_FAULT_STEP, "left");
+        }
+        if (faultOf(right)) {
+            return refuse(REFUSED_FAULT_STEP, "right");
+        }
         if (partialOf(left)) {
             return refuse(REFUSED_PARTIAL_STEP, "left");
         }
@@ -439,6 +452,17 @@ public final class ReplayComparator {
             column.add(witness.instance());
         }
         return column;
+    }
+
+    /** Whether one side carries a typed step whose effect may have run and whose record is not
+     * written. The run's reach is unknown, so the comparison is refused instead of reading a value. */
+    private static boolean faultOf(CommitLog.SchemaReplay side) {
+        for (CommitLog.TypedStep step : side.typedSteps()) {
+            if (step.disposition() == CommitLog.Entry.Disposition.FAULT) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Whether one side carries a typed step whose effect reached only a part of its write. Such a

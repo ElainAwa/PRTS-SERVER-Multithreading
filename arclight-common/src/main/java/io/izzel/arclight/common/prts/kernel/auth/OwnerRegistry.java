@@ -229,6 +229,16 @@ public final class OwnerRegistry {
         return tokens.size();
     }
 
+    /** Ends a registry lifecycle only while no right is active; a busy registry keeps every token
+     * and generation, so a reset cannot retire a right a writer is still holding. */
+    public synchronized boolean resetLifecycleIfIdle() {
+        if (!tokens.isEmpty()) {
+            return false;
+        }
+        resetLifecycle();
+        return true;
+    }
+
     public long lifecycleGeneration() {
         return lifecycleGeneration.get();
     }

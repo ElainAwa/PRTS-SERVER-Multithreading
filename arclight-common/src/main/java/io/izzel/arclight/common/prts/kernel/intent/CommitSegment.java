@@ -135,7 +135,8 @@ public final class CommitSegment {
                     continue;
                 }
                 if (!order.committed()) {
-                    // Nothing was consumed: the head stays and so does the expected order.
+                    // Nothing was consumed: the head stays and so does the expected order. A
+                    // faulted head also lands here, with its handle retained by the channel.
                     refusal = order.code();
                     stopped = true;
                     break;
@@ -179,6 +180,21 @@ public final class CommitSegment {
     /** Returns the order one world's walk expects next. */
     public synchronized long cursor(String worldKey) {
         return cursors.getOrDefault(worldKey, 0L);
+    }
+
+    /** Moves one world's walk past the orders a bounded drain consumed outside {@link #run}. */
+    public synchronized void advanceWorld(String worldKey, long consumedOrders) {
+        if (consumedOrders <= 0L) {
+            return;
+        }
+        String key = worldKey == null ? IntentQueue.NO_WORLD : worldKey;
+        cursors.merge(key, consumedOrders, Long::sum);
+        cursor += consumedOrders;
+    }
+
+    /** Drops one world's expected order at its reclaim; the global consumed count is unchanged. */
+    public synchronized void forgetWorld(String worldKey) {
+        cursors.remove(worldKey == null ? IntentQueue.NO_WORLD : worldKey);
     }
 
     public synchronized List<String> walkedWorlds() {

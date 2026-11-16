@@ -359,6 +359,7 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
         WriteDisposition disposition;
         RejectCode code = null;
         boolean handedOver = false;
+        boolean lifecycleDenied = false;
         if (claimRefusal != null) {
             // The claim face already refused the write this attempt would have covered.
             disposition = WriteDisposition.DENY;
@@ -369,12 +370,19 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
                 code = RejectCode.WRITE_DENIED_NOT_OWNER;
             } else if (routing && deferredSupplier != null) {
                 PrtsWorldWriteTaps.DeferredWrite deferred = deferredSupplier.get();
-                if (deferred != null) {
+                if (intents.worldClosed(worldId)) {
+                    // A closed world may not take a new intent, so the write is refused here
+                    // instead of being handed over and refused later at the queue.
+                    disposition = WriteDisposition.DENY;
+                    code = RejectCode.WORLD_LIFECYCLE_DENIED;
+                    lifecycleDenied = true;
+                } else if (deferred != null) {
                     disposition = WriteDisposition.INTENT;
                     code = handOver(path, origin, holder, worldId, deferred);
                     handedOver = code == null;
                     if (!handedOver) {
                         disposition = WriteDisposition.DENY;
+                        lifecycleDenied = code == RejectCode.WORLD_LIFECYCLE_DENIED;
                     }
                 } else {
                     disposition = WriteDisposition.INTENT;
@@ -413,6 +421,7 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
             thread.getName(), worldId, tickIndex);
         boolean rights = rightsActive();
         boolean blocked = handedOver
+            || lifecycleDenied
             || claimRefusal != null
             || (disposition == WriteDisposition.DENY && (enforce || rights))
             || (rights && disposition == WriteDisposition.INTENT);
@@ -454,9 +463,11 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
         if (owner != null && thread != owner) {
             foreignCommits.increment();
             outcome = Outcome.retryable(RejectCode.WRITE_DENIED_NOT_OWNER);
-        } else if (epochs.epochOf(intent.dstWorldId()) != intent.worldEpoch()) {
+        } else if (intent.worldEpoch() <= 0L
+            || epochs.epochOf(intent.dstWorldId()) != intent.worldEpoch()) {
+            // The refusal happens before the payload is entered, so the channel may release the
+            // handle once; releasing it here as well would be a second release.
             staleWorldRefusals.increment();
-            payloads.release(intent);
             outcome = Outcome.rejected(RejectCode.WORLD_LIFECYCLE_DENIED);
         } else {
             outcome = payloads.apply(intent);
@@ -566,15 +577,21 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
 
     private RejectCode handOver(WritePath path, ThreadOrigin origin, HolderIdentity holder,
                                 String worldId, PrtsWorldWriteTaps.DeferredWrite deferred) {
+        long epoch = epochs.epochOf(worldId);
+        if (epoch <= 0L || intents.worldClosed(worldId)) {
+            // A world that is absent or closing has no order to freeze for this write, so no
+            // payload is bound that no intent could ever name.
+            return RejectCode.WORLD_LIFECYCLE_DENIED;
+        }
         String handle = payloads.bind(path.key(), deferred);
         WriteIntent draft = WriteIntent.draft(intents.nextIntentId(), worldId, worldId, path.key(),
-            0L, epochs.epochOf(worldId), handle, "xdomain", holder.siteId());
+            0L, epoch, handle, "xdomain", holder.siteId());
         IntentQueue.EnqueueResult result = intents.enqueue(draft);
         if (result.accepted()) {
             return null;
         }
         payloads.drop(handle);
-        return RejectCode.QUEUE_CAP_EXCEEDED;
+        return result.code() == null ? RejectCode.QUEUE_CAP_EXCEEDED : result.code();
     }
 
     /** The row identity of one landing, or null when the caller named no block position for it: a

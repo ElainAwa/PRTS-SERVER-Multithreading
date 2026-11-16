@@ -75,6 +75,20 @@ public final class ArenaLedger {
         return pinned;
     }
 
+    /** The slots of one world that are still held, which is what gates its return. */
+    public synchronized int pinnedWorldCount(String worldId) {
+        if (worldId == null || worldId.isEmpty()) {
+            return 0;
+        }
+        int pinned = 0;
+        for (ArenaSegment segment : segments.values()) {
+            if (segment.ref().worldId().equals(worldId)) {
+                pinned += segment.pinnedCount();
+            }
+        }
+        return pinned;
+    }
+
     /** The outstanding allocations: what was claimed and not released yet, never negative. The
      * health readout samples this gauge, so a steady claim/release load has a flat slope; the
      * cumulative claims/releases counters stay as they are. */
@@ -118,7 +132,25 @@ public final class ArenaLedger {
         return claims == releases && pinnedCount() == 0;
     }
 
-    /** Releases everything and clears the counters; used by the readout reset and by tests. */
+    /** Clears every counter and segment only while nothing is held; a busy arena is left whole so
+     * a reset cannot reclaim a slot a batch is still using. */
+    public synchronized boolean resetIfIdle() {
+        if (pinnedCount() != 0 || claims != releases) {
+            return false;
+        }
+        segments.clear();
+        claims = 0L;
+        releases = 0L;
+        generationBumps = 0L;
+        foreignWrites = 0L;
+        refusals = 0L;
+        staleReleases = 0L;
+        repeatReleases = 0L;
+        quarantinedSlots = 0L;
+        return true;
+    }
+
+    /** Releases everything and clears the counters; used by shutdown and by tests. */
     public synchronized void reset() {
         releaseAll();
         claims = 0L;
@@ -131,29 +163,32 @@ public final class ArenaLedger {
         quarantinedSlots = 0L;
     }
 
-    /** Returns every segment of one world and counts the slots it force-released; a world that is
-     * unloading takes its own arena state with it and no other world's segment is touched. */
-    public synchronized int returnWorld(String worldId) {
+    /** What one world's return did: the segments detached, the slots still pinned, and whether the
+     * world was returned whole. */
+    public record WorldReturn(int returned, int pinned, boolean complete) {
+    }
+
+    /** Returns every segment of one world, but only while no slot of that world is still held. A
+     * pinned slot is an in-flight user: the segment stays and the answer says so, so nothing is
+     * force-released into a writer that may still be using it. */
+    public synchronized WorldReturn returnWorld(String worldId) {
         if (worldId == null || worldId.isEmpty()) {
-            return 0;
+            return new WorldReturn(0, 0, true);
+        }
+        int pinned = pinnedWorldCount(worldId);
+        if (pinned > 0) {
+            return new WorldReturn(0, pinned, false);
         }
         int returned = 0;
         var iterator = segments.entrySet().iterator();
         while (iterator.hasNext()) {
             ArenaSegment segment = iterator.next().getValue();
-            if (!segment.ref().worldId().equals(worldId)) {
-                continue;
+            if (segment.ref().worldId().equals(worldId)) {
+                iterator.remove();
+                returned++;
             }
-            for (ArenaSlot slot : segment.slots()) {
-                if (slot.forceRelease()) {
-                    releases++;
-                    generationBumps++;
-                    returned++;
-                }
-            }
-            iterator.remove();
         }
-        return returned;
+        return new WorldReturn(returned, 0, true);
     }
 
     /** Releases every pinned slot and forgets every segment; used by shutdown and by tests. */

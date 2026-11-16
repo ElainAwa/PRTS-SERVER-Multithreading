@@ -231,6 +231,16 @@ public final class MachineTickDeferral {
         return List.copyOf(RECEIPTS);
     }
 
+    /** Clears the receipts and totals only while no plan is waiting; a busy deferral keeps its
+     * state so a reset cannot drop a call that the current tick still owes. */
+    public static synchronized boolean resetIfIdle() {
+        if (!OPEN.isEmpty()) {
+            return false;
+        }
+        reset();
+        return true;
+    }
+
     public static synchronized void reset() {
         OPEN.clear();
         RECEIPTS.clear();

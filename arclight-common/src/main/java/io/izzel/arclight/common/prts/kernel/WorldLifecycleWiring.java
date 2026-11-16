@@ -26,9 +26,13 @@ public final class WorldLifecycleWiring {
                 worldId, null, 0L, 0L, "world-lifecycle", "world-lifecycle"), null)) {
             return;
         }
-        WorldLifecycleOwner owner = KernelModule.instance().worldLifecycle();
+        KernelModule module = KernelModule.instance();
+        WorldLifecycleOwner owner = module.worldLifecycle();
         owner.bindOwner(Thread.currentThread());
         if (owner.requestCreate(worldId)) {
+            // A recreated world leaves the tombstone the close of its previous incarnation left,
+            // so the new incarnation may accept intents again.
+            module.intents().openWorld(worldId);
             owner.transition(worldId, WorldLifecycleOwner.State.LOADING);
             owner.transition(worldId, WorldLifecycleOwner.State.READY);
         }
@@ -59,10 +63,17 @@ public final class WorldLifecycleWiring {
             module.discardPendingUnload(worldId);
             return;
         }
+        KernelModule.WorldStopFlush flush = null;
         if (!module.countPendingUnload(worldId)) {
-            module.flushWorldAtStop(worldId, true);
+            flush = module.flushWorldAtStop(worldId, true);
+        }
+        KernelModule.WorldDrain drain = module.worldDrain(worldId);
+        if ((flush != null && !flush.complete()) || drain == null || !drain.complete()) {
+            // An unfinished drain keeps the world unloading: its epoch, shard and arena slots stay
+            // intact, and GONE is refused until a later bounded drain settles them.
+            return;
         }
         owner.transition(worldId, WorldLifecycleOwner.State.RECLAIMING);
-        owner.transition(worldId, WorldLifecycleOwner.State.GONE);
+        owner.transition(worldId, WorldLifecycleOwner.State.GONE, true);
     }
 }
