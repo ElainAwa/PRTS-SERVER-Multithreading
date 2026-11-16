@@ -6,7 +6,9 @@ import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.IntSupplier;
 
 /** The single write entry of one tick: every producer reports here, the log resolves which plan step
@@ -334,6 +336,9 @@ public final class CommitLog {
     private final OrderSource source;
     private final Map<String, CommitRing> rings = new LinkedHashMap<>();
     private final Map<String, Long> worldEpochs = new LinkedHashMap<>();
+    /** The exact seats that already carry a stored line, by world and domain: the prefix witness
+     * reads this instead of the monotonic watermark, which a line at a later place also raises. */
+    private final Map<String, Map<String, Map<Long, Set<Integer>>>> storedSeats = new LinkedHashMap<>();
     private final Map<String, Long> lastPlanOfRing = new LinkedHashMap<>();
     private final Map<String, Integer> lastPositionOfRing = new LinkedHashMap<>();
     private long sequence;
@@ -518,6 +523,7 @@ public final class CommitLog {
         if (resolved != null) {
             lastPlanOfRing.put(ring.key(), planSequence);
             lastPositionOfRing.put(ring.key(), (int) position);
+            noteStoredSeat(batch.worldId(), batch.domainId(), planSequence, (int) position);
         }
         switch (disposition) {
             case ACCEPTED -> accepted++;
@@ -709,6 +715,7 @@ public final class CommitLog {
         owe(sealed, range);
         lastPlanOfRing.put(key(batch.worldId(), batch.domainId()), resolved.planSequence());
         lastPositionOfRing.put(key(batch.worldId(), batch.domainId()), position);
+        noteStoredSeat(batch.worldId(), batch.domainId(), resolved.planSequence(), position);
         instanceNamespaces.put(instanceKey, instance);
         switch (disposition) {
             case ACCEPTED -> accepted++;
@@ -798,6 +805,8 @@ public final class CommitLog {
         consumeSlot(ringSlot);
         lastPlanOfRing.put(pairKey, ticket.planSequence());
         lastPositionOfRing.put(pairKey, ticket.position());
+        noteStoredSeat(ticket.batch().worldId(), ticket.batch().domainId(), ticket.planSequence(),
+            ticket.position());
         instanceNamespaces.put(instanceKeyOf(ticket.batch().worldId(), ticket.batch().domainId(),
             ticket.identity().instanceId()), instanceOf(ticket.identity(), range));
         switch (disposition) {
@@ -916,6 +925,30 @@ public final class CommitLog {
         return planSequence < plan || (planSequence == plan && position <= lastPosition);
     }
 
+    /** Whether one exact seat already carries a stored line. Unlike the pair's watermark this is not
+     * raised by a line at a later place, so a declared prefix is not read as done by a gap. */
+    public boolean seatStored(String worldId, String domainId, long planSequence, int position) {
+        Map<String, Map<Long, Set<Integer>>> byDomain = storedSeats.get(worldId);
+        if (byDomain == null) {
+            return false;
+        }
+        Map<Long, Set<Integer>> byPlan = byDomain.get(domainId);
+        if (byPlan == null) {
+            return false;
+        }
+        Set<Integer> seats = byPlan.get(planSequence);
+        return seats != null && seats.contains(position);
+    }
+
+    /** Records one stored seat and drops the plan history this pair no longer reports into. */
+    private void noteStoredSeat(String worldId, String domainId, long planSequence, int position) {
+        Map<Long, Set<Integer>> byPlan = storedSeats
+            .computeIfAbsent(worldId, world -> new LinkedHashMap<>())
+            .computeIfAbsent(domainId, domain -> new LinkedHashMap<>());
+        byPlan.keySet().removeIf(plan -> plan < planSequence);
+        byPlan.computeIfAbsent(planSequence, plan -> new LinkedHashSet<>()).add(position);
+    }
+
     /** Whether a reservation of the pair already holds this place. A seat is handed out once, so a
      * second reservation for the same place would run an effect whose line the log cannot take. */
     public boolean placeHeld(String worldId, String domainId, long planSequence, int position) {
@@ -1030,6 +1063,7 @@ public final class CommitLog {
             heldSlots.remove(ticket);
             heldPlans.remove(ticket);
         }
+        storedSeats.remove(worldId);
         instanceNamespaces.keySet().removeIf(instanceKey ->
             pairKeys.stream().anyMatch(pairKey -> instanceKey.startsWith(pairKey + "/")));
     }
@@ -1505,6 +1539,7 @@ public final class CommitLog {
         }
         rings.clear();
         worldEpochs.clear();
+        storedSeats.clear();
         lastPlanOfRing.clear();
         lastPositionOfRing.clear();
         sequence = 0L;

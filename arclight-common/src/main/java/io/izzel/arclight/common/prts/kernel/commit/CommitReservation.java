@@ -426,7 +426,8 @@ public final class CommitReservation {
                 || !seat.worldId().equals(worldId) || !seat.domainId().equals(domainId)) {
                 continue;
             }
-            if (!log.placeSpent(seat.worldId(), seat.domainId(), seat.planSequence(), seat.position())
+            if (!log.seatStored(seat.worldId(), seat.domainId(), seat.planSequence(),
+                    seat.position())
                 && !log.placeHeld(seat.worldId(), seat.domainId(), seat.planSequence(),
                     seat.position())) {
                 return true;
