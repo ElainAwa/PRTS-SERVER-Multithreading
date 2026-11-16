@@ -394,8 +394,45 @@ public final class CommitReservation {
             publishRefusals++;
             return false;
         }
+        if (earlierSeatPending(ticket)) {
+            // The frozen plan declares a place before this one that neither carries a stored line nor
+            // a reservation: the side effect of this place would pass that prefix, so it waits.
+            publishRefusals++;
+            return false;
+        }
         phases.put(ticket.ticketId(), Phase.PUBLISHING);
         return true;
+    }
+
+    /** Whether the frozen plan declares a place before this ticket's place that neither a stored line
+     * nor a held reservation accounts for. The prefix is read from the sealed declarations, so a plan
+     * that does not number its places consecutively is still judged on the places it declared. */
+    private boolean earlierSeatPending(CommitTicket ticket) {
+        CommitLog.Identity identity = ticket.identity();
+        if (identity == null || identity.schemaVersion() != CommitLog.SCHEMA_TYPED) {
+            return false;
+        }
+        String worldId = ticket.batch().worldId();
+        String domainId = ticket.batch().domainId();
+        FrozenDeclarations declarations = log.identitySource().declarations(worldId, domainId,
+            ticket.planSequence());
+        if (declarations == null) {
+            return false;
+        }
+        for (FrozenDeclarations.Entry entry : declarations.entries()) {
+            FrozenDeclarations.Seat seat = entry.seat();
+            if (seat == null || seat.planSequence() != ticket.planSequence()
+                || seat.position() >= ticket.position()
+                || !seat.worldId().equals(worldId) || !seat.domainId().equals(domainId)) {
+                continue;
+            }
+            if (!log.placeSpent(seat.worldId(), seat.domainId(), seat.planSequence(), seat.position())
+                && !log.placeHeld(seat.worldId(), seat.domainId(), seat.planSequence(),
+                    seat.position())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Whether the world generation or the grant the line was frozen under has moved since. A plain
