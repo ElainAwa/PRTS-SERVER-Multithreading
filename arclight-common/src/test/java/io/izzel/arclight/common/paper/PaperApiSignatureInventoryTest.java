@@ -25,10 +25,13 @@ class PaperApiSignatureInventoryTest {
 
     private static final String MISSING = "MISSING";
     private static final String PRESENT = "PRESENT_BEHAVIOR_UNTESTED";
+    private static final String ADDED = "ADDED_LIVE_NOT_RUN";
     private static final String LIVE_NOT_RUN = "NOT_RUN";
+    private static final String VERSION_PATCHER = "io/izzel/arclight/common/prts/support/PrtsBukkitVersionPatcher";
 
     private static final Map<String, String> EXPECTED = new LinkedHashMap<>();
     private static final Map<String, String> LIVE = new LinkedHashMap<>();
+    private static final Map<String, String> ADDED_BY = new LinkedHashMap<>();
     private static final java.util.Set<String> OUTSIDE_VENDORED_JAR = new java.util.HashSet<>();
 
     static {
@@ -46,11 +49,16 @@ class PaperApiSignatureInventoryTest {
         expect("net/kyori/adventure/text/Component", "text", "(Ljava/lang/String;)Lnet/kyori/adventure/text/TextComponent;", MISSING);
         outsideVendoredJar("net/kyori/adventure/text/Component", "text", "(Ljava/lang/String;)Lnet/kyori/adventure/text/TextComponent;");
         expect("org/bukkit/inventory/meta/components/FoodComponent", "getNutrition", "()I", PRESENT);
-        expect("org/bukkit/entity/Player", "getPlayerProfile", "()Lcom/destroystokyo/paper/profile/PlayerProfile;", MISSING);
-        expect("org/bukkit/World", "getChunkAtAsync", "(II)Ljava/util/concurrent/CompletableFuture;", MISSING);
+        expect("org/bukkit/entity/Player", "getPlayerProfile", "()Lcom/destroystokyo/paper/profile/PlayerProfile;", ADDED);
+        addedBy("org/bukkit/entity/Player", "getPlayerProfile", "()Lcom/destroystokyo/paper/profile/PlayerProfile;",
+            "io/izzel/arclight/common/mixin/paper/PaperPlayerProfileApiMixin");
+        expect("org/bukkit/World", "getChunkAtAsync", "(II)Ljava/util/concurrent/CompletableFuture;", ADDED);
+        addedBy("org/bukkit/World", "getChunkAtAsync", "(II)Ljava/util/concurrent/CompletableFuture;",
+            "io/izzel/arclight/common/mixin/paper/PaperWorldChunkApiMixin");
         expect("org/bukkit/plugin/PluginLoader", "loadPlugin",
             "(Ljava/io/File;)Lorg/bukkit/plugin/Plugin;", PRESENT);
-        expect("org/bukkit/Bukkit", "getMinecraftVersion", "()Ljava/lang/String;", MISSING);
+        expect("org/bukkit/Bukkit", "getMinecraftVersion", "()Ljava/lang/String;", ADDED);
+        addedBy("org/bukkit/Bukkit", "getMinecraftVersion", "()Ljava/lang/String;", VERSION_PATCHER);
     }
 
     @Test
@@ -70,6 +78,20 @@ class PaperApiSignatureInventoryTest {
                 throw new AssertionError("probe is not in the vendored paper-api jar: " + key);
             }
             boolean onServer = serverIndex.getOrDefault(type, List.of()).contains(member);
+            if (ADDED.equals(EXPECTED.get(key))) {
+                if (onServer) {
+                    throw new AssertionError("untransformed server jar already has " + key);
+                }
+                String carrier = ADDED_BY.get(key);
+                boolean carried = VERSION_PATCHER.equals(carrier)
+                    ? patcherNamesTheMember(server, carrier, member)
+                    : serverIndex.getOrDefault(carrier, List.of()).contains(member);
+                if (!carried) {
+                    throw new AssertionError("added signature is not in " + carrier + ": " + key);
+                }
+                actual.put(key, ADDED);
+                continue;
+            }
             actual.put(key, onServer ? PRESENT : MISSING);
         }
         assertEquals(EXPECTED, actual);
@@ -88,6 +110,19 @@ class PaperApiSignatureInventoryTest {
 
     private static void outsideVendoredJar(String type, String name, String descriptor) {
         OUTSIDE_VENDORED_JAR.add(type + " " + name + descriptor);
+    }
+
+    private static void addedBy(String type, String name, String descriptor, String carrier) {
+        ADDED_BY.put(type + " " + name + descriptor, carrier);
+    }
+
+    // The version patcher stores the method name and descriptor as constants. It has no method of that name.
+    private static boolean patcherNamesTheMember(List<Path> roots, String carrier, String member) throws IOException {
+        int split = member.indexOf('(');
+        String name = member.substring(0, split);
+        String descriptor = member.substring(split);
+        List<String> utf = utf8(readClass(roots, carrier));
+        return utf.contains(name) && utf.contains(descriptor);
     }
 
     private static Map<String, String> liveMarks() {
@@ -110,6 +145,60 @@ class PaperApiSignatureInventoryTest {
             }
         }
         return paths;
+    }
+
+    private static byte[] readClass(List<Path> roots, String internalName) throws IOException {
+        String entry = internalName + ".class";
+        for (Path root : roots) {
+            if (!Files.exists(root)) {
+                continue;
+            }
+            if (Files.isDirectory(root)) {
+                Path file = root.resolve(entry);
+                if (Files.isRegularFile(file)) {
+                    return Files.readAllBytes(file);
+                }
+            } else if (root.toString().endsWith(".jar")) {
+                try (JarFile jar = new JarFile(root.toFile())) {
+                    JarEntry found = jar.getJarEntry(entry);
+                    if (found != null) {
+                        try (InputStream in = jar.getInputStream(found)) {
+                            return in.readAllBytes();
+                        }
+                    }
+                }
+            }
+        }
+        throw new AssertionError("missing class " + internalName);
+    }
+
+    private static List<String> utf8(byte[] bytes) throws IOException {
+        DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes));
+        if (in.readInt() != 0xCAFEBABE) {
+            return List.of();
+        }
+        in.readUnsignedShort();
+        in.readUnsignedShort();
+        int count = in.readUnsignedShort();
+        List<String> utf = new ArrayList<>();
+        for (int i = 1; i < count; i++) {
+            int tag = in.readUnsignedByte();
+            switch (tag) {
+                case 1 -> utf.add(in.readUTF());
+                case 7, 8, 16, 19, 20 -> in.readUnsignedShort();
+                case 15 -> {
+                    in.readUnsignedByte();
+                    in.readUnsignedShort();
+                }
+                case 3, 4, 9, 10, 11, 12, 17, 18 -> in.readInt();
+                case 5, 6 -> {
+                    in.readLong();
+                    i++;
+                }
+                default -> throw new IOException("unknown constant tag " + tag);
+            }
+        }
+        return utf;
     }
 
     private static Map<String, List<String>> index(List<Path> roots) throws IOException {
