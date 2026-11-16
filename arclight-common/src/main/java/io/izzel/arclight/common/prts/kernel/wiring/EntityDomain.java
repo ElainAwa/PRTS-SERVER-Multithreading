@@ -3,6 +3,8 @@ package io.izzel.arclight.common.prts.kernel.wiring;
 
 import io.izzel.arclight.common.prts.kernel.DomainReadings;
 import io.izzel.arclight.common.prts.kernel.KernelDomain;
+import io.izzel.arclight.common.prts.kernel.CohortDispatchPass;
+import io.izzel.arclight.common.prts.kernel.SharedRuntime;
 import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
@@ -27,6 +29,7 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.TakeoverWhit
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityCandidateView;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
+import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
 import io.izzel.arclight.common.prts.kernel.observe.ScaleBudgetReadings;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
@@ -90,11 +93,17 @@ public final class EntityDomain implements KernelDomain {
     private long lastForkTick = -1L;
     private WorkerPool pool;
     private DispatchPass pending;
+    /** The arena the pending pass claimed from: the module arena on the legacy path, the shared
+     * runtime's arena on the cohort path. */
+    private ArenaLedger pendingArena;
+    /** Whether this domain has the shared runtime open; it closes it again when it stops using it. */
+    private boolean sharedRuntime;
     private MergeSegment.Frame lastFrame = MergeSegment.Frame.empty();
 
     public EntityDomain(KernelModule module) {
         this.module = module;
         this.arena = module.arena();
+        this.pendingArena = arena;
         this.jobAdapter = new JobGraphAdapter(module);
         this.writeBack = new DispatchWriteBack(module.intents(), module.payloads()::bind,
             module.payloads()::drop, module.guard().worldEpochs()::epochOf, readings,
@@ -259,10 +268,10 @@ public final class EntityDomain implements KernelDomain {
         // counted when its plan is built and its intent is consumed at the next commit boundary.
         if (tick - lastEvidenceTick >= EVIDENCE_TICKS) {
             lastEvidenceTick = tick;
-            DispatchReadings.Window window = new DispatchReadings.Window(
-                pool == null ? 0 : pool.alive(), lastFrame.closureOk(), module.commitSegment().cursor(),
-                module.intents().depth(), module.intents().orderViolationCount(), selfEntityMs());
-            EVIDENCE.info(readings.evidenceLine(arena, window));
+            DispatchReadings.Window window = new DispatchReadings.Window(dispatchThreadsAlive(),
+                lastFrame.closureOk(), module.commitSegment().cursor(), module.intents().depth(),
+                module.intents().orderViolationCount(), selfEntityMs());
+            EVIDENCE.info(readings.evidenceLine(dispatchArena(), window));
             EVIDENCE.info(writeBack.sampleLine());
             // The census is observation only: it says which rows a takeover could claim and what
             // those rows cost the host, and no decision of this domain reads it.
@@ -317,7 +326,7 @@ public final class EntityDomain implements KernelDomain {
         }
         if (!KernelSettings.dispatchParallel()) {
             module.clearPendingB3Tokens();
-            if (pool != null || pending != null) {
+            if (pool != null || pending != null || sharedRuntime) {
                 shutdown();
             }
             merge.noteSkippedMerge();
@@ -342,7 +351,9 @@ public final class EntityDomain implements KernelDomain {
             mergingSeatPlanSequence = pendingSeatPlanSequence;
             mergingSeatLifecycle = pendingSeatLifecycle;
             merge.hostFallbackOwned(EntityTickOwnership.hostTickAuthoritative());
-            lastFrame = merge.merge(pending, deadline, arena, readings, probe, module.arms(),
+            ArenaLedger mergeArena = pendingArena;
+            pendingArena = arena;
+            lastFrame = merge.merge(pending, deadline, mergeArena, readings, probe, module.arms(),
                 HashWhitelist.bitexact(),
                 ID, writeBack);
             pending = null;
@@ -426,33 +437,73 @@ public final class EntityDomain implements KernelDomain {
             jobAdapter.meter(RUNTIME_WORLD, System.nanoTime() - jobStartedAt);
         }
         if (!plan.empty()) {
-            if (pool == null) {
-                try {
-                    pool = WorkerPool.open(new WorkerPool.Spec(policy.workerCount(), THREAD_PREFIX,
-                        Thread.NORM_PRIORITY, policy.queueCap(), policy.batchChunks()),
-                        policy.retryBudget(), readings, arena);
-                } catch (Throwable t) {
-                    readings.notePoolOpenFailed();
-                    pool = null;
+            if (KernelSettings.jobGraph()) {
+                // The private pool of a previous legacy tick is closed first, so one life never
+                // runs two pools.
+                if (pool != null) {
+                    shutdown();
                 }
-            }
-            if (pool != null) {
-                if (EntityTickOwnership.live()) {
-                    EntityTickOwnership.bindSharedExecutor(pool.executor());
-                }
-                pending = DispatchPass.dispatch(plan, pool, EntityIntegrator.INSTANCE, arena, readings,
-                    ledger, orderedTasks);
+                pending = cohortDispatch(plan, orderedTasks);
             } else {
-                // No pool this tick: the plan still receives one terminal outcome per task, so the
-                // accounting of the tick closes and the merge redos the batches on the tick thread in
-                // the frozen order.
-                pending = DispatchPass.serialFallback(plan, readings, ledger, orderedTasks);
+                // A switch that turns the cohort off stops the shared workers before the private
+                // pool opens, so one dispatch life never runs two pools.
+                if (sharedRuntime) {
+                    SharedRuntime.shared().close();
+                    sharedRuntime = false;
+                }
+                pendingArena = arena;
+                if (pool == null) {
+                    try {
+                        pool = WorkerPool.open(new WorkerPool.Spec(policy.workerCount(),
+                            THREAD_PREFIX, Thread.NORM_PRIORITY, policy.queueCap(),
+                            policy.batchChunks()), policy.retryBudget(), readings, arena);
+                    } catch (Throwable t) {
+                        readings.notePoolOpenFailed();
+                        pool = null;
+                    }
+                }
+                if (pool != null) {
+                    if (EntityTickOwnership.live()) {
+                        EntityTickOwnership.bindSharedExecutor(pool.executor());
+                    }
+                    pending = DispatchPass.dispatch(plan, pool, EntityIntegrator.INSTANCE, arena,
+                        readings, ledger, orderedTasks);
+                } else {
+                    // No pool this tick: the plan still receives one terminal outcome per task, so
+                    // the accounting of the tick closes and the merge redos the batches on the tick
+                    // thread in the frozen order.
+                    pending = DispatchPass.serialFallback(plan, readings, ledger, orderedTasks);
+                }
             }
             // The declarations submitted here are taken by the next plan the kernel builds; that
             // plan is the one that seats this pass, so its sequence is this module's next one.
             pendingSeatPlanSequence = module.planSequence() + 1L;
             pendingSeatLifecycle = module.plans().lifecycle();
         }
+    }
+
+    /** One dispatch of the frozen plan on the shared runtime: the tasks become the nodes of an
+     * execution graph whose bodies run on the shared workers. A runtime whose pool cannot be opened
+     * falls back to the serial arm, so the tick still closes with one outcome per task. */
+    private DispatchPass cohortDispatch(WorkPlan plan, List<WorkPlan.WorkTask> orderedTasks) {
+        SharedRuntime runtime = SharedRuntime.shared();
+        if (!runtime.open()) {
+            readings.notePoolOpenFailed();
+            sharedRuntime = false;
+            pendingArena = arena;
+            return DispatchPass.serialFallback(plan, readings, ledger, orderedTasks);
+        }
+        sharedRuntime = true;
+        pendingArena = runtime.arena();
+        if (EntityTickOwnership.live()) {
+            EntityTickOwnership.bindSharedExecutor(runtime.pool().executor());
+        }
+        TickPlan latest = module.plans().latest();
+        JobGraph planned = latest == null ? null : latest.graph();
+        CohortDispatchPass.ExecutionSide side = new CohortDispatchPass.ExecutionSide(runtime.pool(),
+            runtime.executor(), runtime.arena(), readings, ledger);
+        return CohortDispatchPass.dispatch(plan, side, EntityIntegrator.INSTANCE, orderedTasks,
+            planned);
     }
 
     @Override
@@ -470,19 +521,25 @@ public final class EntityDomain implements KernelDomain {
         if (open != null) {
             open.abort(RejectCode.TICK_BUDGET_EXHAUSTED.text());
         }
-        boolean confirmed = true;
         if (current != null) {
             WorkerPool.ShutdownReport report = current.shutdown(true, true, SHUTDOWN_WAIT_MS);
-            confirmed = report.terminated() && report.remainingInFlight() == 0;
+            if (report.terminated() && report.remainingInFlight() == 0) {
+                arena.releaseAll();
+            } else {
+                // A worker that ignored the deadline may still hold a lease; the arena is quarantined
+                // so its slots can never be handed to the next pass.
+                arena.quarantineAll();
+            }
             readings.noteShutdown(report.remainingInFlight(), report.terminated());
-        }
-        if (confirmed) {
-            arena.releaseAll();
+        } else if (sharedRuntime) {
+            // No private pool on the cohort path: the workers belong to the shared runtime, so the
+            // stop goes through it.
+            SharedRuntime.shared().close();
+            sharedRuntime = false;
         } else {
-            // A worker that ignored the deadline may still hold a lease; the arena is quarantined so
-            // its slots can never be handed to the next pass.
-            arena.quarantineAll();
+            arena.releaseAll();
         }
+        pendingArena = arena;
     }
 
     @Override
@@ -568,6 +625,27 @@ public final class EntityDomain implements KernelDomain {
     @Override
     public List<String> selfCheck(List<String> failures, long tick) {
         return EntityDomainSelfCheck.run(failures, tick);
+    }
+
+    /** The arena the active dispatch claims from; the runtime's arena on the cohort path. */
+    private ArenaLedger dispatchArena() {
+        if (pool != null || !sharedRuntime) {
+            return arena;
+        }
+        return SharedRuntime.shared().arena();
+    }
+
+    /** The workers the active dispatch life runs on, whichever pool owns them. */
+    private int dispatchThreadsAlive() {
+        WorkerPool current = pool;
+        if (current != null) {
+            return current.alive();
+        }
+        if (!sharedRuntime) {
+            return 0;
+        }
+        WorkerPool shared = SharedRuntime.shared().pool();
+        return shared == null ? 0 : shared.alive();
     }
 
     /** The row the descent named, as one line: the entity id and the offset of the row in the

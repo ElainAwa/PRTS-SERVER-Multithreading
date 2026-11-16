@@ -18,6 +18,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 /** Domain-neutral executor: one body per JobGraph node, supplied by the owner of that domain. A
  * node is submitted only after all of its true predecessors reached their terminal point.
@@ -82,7 +83,7 @@ public final class GenericJobExecutor {
      * successors are submitted by their last completed predecessor, never by the caller thread.
      */
     public Execution executeCohort(JobGraph graph, Map<String, Runnable> bodies) {
-        return executeCohort(graph, bodies, 0L);
+        return executeCohort(graph, bodies, 0L, null);
     }
 
     /**
@@ -91,8 +92,17 @@ public final class GenericJobExecutor {
      * budget code and its successors are cancelled without ever running. Zero means no deadline.
      */
     public Execution executeCohort(JobGraph graph, Map<String, Runnable> bodies, long deadlineNanos) {
+        return executeCohort(graph, bodies, deadlineNanos, null);
+    }
+
+    /**
+     * Starts one graph execution and installs the caller's observers on the cohort before any node
+     * can be submitted, so a settlement they register cannot miss a node. Null is the plain entry.
+     */
+    public Execution executeCohort(JobGraph graph, Map<String, Runnable> bodies, long deadlineNanos,
+                                   Consumer<ExecutionCohort> installer) {
         validate(graph, bodies);
-        return start(graph, bodies, deadlineNanos, null);
+        return start(graph, bodies, deadlineNanos, null, installer);
     }
 
     /**
@@ -122,7 +132,7 @@ public final class GenericJobExecutor {
         }
         try {
             validate(graph, bodies);
-            return start(graph, bodies, deadlineNanos, updateKey);
+            return start(graph, bodies, deadlineNanos, updateKey, null);
         } catch (RuntimeException | Error failure) {
             updateFlights.remove(updateKey);
             throw failure;
@@ -200,7 +210,7 @@ public final class GenericJobExecutor {
     }
 
     private Execution start(JobGraph graph, Map<String, Runnable> bodies, long deadlineNanos,
-                            String updateKey) {
+                            String updateKey, Consumer<ExecutionCohort> installer) {
         Map<String, Runnable> bodyView = Map.copyOf(bodies);
         ExecutionCohort cohort = new ExecutionCohort(graph);
         installSettlement(cohort);
@@ -208,6 +218,9 @@ public final class GenericJobExecutor {
             cohort.onComplete(() -> updateFlights.remove(updateKey));
         }
         seedAccount(cohort);
+        if (installer != null) {
+            installer.accept(cohort);
+        }
         Map<String, AtomicInteger> remaining = new ConcurrentHashMap<>();
         for (JobGraph.Node node : graph.nodes()) {
             remaining.put(node.key(), new AtomicInteger(node.predecessors().size()));

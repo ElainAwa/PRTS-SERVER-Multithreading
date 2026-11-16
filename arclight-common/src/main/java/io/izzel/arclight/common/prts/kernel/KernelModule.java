@@ -255,7 +255,8 @@ public final class KernelModule {
     private final DiffProbe arms = new DiffProbe();
     private final PlanClockSeam planClock = new PlanClockSeam();
     private final List<KernelDomain> domains = new ArrayList<>();
-    private final JobIntake jobIntake = new JobIntake(KernelSettings::jobQueueCap);
+    private final JobIntake jobIntake = new JobIntake(KernelSettings::jobQueueCap,
+        SharedRuntime.shared().account());
     private final JobScheduler scheduler = new JobScheduler();
     private final PipelineBatchLedger pipelineBatches = new PipelineBatchLedger();
     /** The range seals a run start may publish: the table the identity source reads, sized by the
@@ -1415,22 +1416,16 @@ public final class KernelModule {
         return pipelineJobs.candidatesWithoutArtefact();
     }
 
-    /** Every node is taken in the order the graph froze and settled; the hand-out lands nothing. */
+    /** Reports the frozen graph of this tick without handing a body out: no execution side is
+     * attached, so settling its nodes would report outcomes no work produced. The hand-out counter
+     * stays zero until a dispatch that really runs a body feeds it. */
     private void dispatchFrozen(TickPlan plan) {
         JobGraph graph = plan.graph();
+        lastDispatchHandedOut = 0L;
         if (graph == null || graph.empty()) {
-            lastDispatchHandedOut = 0L;
             return;
         }
-        long handed = 0L;
         scheduler.begin(graph);
-        JobScheduler.Step step = scheduler.next();
-        while (step != null) {
-            scheduler.settle(step.nodeId());
-            handed++;
-            step = scheduler.next();
-        }
-        lastDispatchHandedOut = handed;
     }
 
     private boolean claimsEnabled() {
@@ -1918,6 +1913,8 @@ public final class KernelModule {
         for (KernelDomain domain : domains) {
             domain.shutdown();
         }
+        // The module owns the shared runtime and closes it after the domains released their passes.
+        SharedRuntime.shared().close();
     }
 
     public MeterWindow window() {

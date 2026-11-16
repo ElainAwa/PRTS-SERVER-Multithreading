@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** One tick's dispatch: every frozen task offered to the pool, with its token, its slot and its
  * handle. */
@@ -37,6 +38,8 @@ public final class DispatchPass {
     private final List<Entry> entries;
     private final DispatchReadings readings;
     private final TaskLedger ledger;
+    /** Deadline cancellations bound per batch by a cohort pass; empty on the legacy path. */
+    private final Map<Long, Runnable> timeoutActions = new ConcurrentHashMap<>();
 
     private DispatchPass(WorkPlan plan, List<Entry> entries, DispatchReadings readings,
                          TaskLedger ledger) {
@@ -124,6 +127,20 @@ public final class DispatchPass {
         return new DispatchPass(plan, entries, readings, ledger);
     }
 
+    /** Adopts a pass another dispatcher filled; the entries and books stay the caller's. */
+    public static DispatchPass adopt(WorkPlan plan, List<Entry> entries, DispatchReadings readings,
+                              TaskLedger ledger) {
+        return new DispatchPass(plan, entries, readings, ledger);
+    }
+
+    /** Binds the action that cancels one batch's execution side when its wait passes the deadline;
+     * it runs before the token, so a running body already sees its node cancelled when it stops. */
+    public void bindTimeout(long batchId, Runnable action) {
+        if (action != null) {
+            timeoutActions.put(batchId, action);
+        }
+    }
+
     /** Waits until the deadline, cancelling what did not answer; a late result is refused by the
      * handle and counted. */
     public List<TaskOutcome> awaitAll(long deadlineNanos) {
@@ -140,6 +157,14 @@ public final class DispatchPass {
                 TaskOutcome cancelledOutcome = TaskOutcome.cancelled(entry.batch().batchId(), 0,
                     Thread.currentThread().threadId(), Thread.currentThread().getName(),
                     RejectCode.TICK_BUDGET_EXHAUSTED.text());
+                Runnable expiry = timeoutActions.get(entry.batch().batchId());
+                if (expiry != null) {
+                    try {
+                        expiry.run();
+                    } catch (Throwable ignored) {
+                        // A bound execution side cannot keep the deadline from ending.
+                    }
+                }
                 entry.token().cancel();
                 if (entry.handle().complete(cancelledOutcome)) {
                     readings.noteTimeout();
@@ -149,6 +174,9 @@ public final class DispatchPass {
                     // accepted instead of being overwritten by the cancellation.
                     outcome = entry.handle().peek() == null ? cancelledOutcome
                         : entry.handle().peek();
+                    if (expiry != null && outcome.status() == TaskOutcome.Status.CANCELLED) {
+                        readings.noteTimeout();
+                    }
                 }
             }
             readings.noteOutcome(outcome);
@@ -157,8 +185,8 @@ public final class DispatchPass {
         return outcomes;
     }
 
-    /** Ends a pass that will never be merged: every pending batch is cancelled and dropped with
-     * {@code code}, then the window is cleared and the epoch advances. */
+    /** Ends a pass that will never be merged: every bound execution side and batch is cancelled and
+     * dropped with {@code code}, then the window is cleared and the epoch advances. */
     public AbortReport abort(String code) {
         int cancelled = 0;
         int dropped = 0;
@@ -168,6 +196,14 @@ public final class DispatchPass {
             if (ledger.state(batchId) != TaskLedger.BatchState.PENDING) {
                 terminal++;
                 continue;
+            }
+            Runnable expiry = timeoutActions.get(batchId);
+            if (expiry != null) {
+                try {
+                    expiry.run();
+                } catch (Throwable ignored) {
+                    // A bound execution side cannot keep the drop from ending.
+                }
             }
             entry.token().cancel();
             if (entry.handle() != null && !entry.handle().isDone()) {

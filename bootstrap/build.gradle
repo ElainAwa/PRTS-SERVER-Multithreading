@@ -3,6 +3,28 @@ import io.izzel.arclight.gradle.tasks.RenameAsyncCatcherTask
 
 apply from: rootProject.file('gradle/build-stamp.gradle')
 
+// Build identity: a jar must be traceable to the revision and the working tree it was built from.
+// The root project exposes only an abbreviated commit, so the product manifests additionally carry
+// the full commit, that abbreviation and the tree state; a dirty build marks itself instead of
+// looking like a release of the commit it names. This script is not part of the generated-mapping
+// cache digest (see the Arclight plugin), so these reads cannot rewrite generated artifacts.
+def git = { List<String> args ->
+    def stdout = new ByteArrayOutputStream()
+    exec {
+        workingDir rootProject.projectDir
+        commandLine(['git'] + args)
+        standardOutput = stdout
+        errorOutput = new ByteArrayOutputStream()
+    }
+    return stdout.toString().trim()
+}
+def gitCommit = git(['rev-parse', 'HEAD'])
+def gitStatus = git(['status', '--porcelain'])
+def gitDirty = !gitStatus.isEmpty()
+def gitChangeCount = gitStatus.isEmpty() ? 0 : gitStatus.readLines().size()
+def gitState = gitDirty ? 'dirty' : 'clean'
+def releaseVersion = project.version.toString().replace('-SNAPSHOT', '')
+
 apply plugin: 'java'
 apply plugin: 'idea'
 apply plugin: 'maven-publish'
@@ -149,10 +171,14 @@ tasks.register('neoforgeJar', Jar) {
     reproducibleFileOrder = true
     manifest.attributes 'Main-Class': 'io.izzel.arclight.server.Launcher'
     manifest.attributes 'Implementation-Title': 'PRTS'
-    manifest.attributes 'Implementation-Version': "PRTS-${libs.versions.minecraft.get()}-${project.version}-$gitHash"
+    manifest.attributes 'Implementation-Version': "PRTS-${libs.versions.minecraft.get()}-${project.version}-$gitHash${gitDirty ? '-dirty' : ''}"
     manifest.attributes 'Implementation-Vendor': 'PRTS Team'
     manifest.attributes 'Implementation-Timestamp': "$buildTimestamp"
     manifest.attributes 'Automatic-Module-Name': 'luminara.boot'
+    manifest.attributes 'Git-Commit': gitCommit
+    manifest.attributes 'Git-Commit-Short': gitHash
+    manifest.attributes 'Git-Tree': gitState
+    manifest.attributes 'Git-Changes': gitChangeCount.toString()
     from(configurations.embed.collect { it.isDirectory() ? it : zipTree(it) }) {
         exclude 'META-INF/MANIFEST.MF'
         exclude 'META-INF/*.SF'
@@ -184,10 +210,14 @@ tasks.register('fabricJar', Jar) {
     reproducibleFileOrder = true
     manifest.attributes 'Main-Class': 'io.izzel.arclight.server.Launcher'
     manifest.attributes 'Implementation-Title': 'PRTS'
-    manifest.attributes 'Implementation-Version': "PRTS-${libs.versions.minecraft.get()}-${project.version}-$gitHash"
+    manifest.attributes 'Implementation-Version': "PRTS-${libs.versions.minecraft.get()}-${project.version}-$gitHash${gitDirty ? '-dirty' : ''}"
     manifest.attributes 'Implementation-Vendor': 'PRTS Team'
     manifest.attributes 'Implementation-Timestamp': "$buildTimestamp"
     manifest.attributes 'Automatic-Module-Name': 'luminara.boot'
+    manifest.attributes 'Git-Commit': gitCommit
+    manifest.attributes 'Git-Commit-Short': gitHash
+    manifest.attributes 'Git-Tree': gitState
+    manifest.attributes 'Git-Changes': gitChangeCount.toString()
     from(configurations.embedFabric.collect { it.isDirectory() ? it : zipTree(it) })
     into('/') {
         it.from(project(':arclight-fabric').tasks.relocateCraftBukkit.outputs.files.collect())
@@ -201,6 +231,52 @@ tasks.register('fabricJar', Jar) {
     from sourceSets.fabric.output
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     dependsOn(project(':arclight-fabric').tasks.build)
+}
+
+// The artifact that will be loaded must be addressable by revision: the default SNAPSHOT name is
+// overwritten by every build, so a copy whose name carries the commit (and a dirty marker) is kept
+// next to it with a sidecar record of its hashes, size and build time. The default name is kept.
+def retainedName = "PRTS-neoforge-${libs.versions.minecraft.get()}-${releaseVersion}-${gitHash}${gitDirty ? '-dirty' : ''}.jar"
+
+tasks.register('retainNeoforgeJar') {
+    group = 'build'
+    description = 'Copy the NeoForge server jar under a revision-addressed name and record its identity.'
+    dependsOn tasks.named('neoforgeJar')
+    def sourceJar = tasks.named('neoforgeJar').flatMap { it.archiveFile }
+    def retainedJar = project.layout.buildDirectory.file("artifacts/${retainedName}")
+    def identityRecord = project.layout.buildDirectory.file("artifacts/${retainedName}.identity.txt")
+    inputs.file(sourceJar)
+    outputs.file(retainedJar)
+    outputs.file(identityRecord)
+    doLast {
+        def source = sourceJar.get().asFile
+        def target = retainedJar.get().asFile
+        target.parentFile.mkdirs()
+        java.nio.file.Files.copy(source.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        def bytes = target.bytes
+        def digest = { String algorithm ->
+            java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance(algorithm).digest(bytes))
+        }
+        identityRecord.get().asFile.text = [
+                "artifact=${retainedName}",
+                "source=${source.name}",
+                "md5=${digest('MD5')}",
+                "sha256=${digest('SHA-256')}",
+                "bytes=${bytes.length}",
+                "retained_at=${java.time.OffsetDateTime.now().format(java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME)}",
+                "commit_timestamp=${buildTimestamp}",
+                "git_commit=${gitCommit}",
+                "git_commit_short=${gitHash}",
+                "git_tree=${gitState}",
+                "git_changes=${gitChangeCount}",
+                "java_version=${System.getProperty('java.version')}",
+                "gradle_version=${project.gradle.gradleVersion}",
+        ].join(System.lineSeparator()) + System.lineSeparator()
+    }
+}
+
+tasks.named('neoforgeJar').configure {
+    finalizedBy 'retainNeoforgeJar'
 }
 
 tasks.register('generateInstallerInfo', GenerateInstallerInfo) {
