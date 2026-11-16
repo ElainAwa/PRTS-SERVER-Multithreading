@@ -23,6 +23,7 @@ public final class ReplayComparator {
     public static final String REFUSED_MIXED_WITHIN_SIDE = "mixed-within-side";
     public static final String REFUSED_ORPHAN_EFFECT = "orphan-effect";
     public static final String REFUSED_EFFECT_MISSING = "effect-missing";
+    public static final String REFUSED_PARTIAL_STEP = "partial-step";
     public static final String REFUSED_INSTANCE_COLLISION = "instance-collision";
     public static final String REFUSED_EMPTY_SAMPLE = "empty-sample";
     public static final String REFUSED_ILLEGAL_IDENTITY = "illegal-identity";
@@ -116,6 +117,12 @@ public final class ReplayComparator {
     public Verdict compare(Evidence left, Evidence right) {
         if (left == null || right == null || left.replay() == null || right.replay() == null) {
             return refuse(REFUSED_SIDE_MISSING, "");
+        }
+        if (partialOf(left.replay())) {
+            return refuse(REFUSED_PARTIAL_STEP, "left");
+        }
+        if (partialOf(right.replay())) {
+            return refuse(REFUSED_PARTIAL_STEP, "right");
         }
         String broken = closure(left);
         if (broken == null) {
@@ -305,6 +312,12 @@ public final class ReplayComparator {
         if (!left.plainSteps().isEmpty() || !right.plainSteps().isEmpty()) {
             return refuse(REFUSED_MIXED_WITHIN_SIDE, "a version 1 side carries plain steps");
         }
+        if (partialOf(left)) {
+            return refuse(REFUSED_PARTIAL_STEP, "left");
+        }
+        if (partialOf(right)) {
+            return refuse(REFUSED_PARTIAL_STEP, "right");
+        }
         String broken = integrity(left, strict == null ? null : strict.leftRanges());
         if (broken != null) {
             return refuse(broken, "left");
@@ -426,6 +439,18 @@ public final class ReplayComparator {
             column.add(witness.instance());
         }
         return column;
+    }
+
+    /** Whether one side carries a typed step whose effect reached only a part of its write. Such a
+     * step says the run's own reach is unknown, so the two sides are not compared as the same work:
+     * the comparison is refused instead of reading the unknown as an equal or a different value. */
+    private static boolean partialOf(CommitLog.SchemaReplay side) {
+        for (CommitLog.TypedStep step : side.typedSteps()) {
+            if (step.disposition() == CommitLog.Entry.Disposition.PARTIAL) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String integrity(CommitLog.SchemaReplay side, RangeSealTable.Snapshot ranges) {

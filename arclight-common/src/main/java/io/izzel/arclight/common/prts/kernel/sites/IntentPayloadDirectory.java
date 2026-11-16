@@ -44,18 +44,20 @@ public final class IntentPayloadDirectory implements IntentPayload {
             unbound.increment();
             return Outcome.rejected(RejectCode.NATIVE_UNDECLARED);
         }
+        // Entering the native action makes its effect unknown even when it reports failure or
+        // throws, so a second call could repeat an effect that already happened; this refusal is
+        // final and the channel forgets the write through release().
         try {
-            if (!write.apply()) {
-                failed.increment();
-                return Outcome.retryable(RejectCode.VERSION_MISMATCH);
+            if (write.apply()) {
+                pending.remove(intent.payloadHandle());
+                applied.increment();
+                return Outcome.APPLIED;
             }
+            failed.increment();
         } catch (Throwable thrown) {
             this.threw.increment();
-            return Outcome.retryable(RejectCode.VERSION_MISMATCH);
         }
-        pending.remove(intent.payloadHandle());
-        applied.increment();
-        return Outcome.APPLIED;
+        return Outcome.rejected(RejectCode.VERSION_MISMATCH);
     }
 
     @Override

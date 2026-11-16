@@ -18,29 +18,48 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 /** The accepted prefix of one graph execution: every node has one state and one future, and a node
  * that was never submitted is still visible as terminal once the cohort knows it will not run.
  *
  * <p>Every node also carries a phase witness: whether it entered the cohort, became ready, started,
- * returned from its body, failed its charge and reached a terminal point, how many starts it took and
- * the terminal code that explains the end. The witness is written under the same lock as the state,
- * so a reader cannot observe a terminal state whose witness is still behind. */
+ * declared its effect possible, was asked to cancel, returned from its body, failed its charge and
+ * reached a terminal point, how many starts it took and the terminal code that explains the end. The
+ * witness is written under the same lock as the state, so a reader cannot observe a terminal state
+ * whose witness is still behind. The effect and cancellation flags are monotone. */
 public final class ExecutionCohort {
 
-    /** The phase witness of one node. The booleans are monotone; {@code attempt} is zero or one. */
+    /** The phase witness of one node. Every boolean is monotone; {@code attempt} is zero or one. */
     public record Witness(String key, boolean input, boolean ready, boolean start,
-                          boolean bodyReturned, boolean chargeFailed, boolean end, int attempt,
-                          String terminalCode) {
+                          boolean bodyReturned, boolean chargeFailed, boolean effectPossible,
+                          boolean cancelRequested, boolean end, int attempt, String terminalCode) {
 
         public Witness {
             key = key == null ? "" : key;
             terminalCode = terminalCode == null ? "" : terminalCode;
         }
 
+        /** The witness shape before the effect and cancellation flags existed. */
+        public Witness(String key, boolean input, boolean ready, boolean start,
+                       boolean bodyReturned, boolean chargeFailed, boolean end, int attempt,
+                       String terminalCode) {
+            this(key, input, ready, start, bodyReturned, chargeFailed, false, false, end, attempt,
+                terminalCode);
+        }
+
         /** Whether the node reached its terminal point. */
         public boolean terminal() {
             return end;
+        }
+    }
+
+    /** One node's terminal settlement: the state it reached and the code that explains it. */
+    public record Settlement(String key, State state, String terminalCode) {
+
+        public Settlement {
+            key = key == null ? "" : key;
+            terminalCode = terminalCode == null ? "" : terminalCode;
         }
     }
 
@@ -71,6 +90,8 @@ public final class ExecutionCohort {
         private boolean start;
         private boolean bodyReturned;
         private boolean chargeFailed;
+        private boolean effectPossible;
+        private boolean cancelRequested;
         private boolean end;
         private int attempt;
         private String terminalCode = "";
@@ -81,8 +102,8 @@ public final class ExecutionCohort {
         }
 
         private Witness view() {
-            return new Witness(key, input, ready, start, bodyReturned, chargeFailed, end, attempt,
-                terminalCode);
+            return new Witness(key, input, ready, start, bodyReturned, chargeFailed,
+                effectPossible, cancelRequested, end, attempt, terminalCode);
         }
     }
 
@@ -98,6 +119,8 @@ public final class ExecutionCohort {
     private final Map<String, WorkerPool.GenericHandle> workerHandles = new ConcurrentHashMap<>();
     private final List<WorkerPool.GenericHandle> handles = new ArrayList<>();
     private final Map<String, WorkerPool.GenericHandle> handlesByKey = new ConcurrentHashMap<>();
+    private final List<Consumer<Settlement>> settlementHooks = new ArrayList<>();
+    private final List<Runnable> completionHooks = new ArrayList<>();
     private final CountDownLatch done;
     private final AtomicInteger terminalCount = new AtomicInteger();
     private final AtomicInteger accepted = new AtomicInteger();
@@ -192,8 +215,47 @@ public final class ExecutionCohort {
         return witness == null || !witness.end ? "" : witness.terminalCode;
     }
 
+    /** Registers an observer that receives every node's terminal settlement exactly once. A hook
+     * registered after a node settled does not see that node, so callers register before the nodes
+     * can run. Hooks run under the cohort lock and must not wait on the cohort. */
+    public synchronized void onSettled(Consumer<Settlement> hook) {
+        if (hook != null) {
+            settlementHooks.add(hook);
+        }
+    }
+
+    /** Registers a one-shot action for the moment every node is terminal. An empty or already
+     * settled cohort runs the action immediately. */
+    synchronized void onComplete(Runnable hook) {
+        if (hook == null) {
+            return;
+        }
+        if (done.getCount() == 0L) {
+            runSafely(hook);
+            return;
+        }
+        completionHooks.add(hook);
+    }
+
+    /** Declares that the node may now produce its effect. A terminal node keeps the witness it
+     * settled with, so a late declaration cannot turn a no-effect cancellation into an after-effect
+     * one. */
+    public synchronized void markEffectPossible(String key) {
+        State state = key == null ? null : states.get(key);
+        if (state == null || isTerminal(state)) return;
+        WitnessState witness = witnessStates.get(key);
+        if (witness != null) witness.effectPossible = true;
+    }
+
+    /** Whether the node declared that its effect became possible. */
+    public synchronized boolean effectPossible(String key) {
+        WitnessState witness = key == null ? null : witnessStates.get(key);
+        return witness != null && witness.effectPossible;
+    }
+
     /** Requests cancellation of one node. A node that has not started is terminal immediately; a
-     * running node keeps its future until the body exits and then records its real outcome. */
+     * running node keeps its future until the body exits and then records CANCELLED_AFTER_EFFECT
+     * when the body declared its effect possible, or CANCELLED when it did not. */
     public synchronized boolean cancel(String key) {
         return cancelInternal(key, CANCELLED_CODE, false);
     }
@@ -211,22 +273,17 @@ public final class ExecutionCohort {
         if (state == null || isTerminal(state)) return false;
         AtomicBoolean request = cancelRequests.get(key);
         if (request != null) request.set(true);
+        WitnessState witness = witnessStates.get(key);
+        if (witness != null) witness.cancelRequested = true;
         NodeCancel token = cancels.get(key);
         if (token != null) token.cancelled.set(true);
         String reason = code == null ? CANCELLED_CODE : code;
         cancelCodes.putIfAbsent(key, reason);
         if (state == State.RUNNING) return true;
         if (!terminal(key)) return false;
-        states.put(key, State.CANCELLED);
-        WitnessState witness = witnessStates.get(key);
-        if (witness != null) {
-            witness.end = true;
-            witness.terminalCode = cancelCodes.getOrDefault(key, reason);
-        }
-        futures.get(key).completeExceptionally(new CancellationException(
-            (expired ? "cohort expired " : "cohort cancelled ") + key));
         cancelled.incrementAndGet();
-        finish();
+        settle(key, State.CANCELLED, cancelCodes.getOrDefault(key, reason),
+            new CancellationException((expired ? "cohort expired " : "cohort cancelled ") + key));
         return true;
     }
 
@@ -258,16 +315,29 @@ public final class ExecutionCohort {
     }
 
     synchronized void markRejected(String key) {
+        State state = key == null ? null : states.get(key);
+        if (state == null || isTerminal(state) || state == State.RUNNING) return;
         if (!terminal(key)) return;
-        states.put(key, State.REJECTED);
-        WitnessState witness = witnessStates.get(key);
-        if (witness != null) {
-            witness.end = true;
-            witness.terminalCode = REJECTED_CODE;
-        }
         rejected.incrementAndGet();
-        futures.get(key).completeExceptionally(new RejectedExecutionException("job rejected " + key));
-        finish();
+        settle(key, State.REJECTED, REJECTED_CODE,
+            new RejectedExecutionException("job rejected " + key));
+    }
+
+    /** Refuses every node that has not started, before any body of the cohort can run. This is the
+     * admission answer of a cohort that loses a flight gate or cannot be started at all; a node
+     * already running is left for its own body to settle. */
+    public synchronized int rejectAllBeforeEffect() {
+        int count = 0;
+        for (String key : nodes.keySet()) {
+            State state = states.get(key);
+            if (state != State.PENDING && state != State.READY) continue;
+            if (!terminal(key)) continue;
+            rejected.incrementAndGet();
+            settle(key, State.REJECTED, REJECTED_CODE,
+                new RejectedExecutionException("job rejected " + key));
+            count++;
+        }
+        return count;
     }
 
     synchronized void markOutcome(String key, Throwable failure, boolean chargeFailed) {
@@ -291,7 +361,7 @@ public final class ExecutionCohort {
             terminalFailure = new RejectedExecutionException("share budget exhausted");
             failed.incrementAndGet();
         } else if (cancelRequests.get(key).get()) {
-            next = State.CANCELLED_AFTER_EFFECT;
+            next = witness.effectPossible ? State.CANCELLED_AFTER_EFFECT : State.CANCELLED;
             code = cancelCodes.getOrDefault(key, CANCELLED_CODE);
             terminalFailure = new CancellationException("cohort cancelled while running " + key);
             cancelled.incrementAndGet();
@@ -299,28 +369,61 @@ public final class ExecutionCohort {
             next = State.DONE;
             code = DONE_CODE;
         }
-        states.put(key, next);
-        witness.end = true;
-        witness.terminalCode = code;
-        if (terminalFailure != null) {
-            futures.get(key).completeExceptionally(terminalFailure);
-        } else {
-            futures.get(key).complete(null);
-        }
-        finish();
+        settle(key, next, code, terminalFailure);
     }
 
     void registerWorkerHandle(String key, WorkerPool.GenericHandle handle) {
         workerHandles.put(key, handle);
     }
 
-    private boolean terminal(String key) {
-        AtomicBoolean flag = terminals.get(key);
-        return flag != null && flag.compareAndSet(false, true);
+    private void settle(String key, State state, String code, Throwable failure) {
+        states.put(key, state);
+        WitnessState witness = witnessStates.get(key);
+        if (witness != null) {
+            witness.end = true;
+            witness.terminalCode = code == null ? "" : code;
+        }
+        notifySettled(key, state, code);
+        CompletableFuture<Void> future = futures.get(key);
+        if (failure != null) {
+            future.completeExceptionally(failure);
+        } else {
+            future.complete(null);
+        }
+        finish();
+    }
+
+    private void notifySettled(String key, State state, String code) {
+        if (settlementHooks.isEmpty()) return;
+        Settlement settlement = new Settlement(key, state, code);
+        for (Consumer<Settlement> hook : List.copyOf(settlementHooks)) {
+            try {
+                hook.accept(settlement);
+            } catch (Throwable ignored) {
+                // A settlement observer must not be able to leave the node non-terminal.
+            }
+        }
     }
 
     private void finish() {
-        if (terminalCount.incrementAndGet() == nodes.size()) done.countDown();
+        if (terminalCount.incrementAndGet() != nodes.size()) return;
+        for (Runnable hook : List.copyOf(completionHooks)) {
+            runSafely(hook);
+        }
+        done.countDown();
+    }
+
+    private static void runSafely(Runnable hook) {
+        try {
+            hook.run();
+        } catch (Throwable ignored) {
+            // Completion observers cannot keep a settled cohort from opening its latch.
+        }
+    }
+
+    private boolean terminal(String key) {
+        AtomicBoolean flag = terminals.get(key);
+        return flag != null && flag.compareAndSet(false, true);
     }
 
     private static boolean isTerminal(State state) {
@@ -344,6 +447,16 @@ public final class ExecutionCohort {
         @Override
         public boolean cancel() {
             return ExecutionCohort.this.cancel(key);
+        }
+
+        @Override
+        public void markEffectPossible() {
+            ExecutionCohort.this.markEffectPossible(key);
+        }
+
+        @Override
+        public boolean effectPossible() {
+            return ExecutionCohort.this.effectPossible(key);
         }
     }
 }

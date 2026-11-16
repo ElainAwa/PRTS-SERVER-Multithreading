@@ -10,9 +10,11 @@ import io.izzel.arclight.common.prts.kernel.generic.GenericCancel;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkBody;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan.WorkBatch;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Semaphore;
@@ -59,14 +61,26 @@ public final class WorkerPool {
                               int worldScope, long exemptFlags) {
     }
 
-    /** What a shutdown left behind. */
+    /** What a shutdown left behind: the queued work it refused before effect and the running work
+     * that outlived the drain and wait budget. */
     public record ShutdownReport(boolean stopped, int cancelledInFlight, int remainingInFlight,
-                                 boolean terminated) {
+                                 boolean terminated, int queuedDropped, int runningPending) {
+
+        /** The report shape before the drain counters existed. */
+        public ShutdownReport(boolean stopped, int cancelledInFlight, int remainingInFlight,
+                              boolean terminated) {
+            this(stopped, cancelledInFlight, remainingInFlight, terminated, 0, remainingInFlight);
+        }
+    }
+
+    /** The resource split at one instant: queued items, items a worker took, and the accepted sum
+     * the queue capacity bounds. */
+    record Stock(int queued, int running, int inFlight, int cap, int tokens, int alive) {
     }
 
     private record Item(WorkBatch batch, CancelToken token, WorkBody body, ArenaSlot slot,
                         ArenaSlot.Lease lease, WorkerHandle handle, Runnable task,
-                        Runnable afterRelease) {
+                        Runnable afterRelease, CompletableFuture<Void> future) {
     }
 
     private final Spec spec;
@@ -77,6 +91,8 @@ public final class WorkerPool {
     private final LinkedBlockingQueue<Item> genericQueue = new LinkedBlockingQueue<>();
     private final Semaphore signals = new Semaphore(0);
     private final AtomicInteger inFlight = new AtomicInteger();
+    private final AtomicInteger running = new AtomicInteger();
+    private final Object drainLock = new Object();
     private final AtomicLong newestEpoch = new AtomicLong();
     private final AtomicInteger active = new AtomicInteger();
     private final AtomicBoolean accepting = new AtomicBoolean(true);
@@ -142,10 +158,17 @@ public final class WorkerPool {
         WorkerHandle handle = new WorkerHandle(batch.batchId(), batch.batchEpoch());
         newestEpoch.accumulateAndGet(batch.batchEpoch(), Math::max);
         tokens.add(token);
-        Item item = new Item(batch, token, body, slot, lease, handle, null, null);
-        shards.computeIfAbsent(batch.task().worldId(), key -> new LinkedBlockingQueue<>())
-            .offer(item);
-        readings.noteQueueDepth(inFlight.get());
+        Item item = new Item(batch, token, body, slot, lease, handle, null, null, null);
+        synchronized (drainLock) {
+            if (!accepting.get()) {
+                inFlight.decrementAndGet();
+                tokens.remove(token);
+                return null;
+            }
+            shards.computeIfAbsent(batch.task().worldId(), key -> new LinkedBlockingQueue<>())
+                .offer(item);
+        }
+        readings.noteQueueDepth(queued());
         signals.release();
         return handle;
     }
@@ -191,7 +214,7 @@ public final class WorkerPool {
         }
         tokens.add(token);
         CompletableFuture<Void> future = new CompletableFuture<>();
-        genericQueue.offer(new Item(null, null, null, null, null, null, () -> {
+        Item item = new Item(null, null, null, null, null, null, () -> {
             try {
                 if (token.cancelled()) throw new WorkBody.CancelledFault();
                 job.run(token);
@@ -201,8 +224,16 @@ public final class WorkerPool {
             } finally {
                 tokens.remove(token);
             }
-        }, afterRelease));
-        readings.noteQueueDepth(inFlight.get());
+        }, afterRelease, future);
+        synchronized (drainLock) {
+            if (!accepting.get()) {
+                inFlight.decrementAndGet();
+                tokens.remove(token);
+                return null;
+            }
+            genericQueue.offer(item);
+        }
+        readings.noteQueueDepth(queued());
         signals.release();
         return new GenericHandle(future, token);
     }
@@ -215,17 +246,23 @@ public final class WorkerPool {
             inFlight.decrementAndGet();
             return false;
         }
-        LinkedBlockingQueue<Item> shard = null;
-        for (LinkedBlockingQueue<Item> candidate : shards.values()) {
-            shard = candidate;
-            break;
+        synchronized (drainLock) {
+            if (!accepting.get()) {
+                inFlight.decrementAndGet();
+                return false;
+            }
+            LinkedBlockingQueue<Item> shard = null;
+            for (LinkedBlockingQueue<Item> candidate : shards.values()) {
+                shard = candidate;
+                break;
+            }
+            if (shard == null) {
+                inFlight.decrementAndGet();
+                return false;
+            }
+            shard.offer(new Item(null, null, null, null, null, null, task, null, null));
         }
-        if (shard == null) {
-            inFlight.decrementAndGet();
-            return false;
-        }
-        shard.offer(new Item(null, null, null, null, null, null, task, null));
-        readings.noteQueueDepth(inFlight.get());
+        readings.noteQueueDepth(queued());
         signals.release();
         return true;
     }
@@ -253,20 +290,32 @@ public final class WorkerPool {
     }
 
     private Item poll() {
-        Item generic = genericQueue.poll();
-        if (generic != null) {
-            return generic;
-        }
-        for (LinkedBlockingQueue<Item> shard : shards.values()) {
-            Item item = shard.poll();
-            if (item != null) {
-                return item;
+        synchronized (drainLock) {
+            Item generic = genericQueue.poll();
+            if (generic != null) {
+                running.incrementAndGet();
+                return generic;
             }
+            for (LinkedBlockingQueue<Item> shard : shards.values()) {
+                Item item = shard.poll();
+                if (item != null) {
+                    running.incrementAndGet();
+                    return item;
+                }
+            }
+            return null;
         }
-        return null;
     }
 
     private void runItem(Item item) {
+        try {
+            runItemBody(item);
+        } finally {
+            running.decrementAndGet();
+        }
+    }
+
+    private void runItemBody(Item item) {
         Thread self = Thread.currentThread();
         if (item.task() != null) {
             try {
@@ -276,7 +325,7 @@ public final class WorkerPool {
                 // entry runs the row; a failed executor task must not kill the worker.
             } finally {
                 inFlight.decrementAndGet();
-                readings.noteQueueDepth(inFlight.get());
+                readings.noteQueueDepth(queued());
             }
             if (item.afterRelease() != null) {
                 try {
@@ -337,7 +386,7 @@ public final class WorkerPool {
             readings.noteExecution(self.getName(), System.nanoTime() - startedAt);
             inFlight.decrementAndGet();
             tokens.remove(item.token());
-            readings.noteQueueDepth(inFlight.get());
+            readings.noteQueueDepth(queued());
         }
         // The epoch makes a result late whether or not the merge completed the handle first; the
         // release goes through the lease, so a reused slot refuses it instead of being freed.
@@ -362,22 +411,23 @@ public final class WorkerPool {
         }
     }
 
-    /** Stops the pool in the ordered steps shutdown uses everywhere. */
+    /** Stops the pool in the ordered steps shutdown uses everywhere: it refuses new work, cancels
+     * every live token, drops what is still queued before effect, then waits a bounded time for the
+     * bodies that already started. The stopDispatch flag is retained for source compatibility; a
+     * shutdown always refuses new work. */
     public ShutdownReport shutdown(boolean stopDispatch, boolean awaitInFlight,
                                    long awaitTerminationMs) {
-        if (stopDispatch) {
-            accepting.set(false);
-        }
+        accepting.set(false);
         int cancelled = 0;
         for (GenericCancel token : tokens) {
             if (token.cancel()) {
                 cancelled++;
             }
         }
-        int remaining = inFlight.get();
+        int queuedDropped = drainQueued();
         if (awaitInFlight) {
             long deadline = System.nanoTime() + Math.max(0L, awaitTerminationMs) * 1_000_000L;
-            while (inFlight.get() > 0 && System.nanoTime() < deadline) {
+            while (running.get() > 0 && System.nanoTime() < deadline) {
                 try {
                     Thread.sleep(2L);
                 } catch (InterruptedException e) {
@@ -385,8 +435,8 @@ public final class WorkerPool {
                     break;
                 }
             }
-            remaining = inFlight.get();
         }
+        int runningPending = running.get();
         shuttingDown.set(true);
         signals.release(threads.size() * 2 + spec.count());
         boolean terminated = true;
@@ -400,7 +450,49 @@ public final class WorkerPool {
                 terminated = false;
             }
         }
-        return new ShutdownReport(stopDispatch, cancelled, remaining, terminated);
+        return new ShutdownReport(stopDispatch, cancelled, inFlight.get(), terminated,
+            queuedDropped, runningPending);
+    }
+
+    private int drainQueued() {
+        List<Item> drained = new ArrayList<>();
+        synchronized (drainLock) {
+            genericQueue.drainTo(drained);
+            for (LinkedBlockingQueue<Item> shard : shards.values()) {
+                shard.drainTo(drained);
+            }
+        }
+        for (Item item : drained) {
+            inFlight.decrementAndGet();
+            if (item.token() != null) {
+                item.token().cancel();
+                tokens.remove(item.token());
+            }
+            if (item.future() != null) {
+                item.future().completeExceptionally(
+                    new CancellationException("worker pool shut down"));
+            } else if (item.handle() != null) {
+                item.handle().complete(TaskOutcome.cancelled(item.batch().batchId(), 0,
+                    Thread.currentThread().threadId(), Thread.currentThread().getName(),
+                    RejectCode.TICK_BUDGET_EXHAUSTED.text()));
+                if (item.lease() != null) {
+                    arena.release(item.lease(), true);
+                }
+            }
+        }
+        if (!drained.isEmpty()) {
+            readings.noteQueueDepth(queued());
+        }
+        return drained.size();
+    }
+
+    private int queued() {
+        return Math.max(0, inFlight.get() - running.get());
+    }
+
+    Stock stock() {
+        return new Stock(queued(), running.get(), inFlight.get(), spec.queueCap(), tokens.size(),
+            active.get());
     }
 
     /** Retires one worker after a hard fault and shrinks the pool. */
@@ -422,7 +514,7 @@ public final class WorkerPool {
     }
 
     public int queueDepth() {
-        return inFlight.get();
+        return queued();
     }
 
     public List<ThreadClass> threadClasses() {

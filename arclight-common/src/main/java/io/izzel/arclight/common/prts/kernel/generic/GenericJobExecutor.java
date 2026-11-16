@@ -10,11 +10,13 @@ import io.izzel.arclight.common.prts.support.PrtsCpuClock;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Domain-neutral executor: one body per JobGraph node, supplied by the owner of that domain. A
@@ -23,14 +25,17 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>The executor also owns the execution end of a {@link WorkAccount}: it seats every node, moves
  * its pending sub-bucket while it is submitted and running, meters its wall and cpu time and closes
  * it when the node ends. A deadline overload checks the monotonic deadline before every submission
- * and expires what can no longer be submitted; the serial entry keeps one body in flight and walks
- * the frozen graph order. */
+ * and expires what can no longer be submitted; the serial entry keeps one body in flight, walks the
+ * frozen graph order and stops waiting at the deadline instead of blocking on the running body. The
+ * update entry adds a per-key flight gate: one graph per update key is in flight and a second call
+ * with the same key is refused before any body runs. */
 public final class GenericJobExecutor {
 
     private final WorkerPool pool;
     private final JobExecutionContext context;
     private final JobMetering metering;
     private final WorkAccount account;
+    private final Map<String, Boolean> updateFlights = new ConcurrentHashMap<>();
 
     public GenericJobExecutor(WorkerPool pool) {
         this(pool, null, null, null);
@@ -87,18 +92,129 @@ public final class GenericJobExecutor {
      */
     public Execution executeCohort(JobGraph graph, Map<String, Runnable> bodies, long deadlineNanos) {
         validate(graph, bodies);
+        return start(graph, bodies, deadlineNanos, null);
+    }
+
+    /**
+     * Starts one graph execution under a per-key flight gate. If the same key is already in flight,
+     * the call is refused before any body runs: every node is REJECTED and the attached account
+     * closes it as REJECTED_BEFORE_EFFECT. The gate is released when the cohort is terminal, for an
+     * empty graph immediately, and when the call fails to start at all.
+     */
+    public Execution executeUpdate(String updateKey, JobGraph graph, Map<String, Runnable> bodies) {
+        return executeUpdate(updateKey, graph, bodies, 0L);
+    }
+
+    /** The deadline form of {@link #executeUpdate(String, JobGraph, Map)}. */
+    public Execution executeUpdate(String updateKey, JobGraph graph, Map<String, Runnable> bodies,
+                                   long deadlineNanos) {
+        if (updateKey == null || updateKey.isEmpty()) {
+            throw new IllegalArgumentException("update key");
+        }
+        if (graph == null) {
+            throw new IllegalArgumentException("graph");
+        }
+        if (bodies == null) {
+            throw new IllegalArgumentException("bodies");
+        }
+        if (updateFlights.putIfAbsent(updateKey, Boolean.TRUE) != null) {
+            return refuseUpdate(graph);
+        }
+        try {
+            validate(graph, bodies);
+            return start(graph, bodies, deadlineNanos, updateKey);
+        } catch (RuntimeException | Error failure) {
+            updateFlights.remove(updateKey);
+            throw failure;
+        }
+    }
+
+    /** Compatibility entry point: walks the frozen graph order with one body in flight. */
+    public Execution executeSerial(JobGraph graph, Map<String, Runnable> bodies) {
+        return executeSerial(graph, bodies, 0L);
+    }
+
+    /**
+     * Walks the frozen graph order with one body in flight and the same predecessor gate as the
+     * parallel path. A node whose predecessor did not finish done is cancelled, and a deadline that
+     * passed before its turn expires it with the tick budget code. With a deadline the caller stops
+     * waiting when it passes: the running node stays RUNNING with its future pending, every node
+     * that did not start expires, and the call returns without waiting for the body. The caller
+     * waits for each node, so this entry is not meant to run on a worker thread.
+     */
+    public Execution executeSerial(JobGraph graph, Map<String, Runnable> bodies, long deadlineNanos) {
+        validate(graph, bodies);
         Map<String, Runnable> bodyView = Map.copyOf(bodies);
         ExecutionCohort cohort = new ExecutionCohort(graph);
+        installSettlement(cohort);
+        seedAccount(cohort);
+        for (long nodeId : graph.order()) {
+            JobGraph.Node node = graph.node(nodeId);
+            if (node == null) continue;
+            String key = node.key();
+            if (expired(deadlineNanos)) {
+                cohort.expire(key);
+                continue;
+            }
+            if (!predecessorsDone(cohort, node)) {
+                if (predecessorExpired(cohort, node)) {
+                    cohort.expire(key);
+                } else {
+                    cohort.cancel(key);
+                }
+                continue;
+            }
+            ExecutionCohort.State state = cohort.state(key);
+            if (state != ExecutionCohort.State.PENDING && state != ExecutionCohort.State.READY) {
+                continue;
+            }
+            cohort.markReady(key);
+            if (account != null) account.markReady(key);
+            Runnable body = bodyView.get(key);
+            if (body == null) {
+                cohort.markRejected(key);
+                continue;
+            }
+            WorkerPool.GenericHandle handle = pool.submitGeneric(
+                token -> run(cohort, node, body), cohort.token(key));
+            if (handle == null) {
+                cohort.markRejected(key);
+                continue;
+            }
+            cohort.markAccepted(key);
+            cohort.registerWorkerHandle(key, handle);
+            if (awaitNode(handle, deadlineNanos)) {
+                expireUnfinished(cohort, graph);
+                return new Execution(cohort, cohort.handles());
+            }
+        }
+        for (JobGraph.Node node : graph.nodes()) {
+            if (!isTerminal(cohort.state(node.key()))) {
+                cohort.cancel(node.key());
+            }
+        }
+        if (account != null) {
+            account.settle();
+        }
+        return new Execution(cohort, cohort.handles());
+    }
+
+    private Execution start(JobGraph graph, Map<String, Runnable> bodies, long deadlineNanos,
+                            String updateKey) {
+        Map<String, Runnable> bodyView = Map.copyOf(bodies);
+        ExecutionCohort cohort = new ExecutionCohort(graph);
+        installSettlement(cohort);
+        if (updateKey != null) {
+            cohort.onComplete(() -> updateFlights.remove(updateKey));
+        }
         seedAccount(cohort);
         Map<String, AtomicInteger> remaining = new ConcurrentHashMap<>();
         for (JobGraph.Node node : graph.nodes()) {
             remaining.put(node.key(), new AtomicInteger(node.predecessors().size()));
         }
-        Set<String> settledKeys = ConcurrentHashMap.newKeySet();
         for (JobGraph.Node node : graph.nodes()) {
             String key = node.key();
             cohort.handle(key).future().whenComplete((ignored, error) -> {
-                settleUnit(cohort, key, settledKeys);
                 if (error != null) {
                     completed(cohort, remaining, key, bodyView, deadlineNanos);
                 }
@@ -116,85 +232,26 @@ public final class GenericJobExecutor {
         return new Execution(cohort, cohort.handles());
     }
 
-    /** Compatibility entry point: walks the frozen graph order with one body in flight. */
-    public Execution executeSerial(JobGraph graph, Map<String, Runnable> bodies) {
-        return executeSerial(graph, bodies, 0L);
-    }
-
-    /**
-     * Walks the frozen graph order with one body in flight and the same predecessor gate as the
-     * parallel path. A node whose predecessor did not finish done is cancelled, and a deadline that
-     * passed before its turn expires it with the tick budget code. The caller waits for each node, so
-     * this entry is not meant to run on a worker thread.
-     */
-    public Execution executeSerial(JobGraph graph, Map<String, Runnable> bodies, long deadlineNanos) {
-        validate(graph, bodies);
-        Map<String, Runnable> bodyView = Map.copyOf(bodies);
+    private Execution refuseUpdate(JobGraph graph) {
         ExecutionCohort cohort = new ExecutionCohort(graph);
+        installSettlement(cohort);
         seedAccount(cohort);
-        Set<String> settledKeys = ConcurrentHashMap.newKeySet();
-        for (JobGraph.Node node : graph.nodes()) {
-            String key = node.key();
-            cohort.handle(key).future().whenComplete((ignored, error) ->
-                settleUnit(cohort, key, settledKeys));
-        }
-        for (long nodeId : graph.order()) {
-            JobGraph.Node node = graph.node(nodeId);
-            if (node == null) continue;
-            String key = node.key();
-            if (expired(deadlineNanos)) {
-                cohort.expire(key);
-                settleUnit(cohort, key, settledKeys);
-                continue;
-            }
-            if (!predecessorsDone(cohort, node)) {
-                if (predecessorExpired(cohort, node)) {
-                    cohort.expire(key);
-                } else {
-                    cohort.cancel(key);
-                }
-                settleUnit(cohort, key, settledKeys);
-                continue;
-            }
-            ExecutionCohort.State state = cohort.state(key);
-            if (state != ExecutionCohort.State.PENDING && state != ExecutionCohort.State.READY) {
-                settleUnit(cohort, key, settledKeys);
-                continue;
-            }
-            cohort.markReady(key);
-            if (account != null) account.markReady(key);
-            Runnable body = bodyView.get(key);
-            if (body == null) {
-                cohort.markRejected(key);
-                settleUnit(cohort, key, settledKeys);
-                continue;
-            }
-            WorkerPool.GenericHandle handle = pool.submitGeneric(
-                token -> run(cohort, node, body), cohort.token(key));
-            if (handle == null) {
-                cohort.markRejected(key);
-                settleUnit(cohort, key, settledKeys);
-                continue;
-            }
-            cohort.markAccepted(key);
-            cohort.registerWorkerHandle(key, handle);
-            try {
-                handle.future().join();
-            } catch (CompletionException | CancellationException ignored) {
-                // The node's own terminal state and account closure carry the failure.
-            }
-            settleUnit(cohort, key, settledKeys);
-        }
-        for (JobGraph.Node node : graph.nodes()) {
-            if (!isTerminal(cohort.state(node.key()))) {
-                cohort.cancel(node.key());
-            }
-            settleUnit(cohort, node.key(), settledKeys);
-        }
+        cohort.rejectAllBeforeEffect();
         if (account != null) {
             account.settle();
         }
         return new Execution(cohort, cohort.handles());
+    }
+
+    private void installSettlement(ExecutionCohort cohort) {
+        if (account == null) return;
+        cohort.onSettled(settlement -> {
+            WorkAccount.Outcome outcome = outcomeOf(settlement.state());
+            if (outcome == null) return;
+            if (account.close(settlement.key(), outcome, settlement.terminalCode())) {
+                account.settle();
+            }
+        });
     }
 
     private void completed(ExecutionCohort cohort, Map<String, AtomicInteger> remaining, String key,
@@ -281,25 +338,45 @@ public final class GenericJobExecutor {
         cohort.markOutcome(node.key(), failure, chargeFailed);
     }
 
+    private static boolean awaitNode(WorkerPool.GenericHandle handle, long deadlineNanos) {
+        try {
+            if (deadlineNanos == 0L) {
+                handle.future().join();
+                return false;
+            }
+            long remaining = deadlineNanos - System.nanoTime();
+            if (remaining <= 0L) {
+                return true;
+            }
+            handle.future().get(remaining, TimeUnit.NANOSECONDS);
+            return false;
+        } catch (TimeoutException e) {
+            return true;
+        } catch (CancellationException | ExecutionException e) {
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return true;
+        } catch (CompletionException e) {
+            return false;
+        }
+    }
+
+    private static void expireUnfinished(ExecutionCohort cohort, JobGraph graph) {
+        for (long nodeId : graph.order()) {
+            JobGraph.Node node = graph.node(nodeId);
+            if (node != null) {
+                cohort.expire(node.key());
+            }
+        }
+    }
+
     private void seedAccount(ExecutionCohort cohort) {
         if (account == null) return;
         JobGraph graph = cohort.graph();
         for (JobGraph.Node node : graph.nodes()) {
             account.offer(node.key(), node.key(), node.worldId(), node.domainId());
             account.seat(node.key(), graph.planSequence(), graph.tickIndex(), node.position());
-        }
-    }
-
-    private void settleUnit(ExecutionCohort cohort, String key, Set<String> settledKeys) {
-        if (account == null || key == null || !settledKeys.add(key)) return;
-        WorkAccount.Outcome outcome = outcomeOf(cohort.state(key));
-        if (outcome == null) {
-            settledKeys.remove(key);
-            return;
-        }
-        account.close(key, outcome, cohort.terminalCode(key));
-        if (settledKeys.size() == cohort.graph().nodeCount()) {
-            account.settle();
         }
     }
 

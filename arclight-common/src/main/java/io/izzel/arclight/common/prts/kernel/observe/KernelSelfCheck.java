@@ -439,15 +439,15 @@ public final class KernelSelfCheck {
         lines.add("selftest.shard_applied=" + payloads.appliedCount());
         lines.add("selftest.shard_abandoned=" + payloads.abandonedCount());
 
-        if (first.code() != RejectCode.VERSION_MISMATCH || first.steps() != 0
-            || depthAfterFirst != 2) {
-            failures.add("a retryable refusal was not left in place for a second attempt"
+        if (first.code() != RejectCode.VERSION_MISMATCH || first.steps() != 2
+            || first.released() != 1 || depthAfterFirst != 0) {
+            failures.add("a write that entered its native action was not released at once"
                 + " (code=" + first.code() + " steps=" + first.steps()
-                + " depth=" + depthAfterFirst + ")");
+                + " released=" + first.released() + " depth=" + depthAfterFirst + ")");
         }
-        if (second.code() != RejectCode.VERSION_MISMATCH || segment.released() != 1L
-            || queue.retryExhaustedCount() != 1L) {
-            failures.add("a payload past its retry budget was not released with its code");
+        if (second.code() != null || second.steps() != 0 || segment.released() != 1L
+            || queue.retryExhaustedCount() != 0L) {
+            failures.add("a final refusal was retried, or the writes behind it were not drained");
         }
         if (queue.depth("world-a") != 0 || queue.depth("world-b") != 0) {
             failures.add("a failing write held the shard behind it");

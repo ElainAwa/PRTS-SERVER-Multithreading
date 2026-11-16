@@ -127,8 +127,14 @@ public final class CommitController {
         try {
             supplierCalls++;
             CommitTicket.Outcome reported = publisher.publish(ticket);
-            return reported != null ? reported : new CommitTicket.Outcome(CommitTicket.Terminal.FAILED,
-                request.failed().operationKind(), request.failed().rows(), 0, "publisher-silent");
+            if (reported != null) {
+                return reported;
+            }
+            // An action that answered nothing may have written what it was doing: the reach of the
+            // effect is unknown, so the terminal is the partial one and carries the partial payload. A
+            // failure would claim nothing happened, which the silent action does not say.
+            return new CommitTicket.Outcome(CommitTicket.Terminal.PARTIAL,
+                request.partial().operationKind(), request.partial().rows(), 0, "publisher-silent");
         } catch (RuntimeException | Error failure) {
             // An action that threw may already have written what it was doing. What it reached is not
             // known here, so the terminal is the partial one: a failure would claim nothing happened.

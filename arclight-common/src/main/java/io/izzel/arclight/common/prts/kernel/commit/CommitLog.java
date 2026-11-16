@@ -282,6 +282,7 @@ public final class CommitLog {
             ACCEPTED,
             MERGED,
             INTENT,
+            PARTIAL,
             DROPPED,
             RETRIED
         }
@@ -348,6 +349,9 @@ public final class CommitLog {
     private long intents;
     private long dropped;
     private long retried;
+    // Stored lines whose effect reached only a part of its write, counted apart from the dropped
+    // ones. No read key is added: the reservation holder already counts its own partial terminals.
+    private long partial;
     private long orderViolations;
     private long refusedFull;
     private long unplanned;
@@ -529,6 +533,7 @@ public final class CommitLog {
             case ACCEPTED -> accepted++;
             case MERGED -> merged++;
             case INTENT -> intents++;
+            case PARTIAL -> partial++;
             case RETRIED -> retried++;
             case DROPPED -> dropped++;
         }
@@ -721,6 +726,7 @@ public final class CommitLog {
             case ACCEPTED -> accepted++;
             case MERGED -> merged++;
             case INTENT -> intents++;
+            case PARTIAL -> partial++;
             case RETRIED -> retried++;
             case DROPPED -> dropped++;
         }
@@ -788,12 +794,21 @@ public final class CommitLog {
             return ticketRefusal(finished.code() == null ? RejectCode.QUEUE_CAP_EXCEEDED
                 : finished.code(), ticket.position());
         }
-        boolean published = outcome.terminal() == CommitTicket.Terminal.PUBLISHED;
-        Entry.Disposition disposition = published ? dispositionOf(ticket.batch().kind())
-            : Entry.Disposition.DROPPED;
+        // The three terminals keep what the line can still claim: a published line carries the kind
+        // it published, a partial one keeps its kind and says the reach of its effect is unknown, and
+        // a failed one is recorded as the drop it is. A partial line is not a failed one: the effect
+        // was entered, so no drop may be written for it.
+        CommitTicket.Terminal terminal = outcome.terminal();
+        Entry.Disposition disposition = switch (terminal) {
+            case PUBLISHED -> dispositionOf(ticket.batch().kind());
+            case PARTIAL -> Entry.Disposition.PARTIAL;
+            case FAILED -> Entry.Disposition.DROPPED;
+        };
+        Batch.Kind recordedKind = terminal == CommitTicket.Terminal.FAILED
+            ? Batch.Kind.DROP : ticket.batch().kind();
         Entry entry = new Entry(++sequence, tickIndex, ticket.planSequence(), ticket.position(),
             ticket.batch().worldId(), ticket.batch().domainId(), ticket.batch().nodeKey(), 0L,
-            published ? ticket.batch().kind() : Batch.Kind.DROP, ticket.batch().expectedVersion(),
+            recordedKind, ticket.batch().expectedVersion(),
             ticket.batch().writeSetDigest(), ticket.batch().rows(), disposition, null, false,
             ticket.identity());
         CommitRing ring = ring(ticket.batch().worldId(), ticket.batch().domainId());
@@ -813,6 +828,7 @@ public final class CommitLog {
             case ACCEPTED -> accepted++;
             case MERGED -> merged++;
             case INTENT -> intents++;
+            case PARTIAL -> partial++;
             case RETRIED -> retried++;
             case DROPPED -> dropped++;
         }
@@ -1549,6 +1565,7 @@ public final class CommitLog {
         intents = 0L;
         dropped = 0L;
         retried = 0L;
+        partial = 0L;
         orderViolations = 0L;
         refusedFull = 0L;
         unplanned = 0L;
