@@ -69,6 +69,51 @@ public final class EffectRequestFactory {
             writeSetDigest, rows, identity, controller, published, partial, failed);
     }
 
+    /** Builds the request against the state revision the pair carries right now: the number is
+     * read when the request is built, while the authorization generation stays the grant's own clock.
+     * A pair whose slot carries no revision has nothing a request could legitimately name. */
+    public static CommitTicket.ReserveRequest forCurrentRevision(
+                                                      FrozenDeclarations.Entry declaration,
+                                                      CommitReservation.VersionSource versionSource,
+                                                      long authorizationGeneration,
+                                                      long writeSetDigest,
+                                                      CommitLog.Batch.Kind kind,
+                                                      CommitNamespaces.Namespace producer,
+                                                      CommitNamespaces.Namespace controller,
+                                                      EffectStore.Effect published,
+                                                      EffectStore.Effect partial,
+                                                      EffectStore.Effect failed) {
+        if (declaration == null || declaration.seat() == null) {
+            throw new IllegalArgumentException("a request needs a declaration with a seat");
+        }
+        if (versionSource == null) {
+            throw new IllegalArgumentException("a request needs a live state revision source");
+        }
+        long live = versionSource.revisionOf(declaration.seat().worldId(),
+            declaration.seat().domainId());
+        if (live <= 0L) {
+            throw new IllegalArgumentException("the pair carries no live state revision");
+        }
+        return request(declaration, live, authorizationGeneration, writeSetDigest, kind, producer,
+            controller, published, partial, failed);
+    }
+
+    /** Builds the request against the live revision, with the terminals of the effect binding. */
+    public static CommitTicket.ReserveRequest forCurrentRevision(ControlledEffect effect,
+                                                      FrozenDeclarations.Entry declaration,
+                                                      CommitReservation.VersionSource versionSource,
+                                                      long authorizationGeneration,
+                                                      long writeSetDigest,
+                                                      CommitLog.Batch.Kind kind,
+                                                      CommitNamespaces.Namespace producer,
+                                                      CommitNamespaces.Namespace controller) {
+        if (effect == null) {
+            throw new IllegalArgumentException("a request needs an effect binding");
+        }
+        return forCurrentRevision(declaration, versionSource, authorizationGeneration, writeSetDigest,
+            kind, producer, controller, effect.published(), effect.partial(), effect.failed());
+    }
+
     /** Builds a request whose terminals are the ones the effect binding already holds. */
     public static CommitTicket.ReserveRequest request(ControlledEffect effect,
                                                       FrozenDeclarations.Entry declaration,

@@ -92,6 +92,13 @@ public final class CommitReservation {
     public interface VersionSource {
 
         long revisionOf(String worldId, String domainId);
+
+        /** Moves the pair's state revision after a published line was stored, and answers the
+         * revision the pair carries afterwards. A source that keeps the numbering it already had
+         * does nothing and answers the declared absence, which leaves every judgement as before. */
+        default long advance(String worldId, String domainId) {
+            return io.izzel.arclight.common.prts.kernel.auth.WriteVersionSlots.NOT_CARRIED;
+        }
     }
     private final Map<Long, Phase> phases = new LinkedHashMap<>();
     private final Map<Long, Pending> pendings = new LinkedHashMap<>();
@@ -596,6 +603,12 @@ public final class CommitReservation {
         append(new TerminalEntry(ticket.ticketId(), ticket.identity().effectRef(),
             outcome.terminal().name(), ticket.planSequence(), ticket.position(),
             outcome.unitCount(), successBatch, outcome.note()));
+        if (versionSource != null && outcome.terminal() == CommitTicket.Terminal.PUBLISHED) {
+            // The line is stored: the pair's state revision moves once, so a later fragment of the
+            // same wave is built against the number this publication left behind. A partial or
+            // failed terminal stores no state, and a terminal the log refused never reaches here.
+            versionSource.advance(ticket.batch().worldId(), ticket.batch().domainId());
+        }
         return new FinalizeResult(true, null, "recorded", outcome.terminal(), successBatch,
             outcome.unitCount());
     }

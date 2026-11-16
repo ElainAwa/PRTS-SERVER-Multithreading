@@ -9,7 +9,11 @@ import java.util.function.IntSupplier;
 
 /** Where a domain hands its declarations for the next plan. The intake has one declared capacity and
  * refuses past it: a declaration that does not fit is counted and answered with a code, so the queue
- * between a domain and the planning period can never grow without a bound somebody wrote down. */
+ * between a domain and the planning period can never grow without a bound somebody wrote down.
+ *
+ * <p>An intake may carry a work account. Every submit is then registered as an offered unit before
+ * the capacity check, and a refusal closes that unit as rejected before effect with the same code it
+ * answers the caller. A null account keeps the historical behaviour exactly. */
 public final class JobIntake {
 
     /** The answer a declaration receives. */
@@ -17,14 +21,27 @@ public final class JobIntake {
     }
 
     private final IntSupplier capacity;
+    private final WorkAccount account;
     private final List<JobDeclaration> pending = new ArrayList<>();
     private long submitted;
     private long refused;
     private long taken;
     private long takenBatches;
 
+    /** Opens an intake without a work account. */
     public JobIntake(IntSupplier capacity) {
+        this(capacity, null);
+    }
+
+    /** Opens an intake that registers every offer in the given work account. */
+    public JobIntake(IntSupplier capacity, WorkAccount account) {
         this.capacity = capacity;
+        this.account = account;
+    }
+
+    /** The work account of this intake, or null when it carries none. */
+    public WorkAccount account() {
+        return account;
     }
 
     public int capacity() {
@@ -36,8 +53,15 @@ public final class JobIntake {
         if (declaration == null) {
             throw new IllegalArgumentException("an intake takes declarations");
         }
+        boolean registered = account != null
+            && account.offer(declaration.key(), declaration.key(), declaration.worldId(),
+                declaration.domainId());
         if (pending.size() >= capacity()) {
             refused++;
+            if (registered) {
+                account.close(declaration.key(), WorkAccount.Outcome.REJECTED_BEFORE_EFFECT,
+                    RejectCode.QUEUE_CAP_EXCEEDED.text());
+            }
             return new Admission(false, RejectCode.QUEUE_CAP_EXCEEDED, pending.size());
         }
         pending.add(declaration);
@@ -74,6 +98,8 @@ public final class JobIntake {
         return takenBatches;
     }
 
+    /** Clears the intake counters and queue. The carried work account is a window ledger and is not
+     * cleared here; its units keep their offered, seated and closed identities. */
     public synchronized void reset() {
         pending.clear();
         submitted = 0L;
