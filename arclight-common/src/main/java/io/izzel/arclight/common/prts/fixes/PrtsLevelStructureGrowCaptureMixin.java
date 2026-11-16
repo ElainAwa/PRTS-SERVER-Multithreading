@@ -28,6 +28,7 @@ public abstract class PrtsLevelStructureGrowCaptureMixin {
     private void prts$captureGrownTreeBlock(BlockPos pos, BlockState state, int flags, int recursionLeft,
                                             CallbackInfoReturnable<Boolean> cir) {
         if (!prts$admitWorldWrite(pos, state, flags, recursionLeft)) {
+            PrtsWorldWriteTaps.clearJudgedWrite();
             cir.setReturnValue(false);
             return;
         }
@@ -46,6 +47,23 @@ public abstract class PrtsLevelStructureGrowCaptureMixin {
         }
         return decision.admitLazy(level, level.dimension().location().toString(),
             () -> new PrtsDeferredWrites.LevelWrite(level, pos, state, flags, recursionLeft));
+    }
+
+    /** Reports what the judged write actually did: a capture that only remembers the block and a
+     * failed call both report no landing, so admissions are not counted as published writes. */
+    @Inject(method = "setBlock(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;II)Z",
+        at = @At("RETURN"))
+    private void prts$reportWorldWriteResult(BlockPos pos, BlockState state, int flags,
+                                             int recursionLeft, CallbackInfoReturnable<Boolean> cir) {
+        Object judged = PrtsWorldWriteTaps.judgedWrite();
+        if (judged == null) {
+            return;
+        }
+        PrtsWorldWriteTaps.clearJudgedWrite();
+        Level level = (Level) (Object) this;
+        BlockState read = level.getBlockState(pos);
+        boolean applied = Boolean.TRUE.equals(cir.getReturnValue()) && read == state;
+        PrtsWorldWriteTaps.completeBlockWrite(level, pos.getX(), pos.getY(), pos.getZ(), read, applied);
     }
 
     /** The read side of the capture: only the level that started the grow answers from the capture

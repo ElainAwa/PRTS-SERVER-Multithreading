@@ -65,8 +65,16 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
     private final ThreadLocal<RejectCode> pendingClaimRefusal = new ThreadLocal<>();
     /** The key whose captured use the short path opened; the judged path closes it. */
     private final ThreadLocal<WriteControlledSlots.SlotKey> pendingClaimUse = new ThreadLocal<>();
+    /** Admissions whose actual write result is not reported yet: a landing is counted by
+     * {@link #completeBlockWrite}, not by the admission that preceded it. */
+    private final ThreadLocal<java.util.Deque<PendingLanding>> pendingLandings =
+        ThreadLocal.withInitial(java.util.ArrayDeque::new);
+    private record PendingLanding(WriteControlledSlots.Slot claim, String worldId,
+                                  WriteControlledSlots.WritePosition position, long tickIndex) {
+    }
     private final LongAdder claimedWrites = new LongAdder();
     private final LongAdder landedWrites = new LongAdder();
+    private final LongAdder unlandedWrites = new LongAdder();
 
     /** Creates the guard. */
     public WorldWriteGuard(WritePathCounters counters, WriteAuthority authority, IntentQueue intents,
@@ -397,14 +405,9 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
         HolderKind decidedHolder = claim == null ? holder.kind() : claim.holderKind();
         String decidedSite = claim == null ? holder.siteId() : claim.holderSiteId();
         if (claim != null && !handedOver && disposition == WriteDisposition.GRANT) {
-            // The claim was captured and the judged path let the write through: the write lands, and
-            // the batch it belongs to is handed to whoever keeps the commit order. Nothing is
-            // reported for a write that was refused or deferred.
-            landedWrites.increment();
-            ClaimLandedTap tap = claimLanded;
-            if (tap != null) {
-                tap.landed(claim, worldId, tickIndex, rowOf(claim, worldId, position));
-            }
+            // Admission only: the landing is counted when the real call reports what it did, so a
+            // capture that writes nothing and a failed call are not read as a published write.
+            pendingLandings.get().push(new PendingLanding(claim, worldId, position, tickIndex));
         }
         lastDecision = new WriteDecision(path, origin, decidedHolder, disposition, code, decidedSite,
             thread.getName(), worldId, tickIndex);
@@ -414,6 +417,31 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
             || (disposition == WriteDisposition.DENY && (enforce || rights))
             || (rights && disposition == WriteDisposition.INTENT);
         return !blocked;
+    }
+
+    @Override
+    public void completeBlockWrite(Object levelRef, int x, int y, int z, Object stateAfter,
+                                   boolean applied) {
+        java.util.Deque<PendingLanding> pending = pendingLandings.get();
+        PendingLanding landing = pending.poll();
+        if (landing == null) {
+            return;
+        }
+        if (!applied) {
+            unlandedWrites.increment();
+            return;
+        }
+        WriteControlledSlots.Slot claim = landing.claim();
+        if (claim == null || claim.levelRef() != levelRef) {
+            unlandedWrites.increment();
+            return;
+        }
+        landedWrites.increment();
+        ClaimLandedTap tap = claimLanded;
+        if (tap != null) {
+            tap.landed(claim, landing.worldId(), landing.tickIndex(),
+                rowOf(claim, landing.worldId(), landing.position()));
+        }
     }
 
     @Override
@@ -480,6 +508,7 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
     }
 
     /** The captured writes the judged path let through, so they landed in the world. */
+    /** Writes the real call reported as applied, counted after the call and not at admission. */
     public long landedWrites() {
         return landedWrites.sum();
     }

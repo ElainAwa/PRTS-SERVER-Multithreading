@@ -33,9 +33,18 @@ public final class PrtsWorldWriteTaps {
             return admitBlockWrite(levelRef, worldId,
                 deferred == null ? null : deferred.get());
         }
+
+        /** Reports what the write the judged path let through actually did, with the state read
+         * back after the call. A write that never reached the world (a capture) and a failed call
+         * both report {@code applied=false}: admission is not a landing. */
+        default void completeBlockWrite(Object levelRef, int x, int y, int z, Object stateAfter,
+                                        boolean applied) {
+        }
     }
 
     private static volatile BlockWriteTap blockWriteTap;
+    /** The level whose judged write is still waiting for its actual result on this thread. */
+    private static final ThreadLocal<Object> judgedLevel = new ThreadLocal<>();
 
     private PrtsWorldWriteTaps() {
     }
@@ -48,18 +57,55 @@ public final class PrtsWorldWriteTaps {
         return blockWriteTap != null;
     }
 
+    /** Marks that the write this thread is about to make was judged and owes a result report. */
+    public static void noteJudgedWrite(Object levelRef) {
+        judgedLevel.set(levelRef);
+    }
+
+    /** The level whose judged write still owes a result on this thread, or null. */
+    public static Object judgedWrite() {
+        return judgedLevel.get();
+    }
+
+    public static void clearJudgedWrite() {
+        judgedLevel.remove();
+    }
+
+    /** Reports the actual result of one judged write to the watcher that admitted it. */
+    public static void completeBlockWrite(Object levelRef, int x, int y, int z, Object stateAfter,
+                                          boolean applied) {
+        BlockWriteTap tap = blockWriteTap;
+        if (tap != null) {
+            tap.completeBlockWrite(levelRef, x, y, z, stateAfter, applied);
+        }
+    }
+
     /** Opens one decision against the watcher read here; the handle carries it, so a reload between
      * the fast question and the slow path cannot change which watcher judges the write. */
     public static Decision beginBlockWrite(Object levelRef) {
         BlockWriteTap tap = blockWriteTap;
-        return new Decision(tap, tap == null ? BlockWriteTap.PASS : tap.classifyBlockWrite(levelRef));
+        int verdict = tap == null ? BlockWriteTap.PASS : tap.classifyBlockWrite(levelRef);
+        noteJudged(tap, levelRef, verdict);
+        return new Decision(tap, verdict);
     }
 
     /** Opens one decision for a write made at a known block position: a watcher that cannot use the
      * three coordinates answers as it does for a write that has none. */
     public static Decision beginBlockWrite(Object levelRef, int x, int y, int z) {
         BlockWriteTap tap = blockWriteTap;
-        return new Decision(tap, tap == null ? BlockWriteTap.PASS : tap.classifyBlockWrite(levelRef, x, y, z));
+        int verdict = tap == null ? BlockWriteTap.PASS : tap.classifyBlockWrite(levelRef, x, y, z);
+        noteJudged(tap, levelRef, verdict);
+        return new Decision(tap, verdict);
+    }
+
+    private static void noteJudged(BlockWriteTap tap, Object levelRef, int verdict) {
+        if (tap != null && verdict != BlockWriteTap.PASS) {
+            // The caller starts the real write after this answer: the result is reported back to the
+            // watcher when the call returns, not when the admission is handed out.
+            noteJudgedWrite(levelRef);
+        } else {
+            clearJudgedWrite();
+        }
     }
 
     public static final class Decision {
