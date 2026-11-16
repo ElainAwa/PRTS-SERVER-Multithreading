@@ -22,6 +22,16 @@ public final class BatchWriteBack implements PrtsWorldWriteTaps.DeferredWrite {
     public record Result(int written, int gone, int identical, int kept, int refused) {
     }
 
+    /** The move admission one gated write asks before the row reaches the world: the action writes
+     * the row, and only an admitted answer counts it as written. It is a package-private wiring
+     * point: the production write-back passes none, so the gated path keeps the historical order. */
+    @FunctionalInterface
+    interface MoveGate {
+
+        EntityMoveAuthority.Verdict beforeWrite(EntityWriteBackIdentity expected,
+                                                StateHasher.Slice row, Runnable write);
+    }
+
     /** The live world as the write-back sees it: read for the gate, write for the row. */
     public interface LiveAccess extends EntityWriteBackGate.LiveSource {
 
@@ -35,23 +45,39 @@ public final class BatchWriteBack implements PrtsWorldWriteTaps.DeferredWrite {
     private final List<EntityWriteBackIdentity> identities;
     private final LiveAccess live;
     private final Counters readings;
+    private final MoveGate moveGate;
     private Result last = new Result(0, 0, 0, 0, 0);
+    private boolean partialFault;
 
     /** Creates the payload of one batch that carries no write-back identity. */
     public BatchWriteBack(List<StateHasher.Slice> rows, Counters readings) {
-        this(rows, null, null, readings);
+        this(rows, null, null, readings, null);
     }
 
     /** Creates the payload of one batch whose rows carry their frozen write-back identity. */
     public BatchWriteBack(List<StateHasher.Slice> rows, List<EntityWriteBackIdentity> identities,
                           LiveAccess live, Counters readings) {
+        this(rows, identities, live, readings, null);
+    }
+
+    /** Creates one gated payload that asks a move admission before every row write; the admission
+     * is an internal evidence wiring point and no production path passes one. */
+    BatchWriteBack(List<StateHasher.Slice> rows, List<EntityWriteBackIdentity> identities,
+                   LiveAccess live, Counters readings, MoveGate moveGate) {
         this.rows = List.copyOf(rows);
         this.identities = identities == null ? null : List.copyOf(identities);
         this.live = live;
         this.readings = readings;
+        this.moveGate = moveGate;
         if (this.identities != null && this.identities.size() != this.rows.size()) {
             throw new IllegalArgumentException("one identity per row is required");
         }
+    }
+
+    /** Whether the last {@link #apply()} stopped on a fault after keeping its written prefix; no
+     * row after the fault was attempted and nothing is re-dispatched. */
+    public boolean partialFault() {
+        return partialFault;
     }
 
     public List<StateHasher.Slice> rows() {
@@ -157,9 +183,27 @@ public final class BatchWriteBack implements PrtsWorldWriteTaps.DeferredWrite {
                 }
                 continue;
             }
-            live.write(worldId, (int) row.entitySeq(), row.x(), row.y(), row.z(), row.yaw(),
-                row.pitch(), row.velX(), row.velY(), row.velZ());
-            written++;
+            if (moveGate == null) {
+                live.write(worldId, (int) row.entitySeq(), row.x(), row.y(), row.z(), row.yaw(),
+                    row.pitch(), row.velX(), row.velY(), row.velZ());
+                written++;
+                continue;
+            }
+            try {
+                EntityMoveAuthority.Verdict move = moveGate.beforeWrite(expected, row,
+                    () -> live.write(worldId, (int) row.entitySeq(), row.x(), row.y(), row.z(),
+                        row.yaw(), row.pitch(), row.velX(), row.velY(), row.velZ()));
+                if (move == EntityMoveAuthority.Verdict.ADMITTED) {
+                    written++;
+                } else {
+                    refused++;
+                }
+            } catch (RuntimeException fault) {
+                // The written prefix is kept, the faulted row is not counted as applied, and no
+                // row after it is attempted; the observation flag reports the partial fault.
+                partialFault = true;
+                break;
+            }
         }
         long nanos = System.nanoTime() - startedAt;
         readings.noteWriteBack(written, gone, nanos);
