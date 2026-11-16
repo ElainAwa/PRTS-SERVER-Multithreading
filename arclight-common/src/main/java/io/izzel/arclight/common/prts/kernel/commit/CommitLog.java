@@ -914,6 +914,21 @@ public final class CommitLog {
         return planSequence < plan || (planSequence == plan && position <= lastPosition);
     }
 
+    /** Whether a reservation of the pair already holds this place. A seat is handed out once, so a
+     * second reservation for the same place would run an effect whose line the log cannot take. */
+    public boolean placeHeld(String worldId, String domainId, long planSequence, int position) {
+        for (RingSlot held : heldSlots.values()) {
+            if (!held.worldId().equals(worldId) || !held.domainId().equals(domainId)) {
+                continue;
+            }
+            long[] plan = heldPlans.get(held.ticket());
+            if (plan != null && plan[0] == planSequence && plan[1] == position) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Whether this place is the next one the pair may hand to a side effect: no reservation of the
      * pair holds a place before it. Read-only, like the check above: the side effect of a later place
      * waits until the earlier one ended. */

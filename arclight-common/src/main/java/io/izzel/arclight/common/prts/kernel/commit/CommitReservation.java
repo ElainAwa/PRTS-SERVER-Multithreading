@@ -201,6 +201,13 @@ public final class CommitReservation {
             requestRefusals++;
             return new ReserveResult(false, RejectCode.COMMIT_ORDER_VIOLATION, "place-spent", null);
         }
+        if (log.placeHeld(request.worldId(), request.domainId(), request.planSequence(),
+            request.position())) {
+            // The seat is already handed to another reservation: running this effect would produce a
+            // write the log cannot take, so the request is refused before anything moves.
+            requestRefusals++;
+            return new ReserveResult(false, RejectCode.COMMIT_ORDER_VIOLATION, "place-held", null);
+        }
         CommitTicket.Covered covered = covered(request);
         CommitLog.RingSlot ringSlot = log.reserveSlot(request.worldId(), request.domainId(),
             request.planSequence(), request.position());
