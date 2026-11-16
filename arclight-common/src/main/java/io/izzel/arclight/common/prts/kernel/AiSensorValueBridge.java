@@ -16,7 +16,14 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
-/** Internal worker entry to the mixin-added VillagerHostilesSensor value core. */
+/**
+ * Internal worker entry to the mixin-added VillagerHostilesSensor value core.
+ *
+ * <p>Retired side path: the program-shaped entity work reads sensor values in place instead of
+ * handing them to a worker pool, so this bridge is not extended any further. It keeps its exact
+ * dormant behaviour for the existing evidence, and no new caller may depend on it.
+ */
+@Deprecated
 public final class AiSensorValueBridge {
 
     static final String PROPERTY = "arclight.prts.aiSensorCore";

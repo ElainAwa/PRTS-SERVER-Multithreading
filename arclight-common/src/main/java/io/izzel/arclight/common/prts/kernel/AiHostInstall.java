@@ -32,8 +32,15 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
-/** Host install entry for the AI producer. Default off: the property is absent, so the entity plan
- * is unchanged; setting it installs capture->declaration into the freeze hook. */
+/**
+ * Host install entry for the AI producer. Default off: the property is absent, so the entity plan
+ * is unchanged; setting it installs capture->declaration into the freeze hook.
+ *
+ * <p>Retired side path: the program-shaped entity work replaces this full-snapshot worker handoff,
+ * so this entry is not extended any further. It keeps its exact dormant behaviour for the existing
+ * evidence, and no new caller may depend on it.
+ */
+@Deprecated
 final class AiHostInstall {
 
     static final String PROPERTY = "arclight.prts.aiPlan";
