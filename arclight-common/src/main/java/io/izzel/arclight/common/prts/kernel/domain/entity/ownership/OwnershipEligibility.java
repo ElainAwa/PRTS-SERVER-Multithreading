@@ -11,6 +11,7 @@ import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityQueryReadings;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.TickModels;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.WholeTickModel;
+import io.izzel.arclight.common.prts.support.EntityEligibility;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySelector;
@@ -24,24 +25,24 @@ import net.minecraft.world.entity.projectile.Projectile;
  * that does apply is the verdict. */
 final class OwnershipEligibility {
 
-    // Refusal reasons, first match wins: player, foreign class, removed, riding or leashed, AI,
-    // item/projectile callback, class without a model, pushable neighbours, fluid, fire, or a
-    // state the row's own model does not cover.
-    static final int WIDENED = 0;
-    static final int THIRD_PARTY = 1;
-    static final int PLAYER = 2;
-    static final int LIFECYCLE = 3;
-    static final int RIDING = 4;
-    static final int AI = 5;
-    static final int CALLBACK = 6;
-    static final int UNMODELED = 7;
-    static final int NEIGHBOURS = 8;
-    static final int FLUID = 9;
-    static final int FIRE = 10;
-    static final int MODEL = 11;
+    // Refusal reasons, first match wins: player, foreign class, removed, riding or leashed, an
+    // active AI, item/projectile callback, class without a model, fire, fluid, pushable neighbours,
+    // a model that refuses the row, and finally the widened row.
+    static final int WIDENED = EntityEligibility.Takeover.WIDENED;
+    static final int THIRD_PARTY = EntityEligibility.Takeover.THIRD_PARTY;
+    static final int PLAYER = EntityEligibility.Takeover.PLAYER;
+    static final int LIFECYCLE = EntityEligibility.Takeover.LIFECYCLE;
+    static final int RIDING = EntityEligibility.Takeover.RIDING;
+    static final int AI = EntityEligibility.Takeover.AI;
+    static final int CALLBACK = EntityEligibility.Takeover.CALLBACK;
+    static final int UNMODELED = EntityEligibility.Takeover.UNMODELED;
+    static final int NEIGHBOURS = EntityEligibility.Takeover.NEIGHBOURS;
+    static final int FLUID = EntityEligibility.Takeover.FLUID;
+    static final int FIRE = EntityEligibility.Takeover.FIRE;
+    static final int MODEL = EntityEligibility.Takeover.MODEL;
 
     /** How many refusal reasons the table above declares. */
-    static final int REASONS = 12;
+    static final int REASONS = EntityEligibility.Takeover.COUNT;
 
     /** Fingerprint bits the host entry compares between the plan point and the tick. */
     static final byte F_REMOVED = 1;
@@ -56,49 +57,58 @@ final class OwnershipEligibility {
 
     /** The first reason this row is refused, or {@link #WIDENED} when none applies. */
     static int reasonOf(ServerLevel level, Entity entity) {
-        if (entity instanceof Player) {
-            return PLAYER;
+        boolean player = entity instanceof Player;
+        boolean foreignClass = !entity.getClass().getName().startsWith("net.minecraft.");
+        boolean removed = entity.isRemoved();
+        boolean riding = entity.isPassenger() || entity.isVehicle()
+            || (entity instanceof Leashable leashable && leashable.isLeashed());
+        // A row that runs its own AI is refused before any model is asked: a whole-tick model of a
+        // mob row reproduces the path of an inactive AI only, so it cannot answer for an active one.
+        boolean aiMob = entity instanceof Mob mob && !mob.isNoAi();
+        boolean itemOrProjectile = entity instanceof ItemEntity || entity instanceof Projectile;
+        EntityEligibility.Reason early = EntityEligibility.classify(EntityEligibility.observedFacts(
+            player, foreignClass, removed, riding, aiMob, itemOrProjectile,
+            EntityEligibility.Model.UNREAD, EntityEligibility.Fact.UNREAD,
+            EntityEligibility.Fact.UNREAD, EntityEligibility.Fact.UNREAD));
+        if (early != EntityEligibility.Reason.ELIGIBLE) {
+            return projection(early);
         }
-        if (!entity.getClass().getName().startsWith("net.minecraft.")) {
-            return THIRD_PARTY;
+        // Only a row the early facts leave open asks the model registry and the world; a fire, a
+        // fluid or a missing model is decided before the neighbour query, exactly as before.
+        WholeTickModel model = EntityModelRegistry.modelOf(entity);
+        EntityEligibility.Model modelFact = model == null
+            ? EntityEligibility.Model.NONE : EntityEligibility.Model.REPLICABLE;
+        boolean fire = entity.isOnFire();
+        boolean fluid = entity.isInWater() || entity.isInLava() || entity.isInPowderSnow;
+        EntityEligibility.Fact neighbours = EntityEligibility.Fact.UNREAD;
+        if (model != null && !fire && !fluid) {
+            EntityQueryReadings.noteQuery();
+            neighbours = level.getEntities(entity, entity.getBoundingBox(),
+                EntitySelector.pushableBy(entity)).isEmpty()
+                ? EntityEligibility.Fact.NO : EntityEligibility.Fact.YES;
         }
-        if (entity.isRemoved()) {
-            return LIFECYCLE;
-        }
-        if (entity.isPassenger() || entity.isVehicle()
-            || (entity instanceof Leashable leashable && leashable.isLeashed())) {
-            return RIDING;
-        }
-        if (entity instanceof Mob mob && !mob.isNoAi()) {
-            if (EntityModelRegistry.modelOf(entity) == null) {
-                return AI;
+        EntityEligibility.Reason reason = EntityEligibility.classify(
+            EntityEligibility.observedFacts(player, foreignClass, removed, riding, aiMob,
+                itemOrProjectile, modelFact, read(fire), read(fluid), neighbours));
+        if (reason == EntityEligibility.Reason.ELIGIBLE && model != null) {
+            int refusal = model.refusal(entity);
+            if (refusal != WholeTickModel.REPLICABLE) {
+                model.noteRefusal(refusal);
+                reason = EntityEligibility.Reason.MODEL;
             }
         }
-        if (entity instanceof ItemEntity || entity instanceof Projectile) {
-            return CALLBACK;
-        }
-        WholeTickModel model = EntityModelRegistry.modelOf(entity);
-        if (model == null) {
-            return UNMODELED;
-        }
-        if (entity.isOnFire()) {
-            return FIRE;
-        }
-        if (entity.isInWater() || entity.isInLava() || entity.isInPowderSnow) {
-            return FLUID;
-        }
-        EntityQueryReadings.noteQuery();
-        if (!level.getEntities(entity, entity.getBoundingBox(), EntitySelector.pushableBy(entity))
-            .isEmpty()) {
-            return NEIGHBOURS;
-        }
-        int refusal = model.refusal(entity);
-        if (refusal == WholeTickModel.REPLICABLE) {
-            return WIDENED;
-        }
-        model.noteRefusal(refusal);
-        // A declared widen directive admits a refused row on purpose: the negative fixture.
-        return FaultInjection.ownershipWidens() ? WIDENED : MODEL;
+        return projection(reason);
+    }
+
+    /** The code of one reason in this predicate's code set; a declared widen keeps its old effect. */
+    private static int projection(EntityEligibility.Reason reason) {
+        int code = EntityEligibility.Takeover.of(reason);
+        return code == MODEL && FaultInjection.ownershipWidens() ? WIDENED : code;
+    }
+
+    /** One boolean row fact. */
+    private static EntityEligibility.Fact read(boolean value) {
+        return value ? EntityEligibility.Fact.YES : EntityEligibility.Fact.NO;
     }
 
     /** The part of the verdict the host entry can recheck without a world query; zero for a row

@@ -35,23 +35,23 @@ import java.util.concurrent.atomic.LongAdder;
 public final class PrtsEntityCapability {
 
     /** The row may be taken over by a kinematics owner. */
-    public static final int ELIGIBLE = 0;
+    public static final int ELIGIBLE = EntityEligibility.Capability.ELIGIBLE;
     /** The row creates, removes or moves itself between worlds. */
-    public static final int LIFECYCLE = 1;
+    public static final int LIFECYCLE = EntityEligibility.Capability.LIFECYCLE;
     /** The row runs AI, target selection or pathfinding. */
-    public static final int AI = 2;
+    public static final int AI = EntityEligibility.Capability.AI;
     /** The row rides, is ridden or is leashed: its motion belongs to another entity. */
-    public static final int RIDING = 3;
+    public static final int RIDING = EntityEligibility.Capability.RIDING;
     /** The row pushes or collides with other entities. */
-    public static final int CROSS_ENTITY = 4;
+    public static final int CROSS_ENTITY = EntityEligibility.Capability.CROSS_ENTITY;
     /** The row dispatches an event, a platform hook or code outside the host. */
-    public static final int HOST_CALLBACK = 5;
+    public static final int HOST_CALLBACK = EntityEligibility.Capability.HOST_CALLBACK;
     /** The row states no capability this census can derive: it stays with the host. */
-    public static final int UNKNOWN = 6;
+    public static final int UNKNOWN = EntityEligibility.Capability.UNKNOWN;
     /** Not a candidate row at all; counted apart, never eligible. */
-    public static final int PLAYER = 7;
+    public static final int PLAYER = EntityEligibility.Capability.PLAYER;
 
-    private static final int REASONS = 8;
+    private static final int REASONS = EntityEligibility.Capability.COUNT;
     private static final int SLOTS = 64;
     private static final String OTHER_CLASS = "other";
     private static final boolean TIMED = Boolean.getBoolean("arclight.prts.entityCensus");
@@ -87,21 +87,27 @@ public final class PrtsEntityCapability {
             return slot;
         }
     };
-    /** Class to the reason a row of it starts from; state-dependent reasons refine it per row. */
-    private static final ClassValue<Integer> STATIC_REASON = new ClassValue<>() {
+    /** Class shape read once per class; the row state refines it per row. */
+    private static final ClassValue<ClassFacts> CLASS_FACTS = new ClassValue<>() {
 
         @Override
-        protected Integer computeValue(Class<?> type) {
-            return classify(type);
+        protected ClassFacts computeValue(Class<?> type) {
+            return classFacts(type);
         }
     };
+
+    /** The class-level facts of one row: only the shape, never one row's state. */
+    private record ClassFacts(boolean player, boolean foreignClass, boolean itemOrProjectile,
+                              EntityEligibility.ClassKind kind) {
+    }
 
     private PrtsEntityCapability() {
     }
 
-    /** Counts one non-player row the frame froze, and the class it came from. */
-    public static void census(Entity entity) {
-        int reason = reasonOf(entity);
+    /** Counts one non-player row the frame froze and returns the reason the predicate reached. */
+    public static EntityEligibility.Reason census(Entity entity) {
+        EntityEligibility.Reason verdict = classify(entity);
+        int reason = EntityEligibility.Capability.of(verdict);
         int slot = slotOf(entity.getClass());
         CANDIDATES.increment();
         REASON_COUNTS[reason].increment();
@@ -113,6 +119,7 @@ public final class PrtsEntityCapability {
         if (reason == RIDING) {
             OWNER_CONFLICTS.increment();
         }
+        return verdict;
     }
 
     /** Counts one player row the frame skipped. */
@@ -125,35 +132,24 @@ public final class PrtsEntityCapability {
         CAP_DROPPED.increment();
     }
 
-    /** Names the reason one row starts from; state refines the class-level answer. */
+    /** The census code of one row: the single predicate projected onto this census's code set. */
     public static int reasonOf(Entity entity) {
-        Integer fixed = STATIC_REASON.get(entity.getClass());
-        int reason = fixed == null ? UNKNOWN : fixed;
-        if (reason == PLAYER) {
-            return PLAYER;
-        }
-        if (entity.isRemoved()) {
-            return LIFECYCLE;
-        }
-        if (entity.isPassenger() || entity.isVehicle()) {
-            return RIDING;
-        }
-        if (entity instanceof Leashable leashable && leashable.isLeashed()) {
-            return RIDING;
-        }
-        if (reason == AI) {
-            if (entity instanceof Mob mob && !mob.isNoAi()) {
-                // The host runs the goal selectors, the navigation and the sensing of this row.
-                return AI;
-            }
-            // A mob that declares no AI skips serverAiStep, but it is still a living row: it pushes
-            // and queries other entities every tick, so it carries the living-row reason.
-            return entity.isPushable() ? CROSS_ENTITY : UNKNOWN;
-        }
-        if (reason == ELIGIBLE && entity.isPushable()) {
-            return CROSS_ENTITY;
-        }
-        return reason;
+        return EntityEligibility.Capability.of(classify(entity));
+    }
+
+    /**
+     * The single eligibility answer for one row, read from the class shape and the row's own state.
+     * The census never asks the model registry and never queries the world, so those facts stay
+     * unread and the class-level answer is what this arm reports.
+     */
+    public static EntityEligibility.Reason classify(Entity entity) {
+        ClassFacts facts = CLASS_FACTS.get(entity.getClass());
+        boolean riding = entity.isPassenger() || entity.isVehicle()
+            || (entity instanceof Leashable leashable && leashable.isLeashed());
+        boolean aiMob = entity instanceof Mob mob && !mob.isNoAi();
+        return EntityEligibility.classify(EntityEligibility.censusFacts(facts.player(),
+            facts.foreignClass(), entity.isRemoved(), riding, aiMob, facts.itemOrProjectile(),
+            facts.kind(), entity.isPushable()));
     }
 
     /** Starts the host tick of one row; paired with {@link #endTick(Entity)}. */
@@ -381,41 +377,38 @@ public final class PrtsEntityCapability {
         }
     }
 
-    /** The class-level reason a row starts from; the per-row refinement stays in reasonOf. */
-    private static int classify(Class<?> type) {
+    /** The class shape of one row; the row state refines it inside the predicate. */
+    private static ClassFacts classFacts(Class<?> type) {
         if (Player.class.isAssignableFrom(type)) {
-            return PLAYER;
+            return new ClassFacts(true, false, false, EntityEligibility.ClassKind.OTHER);
         }
         if (!type.getName().startsWith("net.minecraft.")) {
             // Code that is not the host can attach a callback a frozen row cannot answer for.
-            return HOST_CALLBACK;
+            return new ClassFacts(false, true, false, EntityEligibility.ClassKind.OTHER);
+        }
+        if (ItemEntity.class.isAssignableFrom(type) || Projectile.class.isAssignableFrom(type)) {
+            // An item runs its own update hook and a projectile answers a hit; both can raise an
+            // event and remove themselves, which a frozen row cannot answer for.
+            return new ClassFacts(false, false, true, EntityEligibility.ClassKind.OTHER);
         }
         if (Mob.class.isAssignableFrom(type)) {
-            return AI;
-        }
-        if (ItemEntity.class.isAssignableFrom(type)) {
-            // The host tick of an item calls the item's own update hook and, on expiry, an event.
-            return HOST_CALLBACK;
-        }
-        if (Projectile.class.isAssignableFrom(type)) {
-            // A projectile answers a hit: it damages, it can raise an event and it removes itself.
-            return HOST_CALLBACK;
+            return new ClassFacts(false, false, false, EntityEligibility.ClassKind.MOB);
         }
         if (ExperienceOrb.class.isAssignableFrom(type)) {
             // An orb steers to the nearest player, which is a read of another entity every tick.
-            return CROSS_ENTITY;
+            return new ClassFacts(false, false, false, EntityEligibility.ClassKind.ORB);
         }
         if (LivingEntity.class.isAssignableFrom(type)) {
             // The living tick always pushes nearby entities and queries the world for them.
-            return CROSS_ENTITY;
+            return new ClassFacts(false, false, false, EntityEligibility.ClassKind.LIVING);
         }
         if (Marker.class.isAssignableFrom(type) || Interaction.class.isAssignableFrom(type)
             || Display.class.isAssignableFrom(type) || HangingEntity.class.isAssignableFrom(type)
             || LeashFenceKnotEntity.class.isAssignableFrom(type)) {
             // These rows hold a position and an orientation only; the host moves them never.
-            return ELIGIBLE;
+            return new ClassFacts(false, false, false, EntityEligibility.ClassKind.PURE);
         }
-        return UNKNOWN;
+        return new ClassFacts(false, false, false, EntityEligibility.ClassKind.OTHER);
     }
 
     private static int slotOf(Class<?> type) {

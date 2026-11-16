@@ -41,29 +41,29 @@ import java.util.concurrent.atomic.LongAdder;
 public final class PrtsEntityRescope {
 
     /** The whole tick of this row looks reproducible from frozen host state alone. */
-    public static final int WIDENED = 0;
+    public static final int WIDENED = EntityEligibility.Rescope.WIDENED;
     /** The class is not the host's: taking it over would take over foreign code. */
-    public static final int THIRD_PARTY = 1;
+    public static final int THIRD_PARTY = EntityEligibility.Rescope.THIRD_PARTY;
     /** A player row: it is never a takeover row. */
-    public static final int PLAYER = 2;
+    public static final int PLAYER = EntityEligibility.Rescope.PLAYER;
     /** The row is being removed. */
-    public static final int LIFECYCLE = 3;
+    public static final int LIFECYCLE = EntityEligibility.Rescope.LIFECYCLE;
     /** The row rides, is ridden or is leashed: its motion belongs to another entity. */
-    public static final int RIDING = 4;
+    public static final int RIDING = EntityEligibility.Rescope.RIDING;
     /** The row runs goal selectors, navigation or sensing. */
-    public static final int AI = 5;
+    public static final int AI = EntityEligibility.Rescope.AI;
     /** The row runs an item, projectile or platform callback inside its tick. */
-    public static final int CALLBACK = 6;
+    public static final int CALLBACK = EntityEligibility.Rescope.CALLBACK;
     /** The row has pushable neighbours, whose motion it shares. */
-    public static final int NEIGHBOURS = 7;
+    public static final int NEIGHBOURS = EntityEligibility.Rescope.NEIGHBOURS;
     /** The row sits in a fluid whose state decides its motion. */
-    public static final int FLUID = 8;
+    public static final int FLUID = EntityEligibility.Rescope.FLUID;
     /** The row is on fire. */
-    public static final int FIRE = 9;
+    public static final int FIRE = EntityEligibility.Rescope.FIRE;
     /** The row states no reproducible whole tick this census can derive. */
-    public static final int UNMODELED = 10;
+    public static final int UNMODELED = EntityEligibility.Rescope.UNMODELED;
 
-    private static final int VERDICTS = 11;
+    private static final int VERDICTS = EntityEligibility.Rescope.COUNT;
     private static final int SLOTS = 64;
     private static final int DEPTH = 8;
     /** The tag the load generator puts on every entity it summons, so declared rows count apart. */
@@ -401,38 +401,21 @@ public final class PrtsEntityRescope {
         return entity instanceof FallingBlockEntity && !entity.onGround();
     }
 
+    /** The verdict of one row: the single predicate projected onto this census's code set. */
     private static int verdictOf(long flags) {
-        if ((flags & F_PLAYER) != 0L) {
-            return PLAYER;
-        }
-        if ((flags & F_THIRD_PARTY) != 0L) {
-            return THIRD_PARTY;
-        }
-        if ((flags & F_LIFECYCLE) != 0L) {
-            return LIFECYCLE;
-        }
-        if ((flags & F_RIDING) != 0L) {
-            return RIDING;
-        }
-        if ((flags & F_AI) != 0L) {
-            return AI;
-        }
-        if ((flags & F_CALLBACK) != 0L) {
-            return CALLBACK;
-        }
-        if ((flags & F_UNMODELED) != 0L) {
-            return UNMODELED;
-        }
-        if ((flags & F_NEIGHBOURS) != 0L) {
-            return NEIGHBOURS;
-        }
-        if ((flags & F_FLUID) != 0L) {
-            return FLUID;
-        }
-        if ((flags & F_FIRE) != 0L) {
-            return FIRE;
-        }
-        return WIDENED;
+        EntityEligibility.RowFacts facts = EntityEligibility.observedFacts(
+            (flags & F_PLAYER) != 0L, (flags & F_THIRD_PARTY) != 0L,
+            (flags & F_LIFECYCLE) != 0L, (flags & F_RIDING) != 0L, (flags & F_AI) != 0L,
+            (flags & F_CALLBACK) != 0L,
+            (flags & F_UNMODELED) != 0L ? EntityEligibility.Model.NONE
+                : EntityEligibility.Model.REPLICABLE,
+            read(flags & F_FIRE), read(flags & F_FLUID), read(flags & F_NEIGHBOURS));
+        return EntityEligibility.Rescope.of(EntityEligibility.classify(facts));
+    }
+
+    /** One flag read as a row fact. */
+    private static EntityEligibility.Fact read(long bit) {
+        return bit != 0L ? EntityEligibility.Fact.YES : EntityEligibility.Fact.NO;
     }
 
     private static int slotOf(Class<?> type) {

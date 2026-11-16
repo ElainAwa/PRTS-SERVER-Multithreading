@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.domain.entity;
 
+import io.izzel.arclight.common.prts.support.EntityEligibility;
 import io.izzel.arclight.common.prts.support.PrtsEntityCapability;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -15,10 +16,19 @@ import java.util.function.IntPredicate;
 import net.minecraft.server.level.ServerLevel;
 
 /** Takes the read-only entity view of one tick, on the tick thread: it copies plain numbers out of
- * the live entities and never keeps a reference to one. */
+ * the live entities and never keeps a reference to one. Every row it sees is also booked in the
+ * per-tick identity ledger with its eligibility reason, so the rows the selection cap keeps out of
+ * the frame stay countable instead of disappearing. */
 public final class DispatchSnapshot {
 
+    private static final ThreadLocal<EntityDueLedger> LAST_LEDGER = new ThreadLocal<>();
+
     private DispatchSnapshot() {
+    }
+
+    /** The ledger the last capture on this thread fed; the next capture of the tick replaces it. */
+    public static EntityDueLedger lastLedger() {
+        return LAST_LEDGER.get();
     }
 
     public static List<EntityCandidateView> capture(WorldEpochSource worldEpochs) {
@@ -29,18 +39,23 @@ public final class DispatchSnapshot {
     public static List<EntityCandidateView> capture(WorldEpochSource worldEpochs,
                                                     IntPredicate skip) {
         List<EntityCandidateView> views = new ArrayList<>();
+        // The ledger keeps every row the work source offers; it declares no capacity, so a row the
+        // per-world selection cap refuses is still retained with its identity and reason.
+        EntityDueLedger ledger = EntityDueLedger.open(-1L, Integer.MAX_VALUE);
         List<World> worlds;
         try {
             worlds = List.copyOf(Bukkit.getWorlds());
         } catch (Throwable ignored) {
             // A platform that cannot list its worlds contributes no candidates; the tick continues.
             EntityQueryReadings.noteEntityCount(0L);
+            ledger.close();
+            LAST_LEDGER.set(ledger);
             return views;
         }
         for (World world : worlds) {
             try {
                 String worldId = WorldKey.id(world);
-                views.add(capture(world, worldId, worldEpochs.epochOf(worldId), skip));
+                views.add(capture(world, worldId, worldEpochs.epochOf(worldId), skip, ledger));
             } catch (Throwable ignored) {
                 // A world that cannot be read contributes no candidates; the tick continues.
             }
@@ -50,31 +65,40 @@ public final class DispatchSnapshot {
             total += view.count();
         }
         EntityQueryReadings.noteEntityCount(total);
+        ledger.close();
+        LAST_LEDGER.set(ledger);
         return views;
     }
 
     private static EntityCandidateView capture(World world, String worldId, long worldEpoch,
-                                               IntPredicate skip) {
+                                               IntPredicate skip, EntityDueLedger ledger) {
         EntityCandidateView.Builder builder = EntityCandidateView.builder(worldId, worldEpoch);
         for (Entity entity : world.getEntities()) {
             if (skip.test(entity.getEntityId())) {
                 continue;
             }
-            if (entity instanceof Player) {
-                PrtsEntityCapability.playerRow();
-                continue;
-            }
-            if (builder.full()) {
-                // The cap belongs to the frame, not to the world: what it leaves out is counted so
-                // a census can say how many rows the frame never saw.
-                PrtsEntityCapability.noteCapDropped();
-                continue;
-            }
             try {
-                net.minecraft.world.entity.Entity handle = ((CraftEntity) entity).getHandle();
-                PrtsEntityCapability.census(handle);
+                CraftEntity craft = (CraftEntity) entity;
+                net.minecraft.world.entity.Entity handle = craft.getHandle();
+                EntityRowIdentity identity = identityOf(worldId, worldEpoch, handle);
+                if (entity instanceof Player) {
+                    PrtsEntityCapability.playerRow();
+                    ledger.observe(identity, EntityEligibility.Reason.PLAYER);
+                    continue;
+                }
+                if (builder.full()) {
+                    // The cap belongs to the frame, not to the world: the row is retained as a
+                    // refusal and booked in the ledger, so a census can say which row it lost.
+                    PrtsEntityCapability.noteCapDropped();
+                    EntityEligibility.Reason refused = PrtsEntityCapability.classify(handle);
+                    ledger.observe(identity, refused);
+                    builder.refuse(identity, refused);
+                    continue;
+                }
+                EntityEligibility.Reason reason = PrtsEntityCapability.census(handle);
+                ledger.observe(identity, reason);
                 Location location = entity.getLocation();
-                builder.add(entity.getEntityId(), location.getBlockX() >> 4,
+                builder.add(identity, reason, location.getBlockX() >> 4,
                     location.getBlockZ() >> 4, location.getX(), location.getY(), location.getZ(),
                     location.getYaw(), location.getPitch(), entity.getVelocity().getX(),
                     entity.getVelocity().getY(), entity.getVelocity().getZ(),
@@ -84,6 +108,13 @@ public final class DispatchSnapshot {
             }
         }
         return builder.build();
+    }
+
+    private static EntityRowIdentity identityOf(String worldId, long worldEpoch,
+                                                net.minecraft.world.entity.Entity handle) {
+        return new EntityRowIdentity(worldId, worldEpoch,
+            handle.getUUID().getMostSignificantBits(), handle.getUUID().getLeastSignificantBits(),
+            handle.getId(), handle.tickCount);
     }
 
     private static long hostStep(net.minecraft.world.entity.Entity handle) {

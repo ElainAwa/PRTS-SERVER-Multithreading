@@ -1,17 +1,38 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.domain.entity;
 
-/** The view is a struct of arrays: the parallel arm and the serial arm read the same instance, so
- * a comparison can never be explained by two different reads of the world. */
+import io.izzel.arclight.common.prts.support.EntityEligibility;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+
+/** The frozen row set of one world of one tick. It is a struct of arrays: the parallel arm and the
+ * serial arm read the same instance, so a comparison can never be explained by two different reads
+ * of the world. Every row carries its full identity and the eligibility reason the census reached. */
 public final class EntityCandidateView {
 
-    /** Most entities one world contributes to a single tick. */
+    /** Most rows one world contributes to a single tick; a row beyond it is kept as a refusal. */
     public static final int MAX_CANDIDATES = 4096;
+
+    /** One row of a world above the selection cap: the frame keeps it instead of dropping it. */
+    public record Refused(EntityRowIdentity identity, EntityEligibility.Reason reason) {
+
+        /** Validates one retained refusal. */
+        public Refused {
+            Objects.requireNonNull(identity, "identity");
+            Objects.requireNonNull(reason, "reason");
+        }
+    }
 
     private final String worldId;
     private final long worldEpoch;
     private final int count;
     private final long[] entitySeq;
+    private final long[] uuidHigh;
+    private final long[] uuidLow;
+    private final int[] tickCount;
+    private final byte[] reasonOrdinal;
     private final int[] chunkX;
     private final int[] chunkZ;
     private final double[] posX;
@@ -23,12 +44,17 @@ public final class EntityCandidateView {
     private final double[] velY;
     private final double[] velZ;
     private final long[] flags;
+    private final List<Refused> refused;
 
     private EntityCandidateView(Builder builder) {
         this.worldId = builder.worldId;
         this.worldEpoch = builder.worldEpoch;
         this.count = builder.count;
         this.entitySeq = java.util.Arrays.copyOf(builder.entitySeq, builder.count);
+        this.uuidHigh = java.util.Arrays.copyOf(builder.uuidHigh, builder.count);
+        this.uuidLow = java.util.Arrays.copyOf(builder.uuidLow, builder.count);
+        this.tickCount = java.util.Arrays.copyOf(builder.tickCount, builder.count);
+        this.reasonOrdinal = java.util.Arrays.copyOf(builder.reasonOrdinal, builder.count);
         this.chunkX = java.util.Arrays.copyOf(builder.chunkX, builder.count);
         this.chunkZ = java.util.Arrays.copyOf(builder.chunkZ, builder.count);
         this.posX = java.util.Arrays.copyOf(builder.posX, builder.count);
@@ -40,6 +66,7 @@ public final class EntityCandidateView {
         this.velY = java.util.Arrays.copyOf(builder.velY, builder.count);
         this.velZ = java.util.Arrays.copyOf(builder.velZ, builder.count);
         this.flags = java.util.Arrays.copyOf(builder.flags, builder.count);
+        this.refused = List.copyOf(builder.refused);
     }
 
     public String worldId() {
@@ -56,6 +83,27 @@ public final class EntityCandidateView {
 
     public long entitySeq(int index) {
         return entitySeq[index];
+    }
+
+    /** The full identity of one selected row: world incarnation, UUID pair, id and ordinal witness. */
+    public EntityRowIdentity identity(int index) {
+        return new EntityRowIdentity(worldId, worldEpoch, uuidHigh[index], uuidLow[index],
+            (int) entitySeq[index], tickCount[index]);
+    }
+
+    /** The eligibility reason the census reached for one selected row. */
+    public EntityEligibility.Reason reason(int index) {
+        return EntityEligibility.Reason.values()[reasonOrdinal[index]];
+    }
+
+    /** Whether the predicate admitted one selected row. */
+    public boolean admitted(int index) {
+        return reason(index) == EntityEligibility.Reason.ELIGIBLE;
+    }
+
+    /** The rows of this world the selection cap kept out of the frame; every one is retained. */
+    public List<Refused> refused() {
+        return refused;
     }
 
     public int chunkX(int index) {
@@ -116,8 +164,12 @@ public final class EntityCandidateView {
         Builder builder = builder(worldId, worldEpoch);
         for (int i = 0; i < count; i++) {
             int row = order[i];
-            builder.add(entitySeq[row], chunkX[row], chunkZ[row], posX[row], posY[row],
-                posZ[row], yaw[row], pitch[row], velX[row], velY[row], velZ[row], flags[row]);
+            builder.add(identity(row), reason(row), chunkX[row], chunkZ[row], posX[row],
+                posY[row], posZ[row], yaw[row], pitch[row], velX[row], velY[row], velZ[row],
+                flags[row]);
+        }
+        for (Refused refusedRow : refused) {
+            builder.refuse(refusedRow.identity(), refusedRow.reason());
         }
         return builder.build();
     }
@@ -139,6 +191,10 @@ public final class EntityCandidateView {
         private final long worldEpoch;
         private int count;
         private long[] entitySeq = new long[16];
+        private long[] uuidHigh = new long[16];
+        private long[] uuidLow = new long[16];
+        private int[] tickCount = new int[16];
+        private byte[] reasonOrdinal = new byte[16];
         private int[] chunkX = new int[16];
         private int[] chunkZ = new int[16];
         private double[] posX = new double[16];
@@ -150,6 +206,7 @@ public final class EntityCandidateView {
         private double[] velY = new double[16];
         private double[] velZ = new double[16];
         private long[] flags = new long[16];
+        private final List<Refused> refused = new ArrayList<>();
 
         private Builder(String worldId, long worldEpoch) {
             this.worldId = worldId;
@@ -164,17 +221,44 @@ public final class EntityCandidateView {
             return count;
         }
 
-        /** Adds one entity row. */
-        public void add(long entitySeq, int chunkX, int chunkZ, double x, double y, double z,
-                        double yawDeg, double pitchDeg, double vx, double vy, double vz,
-                        long flagWord) {
+        /** The rows the selection cap kept out of the frame so far. */
+        public List<Refused> refusedRows() {
+            return List.copyOf(refused);
+        }
+
+        /**
+         * Adds one row a fixture declares. The row carries a fixture identity: the numeric id inside
+         * the view's world incarnation, with no host UUID or update ordinal.
+         */
+        public boolean add(long entitySeq, int chunkX, int chunkZ, double x, double y, double z,
+                           double yawDeg, double pitchDeg, double vx, double vy, double vz,
+                           long flagWord) {
+            return add(EntityRowIdentity.fixture(worldId, worldEpoch, (int) entitySeq),
+                EntityEligibility.Reason.UNKNOWN, chunkX, chunkZ, x, y, z, yawDeg, pitchDeg, vx,
+                vy, vz, flagWord);
+        }
+
+        /**
+         * Adds one observed row with its identity and reason. A row beyond the selection cap is
+         * retained as a refusal and the call returns false, so the cap never drops a row silently.
+         */
+        public boolean add(EntityRowIdentity identity, EntityEligibility.Reason reason, int chunkX,
+                           int chunkZ, double x, double y, double z, double yawDeg,
+                           double pitchDeg, double vx, double vy, double vz, long flagWord) {
+            Objects.requireNonNull(identity, "identity");
+            Objects.requireNonNull(reason, "reason");
             if (full()) {
-                return;
+                refuse(identity, reason);
+                return false;
             }
             if (count == this.entitySeq.length) {
                 grow();
             }
-            this.entitySeq[count] = entitySeq;
+            this.entitySeq[count] = identity.entityId();
+            this.uuidHigh[count] = identity.uuidHigh();
+            this.uuidLow[count] = identity.uuidLow();
+            this.tickCount[count] = identity.tickCount();
+            this.reasonOrdinal[count] = (byte) reason.ordinal();
             this.chunkX[count] = chunkX;
             this.chunkZ[count] = chunkZ;
             this.posX[count] = x;
@@ -187,6 +271,12 @@ public final class EntityCandidateView {
             this.velZ[count] = vz;
             this.flags[count] = flagWord;
             count++;
+            return true;
+        }
+
+        /** Retains one row the selection cap kept out of the frame. */
+        public void refuse(EntityRowIdentity identity, EntityEligibility.Reason reason) {
+            refused.add(new Refused(identity, reason));
         }
 
         public EntityCandidateView build() {
@@ -196,6 +286,10 @@ public final class EntityCandidateView {
         private void grow() {
             int next = Math.min(MAX_CANDIDATES, this.entitySeq.length * 2);
             this.entitySeq = java.util.Arrays.copyOf(this.entitySeq, next);
+            this.uuidHigh = java.util.Arrays.copyOf(this.uuidHigh, next);
+            this.uuidLow = java.util.Arrays.copyOf(this.uuidLow, next);
+            this.tickCount = java.util.Arrays.copyOf(this.tickCount, next);
+            this.reasonOrdinal = java.util.Arrays.copyOf(this.reasonOrdinal, next);
             this.chunkX = java.util.Arrays.copyOf(this.chunkX, next);
             this.chunkZ = java.util.Arrays.copyOf(this.chunkZ, next);
             this.posX = java.util.Arrays.copyOf(this.posX, next);
