@@ -30,6 +30,8 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.EntityCandidateView;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityDueCapture;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityDueWindow;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
+import io.izzel.arclight.common.prts.kernel.domain.entity.WorkBody;
+import io.izzel.arclight.common.prts.kernel.domain.entity.program.EntityProgramBody;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
@@ -62,6 +64,10 @@ public final class EntityDomain implements KernelDomain {
      * no configuration file, reload or command reaches it, and no decision of this domain reads what
      * it books. */
     private static final boolean FRAME_MIGRATION = Boolean.getBoolean("arclight.prts.frameMigration");
+    /** The dormant internal switch of the compute-only program body: an evidence property, not a
+     * configuration key and not a release switch. Off, the domain keeps the kinematics body and the
+     * dispatch path stays exactly as before. */
+    private static final boolean PROGRAM_BODY = Boolean.getBoolean("arclight.prts.entityProgram");
     private static final String THREAD_PREFIX = "prts-worker-";
     /** Metering-only pseudo-world; never a B3 or plan world key (plans and receipts use real
      * dimension keys). */
@@ -101,6 +107,8 @@ public final class EntityDomain implements KernelDomain {
     /** Whether this domain has the shared runtime open; it closes it again when it stops using it. */
     private boolean sharedRuntime;
     private MergeSegment.Frame lastFrame = MergeSegment.Frame.empty();
+    /** The compute-only program body of the dormant internal switch; null until first used. */
+    private WorkBody programBody;
 
     public EntityDomain(KernelModule module) {
         this.module = module;
@@ -483,8 +491,8 @@ public final class EntityDomain implements KernelDomain {
                     if (EntityTickOwnership.live()) {
                         EntityTickOwnership.bindSharedExecutor(pool.executor());
                     }
-                    pending = DispatchPass.dispatch(plan, pool, EntityIntegrator.INSTANCE, arena,
-                        readings, ledger, orderedTasks);
+                    pending = DispatchPass.dispatch(plan, pool, body(), arena, readings, ledger,
+                        orderedTasks);
                 } else {
                     // No pool this tick: the plan still receives one terminal outcome per task, so
                     // the accounting of the tick closes and the merge redos the batches on the tick
@@ -497,6 +505,19 @@ public final class EntityDomain implements KernelDomain {
             pendingSeatPlanSequence = module.planSequence() + 1L;
             pendingSeatLifecycle = module.plans().lifecycle();
         }
+    }
+
+    /** The body the dispatch of this build runs: the compute-only program body when the dormant
+     * internal switch is set, the unchanged kinematics body otherwise. A program body that refuses a
+     * permit faults the batch back to the existing fallback instead of writing a value. */
+    private WorkBody body() {
+        if (!PROGRAM_BODY) {
+            return EntityIntegrator.INSTANCE;
+        }
+        if (programBody == null) {
+            programBody = EntityProgramBody.production(module.guard().worldEpochs()::epochOf);
+        }
+        return programBody;
     }
 
     /** One dispatch of the frozen plan on the shared runtime: the tasks become the nodes of an
@@ -519,8 +540,7 @@ public final class EntityDomain implements KernelDomain {
         JobGraph planned = latest == null ? null : latest.graph();
         CohortDispatchPass.ExecutionSide side = new CohortDispatchPass.ExecutionSide(runtime.pool(),
             runtime.executor(), runtime.arena(), readings, ledger);
-        return CohortDispatchPass.dispatch(plan, side, EntityIntegrator.INSTANCE, orderedTasks,
-            planned);
+        return CohortDispatchPass.dispatch(plan, side, body(), orderedTasks, planned);
     }
 
     @Override
