@@ -636,7 +636,9 @@ public final class CommitLog {
             return typedRefusal(RejectCode.COMMIT_ORDER_VIOLATION, -1);
         }
         int position = resolved.position();
-        if (!ascending(batch.worldId(), batch.domainId(), resolved.planSequence(), position)) {
+        if (placeSpent(batch.worldId(), batch.domainId(), resolved.planSequence(), position)) {
+            // A stored line owns its place: a second typed line of the same frozen seat is not taken,
+            // whoever reports it. The refusal happens before the record is pinned or a slot is taken.
             return typedRefusal(RejectCode.COMMIT_ORDER_VIOLATION, position);
         }
         if (crossesReservedFloor(key(batch.worldId(), batch.domainId()), resolved.planSequence(),
@@ -967,9 +969,25 @@ public final class CommitLog {
             || worldEpoch <= worldEpochOf(worldId)) {
             return false;
         }
+        if (holdsSlotOf(worldId)) {
+            // A reservation of this world is still in flight: its side effect may be running and its
+            // room is promised. The boundary is a safe point, so it waits for that ticket to end.
+            return false;
+        }
         clearWorld(worldId);
         worldEpochs.put(worldId, worldEpoch);
         return true;
+    }
+
+    /** Whether one world holds a ring slot right now: a reserved place whose line is not stored yet
+     * belongs to the incarnation that granted it and keeps that incarnation's boundary from ending. */
+    private boolean holdsSlotOf(String worldId) {
+        for (RingSlot held : heldSlots.values()) {
+            if (held.worldId().equals(worldId)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Drops everything this log holds for one world alone. What the world's rings still carried is
