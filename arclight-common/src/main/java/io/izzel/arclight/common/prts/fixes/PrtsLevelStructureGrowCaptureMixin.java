@@ -61,6 +61,14 @@ public abstract class PrtsLevelStructureGrowCaptureMixin {
         }
         PrtsWorldWriteTaps.clearJudgedWrite();
         Level level = (Level) (Object) this;
+        // While the tree is being built the level answers a captured block from the capture list, so a
+        // read back equal to the requested state only proves the capture, not the world. The capture
+        // stage is a staging write, never a landing; the real dispatch call reports itself later.
+        if (PrtsStructureGrowCapture.capturedState(level, pos) != null) {
+            PrtsWorldWriteTaps.completeBlockWrite(level, pos.getX(), pos.getY(), pos.getZ(), null,
+                false);
+            return;
+        }
         BlockState read = level.getBlockState(pos);
         boolean applied = Boolean.TRUE.equals(cir.getReturnValue()) && read == state;
         PrtsWorldWriteTaps.completeBlockWrite(level, pos.getX(), pos.getY(), pos.getZ(), read, applied);
