@@ -3,6 +3,7 @@ package io.izzel.arclight.neoforge.mixin.core.world.entity;
 import io.izzel.arclight.common.bridge.core.world.entity.LivingEntityBridge;
 import io.izzel.arclight.common.mod.util.ArclightCaptures;
 import io.izzel.arclight.common.mod.util.ArclightDamageContainer;
+import io.izzel.arclight.common.prts.kernel.decision.DamageHostDecision;
 import io.izzel.arclight.mixin.Decorate;
 import io.izzel.arclight.mixin.DecorationOps;
 import io.izzel.arclight.mixin.Local;
@@ -51,15 +52,20 @@ public abstract class LivingEntityMixin_NeoForge extends EntityMixin_NeoForge im
     private float arclight$neoforge$entityDamageEvent(DamageContainer instance, DamageSource source, float original, @Local(allocate = "arclightDamageContainer") ArclightDamageContainer container) throws Throwable {
         float result = (float) DecorationOps.callsite().invoke(instance);
         final EntityDamageEvent event = arclight$fireEntityDamageEvent(source, result);
-
-        if (event == null || event.isCancelled()) {
+        // The consumed result is the same cancel/damage answer the host call always made: a missing
+        // or cancelled event pops the container and cancels before any health write, else the
+        // event's damage is what the following stages consume. The decision node that admitted the
+        // entry waits for nothing, so this consumption stays on the caller's thread.
+        DamageHostDecision.Consumed consumed = DamageHostDecision.consume(event != null,
+            event != null && event.isCancelled(), event == null ? 0.0 : event.getDamage());
+        if (consumed.cancelled()) {
             this.damageContainers.pop();
             return (float) DecorationOps.cancel().invoke(false);
         }
 
         container = new ArclightDamageContainer(event);
         DecorationOps.blackhole().invoke(container);
-        damageContainers.peek().setNewDamage((float) event.getDamage());
+        damageContainers.peek().setNewDamage((float) consumed.damage());
 
         if (source.getEntity() instanceof net.minecraft.world.entity.player.Player player) {
             player.resetAttackStrengthTicker();

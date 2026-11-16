@@ -13,6 +13,7 @@ import io.izzel.arclight.common.bridge.core.world.level.portal.DimensionTransiti
 import io.izzel.arclight.common.mod.server.BukkitRegistry;
 import io.izzel.arclight.common.mod.server.entity.ArclightSpawnReason;
 import io.izzel.arclight.common.mod.util.ArclightCaptures;
+import io.izzel.arclight.common.prts.kernel.decision.AirHostDecision;
 import io.izzel.arclight.mixin.Decorate;
 import io.izzel.arclight.mixin.DecorationOps;
 import net.minecraft.BlockUtil;
@@ -873,21 +874,75 @@ public abstract class EntityMixin implements InternalEntityBridge, EntityBridge,
         // CraftBukkit end
     }
 
+    /** The event of the last air decision dispatch; only the cached host view reads it. */
+    private EntityAirChangeEvent arclight$airEvent;
+
+    /** The cached host view of the air decision glue; it allocates nothing per air change and is
+     * valid on the owning tick thread only. */
+    private final AirHostDecision.Host arclight$airHost = new AirHostDecision.Host() {
+
+        @Override
+        public boolean valid() {
+            return EntityMixin.this.valid;
+        }
+
+        @Override
+        public int currentAirSupply() {
+            return EntityMixin.this.getAirSupply();
+        }
+
+        @Override
+        public AirHostDecision.Event dispatch(int requested) {
+            EntityAirChangeEvent event = new EntityAirChangeEvent(
+                EntityMixin.this.getBukkitEntity(), requested);
+            arclight$airEvent = event;
+            // Suppress during worldgen, exactly as the host path did before the decision gate.
+            if (EntityMixin.this.valid) {
+                event.getEntity().getServer().getPluginManager().callEvent(event);
+            }
+            return arclight$airView;
+        }
+
+        @Override
+        public void writeAir(int amount) {
+            EntityMixin.this.entityData.set(DATA_AIR_SUPPLY_ID, amount);
+        }
+
+        @Override
+        public void markDirty() {
+            ((SynchedEntityDataBridge) EntityMixin.this.getEntityData())
+                .bridge$markDirty(DATA_AIR_SUPPLY_ID);
+        }
+    };
+
+    /** The cached view of the last air event; the host view returns it per dispatch. */
+    private final AirHostDecision.Event arclight$airView = new AirHostDecision.Event() {
+
+        @Override
+        public boolean cancelled() {
+            return arclight$airEvent != null && arclight$airEvent.isCancelled();
+        }
+
+        @Override
+        public int amount() {
+            return arclight$airEvent == null ? 0 : arclight$airEvent.getAmount();
+        }
+    };
+
+    /**
+     * The air-change decision of one row. The kernel decision node asks the admission table first,
+     * and the default table keeps the whole host event path; only then is the host event dispatched
+     * and its result consumed. The air supply is written only after the event result exists, exactly
+     * as before. An owner-local air consumption is not implemented, so an owner-synced admission
+     * refuses before any write instead of pretending a decided amount. The node path waits for
+     * nothing, polls nothing and hands no result to another thread.
+     */
     @Inject(method = "setAirSupply", cancellable = true, at = @At(value = "HEAD"))
     public void arclight$setAir$EntityAirChangeEvent(int air, CallbackInfo ci) {
-        // CraftBukkit start
-        EntityAirChangeEvent event = new EntityAirChangeEvent(this.getBukkitEntity(), air);
-        // Suppress during worldgen
-        if (this.valid) {
-            event.getEntity().getServer().getPluginManager().callEvent(event);
-        }
-        if (event.isCancelled() && this.getAirSupply() != -1) {
+        AirHostDecision.Result result = AirHostDecision.decide(arclight$airHost, air);
+        if (result.cancelled()) {
             ci.cancel();
-            ((SynchedEntityDataBridge) this.getEntityData()).bridge$markDirty(DATA_AIR_SUPPLY_ID);
-            return;
         }
-        this.entityData.set(DATA_AIR_SUPPLY_ID, event.getAmount());
-        // CraftBukkit end
     }
 
     @Decorate(method = "thunderHit", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/Entity;igniteForSeconds(F)V"))

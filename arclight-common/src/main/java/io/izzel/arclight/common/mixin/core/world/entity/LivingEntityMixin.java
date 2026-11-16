@@ -11,6 +11,7 @@ import io.izzel.arclight.common.bridge.core.server.network.ServerGamePacketListe
 import io.izzel.arclight.common.bridge.core.world.level.LevelAccessorBridge;
 import io.izzel.arclight.common.mod.server.ArclightServer;
 import io.izzel.arclight.common.mod.server.event.ArclightEventFactory;
+import io.izzel.arclight.common.prts.kernel.decision.DamageHostDecision;
 import io.izzel.arclight.common.util.IteratorUtil;
 import io.izzel.arclight.mixin.Decorate;
 import io.izzel.arclight.mixin.DecorationOps;
@@ -511,8 +512,23 @@ public abstract class LivingEntityMixin extends EntityMixin implements LivingEnt
         return result + 10 - (int) (this.invulnerableDuration / 2.0F);
     }
 
+    /**
+     * The damage entry of one row. The kernel decision node asks the admission table before any of
+     * the host calculation runs, and the default table keeps the whole host path; an owner-synced
+     * admission refuses before any event or health write instead of pretending a decided damage.
+     * The host event is dispatched once, its result is consumed by the caller, and nothing waits,
+     * polls or hands a result to another thread.
+     */
     @Override
     public EntityDamageEvent arclight$fireEntityDamageEvent(DamageSource source, float original) {
+        if (DamageHostDecision.admit().owned()) {
+            return null;
+        }
+        return arclight$dispatchDamageEvent(source, original);
+    }
+
+    /** The host calculation and the plugin event of one damage entry; the legacy path, unchanged. */
+    private EntityDamageEvent arclight$dispatchDamageEvent(DamageSource source, float original) {
         float damage = original;
 
         Function<Double, Double> blocking = f -> -((this.isDamageSourceBlocked(source)) ? f : 0.0);

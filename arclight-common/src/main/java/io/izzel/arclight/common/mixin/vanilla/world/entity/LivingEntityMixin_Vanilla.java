@@ -4,6 +4,7 @@ import io.izzel.arclight.common.bridge.core.world.entity.LivingEntityBridge;
 import io.izzel.arclight.common.bridge.vanilla.world.entity.LivingEntityBridge_Vanilla;
 import io.izzel.arclight.common.mod.util.ArclightCaptures;
 import io.izzel.arclight.common.mod.util.ArclightDamageContainer;
+import io.izzel.arclight.common.prts.kernel.decision.DamageHostDecision;
 import io.izzel.arclight.mixin.Decorate;
 import io.izzel.arclight.mixin.DecorationOps;
 import io.izzel.arclight.mixin.Local;
@@ -34,14 +35,19 @@ public abstract class LivingEntityMixin_Vanilla extends EntityMixin_Vanilla impl
     @Decorate(method = "hurt", inject = true, at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/LivingEntity;isSleeping()Z"))
     private void arclight$entityDamageEvent(DamageSource damagesource, float originalDamage, @Local(allocate = "arclightDamageContainer") ArclightDamageContainer container) throws Throwable {
         EntityDamageEvent event = arclight$fireEntityDamageEvent(damagesource, originalDamage);
-
-        if (event == null || event.isCancelled()) {
+        // The consumed result is the same cancel/damage answer the host call always made: a missing
+        // or cancelled event cancels the hurt before any health write, else the event's damage is
+        // the one the following stages consume. The decision node that admitted the entry waits for
+        // nothing, so this consumption stays on the caller's thread.
+        DamageHostDecision.Consumed consumed = DamageHostDecision.consume(event != null,
+            event != null && event.isCancelled(), event == null ? 0.0 : event.getDamage());
+        if (consumed.cancelled()) {
             DecorationOps.cancel().invoke(false);
             return;
         }
 
         container = new ArclightDamageContainer(event);
-        originalDamage = (float) event.getDamage();
+        originalDamage = (float) consumed.damage();
         DecorationOps.blackhole().invoke(container, originalDamage);
 
         if (damagesource.getEntity() instanceof net.minecraft.world.entity.player.Player) {
