@@ -414,6 +414,18 @@ public final class CommitReservation {
             driftRefusals++;
             return false;
         }
+        if (versionSource != null) {
+            // The state revision is a different clock from the grant generation: a resource that
+            // moved between the reservation and the effect refuses the start, so the write never
+            // runs against a state the reservation did not judge.
+            long revision = versionSource.revisionOf(ticket.batch().worldId(),
+                ticket.batch().domainId());
+            if (revision == io.izzel.arclight.common.prts.kernel.auth.WriteVersionSlots.NOT_CARRIED
+                || revision != ticket.batch().expectedVersion()) {
+                publishRefusals++;
+                return false;
+            }
+        }
         if (phases.get(ticket.ticketId()) != Phase.RESERVED) {
             return false;
         }
