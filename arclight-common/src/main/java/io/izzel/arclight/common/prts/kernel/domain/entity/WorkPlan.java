@@ -133,6 +133,11 @@ public record WorkPlan(long tickIndex, long planEpoch, List<EntityCandidateView>
         public int rangeEnd() {
             return task.entitySeqEnd();
         }
+
+        /** The write-back identity of one row of this batch; the row range is the task's frozen one. */
+        public EntityWriteBackIdentity writeBackIdentityOf(int local) {
+            return view.writeBackIdentity(rangeStart() + local);
+        }
     }
 
     /** A task is created at planning time and never changes afterwards. */

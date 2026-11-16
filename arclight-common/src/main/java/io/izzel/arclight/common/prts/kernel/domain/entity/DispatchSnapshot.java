@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.domain.entity;
 
+import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.support.EntityEligibility;
 import io.izzel.arclight.common.prts.support.PrtsEntityCapability;
 import org.bukkit.Bukkit;
@@ -108,8 +109,14 @@ public final class DispatchSnapshot {
                 }
                 EntityEligibility.Reason reason = PrtsEntityCapability.census(handle);
                 ledger.observe(identity, reason);
+                // Only a process that declares the takeover face names the witnesses at all; the
+                // loaded scan then declares the lifecycle it saw but no state revision, because a
+                // loaded row is not promised a host tick in the write window.
+                long generation = KernelSettings.dispatchTakeover()
+                    ? EntityObjectGenerations.shared().observe(worldId, worldEpoch,
+                        identity.uuidHigh(), identity.uuidLow()) : 0L;
                 Location location = entity.getLocation();
-                builder.add(identity, reason, location.getBlockX() >> 4,
+                builder.add(identity, reason, generation, 0L, location.getBlockX() >> 4,
                     location.getBlockZ() >> 4, location.getX(), location.getY(), location.getZ(),
                     location.getYaw(), location.getPitch(), entity.getVelocity().getX(),
                     entity.getVelocity().getY(), entity.getVelocity().getZ(),

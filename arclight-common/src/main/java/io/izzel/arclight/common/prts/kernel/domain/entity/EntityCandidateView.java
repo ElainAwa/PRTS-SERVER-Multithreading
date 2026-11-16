@@ -34,6 +34,8 @@ public final class EntityCandidateView {
     private final long[] uuidHigh;
     private final long[] uuidLow;
     private final int[] tickCount;
+    private final long[] objectGeneration;
+    private final long[] expectedStateRevision;
     private final byte[] reasonOrdinal;
     private final int[] chunkX;
     private final int[] chunkZ;
@@ -57,6 +59,9 @@ public final class EntityCandidateView {
         this.uuidHigh = java.util.Arrays.copyOf(builder.uuidHigh, builder.count);
         this.uuidLow = java.util.Arrays.copyOf(builder.uuidLow, builder.count);
         this.tickCount = java.util.Arrays.copyOf(builder.tickCount, builder.count);
+        this.objectGeneration = java.util.Arrays.copyOf(builder.objectGeneration, builder.count);
+        this.expectedStateRevision =
+            java.util.Arrays.copyOf(builder.expectedStateRevision, builder.count);
         this.reasonOrdinal = java.util.Arrays.copyOf(builder.reasonOrdinal, builder.count);
         this.chunkX = java.util.Arrays.copyOf(builder.chunkX, builder.count);
         this.chunkZ = java.util.Arrays.copyOf(builder.chunkZ, builder.count);
@@ -92,6 +97,22 @@ public final class EntityCandidateView {
     public EntityRowIdentity identity(int index) {
         return new EntityRowIdentity(worldId, worldEpoch, uuidHigh[index], uuidLow[index],
             (int) entitySeq[index], tickCount[index]);
+    }
+
+    /** The object lifecycle generation the row was frozen against; zero when none was declared. */
+    public long objectGeneration(int index) {
+        return objectGeneration[index];
+    }
+
+    /** The state revision the row was frozen against; zero when none was declared. */
+    public long expectedStateRevision(int index) {
+        return expectedStateRevision[index];
+    }
+
+    /** The full write-back identity of one selected row, including both optional witnesses. */
+    public EntityWriteBackIdentity writeBackIdentity(int index) {
+        return new EntityWriteBackIdentity(identity(index), objectGeneration[index],
+            expectedStateRevision[index], tickCount[index]);
     }
 
     /** The eligibility reason the census reached for one selected row. */
@@ -167,9 +188,9 @@ public final class EntityCandidateView {
         Builder builder = builder(worldId, worldEpoch, maxRows);
         for (int i = 0; i < count; i++) {
             int row = order[i];
-            builder.add(identity(row), reason(row), chunkX[row], chunkZ[row], posX[row],
-                posY[row], posZ[row], yaw[row], pitch[row], velX[row], velY[row], velZ[row],
-                flags[row]);
+            builder.add(identity(row), reason(row), objectGeneration[row],
+                expectedStateRevision[row], chunkX[row], chunkZ[row], posX[row], posY[row],
+                posZ[row], yaw[row], pitch[row], velX[row], velY[row], velZ[row], flags[row]);
         }
         for (Refused refusedRow : refused) {
             builder.refuse(refusedRow.identity(), refusedRow.reason());
@@ -204,6 +225,8 @@ public final class EntityCandidateView {
         private long[] uuidHigh = new long[16];
         private long[] uuidLow = new long[16];
         private int[] tickCount = new int[16];
+        private long[] objectGeneration = new long[16];
+        private long[] expectedStateRevision = new long[16];
         private byte[] reasonOrdinal = new byte[16];
         private int[] chunkX = new int[16];
         private int[] chunkZ = new int[16];
@@ -259,8 +282,24 @@ public final class EntityCandidateView {
         public boolean add(EntityRowIdentity identity, EntityEligibility.Reason reason, int chunkX,
                            int chunkZ, double x, double y, double z, double yawDeg,
                            double pitchDeg, double vx, double vy, double vz, long flagWord) {
+            return add(identity, reason, 0L, 0L, chunkX, chunkZ, x, y, z, yawDeg, pitchDeg, vx,
+                vy, vz, flagWord);
+        }
+
+        /**
+         * Adds one observed row with the identity witnesses the freeze captured: the object
+         * lifecycle generation and the state revision the row was frozen against, both optional and
+         * zero when the source could not declare them.
+         */
+        public boolean add(EntityRowIdentity identity, EntityEligibility.Reason reason,
+                           long objectGeneration, long expectedStateRevision, int chunkX,
+                           int chunkZ, double x, double y, double z, double yawDeg,
+                           double pitchDeg, double vx, double vy, double vz, long flagWord) {
             Objects.requireNonNull(identity, "identity");
             Objects.requireNonNull(reason, "reason");
+            if (objectGeneration < 0L || expectedStateRevision < 0L) {
+                throw new IllegalArgumentException("a witness cannot be negative");
+            }
             if (full()) {
                 refuse(identity, reason);
                 return false;
@@ -272,6 +311,8 @@ public final class EntityCandidateView {
             this.uuidHigh[count] = identity.uuidHigh();
             this.uuidLow[count] = identity.uuidLow();
             this.tickCount[count] = identity.tickCount();
+            this.objectGeneration[count] = objectGeneration;
+            this.expectedStateRevision[count] = expectedStateRevision;
             this.reasonOrdinal[count] = (byte) reason.ordinal();
             this.chunkX[count] = chunkX;
             this.chunkZ[count] = chunkZ;
@@ -303,6 +344,8 @@ public final class EntityCandidateView {
             this.uuidHigh = java.util.Arrays.copyOf(this.uuidHigh, next);
             this.uuidLow = java.util.Arrays.copyOf(this.uuidLow, next);
             this.tickCount = java.util.Arrays.copyOf(this.tickCount, next);
+            this.objectGeneration = java.util.Arrays.copyOf(this.objectGeneration, next);
+            this.expectedStateRevision = java.util.Arrays.copyOf(this.expectedStateRevision, next);
             this.reasonOrdinal = java.util.Arrays.copyOf(this.reasonOrdinal, next);
             this.chunkX = java.util.Arrays.copyOf(this.chunkX, next);
             this.chunkZ = java.util.Arrays.copyOf(this.chunkZ, next);

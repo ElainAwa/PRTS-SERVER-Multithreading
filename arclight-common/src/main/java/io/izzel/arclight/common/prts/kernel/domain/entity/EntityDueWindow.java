@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.domain.entity;
 
+import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.support.EntityEligibility;
 import io.izzel.arclight.common.prts.support.PrtsEntityCapability;
 
@@ -88,8 +89,17 @@ public final class EntityDueWindow {
                 }
                 int chunkX = (int) Math.floor(row.x()) >> 4;
                 int chunkZ = (int) Math.floor(row.z()) >> 4;
-                if (builder.add(identity, row.reason(), chunkX, chunkZ, row.x(), row.y(), row.z(),
-                    row.yaw(), row.pitch(), row.vx(), row.vy(), row.vz(), row.hostStep())) {
+                // Only a process that declares the takeover face names the witnesses at all. The
+                // window then promises this row one host tick: the write-back lands after that tick,
+                // so the state revision it must find is the row's next logical update ordinal.
+                boolean gated = KernelSettings.dispatchTakeover();
+                long generation = gated
+                    ? EntityObjectGenerations.shared().observe(world.worldId(), epoch,
+                        row.uuidHigh(), row.uuidLow()) : 0L;
+                long revision = gated ? row.tickCount() + 1L : 0L;
+                if (builder.add(identity, row.reason(), generation, revision, chunkX, chunkZ,
+                    row.x(), row.y(), row.z(), row.yaw(), row.pitch(), row.vx(), row.vy(),
+                    row.vz(), row.hostStep())) {
                     ledger.admit(identity);
                 }
             }

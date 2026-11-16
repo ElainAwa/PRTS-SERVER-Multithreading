@@ -13,7 +13,9 @@ import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers;
 import io.izzel.arclight.common.prts.support.PrtsWorldWriteTaps;
 import io.izzel.arclight.common.prts.kernel.domain.entity.BatchWriteBack;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityCandidateView;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityWriteBackIdentity;
 import io.izzel.arclight.common.prts.kernel.domain.entity.LiveEntityAccess;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan.WorkBatch;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan.WorkTask;
@@ -282,7 +284,11 @@ public final class DispatchWriteBack {
             readings.noteWriteBackStale();
             return Settlement.REFUSED_WORLD_EPOCH;
         }
-        String handle = bind.apply(PAYLOAD_PREFIX, new BatchWriteBack(rows, readings));
+        List<EntityWriteBackIdentity> identities = identitiesOf(batch, rows);
+        String handle = identities == null
+            ? bind.apply(PAYLOAD_PREFIX, new BatchWriteBack(rows, readings))
+            : bind.apply(PAYLOAD_PREFIX, new BatchWriteBack(rows, identities,
+                LiveEntityAccess.writeBack(), readings));
         WriteIntent draft = WriteIntent.draft(intents.nextIntentId(), task.worldId(), task.worldId(),
             DOMAIN_ID, 0L, frozenEpoch, handle, WAIT_POINT,
             SITE_PREFIX + ":" + task.batchId());
@@ -294,6 +300,30 @@ public final class DispatchWriteBack {
         }
         readings.noteWriteBackEnqueued(rows.size());
         return Settlement.ACCEPTED;
+    }
+
+    /** The identities the rows carry, aligned by index, or null when the frame declared none. The
+     * rows of a batch are the view rows of the task's frozen range, in order. */
+    public static List<EntityWriteBackIdentity> identitiesOf(WorkBatch batch,
+                                                             List<StateHasher.Slice> rows) {
+        EntityCandidateView view = batch == null ? null : batch.view();
+        if (view == null || rows == null || rows.isEmpty()) {
+            return null;
+        }
+        int start = batch.task().entitySeqStart();
+        List<EntityWriteBackIdentity> identities = new ArrayList<>(rows.size());
+        for (int index = 0; index < rows.size(); index++) {
+            int row = start + index;
+            if (row < 0 || row >= view.count()) {
+                return null;
+            }
+            EntityWriteBackIdentity identity = view.writeBackIdentity(row);
+            if (!identity.witnessed()) {
+                return null;
+            }
+            identities.add(identity);
+        }
+        return identities;
     }
 
     private long currentEpoch(String worldId) {

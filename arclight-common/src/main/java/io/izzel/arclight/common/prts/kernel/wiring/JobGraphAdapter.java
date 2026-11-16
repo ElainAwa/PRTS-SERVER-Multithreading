@@ -50,7 +50,7 @@ public final class JobGraphAdapter {
             return;
         }
         for (WorkTask task : plan.tasks()) {
-            module.jobIntake().submit(declarationOf(task));
+            module.jobIntake().submit(declarationOf(task, plan.tickIndex()));
             module.noteJobDeclarations(1);
         }
     }
@@ -101,13 +101,28 @@ public final class JobGraphAdapter {
     }
 
     /** The declaration of one frozen task, with the write right it asks to hold; declared, and only
-     * granted if the freeze of the plan grants it. */
-    public static JobDeclaration declarationOf(WorkTask task) {
+     * granted if the freeze of the plan grants it. The logical update ordinal is the plan tick the
+     * task belongs to, so the work account can hold the same node of two ticks as two units. */
+    public static JobDeclaration declarationOf(WorkTask task, long logicalUpdateOrdinal) {
         JobDeclaration.DomainRef ref = new JobDeclaration.DomainRef(task.worldId(), DOMAIN, 0);
         return new JobDeclaration(keyOf(task), task.batchId(), task.worldId(), DOMAIN, 0, List.of(),
             task.entityCount(), task.regionId(), task.cancelScope(), List.of(ref), List.of(ref),
             ShareClass.ENTITY, JobDeclaration.SiteClass.PARALLEL, BATCH_KIND_SINGLE_OWNER_TICK,
-            Math.max(1, task.entityCount()), List.of(ownerDemandOf(task)));
+            Math.max(1, task.entityCount()), List.of(ownerDemandOf(task)), logicalUpdateOrdinal);
+    }
+
+    /** The declaration of one task that names no update ordinal; the key stays the node key. */
+    public static JobDeclaration declarationOf(WorkTask task) {
+        return declarationOf(task, 0L);
+    }
+
+    /** The unit identity the job layer offers a task under: the node key of one logical update. */
+    public static String unitIdOf(WorkPlan plan, WorkTask task) {
+        if (plan == null || task == null) {
+            return "";
+        }
+        return io.izzel.arclight.common.prts.kernel.jobs.WorkAccount.unitId(keyOf(task),
+            plan.tickIndex());
     }
 
     private static JobDeclaration.OwnerDemand ownerDemandOf(WorkTask task) {

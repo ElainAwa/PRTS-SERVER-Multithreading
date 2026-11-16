@@ -11,7 +11,6 @@ import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
 import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool.WorkerHandle;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
-import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool.WorkerHandle;
 import io.izzel.arclight.common.prts.kernel.domain.entity.CancelToken;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityCandidateView;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
@@ -23,6 +22,7 @@ import io.izzel.arclight.common.prts.kernel.generic.ExecutionCohort;
 import io.izzel.arclight.common.prts.kernel.generic.GenericJobExecutor;
 import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
+import io.izzel.arclight.common.prts.kernel.jobs.WorkAccount;
 import io.izzel.arclight.common.prts.kernel.shares.ShareClass;
 
 import java.util.ArrayList;
@@ -81,6 +81,7 @@ public final class CohortDispatchPass {
         List<DispatchPass.Entry> entries = new ArrayList<>(orderedTasks.size());
         List<Unit> units = new ArrayList<>(orderedTasks.size());
         Map<String, Unit> byKey = new LinkedHashMap<>();
+        Map<String, Unit> byBaseKey = new LinkedHashMap<>();
         for (WorkTask task : orderedTasks) {
             EntityCandidateView view = byWorld.get(task.worldId());
             WorkBatch batch = new WorkBatch(task.batchId(), task, plan.planEpoch(), view);
@@ -97,17 +98,19 @@ public final class CohortDispatchPass {
                 continue;
             }
             ArenaSlot.Lease lease = slot.lease(plan.planEpoch());
-            String key = keyOf(task, byKey);
-            Unit unit = new Unit(key, batch, body, token, slot, lease, side);
+            String key = keyOf(task, plan.tickIndex(), byKey);
+            String baseKey = DispatchWriteBack.nodeKey(task);
+            Unit unit = new Unit(key, baseKey, batch, body, token, slot, lease, side);
             units.add(unit);
             byKey.put(key, unit);
+            byBaseKey.put(baseKey, unit);
             entries.add(new DispatchPass.Entry(batch, view, unit.handle(), token, slot, lease, null));
         }
         if (units.isEmpty()) {
             side.readings().noteQueueDepth(side.pool().queueDepth());
             return DispatchPass.adopt(plan, entries, side.readings(), side.ledger());
         }
-        JobGraph graph = graph(plan, units, byKey, planned);
+        JobGraph graph = graph(plan, units, byBaseKey, planned);
         Map<String, Runnable> bodies = new LinkedHashMap<>();
         for (Unit unit : units) {
             bodies.put(unit.key(), unit::run);
@@ -163,8 +166,14 @@ public final class CohortDispatchPass {
         return DispatchPass.adopt(plan, closed, side.readings(), side.ledger());
     }
 
-    private static String keyOf(WorkTask task, Map<String, Unit> taken) {
-        String key = DispatchWriteBack.nodeKey(task);
+    /** The unit identity of one task of one logical update: the stable node key plus the plan tick,
+     * so the same node of two ticks is two units of the work account. */
+    public static String unitIdOf(WorkPlan plan, WorkTask task) {
+        return WorkAccount.unitId(DispatchWriteBack.nodeKey(task), plan.tickIndex());
+    }
+
+    private static String keyOf(WorkTask task, long tickIndex, Map<String, Unit> taken) {
+        String key = WorkAccount.unitId(DispatchWriteBack.nodeKey(task), tickIndex);
         if (!taken.containsKey(key)) {
             return key;
         }
@@ -175,7 +184,7 @@ public final class CohortDispatchPass {
 
     /** The execution graph of one dispatch: the frozen order is the position order, and the
      * predecessors are the planned graph's edges whose two ends are both in this task set. */
-    private static JobGraph graph(WorkPlan plan, List<Unit> units, Map<String, Unit> byKey,
+    private static JobGraph graph(WorkPlan plan, List<Unit> units, Map<String, Unit> byBaseKey,
                                   JobGraph planned) {
         Map<String, Long> ids = new LinkedHashMap<>();
         long nextId = 1L;
@@ -187,13 +196,17 @@ public final class CohortDispatchPass {
         for (String key : ids.keySet()) {
             successors.put(key, new ArrayList<>());
         }
-        for (String key : ids.keySet()) {
+        for (Unit unit : units) {
+            String key = unit.key();
             List<String> kept = new ArrayList<>();
-            JobGraph.Node node = planned == null ? null : planned.nodeByKey(key);
+            // The planned graph is keyed by the stable node key: one node of two ticks is one plan
+            // node, so its edges resolve to this tick's unit identity here.
+            JobGraph.Node node = planned == null ? null : planned.nodeByKey(unit.baseKey());
             if (node != null) {
                 for (String predecessor : node.predecessors()) {
-                    if (!predecessor.equals(key) && ids.containsKey(predecessor)) {
-                        kept.add(predecessor);
+                    Unit predecessorUnit = byBaseKey.get(predecessor);
+                    if (predecessorUnit != null && !predecessorUnit.key().equals(key)) {
+                        kept.add(predecessorUnit.key());
                     }
                 }
             }
@@ -253,6 +266,7 @@ public final class CohortDispatchPass {
     private static final class Unit {
 
         private final String key;
+        private final String baseKey;
         private final WorkBatch batch;
         private final WorkBody body;
         private final CancelToken token;
@@ -266,9 +280,10 @@ public final class CohortDispatchPass {
         private volatile String code = "";
         private volatile long checksum;
 
-        private Unit(String key, WorkBatch batch, WorkBody body, CancelToken token, ArenaSlot slot,
-                     ArenaSlot.Lease lease, ExecutionSide side) {
+        private Unit(String key, String baseKey, WorkBatch batch, WorkBody body, CancelToken token,
+                     ArenaSlot slot, ArenaSlot.Lease lease, ExecutionSide side) {
             this.key = key;
+            this.baseKey = baseKey;
             this.batch = batch;
             this.body = body;
             this.token = token;
@@ -280,6 +295,10 @@ public final class CohortDispatchPass {
 
         private String key() {
             return key;
+        }
+
+        private String baseKey() {
+            return baseKey;
         }
 
         private WorkBatch batch() {

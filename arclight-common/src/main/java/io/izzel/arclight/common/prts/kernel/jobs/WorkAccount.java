@@ -39,6 +39,18 @@ public final class WorkAccount {
         PUBLISH_PENDING
     }
 
+    /**
+     * The identity of one offered unit: the node key, and the logical update ordinal when the job
+     * names one. Two ticks of the same node are two units, while a job that names no ordinal keeps
+     * exactly the identity it always had.
+     */
+    public static String unitId(String key, long logicalUpdateOrdinal) {
+        if (key == null) {
+            return "";
+        }
+        return logicalUpdateOrdinal > 0L ? key + "#" + logicalUpdateOrdinal : key;
+    }
+
     /** One offered business unit: its stable identity and the world/domain it belongs to. */
     public record Unit(String unitId, String key, String worldId, String domainId) {
 

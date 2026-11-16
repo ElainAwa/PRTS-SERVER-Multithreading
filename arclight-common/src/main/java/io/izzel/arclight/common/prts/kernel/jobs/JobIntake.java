@@ -53,13 +53,15 @@ public final class JobIntake {
         if (declaration == null) {
             throw new IllegalArgumentException("an intake takes declarations");
         }
+        String unitId = WorkAccount.unitId(declaration.key(),
+            declaration.logicalUpdateOrdinal());
         boolean registered = account != null
-            && account.offer(declaration.key(), declaration.key(), declaration.worldId(),
+            && account.offer(unitId, declaration.key(), declaration.worldId(),
                 declaration.domainId());
         if (pending.size() >= capacity()) {
             refused++;
             if (registered) {
-                account.close(declaration.key(), WorkAccount.Outcome.REJECTED_BEFORE_EFFECT,
+                account.close(unitId, WorkAccount.Outcome.REJECTED_BEFORE_EFFECT,
                     RejectCode.QUEUE_CAP_EXCEEDED.text());
             }
             return new Admission(false, RejectCode.QUEUE_CAP_EXCEEDED, pending.size());

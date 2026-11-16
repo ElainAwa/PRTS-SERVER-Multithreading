@@ -2,6 +2,7 @@
 package io.izzel.arclight.common.prts.kernel.domain.entity;
 
 import io.izzel.arclight.common.prts.kernel.diff.StateHasher;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityObjectGenerations;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import org.bukkit.Bukkit;
@@ -92,6 +93,42 @@ public final class LiveEntityAccess {
 
     public static double velZ(Entity entity) {
         return entity.getDeltaMovement().z;
+    }
+
+    /** The write-back face of this access: the gate reads the live identity and revision, the row
+     * write is the one this class already performs. */
+    public static BatchWriteBack.LiveAccess writeBack() {
+        return new BatchWriteBack.LiveAccess() {
+
+            @Override
+            public EntityWriteBackGate.LiveRow read(String worldId, int entityId) {
+                ServerLevel level = level(worldId);
+                Entity entity = entity(level, entityId);
+                if (entity == null) {
+                    return null;
+                }
+                long uuidHigh = entity.getUUID().getMostSignificantBits();
+                long uuidLow = entity.getUUID().getLeastSignificantBits();
+                return new EntityWriteBackGate.LiveRow(uuidHigh, uuidLow,
+                    EntityObjectGenerations.shared().generationOf(worldId, uuidHigh, uuidLow),
+                    entity.tickCount);
+            }
+
+            @Override
+            public void write(String worldId, int entityId, double x, double y, double z, double yaw,
+                              double pitch, double velX, double velY, double velZ) {
+                Entity entity = entity(level(worldId), entityId);
+                if (entity != null) {
+                    LiveEntityAccess.write(entity, x, y, z, yaw, pitch, velX, velY, velZ);
+                }
+            }
+
+            @Override
+            public boolean identical(String worldId, int entityId, StateHasher.Slice row) {
+                Entity entity = entity(level(worldId), entityId);
+                return entity != null && LiveEntityAccess.identical(entity, row);
+            }
+        };
     }
 
     /** The bit-exact kinematic comparison the takeover boundary rests on. */

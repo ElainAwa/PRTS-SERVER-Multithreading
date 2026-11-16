@@ -16,7 +16,30 @@ public record JobDeclaration(String key, long handle, String worldId, String dom
                              List<String> predecessors, int priority, String affinityKey,
                              String cancelScope, List<DomainRef> readSet, List<DomainRef> writeSet,
                              ShareClass shareClass, SiteClass siteClass, int batchKind,
-                             int batchBound, List<OwnerDemand> ownerDemands, WriteRange range) {
+                             int batchBound, List<OwnerDemand> ownerDemands, WriteRange range,
+                             long logicalUpdateOrdinal) {
+
+    /** A declaration that names no logical update ordinal: the shape every job had before one
+     * tick's update could be named, kept so a job that has none does not have to say so. */
+    public JobDeclaration(String key, long handle, String worldId, String domainId, int level,
+                          List<String> predecessors, int priority, String affinityKey,
+                          String cancelScope, List<DomainRef> readSet, List<DomainRef> writeSet,
+                          ShareClass shareClass, SiteClass siteClass, int batchKind, int batchBound,
+                          List<OwnerDemand> ownerDemands, WriteRange range) {
+        this(key, handle, worldId, domainId, level, predecessors, priority, affinityKey, cancelScope,
+            readSet, writeSet, shareClass, siteClass, batchKind, batchBound, ownerDemands, range, 0L);
+    }
+
+    /** A declaration of one tick's update that declares no spatial range. */
+    public JobDeclaration(String key, long handle, String worldId, String domainId, int level,
+                          List<String> predecessors, int priority, String affinityKey,
+                          String cancelScope, List<DomainRef> readSet, List<DomainRef> writeSet,
+                          ShareClass shareClass, SiteClass siteClass, int batchKind, int batchBound,
+                          List<OwnerDemand> ownerDemands, long logicalUpdateOrdinal) {
+        this(key, handle, worldId, domainId, level, predecessors, priority, affinityKey, cancelScope,
+            readSet, writeSet, shareClass, siteClass, batchKind, batchBound, ownerDemands, null,
+            logicalUpdateOrdinal);
+    }
 
     /** One write right a job asks for: which world and level of it, which holder should hold it, and
      * for how many ticks from the moment it is granted. The demand is what a job declares, not what it
@@ -163,6 +186,14 @@ public record JobDeclaration(String key, long handle, String worldId, String dom
         readSet = List.copyOf(readSet == null ? List.of() : readSet);
         writeSet = List.copyOf(writeSet == null ? List.of() : writeSet);
         ownerDemands = List.copyOf(ownerDemands == null ? List.of() : ownerDemands);
+        if (logicalUpdateOrdinal < 0L) {
+            throw new IllegalArgumentException("a job cannot name a negative update ordinal");
+        }
+    }
+
+    /** Whether this declaration names the logical update it belongs to. */
+    public boolean declaresLogicalUpdateOrdinal() {
+        return logicalUpdateOrdinal > 0L;
     }
 
     /** The affinity of one job: two jobs with the same affinity keep their relative order. */
