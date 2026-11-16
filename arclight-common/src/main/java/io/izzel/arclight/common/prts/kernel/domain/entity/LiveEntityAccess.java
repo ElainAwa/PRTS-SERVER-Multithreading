@@ -1,8 +1,13 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.domain.entity;
 
+import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
+import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
+import io.izzel.arclight.common.prts.kernel.auth.WriteVersionSlots;
 import io.izzel.arclight.common.prts.kernel.diff.StateHasher;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityObjectGenerations;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import org.bukkit.Bukkit;
@@ -93,6 +98,61 @@ public final class LiveEntityAccess {
 
     public static double velZ(Entity entity) {
         return entity.getDeltaMovement().z;
+    }
+
+    /** The internal dormant property of the production move gate; it is not a configuration key and
+     * every shipped build leaves it off, so the write-back passes a null gate by default. */
+    public static final String MOVE_GATE_PROPERTY = "arclight.prts.moveGate";
+
+    private static final Object MOVE_GATE_LOCK = new Object();
+    private static OwnerRegistry moveOwners;
+    private static WriteVersionSlots moveVersions;
+
+    /**
+     * The move admission the production write-back passes, or null while the dormant property is
+     * off. When it is on, one row asks the move authority for its state, section membership and
+     * directory rights before the setter runs; the facts are read here on the tick thread, so no
+     * worker asks a world for an entity.
+     */
+    public static BatchWriteBack.MoveGate writeBackMoveGate() {
+        if (!Boolean.getBoolean(MOVE_GATE_PROPERTY)) {
+            return null;
+        }
+        return LiveEntityAccess::admitMoveWrite;
+    }
+
+    private static boolean admitMoveWrite(EntityWriteBackIdentity expected, StateHasher.Slice row,
+                                          Runnable write) {
+        ServerLevel level = level(row.worldId());
+        Entity entity = entity(level, (int) row.entitySeq());
+        if (entity == null) {
+            return false;
+        }
+        long sourceSection = SectionPos.asLong(BlockPos.containing(entity.getX(), entity.getY(),
+            entity.getZ()));
+        long targetSection = SectionPos.asLong(BlockPos.containing(row.x(), row.y(), row.z()));
+        boolean targetExists = sourceSection == targetSection
+            || level.hasChunk(SectionPos.x(targetSection), SectionPos.z(targetSection));
+        EntityMoveResources.Move move = new EntityMoveResources.Move(expected.identity(),
+            expected.objectGeneration(), sourceSection, targetSection, targetExists, false);
+        synchronized (MOVE_GATE_LOCK) {
+            ensureMoveGateState();
+            for (OwnerRegistry.OwnershipDomain key : EntityMoveResources.keys(move)) {
+                moveVersions.grant(key.worldId(), key.level(), key.domainId());
+            }
+            EntityMoveAuthority authority = new EntityMoveAuthority(moveOwners, moveVersions,
+                new EntityMoveAuthority.Binding("write-back-move-gate", HolderKind.KERNEL, 0L, 0L,
+                    0L, 0L, 0L));
+            return authority.move(move, write) == EntityMoveAuthority.Verdict.ADMITTED;
+        }
+    }
+
+    private static void ensureMoveGateState() {
+        if (moveOwners == null) {
+            moveOwners = new OwnerRegistry();
+            moveVersions = new WriteVersionSlots();
+            moveVersions.refresh(true);
+        }
     }
 
     /** The write-back face of this access: the gate reads the live identity and revision, the row

@@ -23,13 +23,14 @@ public final class BatchWriteBack implements PrtsWorldWriteTaps.DeferredWrite {
     }
 
     /** The move admission one gated write asks before the row reaches the world: the action writes
-     * the row, and only an admitted answer counts it as written. It is a package-private wiring
-     * point: the production write-back passes none, so the gated path keeps the historical order. */
+     * the row, and only an admitted answer counts it as written. It is an internal wiring point: the
+     * production write-back passes none unless the dormant switch is set, so the gated path keeps the
+     * historical order by default. */
     @FunctionalInterface
-    interface MoveGate {
+    public interface MoveGate {
 
-        EntityMoveAuthority.Verdict beforeWrite(EntityWriteBackIdentity expected,
-                                                StateHasher.Slice row, Runnable write);
+        /** Admits the row and runs the write, or refuses before any write and returns false. */
+        boolean beforeWrite(EntityWriteBackIdentity expected, StateHasher.Slice row, Runnable write);
     }
 
     /** The live world as the write-back sees it: read for the gate, write for the row. */
@@ -60,10 +61,10 @@ public final class BatchWriteBack implements PrtsWorldWriteTaps.DeferredWrite {
         this(rows, identities, live, readings, null);
     }
 
-    /** Creates one gated payload that asks a move admission before every row write; the admission
-     * is an internal evidence wiring point and no production path passes one. */
-    BatchWriteBack(List<StateHasher.Slice> rows, List<EntityWriteBackIdentity> identities,
-                   LiveAccess live, Counters readings, MoveGate moveGate) {
+    /** Creates one gated payload that asks a move admission before every row write; a null gate is
+     * the historical path and is what every shipped build passes. */
+    public BatchWriteBack(List<StateHasher.Slice> rows, List<EntityWriteBackIdentity> identities,
+                          LiveAccess live, Counters readings, MoveGate moveGate) {
         this.rows = List.copyOf(rows);
         this.identities = identities == null ? null : List.copyOf(identities);
         this.live = live;
@@ -190,10 +191,10 @@ public final class BatchWriteBack implements PrtsWorldWriteTaps.DeferredWrite {
                 continue;
             }
             try {
-                EntityMoveAuthority.Verdict move = moveGate.beforeWrite(expected, row,
+                boolean admitted = moveGate.beforeWrite(expected, row,
                     () -> live.write(worldId, (int) row.entitySeq(), row.x(), row.y(), row.z(),
                         row.yaw(), row.pitch(), row.velX(), row.velY(), row.velZ()));
-                if (move == EntityMoveAuthority.Verdict.ADMITTED) {
+                if (admitted) {
                     written++;
                 } else {
                     refused++;

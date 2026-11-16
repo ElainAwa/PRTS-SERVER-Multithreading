@@ -31,7 +31,13 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.EntityDueCapture;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityDueWindow;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkBody;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityObjectGenerations;
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityRowIdentity;
+import io.izzel.arclight.common.prts.kernel.domain.entity.LiveEntityAccess;
 import io.izzel.arclight.common.prts.kernel.domain.entity.program.EntityProgramBody;
+import io.izzel.arclight.common.prts.kernel.domain.entity.program.HostSkipPlan;
+import io.izzel.arclight.common.prts.kernel.domain.entity.program.LiveRowSnapshot;
+import io.izzel.arclight.common.prts.kernel.domain.entity.program.StableReadSource;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
 import io.izzel.arclight.common.prts.kernel.meter.SelfClass;
@@ -43,6 +49,8 @@ import io.izzel.arclight.common.prts.support.PrtsEntityRescope;
 import io.izzel.arclight.common.prts.kernel.meter.SelfTimers.SelfRow;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+
+import net.minecraft.world.entity.Entity;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -108,7 +116,10 @@ public final class EntityDomain implements KernelDomain {
     private boolean sharedRuntime;
     private MergeSegment.Frame lastFrame = MergeSegment.Frame.empty();
     /** The compute-only program body of the dormant internal switch; null until first used. */
-    private WorkBody programBody;
+    /** The dormant host-skip plan of the last dispatch: listed only, nothing in this build consumes
+     * it as a skip decision. Off, it stays the empty plan. */
+    private HostSkipPlan.Plan hostSkipPlan = HostSkipPlan.dormant();
+    private static final boolean HOST_SKIP = Boolean.getBoolean(HostSkipPlan.PROPERTY);
 
     public EntityDomain(KernelModule module) {
         this.module = module;
@@ -462,6 +473,11 @@ public final class EntityDomain implements KernelDomain {
             jobAdapter.meter(RUNTIME_WORLD, System.nanoTime() - jobStartedAt);
         }
         if (!plan.empty()) {
+            if (HOST_SKIP) {
+                // Dormant evidence wiring: the plan lists the rows the owner intends to run; no
+                // host entry consumes the list yet, so the host behaviour is unchanged.
+                hostSkipPlan = HostSkipPlan.of(claimedRows(plan));
+            }
             if (KernelSettings.jobGraph()) {
                 // The private pool of a previous legacy tick is closed first, so one life never
                 // runs two pools.
@@ -491,8 +507,8 @@ public final class EntityDomain implements KernelDomain {
                     if (EntityTickOwnership.live()) {
                         EntityTickOwnership.bindSharedExecutor(pool.executor());
                     }
-                    pending = DispatchPass.dispatch(plan, pool, body(), arena, readings, ledger,
-                        orderedTasks);
+                    pending = DispatchPass.dispatch(plan, pool, body(plan), arena, readings,
+                        ledger, orderedTasks);
                 } else {
                     // No pool this tick: the plan still receives one terminal outcome per task, so
                     // the accounting of the tick closes and the merge redos the batches on the tick
@@ -508,16 +524,58 @@ public final class EntityDomain implements KernelDomain {
     }
 
     /** The body the dispatch of this build runs: the compute-only program body when the dormant
-     * internal switch is set, the unchanged kinematics body otherwise. A program body that refuses a
-     * permit faults the batch back to the existing fallback instead of writing a value. */
-    private WorkBody body() {
+     * internal switch is set, the unchanged kinematics body otherwise. The program body is built
+     * for this dispatch from frozen captures read here, on the thread that owns the tick, so its
+     * workers only index the frozen rows and never ask a world for an entity. */
+    private WorkBody body(WorkPlan plan) {
         if (!PROGRAM_BODY) {
             return EntityIntegrator.INSTANCE;
         }
-        if (programBody == null) {
-            programBody = EntityProgramBody.production(module.guard().worldEpochs()::epochOf);
+        return new EntityProgramBody(captureStableSources(plan), null);
+    }
+
+    /** Captures one immutable read source per world of the plan; this runs on the tick thread. */
+    private Map<String, StableReadSource> captureStableSources(WorkPlan plan) {
+        Map<String, StableReadSource> sources = new LinkedHashMap<>();
+        for (EntityCandidateView view : plan.views()) {
+            List<StableReadSource.Capture> captures = new ArrayList<>(view.count());
+            for (int row = 0; row < view.count(); row++) {
+                captures.add(captureRow(view, row));
+            }
+            sources.put(view.worldId(), StableReadSource.capture(captures));
         }
-        return programBody;
+        return Map.copyOf(sources);
+    }
+
+    private StableReadSource.Capture captureRow(EntityCandidateView view, int row) {
+        EntityRowIdentity identity = view.identity(row);
+        Entity entity = LiveEntityAccess.entity(LiveEntityAccess.level(view.worldId()),
+            (int) view.entitySeq(row));
+        if (entity == null) {
+            return StableReadSource.Capture.absent(identity);
+        }
+        long generation = view.objectGeneration(row);
+        long revision = view.expectedStateRevision(row) > 0L ? view.expectedStateRevision(row)
+            : entity.tickCount;
+        LiveRowSnapshot snapshot = LiveRowSnapshot.full(identity, generation, revision,
+            LiveEntityAccess.posX(entity), LiveEntityAccess.posY(entity),
+            LiveEntityAccess.posZ(entity), LiveEntityAccess.yaw(entity),
+            LiveEntityAccess.pitch(entity), LiveEntityAccess.velX(entity),
+            LiveEntityAccess.velY(entity), LiveEntityAccess.velZ(entity));
+        return StableReadSource.Capture.of(identity, generation, revision, snapshot);
+    }
+
+    /** Lists the claimed rows of this plan for the dormant host-skip plan; nothing consumes it yet. */
+    private List<Integer> claimedRows(WorkPlan plan) {
+        List<Integer> rows = new ArrayList<>();
+        for (EntityCandidateView view : plan.views()) {
+            for (int row = 0; row < view.count(); row++) {
+                if (EntityTickOwnership.claimedForDispatch((int) view.entitySeq(row))) {
+                    rows.add(row);
+                }
+            }
+        }
+        return rows;
     }
 
     /** One dispatch of the frozen plan on the shared runtime: the tasks become the nodes of an
@@ -540,7 +598,7 @@ public final class EntityDomain implements KernelDomain {
         JobGraph planned = latest == null ? null : latest.graph();
         CohortDispatchPass.ExecutionSide side = new CohortDispatchPass.ExecutionSide(runtime.pool(),
             runtime.executor(), runtime.arena(), readings, ledger);
-        return CohortDispatchPass.dispatch(plan, side, body(), orderedTasks, planned);
+        return CohortDispatchPass.dispatch(plan, side, body(plan), orderedTasks, planned);
     }
 
     @Override

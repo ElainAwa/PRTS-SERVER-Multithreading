@@ -288,7 +288,7 @@ public final class DispatchWriteBack {
         String handle = identities == null
             ? bind.apply(PAYLOAD_PREFIX, new BatchWriteBack(rows, readings))
             : bind.apply(PAYLOAD_PREFIX, new BatchWriteBack(rows, identities,
-                LiveEntityAccess.writeBack(), readings));
+                LiveEntityAccess.writeBack(), readings, LiveEntityAccess.writeBackMoveGate()));
         WriteIntent draft = WriteIntent.draft(intents.nextIntentId(), task.worldId(), task.worldId(),
             DOMAIN_ID, 0L, frozenEpoch, handle, WAIT_POINT,
             SITE_PREFIX + ":" + task.batchId());
