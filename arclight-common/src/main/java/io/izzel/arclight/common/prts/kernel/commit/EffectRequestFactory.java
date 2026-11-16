@@ -19,6 +19,21 @@ public final class EffectRequestFactory {
                                                       EffectStore.Effect published,
                                                       EffectStore.Effect partial,
                                                       EffectStore.Effect failed) {
+        return request(declaration, expectedVersion, expectedVersion, writeSetDigest, kind, producer,
+            controller, published, partial, failed);
+    }
+
+    /** Builds the request with the authorization generation named separately from the expected state
+     * revision: the two are different clocks and a caller that has the grant record passes both. */
+    public static CommitTicket.ReserveRequest request(FrozenDeclarations.Entry declaration,
+                                                      long expectedVersion, long authorizationGeneration,
+                                                      long writeSetDigest,
+                                                      CommitLog.Batch.Kind kind,
+                                                      CommitNamespaces.Namespace producer,
+                                                      CommitNamespaces.Namespace controller,
+                                                      EffectStore.Effect published,
+                                                      EffectStore.Effect partial,
+                                                      EffectStore.Effect failed) {
         if (declaration == null || declaration.seat() == null || kind == null || producer == null
             || controller == null || published == null || partial == null || failed == null) {
             throw new IllegalArgumentException("a request needs a declaration, a kind, two namespaces "
@@ -33,6 +48,9 @@ public final class EffectRequestFactory {
         if (expectedVersion <= 0L) {
             throw new IllegalArgumentException("a request needs a positive expected version");
         }
+        if (authorizationGeneration <= 0L) {
+            throw new IllegalArgumentException("a request needs a positive authorization generation");
+        }
         long effectRef = published.effectRef();
         if (effectRef <= 0L || partial.effectRef() != effectRef || failed.effectRef() != effectRef) {
             throw new IllegalArgumentException("the three terminals need one positive reference");
@@ -44,7 +62,7 @@ public final class EffectRequestFactory {
         }
         CommitLog.Identity identity = new CommitLog.Identity(CommitLog.SCHEMA_TYPED,
             declaration.instanceId(), declaration.worldEpoch(), declaration.packedChunkPos(),
-            declaration.targetStatus(), expectedVersion, effectRef, producer, controller);
+            declaration.targetStatus(), authorizationGeneration, effectRef, producer, controller);
         FrozenDeclarations.Seat seat = declaration.seat();
         return new CommitTicket.ReserveRequest(seat.worldId(), seat.domainId(),
             declaration.nodeKey(), kind, seat.planSequence(), seat.position(), expectedVersion,

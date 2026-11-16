@@ -82,7 +82,17 @@ public final class CommitReservation {
     private final CommitLog.OrderSource plans;
     private final CommitNamespaces.Namespace controller;
     private final CommitNamespaces.ResetEpochs epochs;
+    private final VersionSource versionSource;
     private final Map<Long, CommitTicket> tickets = new LinkedHashMap<>();
+
+    /** The real state revision of one pair, read where a request is judged. A source that answers
+     * {@link io.izzel.arclight.common.prts.kernel.auth.WriteVersionSlots#NOT_CARRIED} or another
+     * number than the request names refuses it before any slot, room or side effect is taken. */
+    @FunctionalInterface
+    public interface VersionSource {
+
+        long revisionOf(String worldId, String domainId);
+    }
     private final Map<Long, Phase> phases = new LinkedHashMap<>();
     private final Map<Long, Pending> pendings = new LinkedHashMap<>();
     /** What every ticket in flight owes: the freeze its seat was verified in. It is handed to the log
@@ -118,10 +128,20 @@ public final class CommitReservation {
 
     public CommitReservation(CommitLog log, EffectStore store, CommitLog.OrderSource plans,
                              String ownerId, CommitNamespaces.ResetEpochs epochs) {
+        this(log, store, plans, ownerId, epochs, null);
+    }
+
+    /** Creates the reservation with the real state revision source its requests are judged against.
+     * A null source keeps the previous behaviour: the request's expected version is not compared with
+     * a live resource revision. */
+    public CommitReservation(CommitLog log, EffectStore store, CommitLog.OrderSource plans,
+                             String ownerId, CommitNamespaces.ResetEpochs epochs,
+                             VersionSource versionSource) {
         this.log = log;
         this.store = store;
         this.plans = plans;
         this.epochs = epochs;
+        this.versionSource = versionSource;
         this.controller = new CommitNamespaces.Namespace(ownerId, CommitNamespaces.Lifetimes.mint(),
             epochs.current(), CommitNamespaces.NO_THREAD);
     }
@@ -273,9 +293,19 @@ public final class CommitReservation {
             || resolved.position() != request.position()) {
             return Judged.refused(new Refusal(RejectCode.COMMIT_ORDER_VIOLATION, "plan-ref-mismatch"));
         }
-        if (identity.authorizationGeneration() != request.expectedVersion()
-            || identity.authorizationGeneration() == CommitLog.NO_AUTHORIZATION_GENERATION) {
+        if (identity.authorizationGeneration() == CommitLog.NO_AUTHORIZATION_GENERATION) {
             return Judged.refused(new Refusal(RejectCode.VERSION_MISMATCH, "authorization-mismatch"));
+        }
+        if (versionSource != null) {
+            // The authorization generation is checked against the grant record further down; the
+            // request's expected version is a different clock - the resource state revision - and is
+            // read here, before a slot or a room is taken.
+            long revision = versionSource.revisionOf(request.worldId(), request.domainId());
+            if (revision == io.izzel.arclight.common.prts.kernel.auth.WriteVersionSlots.NOT_CARRIED
+                || revision != request.expectedVersion()) {
+                return Judged.refused(new Refusal(RejectCode.VERSION_MISMATCH,
+                    "state-revision-mismatch"));
+            }
         }
         // The seat is looked up after the plan reference was checked and before a slot or a room is
         // taken; the namespace agreement is asked of the holder's current controller.
