@@ -13,6 +13,7 @@ import io.izzel.arclight.api.ArclightPlatform;
 import io.izzel.arclight.common.mod.mixins.annotation.OnlyInPlatform;
 import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
+import io.izzel.arclight.common.prts.kernel.domain.be.BlockEntityIdentity;
 import io.izzel.arclight.common.prts.kernel.observe.BlockEntityAttribution;
 import io.izzel.arclight.common.prts.kernel.quota.DeviceTickDeferral;
 import io.izzel.arclight.common.prts.kernel.shares.ShareClass;
@@ -68,6 +69,18 @@ public abstract class PrtsBlockEntityTickCostMixin {
         target = "Lnet/minecraft/world/level/block/entity/TickingBlockEntity;tick()V"))
     private void prts$timeBlockEntityTick(TickingBlockEntity ticker, Operation<Void> original) {
         Level level = (Level) (Object) this;
+        if (KernelSettings.enabled() && KernelSettings.writePathGuard()) {
+            try {
+                String worldId = level.dimension().location().toString();
+                KernelModule module = KernelModule.instance();
+                long incarnation = Math.max(0L,
+                    module.guard().worldEpochs().epochOf(worldId));
+                BlockEntityIdentity.Observation.observe(worldId, incarnation,
+                    ticker.getPos().asLong(), ticker.getType(), module.tickIndex());
+            } catch (Throwable ignored) {
+                // observation only: the tick below keeps its own order and outcome
+            }
+        }
         if (!prts$devicePlanAttempted) {
             // The HEAD injector did not reach this invocation: open the plan lazily with the same
             // level/tick/epoch/budget, so the plan never depends on injection order.

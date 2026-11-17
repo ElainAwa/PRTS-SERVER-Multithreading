@@ -46,6 +46,71 @@ public record BlockEntityIdentity(String worldId, long worldIncarnation, long bl
         private long logicalUpdateOrdinal;
     }
 
+    /** The observation-only admission face: it counts accepted, idempotent and refused BE tick
+     * identities from real world/position/type values and writes no host state. */
+    public static final class Observation {
+
+        private static final Registry REGISTRY = new Registry();
+        private static long observed;
+        private static long admitted;
+        private static long idempotent;
+        private static long refused;
+        private static long failed;
+
+        public static synchronized Admission observe(String worldId, long worldIncarnation,
+                                                     long blockPosLong, String beTypeId,
+                                                     long logicalUpdateOrdinal) {
+            try {
+                String type = beTypeId == null || beTypeId.isEmpty() ? "unknown" : beTypeId;
+                BlockEntityIdentity identity = new BlockEntityIdentity(worldId,
+                    Math.max(0L, worldIncarnation), blockPosLong, type, 0L, 0L,
+                    Math.max(0L, logicalUpdateOrdinal));
+                Admission admission = REGISTRY.admit(identity);
+                observed++;
+                if (admission.verdict() == Verdict.ACCEPTED) {
+                    admitted++;
+                } else if (admission.verdict() == Verdict.IDEMPOTENT) {
+                    idempotent++;
+                } else {
+                    refused++;
+                }
+                return admission;
+            } catch (Throwable unavailable) {
+                failed++;
+                return null;
+            }
+        }
+
+        public static synchronized long observed() {
+            return observed;
+        }
+
+        public static synchronized long admitted() {
+            return admitted;
+        }
+
+        public static synchronized long idempotent() {
+            return idempotent;
+        }
+
+        public static synchronized long refused() {
+            return refused;
+        }
+
+        public static synchronized long failed() {
+            return failed;
+        }
+
+        public static synchronized void reset() {
+            REGISTRY.reset();
+            observed = 0L;
+            admitted = 0L;
+            idempotent = 0L;
+            refused = 0L;
+            failed = 0L;
+        }
+    }
+
     /** One process-wide registry of the current host/rebuilt bindings of one block position. */
     public static final class Registry {
 
@@ -101,6 +166,13 @@ public record BlockEntityIdentity(String worldId, long worldIncarnation, long bl
 
         public synchronized long idempotent() {
             return idempotent;
+        }
+
+        /** Clears the observation's bindings and counters; test and evidence code only. */
+        public synchronized void reset() {
+            bounds.clear();
+            refused = 0L;
+            idempotent = 0L;
         }
     }
 }

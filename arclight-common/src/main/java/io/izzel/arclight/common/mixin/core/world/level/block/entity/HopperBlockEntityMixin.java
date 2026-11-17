@@ -5,6 +5,7 @@ import io.izzel.arclight.common.bridge.core.world.level.WorldBridge;
 import io.izzel.arclight.common.mod.server.ArclightServer;
 import io.izzel.arclight.common.mod.util.ArclightCaptures;
 import io.izzel.arclight.common.mod.util.DistValidate;
+import io.izzel.arclight.common.prts.kernel.domain.be.HopperConservationShadow;
 import io.izzel.arclight.mixin.Decorate;
 import io.izzel.arclight.mixin.DecorationOps;
 import net.minecraft.core.BlockPos;
@@ -64,6 +65,8 @@ public abstract class HopperBlockEntityMixin extends BaseContainerBlockEntityMix
         return result;
     }
 
+    // PRTS shadow conservation: the before/after counts only feed a local zero-sum check; the
+    // transfer, its event, its order and any retry stay exactly the host's own.
     // Somehow this works for Forge again.
     // Removing requires = 0
     // For Forge&NeoForge, see also VanillaInventoryCodeHooksMixin and respective HopperBlockEntityMixin
@@ -92,7 +95,16 @@ public abstract class HopperBlockEntityMixin extends BaseContainerBlockEntityMix
             }
             stack = CraftItemStack.asNMSCopy(event.getItem());
         }
-        return (ItemStack) DecorationOps.callsite().invoke(source, destination, stack, direction);
+        HopperConservationShadow.Snapshot shadow = HopperConservationShadow.begin(source, destination);
+        try {
+            return (ItemStack) DecorationOps.callsite().invoke(source, destination, stack, direction);
+        } finally {
+            try {
+                HopperConservationShadow.end(shadow, source, destination);
+            } catch (Throwable ignored) {
+                // observation only: the host's transfer result is already decided
+            }
+        }
     }
 
     @Decorate(method = "tryTakeInItemFromSlot", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/block/entity/HopperBlockEntity;addItem(Lnet/minecraft/world/Container;Lnet/minecraft/world/Container;Lnet/minecraft/world/item/ItemStack;Lnet/minecraft/core/Direction;)Lnet/minecraft/world/item/ItemStack;"))
@@ -121,7 +133,16 @@ public abstract class HopperBlockEntityMixin extends BaseContainerBlockEntityMix
             }
             stack = CraftItemStack.asNMSCopy(event.getItem());
         }
-        return (ItemStack) DecorationOps.callsite().invoke(source, destination, stack, direction);
+        HopperConservationShadow.Snapshot shadow = HopperConservationShadow.begin(source, destination);
+        try {
+            return (ItemStack) DecorationOps.callsite().invoke(source, destination, stack, direction);
+        } finally {
+            try {
+                HopperConservationShadow.end(shadow, source, destination);
+            } catch (Throwable ignored) {
+                // observation only: the host's transfer result is already decided
+            }
+        }
     }
 
     @Inject(method = "addItem(Lnet/minecraft/world/Container;Lnet/minecraft/world/entity/item/ItemEntity;)Z", cancellable = true, at = @At("HEAD"))
