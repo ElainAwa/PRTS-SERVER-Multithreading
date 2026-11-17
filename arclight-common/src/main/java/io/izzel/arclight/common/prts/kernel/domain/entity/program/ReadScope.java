@@ -59,6 +59,7 @@ public final class ReadScope {
     private boolean closed;
     private boolean readPhaseClosed;
     private boolean writeStarted;
+    private Result settled;
     private int allowed;
     private int refused;
     private long lastRevision;
@@ -175,17 +176,16 @@ public final class ReadScope {
      * read once the phase is closed. A second call returns the same witness.
      */
     public Result closeReadPhase() {
-        if (closed) {
-            return new Result(waveId, permits.size(), allowed, refused, foreignWrites.size(),
-                lastRevision);
+        if (settled != null) {
+            return settled;
         }
-        Result result = new Result(waveId, permits.size(), allowed, refused, foreignWrites.size(),
+        settled = new Result(waveId, permits.size(), allowed, refused, foreignWrites.size(),
             lastRevision);
         permits.clear();
         readRevisions.clear();
         readPhaseClosed = true;
         closed = true;
-        return result;
+        return settled;
     }
 
     public boolean closed() {

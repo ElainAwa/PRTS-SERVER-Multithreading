@@ -104,9 +104,7 @@ public final class LiveEntityAccess {
      * every shipped build leaves it off, so the write-back passes a null gate by default. */
     public static final String MOVE_GATE_PROPERTY = "arclight.prts.moveGate";
 
-    private static final Object MOVE_GATE_LOCK = new Object();
-    private static OwnerRegistry moveOwners;
-    private static WriteVersionSlots moveVersions;
+    private static volatile OwnerContext ownerContext;
 
     /**
      * The move admission the production write-back passes, or null while the dormant property is
@@ -118,41 +116,22 @@ public final class LiveEntityAccess {
         if (!Boolean.getBoolean(MOVE_GATE_PROPERTY)) {
             return null;
         }
-        return LiveEntityAccess::admitMoveWrite;
+        OwnerContext context = ownerContext;
+        if (context == null) {
+            return null;
+        }
+        context.versions().refresh(true);
+        return new EntityMoveGate(context, EntityMoveGate.LIVE_FACTS,
+            (worldId, entityId) -> {
+                Entity entity = entity(level(worldId), entityId);
+                return entity == null ? null : new EntityMoveGate.Position(entity.getX(),
+                    entity.getY(), entity.getZ());
+            })::admit;
     }
 
-    private static boolean admitMoveWrite(EntityWriteBackIdentity expected, StateHasher.Slice row,
-                                          Runnable write) {
-        ServerLevel level = level(row.worldId());
-        Entity entity = entity(level, (int) row.entitySeq());
-        if (entity == null) {
-            return false;
-        }
-        long sourceSection = SectionPos.asLong(BlockPos.containing(entity.getX(), entity.getY(),
-            entity.getZ()));
-        long targetSection = SectionPos.asLong(BlockPos.containing(row.x(), row.y(), row.z()));
-        boolean targetExists = sourceSection == targetSection
-            || level.hasChunk(SectionPos.x(targetSection), SectionPos.z(targetSection));
-        EntityMoveResources.Move move = new EntityMoveResources.Move(expected.identity(),
-            expected.objectGeneration(), sourceSection, targetSection, targetExists, false);
-        synchronized (MOVE_GATE_LOCK) {
-            ensureMoveGateState();
-            for (OwnerRegistry.OwnershipDomain key : EntityMoveResources.keys(move)) {
-                moveVersions.grant(key.worldId(), key.level(), key.domainId());
-            }
-            EntityMoveAuthority authority = new EntityMoveAuthority(moveOwners, moveVersions,
-                new EntityMoveAuthority.Binding("write-back-move-gate", HolderKind.KERNEL, 0L, 0L,
-                    0L, 0L, 0L));
-            return authority.move(move, write) == EntityMoveAuthority.Verdict.ADMITTED;
-        }
-    }
-
-    private static void ensureMoveGateState() {
-        if (moveOwners == null) {
-            moveOwners = new OwnerRegistry();
-            moveVersions = new WriteVersionSlots();
-            moveVersions.refresh(true);
-        }
+    /** Binds the process owner context the dormant move gate reads; no injection means no gate. */
+    public static void bindOwnerContext(OwnerContext context) {
+        ownerContext = context;
     }
 
     /** The write-back face of this access: the gate reads the live identity and revision, the row

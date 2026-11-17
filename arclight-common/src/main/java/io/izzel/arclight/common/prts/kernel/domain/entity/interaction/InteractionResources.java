@@ -98,13 +98,16 @@ public final class InteractionResources {
         return domain(worldId, KIND_POI_OCCUPANCY + ":" + recordKey);
     }
 
-    /** The keys of one attack pair in the stable order, plus the optional record occupancy key. */
+    /** The keys of one pair with the real object generations; zero only when none was declared. */
     public static List<OwnerRegistry.OwnershipDomain> keys(PairKey pair, boolean health,
                                                            boolean inventory, boolean durability,
-                                                           OwnerRegistry.OwnershipDomain occupancy) {
+                                                           OwnerRegistry.OwnershipDomain occupancy,
+                                                           long attackerGeneration,
+                                                           long victimGeneration) {
         List<OwnerRegistry.OwnershipDomain> keys = new ArrayList<>(9);
+        keys.add(entityState(pair.attacker(), attackerGeneration));
+        keys.add(entityState(pair.victim(), victimGeneration));
         for (EntityRowIdentity row : pair.ordered()) {
-            keys.add(entityState(row, 0L));
             if (health) {
                 keys.add(health(row));
             }
@@ -120,6 +123,13 @@ public final class InteractionResources {
         }
         keys.sort(DOMAIN_ORDER);
         return List.copyOf(keys);
+    }
+
+    /** The keys of one pair without a declared generation; a real caller passes the frozen ones. */
+    public static List<OwnerRegistry.OwnershipDomain> keys(PairKey pair, boolean health,
+                                                           boolean inventory, boolean durability,
+                                                           OwnerRegistry.OwnershipDomain occupancy) {
+        return keys(pair, health, inventory, durability, occupancy, 0L, 0L);
     }
 
     /** The tokens one admission asks for; the expected version is the slot's carried version. */

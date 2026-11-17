@@ -60,18 +60,34 @@ public record InteractionProgram(PairKey pair, InteractionKind kind, List<Effect
 
     /** One attack: the attacker hits the victim, its controlled phase declares the damage effect. */
     public static InteractionProgram attack(PairKey pair, EntityUpdateProgram.Input input) {
+        return attack(pair, 0L, 0L, input);
+    }
+
+    /** One attack whose resource keys carry the real object generations of both rows. */
+    public static InteractionProgram attack(PairKey pair, long attackerGeneration,
+                                            long victimGeneration,
+                                            EntityUpdateProgram.Input input) {
         return new InteractionProgram(pair, InteractionKind.ATTACK, List.of(EffectKind.DAMAGE),
             writeProgram(EntityUpdateProgram.ProgramKind.ATTACK,
                 EntityUpdateProgram.EffectKind.DAMAGE, "health", input),
-            InteractionResources.keys(pair, true, false, false, null));
+            InteractionResources.keys(pair, true, false, false, null, attackerGeneration,
+                victimGeneration));
     }
 
     /** One collision: the pair pushes each other; the controlled phase declares the damage effect. */
     public static InteractionProgram collision(PairKey pair, EntityUpdateProgram.Input input) {
+        return collision(pair, 0L, 0L, input);
+    }
+
+    /** One collision whose resource keys carry the real object generations of both rows. */
+    public static InteractionProgram collision(PairKey pair, long attackerGeneration,
+                                               long victimGeneration,
+                                               EntityUpdateProgram.Input input) {
         return new InteractionProgram(pair, InteractionKind.COLLISION, List.of(EffectKind.DAMAGE),
             writeProgram(EntityUpdateProgram.ProgramKind.COLLISION,
                 EntityUpdateProgram.EffectKind.DAMAGE, "motion", input),
-            InteractionResources.keys(pair, false, false, false, null));
+            InteractionResources.keys(pair, false, false, false, null, attackerGeneration,
+                victimGeneration));
     }
 
     /** One point-of-interest take: the controlled phase declares the occupancy effect. */
@@ -96,7 +112,7 @@ public record InteractionProgram(PairKey pair, InteractionKind kind, List<Effect
         return new InteractionProgram(pair, kind, List.of(EffectKind.POI_OCCUPANCY),
             writeProgram(programKind, EntityUpdateProgram.EffectKind.POI_OCCUPANCY, "occupancy",
                 input),
-            InteractionResources.keys(pair, false, false, false, occupancy));
+            InteractionResources.keys(pair, false, false, false, occupancy, 0L, 0L));
     }
 
     private static EntityUpdateProgram writeProgram(EntityUpdateProgram.ProgramKind kind,

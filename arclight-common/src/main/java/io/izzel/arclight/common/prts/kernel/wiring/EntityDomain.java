@@ -86,6 +86,7 @@ public final class EntityDomain implements KernelDomain {
 
     private final KernelModule module;
     private final ArenaLedger arena;
+    private final io.izzel.arclight.common.prts.kernel.domain.entity.OwnerSite ownerSite;
     private final JobGraphAdapter jobAdapter;
     private final DispatchReadings readings = new DispatchReadings();
     private final TaskLedger ledger = new TaskLedger(0L);
@@ -122,8 +123,16 @@ public final class EntityDomain implements KernelDomain {
     private static final boolean HOST_SKIP = Boolean.getBoolean(HostSkipPlan.PROPERTY);
 
     public EntityDomain(KernelModule module) {
+        this(module, module.ownerContext().primarySite());
+    }
+
+    /** One domain that runs as the given owner site of the process owner context. */
+    public EntityDomain(KernelModule module, io.izzel.arclight.common.prts.kernel.domain.entity
+                            .OwnerSite ownerSite) {
         this.module = module;
-        this.arena = module.arena();
+        this.ownerSite = java.util.Objects.requireNonNull(ownerSite, "ownerSite");
+        LiveEntityAccess.bindOwnerContext(module.ownerContext());
+        this.arena = module.ownerContext().arena();
         this.pendingArena = arena;
         this.jobAdapter = new JobGraphAdapter(module);
         this.writeBack = new DispatchWriteBack(module.intents(), module.payloads()::bind,

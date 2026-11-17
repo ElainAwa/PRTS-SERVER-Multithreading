@@ -4,6 +4,7 @@ package io.izzel.arclight.common.prts.kernel;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaPassthrough;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
+import io.izzel.arclight.common.prts.kernel.domain.entity.OwnerContext;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry.OwnershipDomain;
 import io.izzel.arclight.common.prts.kernel.auth.WriteAuthority;
 import io.izzel.arclight.common.prts.kernel.auth.SystemOwnerSource;
@@ -203,6 +204,7 @@ public final class KernelModule {
     public static final String CHAIN_OWNER_ID = "host:commit-chain";
 
     private final OwnerRegistry owners = new OwnerRegistry();
+    private OwnerContext ownerContext;
     private final IntentQueue intents = new IntentQueue(KernelSettings::intentQueueCap,
         KernelSettings::retryBudget);
     private final CommitSegment commitSegment = new CommitSegment(intents,
@@ -1947,6 +1949,24 @@ public final class KernelModule {
 
     public boolean started() {
         return started;
+    }
+
+    /** The shared owner context of this process: one registry, one version store and one arena,
+     * with the single main site until another owner site is injected. */
+    public OwnerContext ownerContext() {
+        OwnerContext current = ownerContext;
+        if (current == null) {
+            current = OwnerContext.single(owners(), versionSlots(), arena());
+            ownerContext = current;
+        }
+        return current;
+    }
+
+    /** Injects the process owner context a caller prepared; returns the previous one. */
+    public OwnerContext useOwnerContext(OwnerContext context) {
+        OwnerContext previous = ownerContext();
+        ownerContext = java.util.Objects.requireNonNull(context, "context");
+        return previous;
     }
 
     public OwnerRegistry owners() {
