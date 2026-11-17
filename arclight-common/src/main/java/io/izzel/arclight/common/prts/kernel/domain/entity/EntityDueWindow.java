@@ -23,10 +23,16 @@ public final class EntityDueWindow {
     public record Row(int entityId, long uuidHigh, long uuidLow, int tickCount, boolean passenger,
                       boolean removed, double x, double y, double z, double yaw, double pitch,
                       double vx, double vy, double vz, long hostStep,
-                      EntityEligibility.Reason reason) {
+                      EntityEligibility.Reason reason, String classTag) {
 
         public Row {
             Objects.requireNonNull(reason, "reason");
+        }
+
+        /** The same row with its internal class tag, written by the tick thread that froze it. */
+        public Row withClassTag(String className) {
+            return new Row(entityId, uuidHigh, uuidLow, tickCount, passenger, removed, x, y, z,
+                yaw, pitch, vx, vy, vz, hostStep, reason, className);
         }
     }
 
@@ -101,6 +107,9 @@ public final class EntityDueWindow {
                     row.x(), row.y(), row.z(), row.yaw(), row.pitch(), row.vx(), row.vy(),
                     row.vz(), row.hostStep())) {
                     ledger.admit(identity);
+                    if (row.classTag() != null) {
+                        builder.tagLast(row.classTag());
+                    }
                 }
             }
             views.add(builder.build());

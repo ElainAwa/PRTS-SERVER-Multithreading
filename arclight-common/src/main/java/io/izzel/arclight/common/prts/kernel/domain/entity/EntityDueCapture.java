@@ -79,7 +79,7 @@ public final class EntityDueCapture {
                 entity.getUUID().getLeastSignificantBits(), entity.tickCount,
                 entity.isPassenger(), entity.isRemoved(), entity.getX(), entity.getY(),
                 entity.getZ(), entity.getYRot(), entity.getXRot(), motion.x, motion.y, motion.z,
-                DispatchSnapshot.hostStep(entity), reason));
+                DispatchSnapshot.hostStep(entity), reason, entity.getClass().getName()));
         } catch (Throwable failure) {
             fail(failure);
         }

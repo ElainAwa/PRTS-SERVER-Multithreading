@@ -49,6 +49,9 @@ public final class TakeoverWhitelist {
 
     /** Counts one row the plan point offered, by its class slot; a refused class is named once. */
     static void noteSeen(int slot, Class<?> type) {
+        io.izzel.arclight.common.prts.kernel.domain.entity.support.SupportCensus.note(
+            type.getName(), io.izzel.arclight.common.prts.kernel.domain.entity.support
+                .SupportCensus.Outcome.SEEN);
         if (slot >= 0 && slot < SLOTS) {
             SEEN[slot].increment();
             return;

@@ -128,6 +128,40 @@ public final class PrtsEntityCapability {
     }
 
     /** Counts one non-player entity the per-world row cap left out of the frame. */
+    /** Counts one class seen by the support census; the support matrix decides what it counts as. */
+    public static void noteClassSeen(String className) {
+        io.izzel.arclight.common.prts.kernel.domain.entity.support.SupportCensus.note(className,
+            io.izzel.arclight.common.prts.kernel.domain.entity.support.SupportCensus.Outcome.SEEN);
+    }
+
+    /** Counts one class admitted to an owner program. */
+    public static void noteClassAdmitted(String className) {
+        io.izzel.arclight.common.prts.kernel.domain.entity.support.SupportCensus.note(className,
+            io.izzel.arclight.common.prts.kernel.domain.entity.support.SupportCensus.Outcome
+                .ADMITTED);
+    }
+
+    /** Counts one class completed by an owner program. */
+    public static void noteClassCompleted(String className) {
+        io.izzel.arclight.common.prts.kernel.domain.entity.support.SupportCensus.note(className,
+            io.izzel.arclight.common.prts.kernel.domain.entity.support.SupportCensus.Outcome
+                .COMPLETED);
+    }
+
+    /** Counts one class that stayed at the C1 host fallback. */
+    public static void noteClassFallback(String className) {
+        io.izzel.arclight.common.prts.kernel.domain.entity.support.SupportCensus.note(className,
+            io.izzel.arclight.common.prts.kernel.domain.entity.support.SupportCensus.Outcome
+                .FALLBACK);
+    }
+
+    /** Counts one class outside the declared support set. */
+    public static void noteClassOutside(String className) {
+        io.izzel.arclight.common.prts.kernel.domain.entity.support.SupportCensus.note(className,
+            io.izzel.arclight.common.prts.kernel.domain.entity.support.SupportCensus.Outcome
+                .OUTSIDE);
+    }
+
     public static void noteCapDropped() {
         CAP_DROPPED.increment();
     }

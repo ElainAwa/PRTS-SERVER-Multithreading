@@ -2,6 +2,7 @@
 package io.izzel.arclight.common.prts.kernel.domain.entity.program;
 
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityCandidateView;
+import io.izzel.arclight.common.prts.kernel.domain.entity.support.EntitySupportMatrix;
 
 /**
  * The per-row program dispatch: every row of one frozen batch declares its own program kind from
@@ -32,10 +33,30 @@ public final class RowProgramDispatch {
         return EntityUpdateProgram.ProgramKind.BASE_TICK;
     }
 
-    /** One row's program, built from the frozen row and its own host step. */
+    /** The per-class program kind the support matrix declares for one class tag. */
+    public static EntityUpdateProgram.ProgramKind kindOfClass(String className) {
+        return switch (EntitySupportMatrix.programNameFor(className, null)) {
+            case "brain" -> EntityUpdateProgram.ProgramKind.BRAIN_TICK;
+            case "goal" -> EntityUpdateProgram.ProgramKind.GOAL_SELECTOR;
+            case "sensor" -> EntityUpdateProgram.ProgramKind.SENSOR_TICK;
+            case "move" -> EntityUpdateProgram.ProgramKind.MOVE_CONTROL;
+            case "navigation" -> EntityUpdateProgram.ProgramKind.NAVIGATION;
+            case "mob" -> EntityUpdateProgram.ProgramKind.MOB_TICK;
+            case "living" -> EntityUpdateProgram.ProgramKind.LIVING_TICK;
+            default -> EntityUpdateProgram.ProgramKind.BASE_TICK;
+        };
+    }
+
+    /**
+     * One row's program: a row the tick thread tagged with its class takes the declared per-class
+     * program, every other row keeps its own host step. The first row of a batch never speaks for
+     * the batch.
+     */
     public static EntityUpdateProgram forRow(EntityCandidateView view, int row,
                                              EntityUpdateProgram.Input base) {
-        EntityUpdateProgram.ProgramKind kind = kindOf(view.flags(row));
+        String classTag = view.classTag(row);
+        EntityUpdateProgram.ProgramKind kind = classTag == null ? kindOf(view.flags(row))
+            : kindOfClass(classTag);
         return EntityUpdateProgram.dormant(kind, base);
     }
 }

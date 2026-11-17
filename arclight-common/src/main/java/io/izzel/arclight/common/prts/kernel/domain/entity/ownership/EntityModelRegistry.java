@@ -56,6 +56,16 @@ public final class EntityModelRegistry {
     private EntityModelRegistry() {
     }
 
+    /** Installs the production trait composite; nothing calls this without an explicit install. */
+    public static void installProductionTraitProvider(TraitProvider provider) {
+        traitProvider = provider;
+    }
+
+    /** Whether any trait provider (production or test) is installed. */
+    public static boolean traitProviderInstalled() {
+        return traitProvider != null;
+    }
+
     /** Test-only installation; production never installs a provider in this batch. */
     public static void installTraitProviderForTests(TraitProvider provider) {
         traitProvider = provider;

@@ -48,6 +48,7 @@ public final class EntityCandidateView {
     private final double[] velY;
     private final double[] velZ;
     private final long[] flags;
+    private final String[] classTags;
     private final List<Refused> refused;
 
     private EntityCandidateView(Builder builder) {
@@ -62,6 +63,7 @@ public final class EntityCandidateView {
         this.objectGeneration = java.util.Arrays.copyOf(builder.objectGeneration, builder.count);
         this.expectedStateRevision =
             java.util.Arrays.copyOf(builder.expectedStateRevision, builder.count);
+        this.classTags = java.util.Arrays.copyOf(builder.classTags, builder.count);
         this.reasonOrdinal = java.util.Arrays.copyOf(builder.reasonOrdinal, builder.count);
         this.chunkX = java.util.Arrays.copyOf(builder.chunkX, builder.count);
         this.chunkZ = java.util.Arrays.copyOf(builder.chunkZ, builder.count);
@@ -174,6 +176,11 @@ public final class EntityCandidateView {
         return flags[index];
     }
 
+    /** The internal class tag the tick thread wrote for one row, or null when it wrote none. */
+    public String classTag(int index) {
+        return classTags == null ? null : classTags[index];
+    }
+
     /** Returns the same rows reordered by region and entity sequence. A region is one group of
      * {@code chunks} by {@code chunks} chunks. */
     public EntityCandidateView sortedByRegion(int chunks) {
@@ -191,6 +198,9 @@ public final class EntityCandidateView {
             builder.add(identity(row), reason(row), objectGeneration[row],
                 expectedStateRevision[row], chunkX[row], chunkZ[row], posX[row], posY[row],
                 posZ[row], yaw[row], pitch[row], velX[row], velY[row], velZ[row], flags[row]);
+            if (classTags[row] != null) {
+                builder.tagLast(classTags[row]);
+            }
         }
         for (Refused refusedRow : refused) {
             builder.refuse(refusedRow.identity(), refusedRow.reason());
@@ -239,6 +249,7 @@ public final class EntityCandidateView {
         private double[] velY = new double[16];
         private double[] velZ = new double[16];
         private long[] flags = new long[16];
+        private String[] classTags = new String[16];
         private final List<Refused> refused = new ArrayList<>();
 
         private Builder(String worldId, long worldEpoch, int maxRows) {
@@ -332,6 +343,13 @@ public final class EntityCandidateView {
         /** Retains one row the selection cap kept out of the frame. */
         public void refuse(EntityRowIdentity identity, EntityEligibility.Reason reason) {
             refused.add(new Refused(identity, reason));
+        }
+
+        /** Tags the row that was added last with its internal class name. */
+        public void tagLast(String className) {
+            if (count > 0) {
+                classTags[count - 1] = className;
+            }
         }
 
         public EntityCandidateView build() {
