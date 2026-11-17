@@ -30,4 +30,26 @@ public final class KernelWiring {
         io.izzel.arclight.common.prts.kernel.domain.entity.OwnerSite ownerSite) {
         return new EntityDomain(KernelModule.instance(), ownerSite);
     }
+
+    /**
+     * Installs the entity domain of every owner site of the process: with the two-owner property
+     * off this is exactly the one-domain install; with it on, both sites build their own domain on
+     * the same module and the same owner context, and both are installed.
+     */
+    public static java.util.List<EntityDomain> installTwoOwners() {
+        KernelModule module = KernelModule.instance();
+        java.util.List<io.izzel.arclight.common.prts.kernel.domain.entity.OwnerSite> sites =
+            io.izzel.arclight.common.prts.kernel.domain.entity.twoowner.TwoOwnerSetup
+                .sites(module.ownerContext());
+        if (sites.size() == 1) {
+            return java.util.List.of(install(sites.get(0)));
+        }
+        java.util.List<EntityDomain> domains = new java.util.ArrayList<>(sites.size());
+        for (io.izzel.arclight.common.prts.kernel.domain.entity.OwnerSite site : sites) {
+            EntityDomain domain = new EntityDomain(module, site);
+            module.installDomain(domain);
+            domains.add(domain);
+        }
+        return java.util.List.copyOf(domains);
+    }
 }
