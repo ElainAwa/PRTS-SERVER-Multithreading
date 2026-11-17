@@ -80,7 +80,6 @@ public final class EntityDomain implements KernelDomain {
      * configuration key and not a release switch. Off, the domain keeps the kinematics body and the
      * dispatch path stays exactly as before. */
     private static final boolean PROGRAM_BODY = Boolean.getBoolean("arclight.prts.entityProgram");
-    private static final String THREAD_PREFIX = "prts-worker-";
     /** Metering-only pseudo-world; never a B3 or plan world key (plans and receipts use real
      * dimension keys). */
     private static final String RUNTIME_WORLD = "";
@@ -112,7 +111,6 @@ public final class EntityDomain implements KernelDomain {
     private long taskSeq;
     private long lastEvidenceTick;
     private long lastForkTick = -1L;
-    private WorkerPool pool;
     private DispatchPass pending;
     /** The arena the pending pass claimed from: the module arena on the legacy path, the shared
      * runtime's arena on the cohort path. */
@@ -374,7 +372,7 @@ public final class EntityDomain implements KernelDomain {
         }
         if (!KernelSettings.dispatchParallel()) {
             module.clearPendingB3Tokens();
-            if (pool != null || pending != null || sharedRuntime) {
+            if (pending != null || sharedRuntime) {
                 shutdown();
             }
             merge.noteSkippedMerge();
@@ -541,41 +539,24 @@ public final class EntityDomain implements KernelDomain {
             pendingRows = dispatchedRows;
             twoOwnerOfferedTotal += dispatchedRows;
             if (KernelSettings.jobGraph()) {
-                // The private pool of a previous legacy tick is closed first, so one life never
-                // runs two pools.
-                if (pool != null) {
-                    shutdown();
-                }
                 pending = cohortDispatch(plan, orderedTasks);
             } else {
-                // A switch that turns the cohort off stops the shared workers before the private
-                // pool opens, so one dispatch life never runs two pools.
-                if (sharedRuntime) {
-                    SharedRuntime.shared().close();
+                // Both parallel arms run on the one shared runtime; a runtime that cannot open
+                // closes this pass on the serial arm instead of opening a second pool.
+                SharedRuntime runtime = SharedRuntime.shared();
+                if (!runtime.open()) {
+                    readings.notePoolOpenFailed();
                     sharedRuntime = false;
-                }
-                pendingArena = arena;
-                if (pool == null) {
-                    try {
-                        pool = WorkerPool.open(new WorkerPool.Spec(policy.workerCount(),
-                            THREAD_PREFIX, Thread.NORM_PRIORITY, policy.queueCap(),
-                            policy.batchChunks()), policy.retryBudget(), readings, arena);
-                    } catch (Throwable t) {
-                        readings.notePoolOpenFailed();
-                        pool = null;
-                    }
-                }
-                if (pool != null) {
-                    if (EntityTickOwnership.live()) {
-                        EntityTickOwnership.bindSharedExecutor(pool.executor());
-                    }
-                    pending = DispatchPass.dispatch(plan, pool, body(plan), arena, readings,
-                        ledger, orderedTasks);
-                } else {
-                    // No pool this tick: the plan still receives one terminal outcome per task, so
-                    // the accounting of the tick closes and the merge redos the batches on the tick
-                    // thread in the frozen order.
+                    pendingArena = arena;
                     pending = DispatchPass.serialFallback(plan, readings, ledger, orderedTasks);
+                } else {
+                    sharedRuntime = true;
+                    pendingArena = runtime.arena();
+                    if (EntityTickOwnership.live()) {
+                        EntityTickOwnership.bindSharedExecutor(runtime.pool().executor());
+                    }
+                    pending = DispatchPass.dispatch(plan, runtime.pool(), body(plan),
+                        runtime.arena(), readings, ledger, orderedTasks);
                 }
             }
             // The declarations submitted here are taken by the next plan the kernel builds; that
@@ -719,8 +700,6 @@ public final class EntityDomain implements KernelDomain {
         // A shutdown cannot wait for a newer plan to close the last group; report it now under the
         // plan that seats it before the pool and the arena are released.
         flushAllLandedEntityBatches();
-        WorkerPool current = pool;
-        pool = null;
         if (EntityTickOwnership.live()) {
             EntityTickOwnership.bindSharedExecutor(null);
         }
@@ -729,19 +708,7 @@ public final class EntityDomain implements KernelDomain {
         if (open != null) {
             open.abort(RejectCode.TICK_BUDGET_EXHAUSTED.text());
         }
-        if (current != null) {
-            WorkerPool.ShutdownReport report = current.shutdown(true, true, SHUTDOWN_WAIT_MS);
-            if (report.terminated() && report.remainingInFlight() == 0) {
-                arena.releaseAll();
-            } else {
-                // A worker that ignored the deadline may still hold a lease; the arena is quarantined
-                // so its slots can never be handed to the next pass.
-                arena.quarantineAll();
-            }
-            readings.noteShutdown(report.remainingInFlight(), report.terminated());
-        } else if (sharedRuntime) {
-            // No private pool on the cohort path: the workers belong to the shared runtime, so the
-            // stop goes through it.
+        if (sharedRuntime) {
             SharedRuntime.shared().close();
             sharedRuntime = false;
         } else {
@@ -837,18 +804,11 @@ public final class EntityDomain implements KernelDomain {
 
     /** The arena the active dispatch claims from; the runtime's arena on the cohort path. */
     private ArenaLedger dispatchArena() {
-        if (pool != null || !sharedRuntime) {
-            return arena;
-        }
-        return SharedRuntime.shared().arena();
+        return sharedRuntime ? SharedRuntime.shared().arena() : arena;
     }
 
     /** The workers the active dispatch life runs on, whichever pool owns them. */
     private int dispatchThreadsAlive() {
-        WorkerPool current = pool;
-        if (current != null) {
-            return current.alive();
-        }
         if (!sharedRuntime) {
             return 0;
         }

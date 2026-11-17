@@ -56,10 +56,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Locale;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.Executor;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -84,9 +81,8 @@ public final class EntityTickOwnership {
         return !LIVE;
     }
 
-    /** Test-only binding of the existing executor used by the dispatch pool; null keeps the
-     * fixture's own existing pool. The fixture binds the dispatch pool so no second thread set
-     * is opened. */
+    /** Binds the one shared executor of the shared runtime; null makes the lease publish inline on
+     * the calling thread, so this fixture never opens a second pool of its own. */
     public static void bindSharedExecutor(Executor executor) {
         sharedExecutor = executor;
     }
@@ -256,7 +252,6 @@ public final class EntityTickOwnership {
     private static final java.util.LinkedHashMap<String, long[]> WORLD_TOTALS =
         new java.util.LinkedHashMap<>();
 
-    private static volatile ThreadPoolExecutor pool;
     private static volatile Executor sharedExecutor;
 
     private static int[] entryIds = new int[TRACE_START];
@@ -593,7 +588,7 @@ public final class EntityTickOwnership {
         }
         nextToken = lease.lastToken();
         Executor target = sharedExecutor;
-        lease.publish(target != null ? target : pool(), Math.max(1, workerCount() * 4));
+        lease.publish(target != null ? target : Runnable::run, Math.max(1, workerCount() * 4));
         PLAN_NANOS.add(System.nanoTime() - startedAt);
         current = lease;
     }
@@ -1480,13 +1475,6 @@ public final class EntityTickOwnership {
         // hook then skips its second dump so the file is the pre-reset evidence.
         EntityOwnershipCensus.dump();
         reset();
-        synchronized (EntityTickOwnership.class) {
-            ThreadPoolExecutor open = pool;
-            pool = null;
-            if (open != null) {
-                open.shutdownNow();
-            }
-        }
     }
 
     /**
@@ -1663,24 +1651,6 @@ public final class EntityTickOwnership {
         traceWriteRows++;
     }
 
-    private static ThreadPoolExecutor pool() {
-        ThreadPoolExecutor open = pool;
-        if (open != null) {
-            return open;
-        }
-        synchronized (EntityTickOwnership.class) {
-            if (pool == null) {
-                int workers = workerCount();
-                ThreadPoolExecutor created = new ThreadPoolExecutor(workers, workers, 30L,
-                    TimeUnit.SECONDS, new ArrayBlockingQueue<>(64), new OwnershipThreads(),
-                    new ThreadPoolExecutor.AbortPolicy());
-                created.allowCoreThreadTimeOut(true);
-                pool = created;
-            }
-            return pool;
-        }
-    }
-
     private static int workerCount() {
         return Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors() - 1));
     }
@@ -1691,19 +1661,6 @@ public final class EntityTickOwnership {
             adders[index] = new LongAdder();
         }
         return adders;
-    }
-
-    /** Named daemon workers of the fixture: a process that stops does not wait for them. */
-    private static final class OwnershipThreads implements ThreadFactory {
-
-        private final AtomicInteger seq = new AtomicInteger();
-
-        @Override
-        public Thread newThread(Runnable body) {
-            Thread thread = new Thread(body, "prts-owner-" + seq.getAndIncrement());
-            thread.setDaemon(true);
-            return thread;
-        }
     }
 
     /** The plan-point helpers the tests drive without a world. */
