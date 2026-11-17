@@ -12,6 +12,7 @@ import java.util.concurrent.CompletableFuture;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PaperChunkLoadsTest {
 
@@ -31,6 +32,12 @@ class PaperChunkLoadsTest {
         CompletableFuture<Chunk> failed = PaperChunkLoads.withoutGenerating(null,
             CompletableFuture.completedFuture(ChunkResult.error("absent")));
         assertNull(failed.join());
+    }
+
+    @Test
+    void theGenerateFlagStaysOffUnlessAsked() {
+        assertFalse(PaperChunkLoads.generationFlag(false));
+        assertTrue(PaperChunkLoads.generationFlag(true));
     }
 
     private static Chunk chunk() {

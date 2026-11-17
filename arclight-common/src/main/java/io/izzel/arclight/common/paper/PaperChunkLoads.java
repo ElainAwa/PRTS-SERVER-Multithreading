@@ -17,6 +17,10 @@ public final class PaperChunkLoads {
     private PaperChunkLoads() {
     }
 
+    public static boolean generationFlag(boolean generate) {
+        return generate ? true : START_GENERATION;
+    }
+
     public static CompletableFuture<Chunk> withoutGenerating(Chunk alreadyLoaded,
                                                              CompletableFuture<ChunkResult<ChunkAccess>> existing) {
         if (alreadyLoaded != null) {
