@@ -16,10 +16,11 @@ import java.util.function.Consumer;
  */
 public final class DropTransaction {
 
-    /** Where the player pickup boundary sits; J03 owns it and this contract does not run it. */
+    /** Where the player pickup boundary sits; the player pickup domain owns it and this contract
+     * does not run it. */
     public enum PlayerPickupBoundary {
         HOST_PARITY_ONLY,
-        PLAYER_BOUNDARY_J03
+        PLAYER_BOUNDARY_OWNED_BY_PICKUP
     }
 
     /** The phases of one drop transaction. */
@@ -133,6 +134,6 @@ public final class DropTransaction {
 
     /** The boundary the host still owns: player pickup is not run by this contract. */
     public static PlayerPickupBoundary playerBoundary() {
-        return PlayerPickupBoundary.PLAYER_BOUNDARY_J03;
+        return PlayerPickupBoundary.PLAYER_BOUNDARY_OWNED_BY_PICKUP;
     }
 }

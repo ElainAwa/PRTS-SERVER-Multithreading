@@ -37,7 +37,7 @@ public final class PrtsSeams {
             "io.izzel.arclight.common.prts.fixes.PrtsLevelStructureGrowCaptureMixin",
             "net.minecraft.world.level.Level", FIXES_CATEGORY),
         // The platform entry is now the same real Level.setBlock path; the legacy seam id stays
-        // readable so the P0 seam-count/readout contract does not change.
+        // readable so the seam-count and readout contract established earlier does not change.
         new Seam("write_path_platform",
             "io.izzel.arclight.common.prts.fixes.PrtsLevelStructureGrowCaptureMixin",
             "net.minecraft.world.level.Level", FIXES_CATEGORY),

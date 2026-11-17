@@ -30,7 +30,7 @@ public final class PrtsEntityOwnershipEvents {
     }
 
     /** Binds the real entity-tick entry while the kernel is enabled; the ownership action itself
-     * remains behind the explicit fixture property, so this changes no P1 behavior by default. */
+     * remains behind the explicit fixture property, so this changes no default behavior. */
     public static synchronized void registerIfDeclared() {
         syncSubscription(KernelSettings.enabled());
         bindingDiagnostic();

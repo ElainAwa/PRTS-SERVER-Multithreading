@@ -915,7 +915,7 @@ public final class KernelReadings {
         }
     }
 
-    /** One aggregate pair derived from the live B01-A child settlements. */
+    /** One aggregate pair derived from the live child settlements. */
     record WorldResChildShares(double genShareMs, double lightShareMs) {
     }
 
@@ -1129,8 +1129,8 @@ public final class KernelReadings {
         add(lines, "plan.nanos_builds", module.planNanosBuilds());
         add(lines, "plan.nanos_per_build", module.planNanosBuilds() == 0L ? 0L
             : module.planNanosTotal() / module.planNanosBuilds());
-        // The chunk-pipeline declaration step is timed apart from the whole plan build: it is the
-        // part of F the R02/C2 domain itself executes inside the freeze, not the shared planner.
+        // The chunk-pipeline declaration step is timed apart from the whole plan build: the chunk
+        // pipeline domain itself executes it inside the freeze, not the shared planner.
         add(lines, "plan.c1.nanos_last", module.planC1NanosLast());
         add(lines, "plan.c1.nanos_total", module.planC1NanosTotal());
         add(lines, "plan.c1.nanos_max", module.planC1NanosMax());

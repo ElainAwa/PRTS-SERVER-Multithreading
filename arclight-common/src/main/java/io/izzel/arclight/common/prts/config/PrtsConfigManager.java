@@ -208,7 +208,7 @@ public final class PrtsConfigManager {
                 + "# itself produced, and it lands nothing, so every position, orientation and velocity\n"
                 + "# stays with the host. On, the leg hands the batch to the intent channel and the\n"
                 + "# commit segment lands it - the tier the controlled three-probe comparison registered\n"
-                + "# as a semantic deviation (registration M4-OPEN), reachable only by this opt-in.\n"
+                + "# as a semantic deviation, reachable only by this opt-in.\n"
                 + "# 'tick-plan: false' leaves the planning period switched off: no plan is frozen and\n"
                 + "# nothing consumes an order. On, the tick freezes one plan - the job graph, its\n"
                 + "# topological order, the commit order derived from it, the share table and the mode\n"

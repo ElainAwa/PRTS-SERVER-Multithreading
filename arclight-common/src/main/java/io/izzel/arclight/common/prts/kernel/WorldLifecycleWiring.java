@@ -40,7 +40,7 @@ public final class WorldLifecycleWiring {
         }
     }
 
-    /** The server stopping entry: flush every world without recording an A04 session; the
+    /** The server stopping entry: flush every world without recording a stop session; the
      * owner-gated unload path counts the pending session once it accepts the unload. */
     public static void onServerStopping(List<String> worldIds) {
         MultiWorldWiring.onServerStopping();

@@ -11,7 +11,7 @@ import java.util.Map;
 /** The conservative multi-world watermark for the existing generation wait-point row. It publishes
  * the minimum cumulative generation-step count of the tracked worlds and only moves when that
  * minimum moves; a stalled world therefore holds the row while others advance. The row is bound
- * only while the A02d producer is installed and at least one world is tracked; reset, unload, an
+ * only while the generation-watermark producer is installed and at least one world is tracked; reset, unload, an
  * epoch change and a disabled producer unbind it instead of publishing a synthetic zero. */
 final class GenMinWatermark {
 
@@ -22,7 +22,7 @@ final class GenMinWatermark {
     private long watermark;
     private Map<String, Long> worlds;
 
-    /** Synchronizes the binding with one bounded A02d snapshot. */
+    /** Synchronizes the binding with one bounded generation-watermark snapshot. */
     synchronized void sync(WaitProgress progress, boolean installed,
                            List<ChunkPipelineProgress.WorldReading> readings) {
         if (progress == null) {

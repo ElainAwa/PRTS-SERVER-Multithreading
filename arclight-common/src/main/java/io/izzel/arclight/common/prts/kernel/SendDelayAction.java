@@ -14,7 +14,7 @@ import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import java.util.function.ToLongFunction;
 
-/** The bounded send-delay decision. Under a fresh B01-A parent-over settlement it asks the existing
+/** The bounded send-delay decision. Under a fresh parent-over settlement it asks the existing
  * PlayerChunkSender to defer one send tick; the host's own pending set remains the only chunk
  * queue, so nothing is dropped or duplicated. The delay is capped by ticks, worlds and the host
  * pending size and fails open on any unreadable or stale input. */

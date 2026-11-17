@@ -111,7 +111,7 @@ public final class KernelSettings {
     /** Publishes the read-only aggregate identity of the frozen batch cells; off, the two
      * identity rows are not emitted and no aggregate is kept. The emitted form is the v2
      * since-reset window aggregate; the earlier per-freeze last aggregate is historic. */
-    public static final String R02_IDENTITY_DIGEST = "r02-identity-digest";
+    public static final String IDENTITY_DIGEST_FEATURE = "r02-identity-digest";
 
     /** Publishes the world-set readiness rows only while this instance switch is on; off, the
      * world rows are not emitted and no readout is updated. */
@@ -433,7 +433,7 @@ public final class KernelSettings {
     }
 
     public static boolean r02IdentityDigest() {
-        return feature(R02_IDENTITY_DIGEST);
+        return feature(IDENTITY_DIGEST_FEATURE);
     }
 
     public static boolean worldSetReadouts() {

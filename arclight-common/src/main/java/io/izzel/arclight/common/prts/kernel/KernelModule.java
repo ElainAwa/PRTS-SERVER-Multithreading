@@ -843,7 +843,7 @@ public final class KernelModule {
     }
 
     /** Binds the existing generation wait-point row to the conservative min watermark only while
-     * the A02d producer is installed and the snapshot carries at least one tracked world. */
+     * the generation-watermark producer is installed and the snapshot carries at least one tracked world. */
     private void syncGenProgressWatermark() {
         ChunkPipelineProgress.Snapshot snapshot = ChunkPipelineProgress.snapshot();
         genMinWatermark.sync(waitPoints.progress(), snapshot.installed(), snapshot.worlds());
@@ -2271,7 +2271,7 @@ public final class KernelModule {
         return worldResLedger;
     }
 
-    /** Immutable bounded snapshot of the B01-A child settlements for the formal child readout; it
+    /** Immutable bounded snapshot of the child settlements for the formal child readout; it
      * is not a top-level ShareTable row and does not affect share count or conservation. */
     public List<WorldResChildBudget> worldResChildSettlements() {
         return worldResLedger.settlements();
@@ -3260,7 +3260,7 @@ public final class KernelModule {
         return flushWorldAtStop(worldId, record, false);
     }
 
-    /** Flushes one world and records the A04 session only when the owner accepted it. The event
+    /** Flushes one world and records the stop session only when the owner accepted it. The event
      * stopping path passes false and leaves a pending session for the owner-gated unload path to
      * count once; the generic path passes true after the owner accepted the unload. */
     public WorldStopFlush flushWorldAtStop(String worldId, boolean recordSession) {
@@ -3338,7 +3338,7 @@ public final class KernelModule {
             unloadRowStep, reclaimStep, drained.applied(), reclaimed, complete));
     }
 
-    /** Counts one A04 session at the owner-accepted entry; the flush/returns may already have run
+    /** Counts one pending unload session at the owner-accepted entry; the flush/returns may already have run
      * on the stopping path. */
     public boolean countPendingUnload(String worldId) {
         String named = worldId == null || worldId.isEmpty() ? "unnamed" : worldId;

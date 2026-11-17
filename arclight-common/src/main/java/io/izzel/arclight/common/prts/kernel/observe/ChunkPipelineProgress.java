@@ -80,7 +80,7 @@ public final class ChunkPipelineProgress {
     private ChunkPipelineProgress() {
     }
 
-    /** Installs or removes the face. It is installed only while the kernel and the B01-A child meter
+    /** Installs or removes the face. It is installed only while the kernel and the child meter
      * are both on; an install while already installed keeps the retained counters and refreshes the
      * suppliers, a disable clears them. */
     public static void install(boolean wanted, ToLongFunction<String> epochs, LongSupplier ticks) {
