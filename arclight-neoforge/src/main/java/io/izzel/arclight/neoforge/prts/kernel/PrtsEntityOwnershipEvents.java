@@ -100,6 +100,7 @@ public final class PrtsEntityOwnershipEvents {
     @SubscribeEvent
     public void onEntityTickPost(EntityTickEvent.Post event) {
         ENTITY_POST.increment();
+        EntityTickOwnership.clearPoiContext();
         PrtsHostTickCalls.notePath(event.getEntity());
     }
 
@@ -117,6 +118,7 @@ public final class PrtsEntityOwnershipEvents {
                 + io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityOwnershipCensus.recordCalls()
                 + " " + EntityTickOwnership.planDiagnostic());
         }
+        EntityTickOwnership.clearPoiContext();
         EntityTickOwnership.shutdown();
     }
 }

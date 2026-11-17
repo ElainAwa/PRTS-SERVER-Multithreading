@@ -57,6 +57,7 @@
     "waitpoints.PrtsEndDragonFightWaitSitesMixin",
     "waitpoints.PrtsMapItemWaitSiteMixin",
     "waitpoints.PrtsPoiManagerWaitSiteMixin",
+    "waitpoints.PrtsPoiManagerSingleWinnerMixin",
     "waitpoints.PrtsStructureManagerWaitSitesMixin",
     "waitpoints.PrtsPlayerRespawnLogicWaitSiteMixin",
     "waitpoints.PrtsServerLevelWaitSiteMixin",

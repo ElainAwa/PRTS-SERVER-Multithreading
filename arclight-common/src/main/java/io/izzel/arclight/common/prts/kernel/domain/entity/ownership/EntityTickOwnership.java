@@ -97,7 +97,7 @@ public final class EntityTickOwnership {
     }
 
     /** The typed identity of one frozen plan-point row. */
-    record TypedUpdate(String unitId, long ordinal, String worldId, long worldIncarnation,
+    public record TypedUpdate(String unitId, long ordinal, String worldId, long worldIncarnation,
                        long generation, long revision) {
     }
 
@@ -656,6 +656,42 @@ public final class EntityTickOwnership {
         current = lease;
     }
 
+    /** The internal POI single-winner property; off in every shipped build. */
+    public static final String POI_SINGLE_WINNER_PROPERTY = "arclight.prts.poiSingleWinner";
+    private static volatile TypedUpdate poiContext;
+
+    public static boolean poiEnabled() {
+        return Boolean.getBoolean(POI_SINGLE_WINNER_PROPERTY);
+    }
+
+    public static TypedUpdate poiContext() {
+        return poiContext;
+    }
+
+    public static void bindPoiContext(TypedUpdate update) {
+        poiContext = update;
+    }
+
+    public static void clearPoiContext() {
+        poiContext = null;
+    }
+
+    private static void bindPoiContext(net.minecraft.world.entity.Entity entity) {
+        try {
+            net.minecraft.server.level.ServerLevel level = (net.minecraft.server.level.ServerLevel)
+                entity.level();
+            String worldId = worldIdOf(level);
+            long incarnation = worldEpochOf(level);
+            // The server tick is the only logical ordinal available at this entry; the lifecycle
+            // generation and the state revision are not readable here and stay unbound (-1), so the
+            // claim key never carries a made-up version.
+            bindPoiContext(typedUpdate(entity.getId(), currentTickIndex, worldId, incarnation,
+                -1L, -1L));
+        } catch (Throwable unavailable) {
+            poiContext = null;
+        }
+    }
+
     /**
      * The host entry of one row: it reads the frozen capability of the row once, decides right there,
      * counts the decision and returns it, so the platform binder cancels exactly the rows this entry
@@ -663,6 +699,9 @@ public final class EntityTickOwnership {
      * a row it cannot take runs its original tick on the host path, exactly once.
      */
     public static int onEntityTickPre(Entity entity) {
+        if (poiEnabled()) {
+            bindPoiContext(entity);
+        }
         if (!armed()) {
             return RUN_HOST_TICK;
         }
