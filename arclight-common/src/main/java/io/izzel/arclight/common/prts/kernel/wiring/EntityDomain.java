@@ -673,11 +673,12 @@ public final class EntityDomain implements KernelDomain {
         long generation = view.objectGeneration(row);
         long revision = view.expectedStateRevision(row) > 0L ? view.expectedStateRevision(row)
             : entity.tickCount;
-        LiveRowSnapshot snapshot = LiveRowSnapshot.full(identity, generation, revision,
+        LiveRowSnapshot snapshot = LiveRowSnapshot.captured(identity, generation, revision,
             LiveEntityAccess.posX(entity), LiveEntityAccess.posY(entity),
             LiveEntityAccess.posZ(entity), LiveEntityAccess.yaw(entity),
             LiveEntityAccess.pitch(entity), LiveEntityAccess.velX(entity),
-            LiveEntityAccess.velY(entity), LiveEntityAccess.velZ(entity));
+            LiveEntityAccess.velY(entity), LiveEntityAccess.velZ(entity),
+            LiveEntityAccess.readFields(entity));
         return StableReadSource.Capture.of(identity, generation, revision, snapshot);
     }
 

@@ -22,7 +22,13 @@ public record ReadPermit(EntityRowIdentity identity, long objectGeneration, long
         ROTATION,
         MOTION,
         AIR,
-        HEALTH
+        HEALTH,
+        LIFECYCLE,
+        MOB,
+        BRAIN,
+        GOAL,
+        SENSOR,
+        NAVIGATION
     }
 
     public ReadPermit {

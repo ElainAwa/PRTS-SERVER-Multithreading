@@ -10,6 +10,9 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.schedule.Activity;
 import org.bukkit.Bukkit;
 import org.bukkit.World;
 import org.bukkit.craftbukkit.v.CraftWorld;
@@ -60,6 +63,69 @@ public final class LiveEntityAccess {
         return new StateHasher.Slice(row.worldId(), row.regionId(), row.batchId(), row.entitySeq(),
             posX(entity), posY(entity), posZ(entity), yaw(entity), pitch(entity), velX(entity),
             velY(entity), velZ(entity), row.flags(), row.slotGeneration(), row.segmentRef());
+    }
+
+    /** Reads the extended scalar matrix once on the tick thread; no live object leaves this call. */
+    public static EntityRowFields readFields(Entity entity) {
+        boolean removed = entity.isRemoved();
+        boolean passenger = entity.isPassenger();
+        int tickCount = entity.tickCount;
+        java.util.Set<String> groups = new java.util.LinkedHashSet<>();
+        groups.add("LIFECYCLE");
+        double health = -1.0;
+        double maxHealth = -1.0;
+        int air = -1;
+        int maxAir = -1;
+        if (entity instanceof LivingEntity living) {
+            health = living.getHealth();
+            maxHealth = living.getMaxHealth();
+            air = living.getAirSupply();
+            maxAir = living.getMaxAirSupply();
+            groups.add("HEALTH");
+            groups.add("AIR");
+        }
+        boolean hasTarget = false;
+        boolean noAi = false;
+        int brainMask = -1;
+        int goalMask = -1;
+        int priorityMask = -1;
+        boolean navPath = false;
+        boolean navProgress = false;
+        double navValue = -1.0;
+        if (entity instanceof Mob mob) {
+            hasTarget = mob.getTarget() != null;
+            noAi = mob.isNoAi();
+            brainMask = 0;
+            brainMask |= mob.getBrain().isActive(Activity.CORE) ? 1 : 0;
+            brainMask |= mob.getBrain().isActive(Activity.IDLE) ? 2 : 0;
+            brainMask |= mob.getBrain().isActive(Activity.WORK) ? 4 : 0;
+            brainMask |= mob.getBrain().isActive(Activity.PLAY) ? 8 : 0;
+            brainMask |= mob.getBrain().isActive(Activity.REST) ? 16 : 0;
+            brainMask |= mob.getBrain().isActive(Activity.FIGHT) ? 32 : 0;
+            brainMask |= mob.getBrain().isActive(Activity.PANIC) ? 64 : 0;
+            goalMask = 0;
+            priorityMask = 0;
+            int running = 0;
+            for (net.minecraft.world.entity.ai.goal.WrappedGoal goal : mob.goalSelector
+                .getAvailableGoals()) {
+                int priority = goal.getPriority();
+                priorityMask |= 1 << Math.min(30, priority);
+                if (goal.isRunning()) {
+                    running++;
+                    goalMask |= 1 << Math.min(30, running);
+                }
+            }
+            navPath = mob.getNavigation().getPath() != null;
+            navProgress = mob.getNavigation().isInProgress();
+            navValue = navPath ? 1.0 : 0.0;
+            groups.add("MOB");
+            groups.add("BRAIN");
+            groups.add("GOAL");
+            groups.add("NAVIGATION");
+        }
+        return new EntityRowFields(removed, passenger, tickCount, health, maxHealth, air, maxAir,
+            hasTarget, noAi, brainMask, goalMask, priorityMask, -1, -1, navPath, navProgress,
+            navValue, groups);
     }
 
     /** This is the predicate of the takeover boundary: only a row the host itself already holds,
