@@ -119,6 +119,12 @@ public final class EntityDueCapture {
         return SHARED.take(serverTick);
     }
 
+    /** The window the kernel published for one tick; reading it neither publishes nor clears. */
+    public static Window published(long serverTick) {
+        SharedDueWindow shared = SHARED;
+        return shared == null ? null : shared.take(serverTick);
+    }
+
     /** The shared window cache of the current tick; test and evidence code only. */
     static SharedDueWindow sharedWindow() {
         return SHARED;

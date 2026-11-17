@@ -48,16 +48,18 @@ public final class ReferenceRunner {
                              String reason) {
     }
 
-    /** The whole three-reference report. */
+    /** The whole three-reference report, including the A differences and the policy verdict. */
     public record Report(ReferenceInput reference, List<Mode> executionOrder,
                          Map<Mode, ModeResult> results, boolean bCExact,
-                         List<String> differences, boolean fullThreeReferencePass,
+                         List<String> differences, List<String> aDifferences,
+                         List<String> disallowedDifferences, boolean fullThreeReferencePass,
                          String aStatus, String aReason, boolean restoreRefused) {
     }
 
     private final Entry nativeSerial;
     private final Entry ownerParallel;
     private final HostSerialReference hostSerial;
+    private final ReferenceDifferencePolicy policy;
 
     /** The runner over the two offline entries; the A host adapter starts absent. */
     public ReferenceRunner(Entry nativeSerial, Entry ownerParallel) {
@@ -67,9 +69,16 @@ public final class ReferenceRunner {
     /** The runner with an explicit real host-serial adapter path (still not live-authorised). */
     public ReferenceRunner(Entry nativeSerial, Entry ownerParallel,
                            HostSerialReference hostSerial) {
+        this(nativeSerial, ownerParallel, hostSerial, ReferenceDifferencePolicy.empty());
+    }
+
+    /** The runner with an explicit approved-difference policy for the A half. */
+    public ReferenceRunner(Entry nativeSerial, Entry ownerParallel,
+                           HostSerialReference hostSerial, ReferenceDifferencePolicy policy) {
         this.nativeSerial = Objects.requireNonNull(nativeSerial, "nativeSerial");
         this.ownerParallel = Objects.requireNonNull(ownerParallel, "ownerParallel");
         this.hostSerial = hostSerial;
+        this.policy = Objects.requireNonNull(policy, "policy");
     }
 
     /** The offline fixture runner: B uses the harness serial reference, C its owner-parallel run. */
@@ -111,6 +120,12 @@ public final class ReferenceRunner {
 
     /** Runs the three modes sequentially over one fixed input; a restore mismatch refuses first. */
     public Report runAll(ReferenceInput captured, ReferenceInput live, boolean hostAuthorized) {
+        return runAll(captured, live, hostAuthorized, policy);
+    }
+
+    /** Runs with the given policy; an A difference outside the approved range fails the full pass. */
+    public Report runAll(ReferenceInput captured, ReferenceInput live, boolean hostAuthorized,
+                         ReferenceDifferencePolicy activePolicy) {
         if (captured == null) {
             return refused("restore-failed:no-capture");
         }
@@ -147,9 +162,12 @@ public final class ReferenceRunner {
         boolean bCExact = differences.isEmpty();
         List<String> aDifferences = "PASS".equals(a.status())
             ? fieldDifferences(a.result(), b.result()) : List.of();
-        boolean full = "PASS".equals(a.status()) && bCExact && aDifferences.isEmpty();
+        List<String> disallowed = activePolicy == null ? aDifferences
+            : aDifferences.stream().filter(field -> !activePolicy.allows(field)).toList();
+        boolean full = "PASS".equals(a.status()) && bCExact && disallowed.isEmpty();
         return new Report(input, List.copyOf(order), Map.copyOf(results), bCExact,
-            List.copyOf(differences), full, a.status(), a.reason(), false);
+            List.copyOf(differences), List.copyOf(aDifferences), List.copyOf(disallowed), full,
+            a.status(), a.reason(), false);
     }
 
     /** The differences between two witnesses, by field name; an empty list is bit-exact. */
@@ -196,8 +214,8 @@ public final class ReferenceRunner {
     }
 
     private static Report refused(String failure) {
-        return new Report(null, List.of(), Map.of(), false, List.of(failure), false, "REFUSED",
-            failure, true);
+        return new Report(null, List.of(), Map.of(), false, List.of(failure), List.of(),
+            List.of(failure), false, "REFUSED", failure, true);
     }
 
     private static DualReferenceParityHarness.Input toHarness(ReferenceInput input) {

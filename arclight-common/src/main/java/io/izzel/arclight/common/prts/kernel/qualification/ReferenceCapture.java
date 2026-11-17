@@ -61,11 +61,14 @@ public final class ReferenceCapture {
     /** Captures the current due window when the capture and the kernel plan are available. */
     public static Result captureCurrent(long planTick, SharedStream stream,
                                         Map<Long, Long> initialState) {
-        EntityDueCapture.Window window = EntityDueCapture.take(planTick);
+        EntityDueCapture.Window window = EntityDueCapture.published(planTick);
         if (window == null) {
             return new Result(null, "unbound:due-window-not-armed-or-no-plan");
         }
-        String worldId = window.worlds().isEmpty() ? "" : window.worlds().get(0).worldId();
+        if (window.worlds().isEmpty()) {
+            return new Result(null, "unbound:no-arrival-rows");
+        }
+        String worldId = window.worlds().get(0).worldId();
         long incarnation = -1L;
         try {
             if (!worldId.isEmpty()) {
