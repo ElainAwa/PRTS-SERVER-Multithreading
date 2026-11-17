@@ -8,6 +8,7 @@ import io.izzel.arclight.common.bridge.core.server.network.ServerGamePacketListe
 import io.izzel.arclight.common.bridge.core.world.food.FoodDataBridge;
 import io.izzel.arclight.common.bridge.core.world.level.WorldBridge;
 import io.izzel.arclight.common.prts.kernel.domain.player.PlayerPickupWiring;
+import io.izzel.arclight.common.prts.kernel.domain.region.MultiWorldWiring;
 import io.izzel.arclight.common.bridge.core.world.damagesource.CombatTrackerBridge;
 import io.izzel.arclight.common.bridge.core.world.level.portal.DimensionTransitionBridge;
 import io.izzel.arclight.common.mixin.core.world.entity.player.PlayerMixin;
@@ -507,6 +508,11 @@ public abstract class ServerPlayerMixin extends PlayerMixin implements ServerPla
     private void arclight$fireChangeWorldEvent(DimensionTransition dimensionTransition, @Local(ordinal = 0) ServerLevel newLevel, @Local(ordinal = 1) ServerLevel oldLevel) {
         // PRTS session generation: the dimension change starts a new pickup generation.
         PlayerPickupWiring.advance(((ServerPlayer) (Object) this).getUUID().toString());
+        // PRTS multi-world witness: the entity-guard already made the admission decision.
+        if (oldLevel != null && newLevel != null) {
+            MultiWorldWiring.accept(oldLevel.dimension().location().toString(), 0L,
+                newLevel.dimension().location().toString());
+        }
         PlayerChangedWorldEvent changeEvent = new PlayerChangedWorldEvent(this.getBukkitEntity(), oldLevel.bridge$getWorld());
         Bukkit.getPluginManager().callEvent(changeEvent);
     }

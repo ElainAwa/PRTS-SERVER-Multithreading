@@ -13,7 +13,9 @@ import io.izzel.arclight.common.bridge.core.world.level.portal.DimensionTransiti
 import io.izzel.arclight.common.mod.server.BukkitRegistry;
 import io.izzel.arclight.common.mod.server.entity.ArclightSpawnReason;
 import io.izzel.arclight.common.mod.util.ArclightCaptures;
+import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.decision.AirHostDecision;
+import io.izzel.arclight.common.prts.kernel.domain.region.MultiWorldWiring;
 import io.izzel.arclight.mixin.Decorate;
 import io.izzel.arclight.mixin.DecorationOps;
 import net.minecraft.BlockUtil;
@@ -996,6 +998,17 @@ public abstract class EntityMixin implements InternalEntityBridge, EntityBridge,
 
     @Decorate(method = "changeDimension", inject = true, at = @At("HEAD"))
     private void arclight$changeDim(DimensionTransition dimensionTransition) throws Throwable {
+        // PRTS multi-world guard: only a registered target that is no longer ACTIVE is refused;
+        // an unknown target and the kernel-off path keep the vanilla transition unchanged.
+        if (KernelSettings.enabled() && this.level() instanceof ServerLevel sourceLevel
+            && dimensionTransition.newLevel() instanceof ServerLevel targetLevel) {
+            String sourceWorld = sourceLevel.dimension().location().toString();
+            String targetWorld = targetLevel.dimension().location().toString();
+            if (!MultiWorldWiring.accept(sourceWorld, 0L, targetWorld)) {
+                DecorationOps.cancel().invoke((Entity) null);
+                return;
+            }
+        }
         if (this.level() instanceof ServerLevel && !this.isRemoved()) {
             var toWorld = ((InjectLevelBridge) dimensionTransition.newLevel()).bridge$getWorldOrNull();
             // No Bukkit world can host the teleport event, so the original transition stays.

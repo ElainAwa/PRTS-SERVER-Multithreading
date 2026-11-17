@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel;
 
+import io.izzel.arclight.common.prts.kernel.domain.region.RegionTopologyWiring;
+import io.izzel.arclight.common.prts.kernel.domain.region.WorldUnloadWiring;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaPassthrough;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
@@ -2066,6 +2068,17 @@ public final class KernelModule {
         return new SystemOwnerSource(owners, versionSlots);
     }
 
+    /** The readout exit's region-topology sink; observe only calls it, it never gates a tick. */
+    public interface RegionTopologyFeed {
+        void observe(String worldId, long[] chunks);
+    }
+
+    private final RegionTopologyFeed regionTopologyFeed = RegionTopologyWiring::observe;
+
+    public RegionTopologyFeed regionTopologyFeed() {
+        return regionTopologyFeed;
+    }
+
     public WorldWriteGuard guard() {
         return guard;
     }
@@ -3269,6 +3282,11 @@ public final class KernelModule {
                 0L, 0, 0, false));
         }
         long dispatchStep = ++stopStepSequence;
+        CommitController settleController = commitController;
+        if (settleController != null) {
+            // The unload settles its own UNRECORDED tickets before the drain; publishing stays.
+            WorldUnloadWiring.settleUnrecorded(settleController.reservations(), named);
+        }
         intents.closeWorld(named);
         long flushStep = ++stopStepSequence;
         IntentQueue.DrainResult drained = intents.drainWorld(named, STOP_DRAIN_ITEMS,

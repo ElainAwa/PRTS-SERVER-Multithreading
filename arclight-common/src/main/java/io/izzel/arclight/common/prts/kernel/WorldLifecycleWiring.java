@@ -2,6 +2,7 @@
 package io.izzel.arclight.common.prts.kernel;
 
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
+import io.izzel.arclight.common.prts.kernel.domain.region.MultiWorldWiring;
 import io.izzel.arclight.common.prts.kernel.sites.WorldLifecycleOwner;
 import io.izzel.arclight.common.prts.kernel.sites.WorldLifecycleWriteTap;
 
@@ -18,6 +19,7 @@ public final class WorldLifecycleWiring {
 
     /** Called after the host inserted one level; the level id is the dimension location. */
     public static void onLevelLoaded(String worldId) {
+        MultiWorldWiring.onLevelLoaded(worldId);
         if (!KernelSettings.worldSetReadouts()) {
             return;
         }
@@ -41,6 +43,7 @@ public final class WorldLifecycleWiring {
     /** The server stopping entry: flush every world without recording an A04 session; the
      * owner-gated unload path counts the pending session once it accepts the unload. */
     public static void onServerStopping(List<String> worldIds) {
+        MultiWorldWiring.onServerStopping();
         KernelModule module = KernelModule.instance();
         if (worldIds == null) {
             return;
@@ -53,6 +56,7 @@ public final class WorldLifecycleWiring {
 
     /** Called before/after the host removed one level; the owner refuses an unload it did not hold. */
     public static void onLevelUnloaded(String worldId) {
+        MultiWorldWiring.onLevelUnloaded(worldId);
         if (!KernelSettings.worldSetReadouts()) {
             return;
         }

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.observe;
 
+
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ChunkHolder;
 import net.minecraft.server.level.ChunkMap;
@@ -135,6 +136,8 @@ public final class RegionIdentityObserver {
         List<WorldRow> rows = new ArrayList<>(observed.size());
         StringBuilder canonical = new StringBuilder();
         for (WorldChunks world : observed) {
+            io.izzel.arclight.common.prts.kernel.KernelModule.instance().regionTopologyFeed()
+                .observe(world.worldId(), world.chunks());
             Partition partition = partition(world.chunks());
             total += partition.count();
             worldsSeen += partition.chunks() > 0 ? 1 : 0;
