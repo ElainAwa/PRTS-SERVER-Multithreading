@@ -1,8 +1,13 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.rcon;
 
+import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
+import io.izzel.arclight.common.prts.kernel.domain.player.CommandExecutionContract;
+
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
+import java.util.List;
+import java.util.concurrent.atomic.LongAdder;
 
 /** A bounded hand-off for complete remote-console commands. The calling worker only holds the
  * immutable command and a future reply; the owner thread runs prepare, dispatch and response
@@ -67,6 +72,8 @@ public final class RconCommandDeferral {
         final int bytes;
         final long sequence;
         final long epoch;
+        CommandExecutionContract contract;
+        CommandExecutionContract.Ticket ticket;
         boolean started;
         boolean done;
         String response;
@@ -83,6 +90,12 @@ public final class RconCommandDeferral {
 
     private final ArrayDeque<Request> queue = new ArrayDeque<>();
     private final Object lock = new Object();
+    private static final LongAdder SUBMITTED = new LongAdder();
+    private static final LongAdder COMPLETED = new LongAdder();
+    private static final LongAdder FAILED_TICKETS = new LongAdder();
+    private static final LongAdder CANCELLED_TICKETS = new LongAdder();
+    private static final LongAdder TIMED_OUT_TICKETS = new LongAdder();
+
     private long nextSequence = 1L;
     private long epoch;
     private int queuedBytes;
@@ -116,6 +129,13 @@ public final class RconCommandDeferral {
                 throw new Rejected("deferral queue full");
             }
             request = new Request(command, unit, bytes, nextSequence++, epoch);
+            if (KernelSettings.enabled()) {
+                request.contract = new CommandExecutionContract();
+                request.ticket = request.contract.submitAsync(
+                    new CommandExecutionContract.Command("rcon:" + request.sequence, "rcon",
+                        List.of(command)));
+                SUBMITTED.increment();
+            }
             queue.addLast(request);
             queuedBytes += bytes;
         }
@@ -126,12 +146,14 @@ public final class RconCommandDeferral {
         synchronized (lock) {
             while (!request.done) {
                 if (shutdown && !request.started) {
+                    cancelTicket(request);
                     removeLocked(request);
                     throw new Rejected("deferral closed");
                 }
                 if (!request.started) {
                     long remaining = deadline - System.nanoTime();
                     if (remaining <= 0L) {
+                        timeOutTicket(request);
                         removeLocked(request);
                         throw new Rejected("deferral deadline");
                     }
@@ -192,6 +214,7 @@ public final class RconCommandDeferral {
                         // The original command failure is the one returned to the caller.
                     }
                 }
+                completeTicket(request, failure == null);
                 synchronized (lock) {
                     request.response = response;
                     request.failure = failure;
@@ -265,10 +288,68 @@ public final class RconCommandDeferral {
             }
             request.failure = new Rejected("deferral reset");
             request.done = true;
+            cancelTicket(request);
             queuedBytes -= request.bytes;
             iterator.remove();
         }
         lock.notifyAll();
+    }
+
+    /** Completes the per-command ticket with the real unit outcome; a no-op while the kernel is off. */
+    private static void completeTicket(Request request, boolean success) {
+        if (request.contract == null || request.ticket == null) {
+            return;
+        }
+        request.contract.complete(request.ticket, success);
+        if (success) {
+            COMPLETED.increment();
+        } else {
+            FAILED_TICKETS.increment();
+        }
+    }
+
+    private static void cancelTicket(Request request) {
+        if (request.contract == null || request.ticket == null) {
+            return;
+        }
+        request.contract.cancel(request.ticket);
+        CANCELLED_TICKETS.increment();
+    }
+
+    private static void timeOutTicket(Request request) {
+        if (request.contract == null || request.ticket == null) {
+            return;
+        }
+        request.contract.timedOut(request.ticket);
+        TIMED_OUT_TICKETS.increment();
+    }
+
+    static long submittedTickets() {
+        return SUBMITTED.sum();
+    }
+
+    static long completedTickets() {
+        return COMPLETED.sum();
+    }
+
+    static long failedTickets() {
+        return FAILED_TICKETS.sum();
+    }
+
+    static long cancelledTickets() {
+        return CANCELLED_TICKETS.sum();
+    }
+
+    static long timedOutTickets() {
+        return TIMED_OUT_TICKETS.sum();
+    }
+
+    static void resetTickets() {
+        SUBMITTED.reset();
+        COMPLETED.reset();
+        FAILED_TICKETS.reset();
+        CANCELLED_TICKETS.reset();
+        TIMED_OUT_TICKETS.reset();
     }
 
     private void removeLocked(Request request) {

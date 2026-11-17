@@ -7,6 +7,7 @@ import io.izzel.arclight.common.bridge.core.world.inventory.AbstractContainerMen
 import io.izzel.arclight.common.bridge.core.server.network.ServerGamePacketListenerImplBridge;
 import io.izzel.arclight.common.bridge.core.world.food.FoodDataBridge;
 import io.izzel.arclight.common.bridge.core.world.level.WorldBridge;
+import io.izzel.arclight.common.prts.kernel.domain.player.PlayerPickupWiring;
 import io.izzel.arclight.common.bridge.core.world.damagesource.CombatTrackerBridge;
 import io.izzel.arclight.common.bridge.core.world.level.portal.DimensionTransitionBridge;
 import io.izzel.arclight.common.mixin.core.world.entity.player.PlayerMixin;
@@ -504,6 +505,8 @@ public abstract class ServerPlayerMixin extends PlayerMixin implements ServerPla
     @Decorate(method = "changeDimension", inject = true, at = @At("RETURN"),
         slice = @Slice(from = @At(value = "INVOKE", ordinal = 1, target = "Lnet/minecraft/world/level/portal/DimensionTransition$PostDimensionTransition;onTransition(Lnet/minecraft/world/entity/Entity;)V")))
     private void arclight$fireChangeWorldEvent(DimensionTransition dimensionTransition, @Local(ordinal = 0) ServerLevel newLevel, @Local(ordinal = 1) ServerLevel oldLevel) {
+        // PRTS session generation: the dimension change starts a new pickup generation.
+        PlayerPickupWiring.advance(((ServerPlayer) (Object) this).getUUID().toString());
         PlayerChangedWorldEvent changeEvent = new PlayerChangedWorldEvent(this.getBukkitEntity(), oldLevel.bridge$getWorld());
         Bukkit.getPluginManager().callEvent(changeEvent);
     }

@@ -1,5 +1,8 @@
 package io.izzel.arclight.common.mixin.core.world.entity;
 
+import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
+import io.izzel.arclight.common.prts.kernel.domain.player.PlayerPickupConservation;
+import io.izzel.arclight.common.prts.kernel.domain.player.PlayerPickupWiring;
 import io.izzel.arclight.mixin.Decorate;
 import io.izzel.arclight.mixin.DecorationOps;
 import io.izzel.arclight.mixin.Local;
@@ -81,7 +84,21 @@ public abstract class ExperienceOrbMixin extends EntityMixin {
 
     @Decorate(method = "playerTouch", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/player/Player;giveExperiencePoints(I)V"))
     private void arclight$expChange(Player player, int amount) throws Throwable {
-        DecorationOps.callsite().invoke(player, CraftEventFactory.callPlayerExpChangeEvent(player, amount).getAmount());
+        int granted = CraftEventFactory.callPlayerExpChangeEvent(player, amount).getAmount();
+        // PRTS experience admission: the same session/duplicate rule; vanilla grants the XP once.
+        if (KernelSettings.enabled()) {
+            String playerKey = player.getUUID().toString();
+            long generation = PlayerPickupWiring.generation(playerKey);
+            PlayerPickupWiring.Admission admission = PlayerPickupWiring.admit(playerKey,
+                generation, PlayerPickupConservation.Kind.EXPERIENCE,
+                ((ExperienceOrb) (Object) this).getUUID() + ":xp:" + granted, Math.max(1, granted), true);
+            if (admission != PlayerPickupWiring.Admission.COMMITTED
+                && admission != PlayerPickupWiring.Admission.DISABLED) {
+                DecorationOps.cancel().invoke();
+                return;
+            }
+        }
+        DecorationOps.callsite().invoke(player, granted);
     }
 
     @Decorate(method = "playerTouch", at = @At(value = "FIELD", opcode = Opcodes.PUTFIELD, target = "Lnet/minecraft/world/entity/player/Player;takeXpDelay:I"))

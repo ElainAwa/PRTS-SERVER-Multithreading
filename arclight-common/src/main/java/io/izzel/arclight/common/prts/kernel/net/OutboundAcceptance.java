@@ -6,6 +6,7 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.EventLoop;
+import io.izzel.arclight.common.prts.kernel.domain.player.NetworkSendLedger;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.common.ClientboundKeepAlivePacket;
 
@@ -42,16 +43,19 @@ public final class OutboundAcceptance {
     private static volatile long epoch = 1L;
     private static volatile boolean deferDeferableWrites;
 
+    private final Object connection;
     private final Channel channel;
     private final EventLoop owner;
     private final ArrayDeque<Write> queue = new ArrayDeque<>();
     private boolean closed;
     private boolean draining;
 
-    private record Write(Packet<?> packet, boolean flush, ChannelPromise placeholder, long epoch) {
+    private record Write(Packet<?> packet, boolean flush, ChannelPromise placeholder, long epoch,
+                         NetworkSendLedger.MessageKey messageKey) {
     }
 
-    private OutboundAcceptance(Channel channel) {
+    private OutboundAcceptance(Object connection, Channel channel) {
+        this.connection = connection;
         this.channel = channel;
         this.owner = channel.eventLoop();
     }
@@ -82,11 +86,12 @@ public final class OutboundAcceptance {
     public static OutboundAcceptance of(Object connection, Channel channel) {
         synchronized (STATES) {
             if (DROPPING.contains(connection) || !channel.isActive()) {
-                OutboundAcceptance closed = new OutboundAcceptance(channel);
+                OutboundAcceptance closed = new OutboundAcceptance(connection, channel);
                 closed.close("inactive");
                 return closed;
             }
-            return STATES.computeIfAbsent(connection, ignored -> new OutboundAcceptance(channel));
+            return STATES.computeIfAbsent(connection,
+                ignored -> new OutboundAcceptance(connection, channel));
         }
     }
 
@@ -134,7 +139,8 @@ public final class OutboundAcceptance {
             receipt("REJECTED", packet, "queue-full");
             return Result.REJECT_NOT_ACCEPTED;
         }
-        queue.addLast(new Write(packet, flush, placeholder, epoch));
+        NetworkSendLedger.MessageKey messageKey = enabled() ? SendTrack.queue(connection) : null;
+        queue.addLast(new Write(packet, flush, placeholder, epoch, messageKey));
         if (!deferDeferableWrites) {
             drain();
         }
@@ -173,6 +179,9 @@ public final class OutboundAcceptance {
                     write.placeholder().tryFailure(new IllegalStateException("epoch-invalid"));
                     continue;
                 }
+                if (enabled() && write.messageKey() != null) {
+                    SendTrack.encoded(connection, write.messageKey());
+                }
                 ChannelFuture future = write.flush() ? channel.writeAndFlush(write.packet())
                     : channel.write(write.packet());
                 bridge(write, future);
@@ -185,8 +194,14 @@ public final class OutboundAcceptance {
     private void bridge(Write write, ChannelFuture future) {
         future.addListener((ChannelFutureListener) completed -> {
             if (completed.isSuccess()) {
+                if (enabled() && write.messageKey() != null) {
+                    SendTrack.flushed(connection, write.messageKey());
+                }
                 write.placeholder().trySuccess();
             } else {
+                if (enabled() && write.messageKey() != null) {
+                    SendTrack.cancel(connection, write.messageKey());
+                }
                 receipt("FAILED", write.packet(), "downstream");
                 write.placeholder().tryFailure(completed.cause());
             }
@@ -203,10 +218,68 @@ public final class OutboundAcceptance {
             return;
         }
         for (Write write : queue) {
+            if (enabled() && write.messageKey() != null) {
+                SendTrack.cancel(connection, write.messageKey());
+            }
             receipt("CLOSED", write.packet(), reason);
             write.placeholder().tryFailure(new IllegalStateException(reason));
         }
         queue.clear();
+        if (enabled()) {
+            SendTrack.drop(connection);
+        }
+    }
+
+    /** The per-connection three-layer send witness: queue -> encoded -> flushed, never acked. */
+    static final class SendTrack {
+
+        private static final Map<Object, SendTrack> TRACKS = new ConcurrentHashMap<>();
+
+        private final NetworkSendLedger ledger = new NetworkSendLedger();
+        private long sessionGeneration = 1L;
+
+        private static SendTrack of(Object connection) {
+            return TRACKS.computeIfAbsent(connection, ignored -> new SendTrack());
+        }
+
+        static NetworkSendLedger.MessageKey queue(Object connection) {
+            SendTrack track = of(connection);
+            NetworkSendLedger.MessageKey key = new NetworkSendLedger.MessageKey(
+                String.valueOf(connection), track.sessionGeneration, 0L, 0L);
+            track.ledger.queue(key);
+            return key;
+        }
+
+        static void encoded(Object connection, NetworkSendLedger.MessageKey key) {
+            of(connection).ledger.advance(key, NetworkSendLedger.Layer.ENCODED);
+        }
+
+        static void flushed(Object connection, NetworkSendLedger.MessageKey key) {
+            of(connection).ledger.advance(key, NetworkSendLedger.Layer.FLUSHED);
+        }
+
+        static void cancel(Object connection, NetworkSendLedger.MessageKey key) {
+            of(connection).ledger.cancel(key);
+        }
+
+        static void drop(Object connection) {
+            SendTrack track = TRACKS.get(connection);
+            if (track != null) {
+                track.sessionGeneration++;
+                track.ledger.invalidateSession(String.valueOf(connection),
+                    track.sessionGeneration);
+            }
+        }
+
+        static NetworkSendLedger.Layer layer(Object connection, NetworkSendLedger.MessageKey key) {
+            SendTrack track = TRACKS.get(connection);
+            return track == null ? null : track.ledger.layer(key);
+        }
+
+        static long completed(Object connection) {
+            SendTrack track = TRACKS.get(connection);
+            return track == null ? 0L : track.ledger.completed();
+        }
     }
 
     private static void receipt(String kind, Packet<?> packet, String reason) {

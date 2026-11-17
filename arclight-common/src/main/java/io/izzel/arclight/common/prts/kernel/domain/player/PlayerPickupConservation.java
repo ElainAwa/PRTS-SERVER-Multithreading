@@ -58,6 +58,31 @@ public final class PlayerPickupConservation {
         void apply(Kind kind, String key, long delta);
     }
 
+    /** The admission-only ledger: a huge source balance and a fixed target capacity, no write. */
+    public static final class MirrorLedger implements Ledger {
+
+        private final boolean canHold;
+
+        public MirrorLedger(boolean canHold) {
+            this.canHold = canHold;
+        }
+
+        @Override
+        public long balance(Kind kind, String key) {
+            return Long.MAX_VALUE / 2L;
+        }
+
+        @Override
+        public boolean canAccept(Kind kind, String key, long quantity) {
+            return canHold;
+        }
+
+        @Override
+        public void apply(Kind kind, String key, long delta) {
+            // An admission mirror never writes a world or inventory.
+        }
+    }
+
     /** What one pickup did. */
     public enum Result {
         COMMITTED,

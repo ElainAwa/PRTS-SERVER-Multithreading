@@ -1,5 +1,8 @@
 package io.izzel.arclight.common.mixin.core.world.entity.item;
 
+import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
+import io.izzel.arclight.common.prts.kernel.domain.player.PlayerPickupConservation;
+import io.izzel.arclight.common.prts.kernel.domain.player.PlayerPickupWiring;
 import io.izzel.arclight.common.bridge.core.world.entity.LivingEntityBridge;
 import io.izzel.arclight.common.bridge.core.world.entity.item.ItemEntityBridge;
 import io.izzel.arclight.common.bridge.core.world.entity.player.PlayerBridge;
@@ -91,6 +94,20 @@ public abstract class ItemEntityMixin extends EntityMixin implements ItemEntityB
             if (entityEvent.isCancelled()) {
                 itemstack.setCount(canHold + remaining);
                 return (int) DecorationOps.cancel().invoke();
+            }
+            // PRTS pickup admission: a stale or duplicate pickup is cancelled before vanilla writes;
+            // the host's own events and its single writer stay unchanged.
+            if (KernelSettings.enabled()) {
+                String playerKey = entity.getUUID().toString();
+                long generation = PlayerPickupWiring.generation(playerKey);
+                PlayerPickupWiring.Admission admission = PlayerPickupWiring.admit(playerKey,
+                    generation, PlayerPickupConservation.Kind.ITEM,
+                    ((ItemEntity) (Object) this).getUUID() + ":" + count, canHold, true);
+                if (admission != PlayerPickupWiring.Admission.COMMITTED
+                    && admission != PlayerPickupWiring.Admission.DISABLED) {
+                    itemstack.setCount(canHold + remaining);
+                    return (int) DecorationOps.cancel().invoke();
+                }
             }
             ItemStack current = this.getItem();
             if (!itemstack.equals(current)) {

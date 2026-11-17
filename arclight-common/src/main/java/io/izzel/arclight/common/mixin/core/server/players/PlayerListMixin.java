@@ -8,6 +8,7 @@ import io.izzel.arclight.common.bridge.core.network.ConnectionBridge;
 import io.izzel.arclight.common.bridge.core.network.syncher.SynchedEntityDataBridge;
 import io.izzel.arclight.common.bridge.core.server.network.ServerGamePacketListenerImplBridge;
 import io.izzel.arclight.common.bridge.core.server.players.PlayerListBridge;
+import io.izzel.arclight.common.prts.kernel.domain.player.PlayerPickupWiring;
 import io.izzel.arclight.common.bridge.core.world.level.WorldBridge;
 import io.izzel.arclight.common.mod.server.ArclightServer;
 import io.izzel.arclight.common.mod.server.world.border.ArclightBorderChangeListener;
@@ -485,6 +486,8 @@ public abstract class PlayerListMixin implements PlayerListBridge {
 
     @Inject(method = "remove", at = @At(value = "INVOKE", target = "Lnet/minecraft/server/level/ServerPlayer;stopRiding()V"))
     private void arclight$removeMount(ServerPlayer serverPlayer, CallbackInfo ci) {
+        // PRTS session generation: pickups of the previous session become stale at removal.
+        PlayerPickupWiring.advance(serverPlayer.getUUID().toString());
         serverPlayer.getRootVehicle().getPassengersAndSelf().forEach(entity ->
             ((EntityBridge) entity).bridge$pushEntityRemoveCause(EntityRemoveEvent.Cause.PLAYER_QUIT));
     }
