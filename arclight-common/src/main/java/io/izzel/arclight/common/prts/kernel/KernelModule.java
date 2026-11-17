@@ -257,6 +257,12 @@ public final class KernelModule {
     private final DiffProbe arms = new DiffProbe();
     private final PlanClockSeam planClock = new PlanClockSeam();
     private final List<KernelDomain> domains = new ArrayList<>();
+    /** Domains that execute but are not declared: a second owner site is driven and shut down, and
+     * its readings stay out of the module's domain declarations. */
+    private final List<KernelDomain> ownerDomains = new ArrayList<>();
+    private final io.izzel.arclight.common.prts.kernel.domain.entity.twoowner.OwnerTickClaim
+        ownerTickClaim = new io.izzel.arclight.common.prts.kernel.domain.entity.twoowner
+            .OwnerTickClaim();
     private final JobIntake jobIntake = new JobIntake(KernelSettings::jobQueueCap,
         SharedRuntime.shared().account());
     private final JobScheduler scheduler = new JobScheduler();
@@ -1898,8 +1904,29 @@ public final class KernelModule {
         return List.copyOf(domains);
     }
 
+    /** Installs one owner-site domain that only executes; the declared domain list is unchanged. */
+    public void installOwnerDomain(KernelDomain domain) {
+        if (!ownerDomains.contains(domain)) {
+            ownerDomains.add(domain);
+        }
+    }
+
+    /** The domains one tick drives: the declared domains first, then the owner-site domains. */
+    public List<KernelDomain> domainsToTick() {
+        List<KernelDomain> all = new ArrayList<>(domains.size() + ownerDomains.size());
+        all.addAll(domains);
+        all.addAll(ownerDomains);
+        return List.copyOf(all);
+    }
+
+    /** The shared per-tick claim both owner sites of this module ask before running a row. */
+    public io.izzel.arclight.common.prts.kernel.domain.entity.twoowner.OwnerTickClaim
+        ownerTickClaim() {
+        return ownerTickClaim;
+    }
+
     private void tickDomains() {
-        for (KernelDomain domain : domains) {
+        for (KernelDomain domain : domainsToTick()) {
             domain.tick(tickIndex);
         }
     }
@@ -1912,11 +1939,43 @@ public final class KernelModule {
 
     private void shutdownDomains() {
         AiHostInstall.stop();
-        for (KernelDomain domain : domains) {
+        for (KernelDomain domain : domainsToTick()) {
             domain.shutdown();
         }
+        noteOwnerSettlement();
         // The module owns the shared runtime and closes it after the domains released their passes.
         SharedRuntime.shared().close();
+    }
+
+    /** The stop settlement line of every owner site; only the dormant two-owner path writes one. */
+    private void noteOwnerSettlement() {
+        if (!io.izzel.arclight.common.prts.kernel.domain.entity.twoowner.TwoOwnerSetup.enabled()) {
+            return;
+        }
+        org.apache.logging.log4j.Logger log = org.apache.logging.log4j.LogManager.getLogger("PRTS");
+        io.izzel.arclight.common.prts.kernel.arena.ArenaLedger arena =
+            ownerContext().arena();
+        io.izzel.arclight.common.prts.kernel.jobs.WorkAccount.Snapshot account =
+            SharedRuntime.shared().account().snapshot();
+        long accountsOpen = Math.max(0L, account.offered() - account.closed());
+        long accountsClosed = account.closed();
+        io.izzel.arclight.common.prts.kernel.intent.IntentQueue intents = intents();
+        java.util.Map<String, Long> rowsDone = new java.util.HashMap<>();
+        for (KernelDomain domain : domainsToTick()) {
+            if (domain instanceof io.izzel.arclight.common.prts.kernel.wiring.EntityDomain entity) {
+                rowsDone.merge(entity.ownerSite().siteId(), entity.rowsDoneTotal(),
+                    (left, right) -> right >= 0L ? right : left);
+            }
+        }
+        for (io.izzel.arclight.common.prts.kernel.domain.entity.OwnerSite site
+            : ownerContext().sites()) {
+            log.info(io.izzel.arclight.common.prts.kernel.domain.entity.twoowner
+                .TwoOwnerEvidence.settlementLine(site.siteId(), arena.pinnedCount(),
+                    arena.releases(), arena.claims(), accountsOpen, accountsClosed,
+                    intents.executedCount(), intents.rejectedFullCount(),
+                    intents.faultUnknownCount(),
+                    rowsDone.getOrDefault(site.siteId(), -1L)));
+        }
     }
 
     public MeterWindow window() {

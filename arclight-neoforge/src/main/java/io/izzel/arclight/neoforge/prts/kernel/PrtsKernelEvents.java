@@ -36,7 +36,7 @@ public final class PrtsKernelEvents {
     /** Binds the kernel domains, installs the configuration reload hooks and synchronizes the
      * platform subscription once. */
     public static synchronized void register() {
-        KernelWiring.install();
+        KernelWiring.installTwoOwners();
         PrtsEntityOwnershipEvents.registerIfDeclared();
         if (!reloadHookInstalled) {
             PrtsConfigManager.addReloadListener(PrtsKernelEvents::syncSubscription);

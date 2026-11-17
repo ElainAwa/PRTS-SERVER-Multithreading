@@ -28,6 +28,12 @@ public interface KernelDomain {
     /** Contributes the observation fields of this domain. */
     void readings(DomainReadings readings);
 
-    /** Runs the self checks of this domain; returns their lines and records their failures. */
+    /** Runs the self checks of this domain; returns its lines and records their failures. */
     List<String> selfCheck(List<String> failures, long tick);
+
+    /** Rows this domain has settled over the process, or a negative value when it does not track
+     * one; the settlement evidence reports N/A for a negative value. */
+    default long rowsDoneTotal() {
+        return -1L;
+    }
 }

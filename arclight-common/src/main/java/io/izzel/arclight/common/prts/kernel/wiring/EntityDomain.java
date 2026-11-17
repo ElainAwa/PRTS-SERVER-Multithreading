@@ -32,6 +32,10 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.EntityDueWindow;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkBody;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityObjectGenerations;
+import io.izzel.arclight.common.prts.kernel.domain.entity.OwnerSite;
+import io.izzel.arclight.common.prts.kernel.domain.entity.twoowner.OwnerPartition;
+import io.izzel.arclight.common.prts.kernel.domain.entity.twoowner.TwoOwnerEvidence;
+import io.izzel.arclight.common.prts.kernel.domain.entity.twoowner.TwoOwnerSetup;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityRowIdentity;
 import io.izzel.arclight.common.prts.kernel.domain.entity.LiveEntityAccess;
 import io.izzel.arclight.common.prts.kernel.domain.entity.program.EntityProgramBody;
@@ -120,6 +124,14 @@ public final class EntityDomain implements KernelDomain {
     /** The dormant host-skip plan of the last dispatch: listed only, nothing in this build consumes
      * it as a skip decision. Off, it stays the empty plan. */
     private HostSkipPlan.Plan hostSkipPlan = HostSkipPlan.dormant();
+    /** Rows of the pass handed out by this domain; booked as settled only when its merge lands. */
+    private long pendingRows;
+    /** Rows this domain settled since its last evidence line. */
+    private long twoOwnerDoneSinceLine;
+    /** Rows this domain settled over the process; negative until a merge landed. */
+    private long twoOwnerRowsDoneTotal = -1L;
+    /** Rows this domain handed to a pass over the process, before the merge settles them. */
+    private long twoOwnerOfferedTotal;
     private static final boolean HOST_SKIP = Boolean.getBoolean(HostSkipPlan.PROPERTY);
 
     public EntityDomain(KernelModule module) {
@@ -291,7 +303,9 @@ public final class EntityDomain implements KernelDomain {
         // The due window of this server tick was frozen by the level ticks that just ran; it is
         // taken before any early return, so a tick this domain does not dispatch leaves no window
         // behind for the next one.
-        EntityDueCapture.Window dueWindow = EntityDueCapture.take();
+        EntityDueCapture.Window dueWindow = EntityDueCapture.take(tick);
+        // Which work source this tick reached: the shared same-tick due window, or the legacy scan.
+        String dueSource = dueWindow != null ? "due" : "legacy";
         // The migrated face books what the host entry closed since the last adoption; it is read
         // here and nowhere else, so nothing this domain decides can depend on it.
         if (FRAME_MIGRATION) {
@@ -390,7 +404,12 @@ public final class EntityDomain implements KernelDomain {
             lastFrame = merge.merge(pending, deadline, mergeArena, readings, probe, module.arms(),
                 HashWhitelist.bitexact(),
                 ID, writeBack);
+            if (lastFrame != null) {
+                twoOwnerRowsDoneTotal = Math.max(0L, twoOwnerRowsDoneTotal) + pendingRows;
+                twoOwnerDoneSinceLine += pendingRows;
+            }
             pending = null;
+            pendingRows = 0L;
             flushLandedEntityBatches();
             if (lastFrame == null) {
                 lastFrame = MergeSegment.Frame.empty();
@@ -482,11 +501,45 @@ public final class EntityDomain implements KernelDomain {
             jobAdapter.meter(RUNTIME_WORLD, System.nanoTime() - jobStartedAt);
         }
         if (!plan.empty()) {
+            long conflictSkipped = 0L;
+            if (TwoOwnerSetup.enabled() && module.domainsToTick().size() > 1) {
+                List<OwnerSite> sites = TwoOwnerSetup.sites(module.ownerContext());
+                int siteIndex = siteIndexOf(sites);
+                module.ownerTickClaim().retainTick(tick);
+                if (OwnerPartition.enabled()) {
+                    orderedTasks = OwnerPartition.assign(orderedTasks, siteIndex, sites.size());
+                } else {
+                    List<WorkPlan.WorkTask> kept = new ArrayList<>(orderedTasks.size());
+                    for (WorkPlan.WorkTask task : orderedTasks) {
+                        long conflicts = claimTask(tick, sites.get(siteIndex).siteId(), task);
+                        if (conflicts == 0L) {
+                            kept.add(task);
+                        } else {
+                            conflictSkipped += conflicts;
+                        }
+                    }
+                    orderedTasks = List.copyOf(kept);
+                }
+                if (orderedTasks.isEmpty()) {
+                    EVIDENCE.info(TwoOwnerEvidence.tickLine(tick, sites.get(siteIndex).siteId(),
+                        plan.taskCount(), 0L, 0L, -1L, -1L, arena.pinnedCount(),
+                        planRows(plan), twoOwnerDoneSinceLine, conflictSkipped, dueSource,
+                        twoOwnerOfferedTotal, twoOwnerRowsDoneTotal));
+                    twoOwnerDoneSinceLine = 0L;
+                    return;
+                }
+            }
             if (HOST_SKIP) {
                 // Dormant evidence wiring: the plan lists the rows the owner intends to run; no
                 // host entry consumes the list yet, so the host behaviour is unchanged.
                 hostSkipPlan = HostSkipPlan.of(claimedRows(plan));
             }
+            long dispatchedRows = 0L;
+            for (WorkPlan.WorkTask task : orderedTasks) {
+                dispatchedRows += task.entityCount();
+            }
+            pendingRows = dispatchedRows;
+            twoOwnerOfferedTotal += dispatchedRows;
             if (KernelSettings.jobGraph()) {
                 // The private pool of a previous legacy tick is closed first, so one life never
                 // runs two pools.
@@ -529,7 +582,58 @@ public final class EntityDomain implements KernelDomain {
             // plan is the one that seats this pass, so its sequence is this module's next one.
             pendingSeatPlanSequence = module.planSequence() + 1L;
             pendingSeatLifecycle = module.plans().lifecycle();
+            if (TwoOwnerSetup.enabled() && tick % 20L == 0L) {
+                long rows = 0L;
+                for (WorkPlan.WorkTask task : orderedTasks) {
+                    rows += task.entityCount();
+                }
+                EVIDENCE.info(TwoOwnerEvidence.tickLine(tick, ownerSite.siteId(),
+                    plan.taskCount(), rows, orderedTasks.size(), -1L, -1L,
+                    arena.pinnedCount(), planRows(plan), twoOwnerDoneSinceLine, conflictSkipped,
+                    dueSource, twoOwnerOfferedTotal, twoOwnerRowsDoneTotal));
+                twoOwnerDoneSinceLine = 0L;
+            }
         }
+    }
+
+    /** The rows of the complete frozen plan, before any partition and before any refusal. */
+    private static long planRows(WorkPlan plan) {
+        long rows = 0L;
+        for (WorkPlan.WorkTask task : plan.tasks()) {
+            rows += task.entityCount();
+        }
+        return rows;
+    }
+
+    /** The owner site this domain executes as. */
+    public OwnerSite ownerSite() {
+        return ownerSite;
+    }
+
+    @Override
+    public long rowsDoneTotal() {
+        return twoOwnerRowsDoneTotal;
+    }
+
+    /** The index of this domain's owner site inside the two-owner site list. */
+    private int siteIndexOf(List<OwnerSite> sites) {
+        for (int index = 0; index < sites.size(); index++) {
+            if (sites.get(index).siteId().equals(ownerSite.siteId())) {
+                return index;
+            }
+        }
+        return 0;
+    }
+
+    /** Claims every row of one task for this site; the number of rows another site already owns. */
+    private long claimTask(long tick, String siteId, WorkPlan.WorkTask task) {
+        long conflicts = 0L;
+        for (int entitySeq = task.entitySeqStart(); entitySeq < task.entitySeqEnd(); entitySeq++) {
+            if (!module.ownerTickClaim().claim(tick, siteId, task.worldId(), entitySeq)) {
+                conflicts++;
+            }
+        }
+        return conflicts;
     }
 
     /** The body the dispatch of this build runs: the compute-only program body when the dormant

@@ -45,9 +45,16 @@ public final class KernelWiring {
             return java.util.List.of(install(sites.get(0)));
         }
         java.util.List<EntityDomain> domains = new java.util.ArrayList<>(sites.size());
-        for (io.izzel.arclight.common.prts.kernel.domain.entity.OwnerSite site : sites) {
+        for (int index = 0; index < sites.size(); index++) {
+            io.izzel.arclight.common.prts.kernel.domain.entity.OwnerSite site = sites.get(index);
             EntityDomain domain = new EntityDomain(module, site);
-            module.installDomain(domain);
+            if (index == 0) {
+                // The primary domain keeps the declared identity, readings and plan declarations.
+                module.installDomain(domain);
+            } else {
+                // A further owner site only executes; it never joins the declared domain list.
+                module.installOwnerDomain(domain);
+            }
             domains.add(domain);
         }
         return java.util.List.copyOf(domains);

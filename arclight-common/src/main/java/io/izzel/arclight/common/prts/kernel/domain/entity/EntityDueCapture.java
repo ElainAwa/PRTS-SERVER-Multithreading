@@ -24,6 +24,7 @@ public final class EntityDueCapture {
         }
     }
 
+    private static final SharedDueWindow SHARED = new SharedDueWindow();
     private static long windowTick = Long.MIN_VALUE;
     private static final List<EntityDueWindow.World> WORLDS = new ArrayList<>();
     private static List<EntityDueWindow.Row> rows;
@@ -52,6 +53,7 @@ public final class EntityDueCapture {
             windowTick = serverTick;
             failed = false;
             captured = false;
+            SHARED.begin(serverTick);
         }
         worldId = levelId;
         loaded = loadedTotal;
@@ -108,19 +110,17 @@ public final class EntityDueCapture {
      * @return the window, or null when the source is not declared, nothing was captured, or a
      * freeze failed and the legacy path must run
      */
-    public static Window take() {
-        Window window;
-        if (!armed() || failed || !captured) {
-            window = null;
-        } else {
-            window = new Window(windowTick, WORLDS);
+    public static Window take(long serverTick) {
+        if (!armed() || failed || !captured || windowTick != serverTick || WORLDS.isEmpty()) {
+            return null;
         }
-        WORLDS.clear();
-        rows = null;
-        captured = false;
-        failed = false;
-        windowTick = Long.MIN_VALUE;
-        return window;
+        // All levels of the tick have ended before the post-tick take; publish the complete window.
+        SHARED.publish(new Window(windowTick, WORLDS));
+        return SHARED.take(serverTick);
     }
 
+    /** The shared window cache of the current tick; test and evidence code only. */
+    static SharedDueWindow sharedWindow() {
+        return SHARED;
+    }
 }
