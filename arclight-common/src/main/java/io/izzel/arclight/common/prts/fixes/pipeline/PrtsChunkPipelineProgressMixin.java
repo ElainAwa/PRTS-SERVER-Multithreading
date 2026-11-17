@@ -37,7 +37,8 @@ public abstract class PrtsChunkPipelineProgressMixin {
 
     @Inject(method = "applyStep", at = @At("HEAD"), require = 1)
     private void prts$observeStageIdentity(GenerationChunkHolder holder, ChunkStep step,
-            StaticCache2D<GenerationChunkHolder> cache, CallbackInfo ci) {
+            StaticCache2D<GenerationChunkHolder> cache,
+            CallbackInfoReturnable<CompletableFuture<ChunkAccess>> cir) {
         if (!ChunkPipelineProgress.installed()) {
             return;
         }
