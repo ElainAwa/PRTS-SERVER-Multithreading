@@ -32,4 +32,18 @@ public interface PaperWorldChunkApiMixin {
             : null;
         return PaperChunkLoads.withoutGenerating(alreadyLoaded, existing);
     }
+
+    default CompletableFuture<Chunk> getChunkAtAsync(int x, int z, boolean generate) {
+        if (!(this instanceof CraftWorld world)) {
+            return CompletableFuture.completedFuture(null);
+        }
+        ServerLevel level = world.getHandle();
+        ServerChunkCache cache = level.getChunkSource();
+        LevelChunk loaded = cache.getChunkNow(x, z);
+        Chunk alreadyLoaded = loaded == null ? null : ((LevelChunkBridge) loaded).bridge$getBukkitChunk();
+        CompletableFuture<ChunkResult<ChunkAccess>> existing = loaded == null
+            ? cache.getChunkFuture(x, z, ChunkStatus.FULL, PaperChunkLoads.generationFlag(generate))
+            : null;
+        return PaperChunkLoads.withoutGenerating(alreadyLoaded, existing);
+    }
 }
