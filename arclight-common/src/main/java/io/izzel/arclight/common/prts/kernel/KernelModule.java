@@ -1967,7 +1967,7 @@ public final class KernelModule {
         }
         org.apache.logging.log4j.Logger log = org.apache.logging.log4j.LogManager.getLogger("PRTS");
         io.izzel.arclight.common.prts.kernel.arena.ArenaLedger arena =
-            ownerContext().arena();
+            SharedRuntime.shared().arena();
         io.izzel.arclight.common.prts.kernel.jobs.WorkAccount.Snapshot account =
             SharedRuntime.shared().account().snapshot();
         long accountsOpen = Math.max(0L, account.offered() - account.closed());

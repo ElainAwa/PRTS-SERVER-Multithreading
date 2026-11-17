@@ -9,9 +9,11 @@ import java.util.Objects;
 
 /**
  * The dormant owner partition: with its internal property set, the tasks of one frozen plan are
- * split between the owner sites by a stable hash of the task world and region, so the union of the
- * sites is the whole plan, their intersection is empty and every site sees the plan order. With the
- * property off every task keeps site zero and the single owner runs the whole plan unchanged.
+ * dealt to the owner sites by their seat in the frozen order, so the union of the sites is the
+ * whole plan, their intersection is empty and every site sees the plan order. Dealing by seat
+ * keeps the split even for the neighbouring region names of one spawn area, which a hash of the
+ * region name can put on one side. With the property off every task keeps site zero and the single
+ * owner runs the whole plan unchanged.
  */
 public final class OwnerPartition {
 
@@ -26,15 +28,6 @@ public final class OwnerPartition {
         return Boolean.getBoolean(PROPERTY);
     }
 
-    /** The stable site index of one task: the hash of its world and region, never the list index. */
-    public static int siteIndexOf(WorkTask task, int siteCount) {
-        Objects.requireNonNull(task, "task");
-        if (siteCount <= 0) {
-            throw new IllegalArgumentException("a partition needs at least one site");
-        }
-        return Math.floorMod(hash(task.worldId(), task.regionId()), siteCount);
-    }
-
     /** The tasks one site runs, in the frozen plan order; off means the whole plan on site zero. */
     public static List<WorkTask> assign(List<WorkTask> tasks, int siteIndex, int siteCount) {
         Objects.requireNonNull(tasks, "tasks");
@@ -45,29 +38,11 @@ public final class OwnerPartition {
             return siteIndex == 0 ? List.copyOf(tasks) : List.of();
         }
         List<WorkTask> assigned = new ArrayList<>(tasks.size());
-        for (WorkTask task : tasks) {
-            if (siteIndexOf(task, siteCount) == siteIndex) {
-                assigned.add(task);
+        for (int seat = 0; seat < tasks.size(); seat++) {
+            if (Math.floorMod(seat, siteCount) == siteIndex) {
+                assigned.add(tasks.get(seat));
             }
         }
         return List.copyOf(assigned);
-    }
-
-    private static int hash(String worldId, String regionId) {
-        int hash = 0x811c9dc5;
-        hash = mix(hash, worldId);
-        hash = mix(hash, regionId);
-        return hash;
-    }
-
-    private static int mix(int hash, String value) {
-        if (value == null) {
-            return hash;
-        }
-        for (int index = 0; index < value.length(); index++) {
-            hash = (hash ^ value.charAt(index)) * 0x01000193;
-        }
-        hash = (hash ^ 0x7C) * 0x01000193;
-        return hash;
     }
 }
