@@ -33,7 +33,11 @@ public final class ChunkRequestWiring {
     }
 
     private static final ChunkSubscriberLedger LEDGER = new ChunkSubscriberLedger();
-    private static final Map<Long, ChunkCompletionState> COMPLETIONS = new ConcurrentHashMap<>();
+    private record CompletionKey(String worldId, long chunkPos) {
+    }
+
+    private static final Map<CompletionKey, ChunkCompletionState> COMPLETIONS =
+        new ConcurrentHashMap<>();
     private static final java.util.LinkedHashMap<Long, PendingRequest> TOKENS =
         new java.util.LinkedHashMap<>();
     private static final ThreadLocal<PendingRequest> SYNC = new ThreadLocal<>();
@@ -50,15 +54,16 @@ public final class ChunkRequestWiring {
         return LEDGER;
     }
 
-    /** The completion state of one chunk; the completed-state map keeps the bounded LRU. */
-    public static ChunkCompletionState completion(long chunkPos) {
+    /** The completion state of one chunk of one world; the map keeps the bounded LRU. */
+    public static ChunkCompletionState completion(String worldId, long chunkPos) {
+        CompletionKey key = new CompletionKey(worldId == null ? "" : worldId, chunkPos);
         synchronized (COMPLETIONS) {
-            ChunkCompletionState existing = COMPLETIONS.get(chunkPos);
+            ChunkCompletionState existing = COMPLETIONS.get(key);
             if (existing != null) {
                 return existing;
             }
             if (COMPLETIONS.size() >= COMPLETION_CAP) {
-                java.util.Iterator<Long> eldest = COMPLETIONS.keySet().iterator();
+                java.util.Iterator<CompletionKey> eldest = COMPLETIONS.keySet().iterator();
                 if (eldest.hasNext()) {
                     eldest.next();
                     eldest.remove();
@@ -66,9 +71,14 @@ public final class ChunkRequestWiring {
                 }
             }
             ChunkCompletionState created = new ChunkCompletionState();
-            COMPLETIONS.put(chunkPos, created);
+            COMPLETIONS.put(key, created);
             return created;
         }
+    }
+
+    /** The completion state of one chunk without a world key; kept for existing local tests. */
+    public static ChunkCompletionState completion(long chunkPos) {
+        return completion("", chunkPos);
     }
 
     /** One future-returning demand: registers its subscriber identity under its call token. */
@@ -147,13 +157,25 @@ public final class ChunkRequestWiring {
 
     /** One materialized chunk advances only the layers the materialization really reports. */
     public static void materialized(String worldId, long chunkPos, String status) {
-        ChunkCompletionState state = completion(chunkPos);
+        ChunkCompletionState state = completion(worldId, chunkPos);
         state.mark(HOLDER_GEN_UNAVAILABLE, ChunkCompletionLayer.LOADED);
         if (PrtsChunkMaterialization.STATUS_FULL.equals(status)) {
             state.mark(HOLDER_GEN_UNAVAILABLE, ChunkCompletionLayer.TARGET_STATUS_READY);
         }
         // The other six layers have no production signal here; they stay NOT_OBSERVED.
         complete(worldId, chunkPos, status);
+    }
+
+    /** Marks the chunk's send-ready layer from the host's own ready notification. */
+    public static void sendReady(String worldId, long chunkPos) {
+        completion(worldId, chunkPos).mark(HOLDER_GEN_UNAVAILABLE,
+            ChunkCompletionLayer.SEND_READY);
+    }
+
+    /** Marks the chunk's queued layer from the host's pending-to-send notification. */
+    public static void queued(String worldId, long chunkPos) {
+        completion(worldId, chunkPos).mark(HOLDER_GEN_UNAVAILABLE,
+            ChunkCompletionLayer.QUEUED);
     }
 
     /** Drops every registration and completion state; test and evidence code only. */

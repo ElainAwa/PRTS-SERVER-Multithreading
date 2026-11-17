@@ -167,6 +167,67 @@ public final class ChunkStageDag {
         return staleGenerations;
     }
 
+    /** The observation-only admission face: it counts accepted and refused stage identities and
+     * answers whether the stage would be ready, without gating or cancelling any host step. */
+    public static final class Observation {
+
+        private static final ChunkStageDag DAG = new ChunkStageDag(1);
+        private static long admitted;
+        private static long refused;
+        private static long unmapped;
+
+        public static synchronized boolean observe(long worldIncarnation, long chunkPos,
+                                                   String statusName) {
+            Stage stage = stageOf(statusName);
+            if (stage == null) {
+                unmapped++;
+                return false;
+            }
+            Admission admission = DAG.admit(new Key(worldIncarnation, HOLDER_GEN_UNAVAILABLE,
+                chunkPos, stage, 0L));
+            if (admission.ready()) {
+                admitted++;
+                return true;
+            }
+            refused++;
+            return false;
+        }
+
+        public static synchronized long admitted() {
+            return admitted;
+        }
+
+        public static synchronized long refused() {
+            return refused;
+        }
+
+        public static synchronized long unmapped() {
+            return unmapped;
+        }
+
+        public static synchronized void reset() {
+            DAG.reset();
+            admitted = 0L;
+            refused = 0L;
+            unmapped = 0L;
+        }
+
+        private static Stage stageOf(String statusName) {
+            if (statusName == null) {
+                return null;
+            }
+            for (Stage stage : Stage.values()) {
+                if (stage.name().equalsIgnoreCase(statusName)) {
+                    return stage;
+                }
+            }
+            return null;
+        }
+    }
+
+    /** The holder generation no production signal can name; the explicit unavailable value. */
+    public static final long HOLDER_GEN_UNAVAILABLE = 0L;
+
     /** Drops every ready stage and revision; test and evidence code only. */
     public synchronized void reset() {
         ready.clear();

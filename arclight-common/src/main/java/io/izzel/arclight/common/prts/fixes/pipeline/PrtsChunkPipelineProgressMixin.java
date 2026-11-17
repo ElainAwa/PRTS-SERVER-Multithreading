@@ -4,6 +4,7 @@ package io.izzel.arclight.common.prts.fixes.pipeline;
 
 import io.izzel.arclight.api.ArclightPlatform;
 import io.izzel.arclight.common.mod.mixins.annotation.OnlyInPlatform;
+import io.izzel.arclight.common.prts.kernel.domain.chunk.stage.ChunkStageDag;
 import io.izzel.arclight.common.prts.kernel.observe.ChunkPipelineProgress;
 import net.minecraft.server.level.ChunkMap;
 import net.minecraft.server.level.GenerationChunkHolder;
@@ -17,6 +18,7 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.concurrent.CompletableFuture;
@@ -32,6 +34,22 @@ public abstract class PrtsChunkPipelineProgressMixin {
     @Shadow
     @Final
     public ServerLevel level;
+
+    @Inject(method = "applyStep", at = @At("HEAD"), require = 1)
+    private void prts$observeStageIdentity(GenerationChunkHolder holder, ChunkStep step,
+            StaticCache2D<GenerationChunkHolder> cache, CallbackInfo ci) {
+        if (!ChunkPipelineProgress.installed()) {
+            return;
+        }
+        try {
+            String worldId = this.level.dimension().location().toString();
+            long incarnation = Math.max(0L, ChunkPipelineProgress.epochOf(worldId));
+            ChunkStageDag.Observation.observe(incarnation, holder.getPos().toLong(),
+                step.targetStatus().getName());
+        } catch (Throwable ignored) {
+            // observation only: the host step keeps its own future, order and result
+        }
+    }
 
     @Inject(method = "applyStep", at = @At("RETURN"), require = 1)
     private void prts$observeStep(GenerationChunkHolder holder, ChunkStep step,

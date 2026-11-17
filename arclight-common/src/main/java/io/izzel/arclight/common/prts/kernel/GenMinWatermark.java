@@ -34,6 +34,7 @@ final class GenMinWatermark {
         }
         Map<String, Long> current = new LinkedHashMap<>();
         long minimum = Long.MAX_VALUE;
+        long lightMinimum = Long.MAX_VALUE;
         for (ChunkPipelineProgress.WorldReading reading : readings) {
             if (reading == null || reading.worldId() == null || reading.worldId().isBlank()) {
                 continue;
@@ -43,6 +44,12 @@ final class GenMinWatermark {
             }
             current.put(reading.worldId(), reading.epoch());
             minimum = Math.min(minimum, Math.max(0L, reading.genSteps()));
+            if (reading.lightSteps() > 0L) {
+                lightMinimum = Math.min(lightMinimum, reading.lightSteps());
+            }
+        }
+        if (lightMinimum != Long.MAX_VALUE) {
+            minimum = Math.min(minimum, lightMinimum);
         }
         if (current.isEmpty() || minimum == Long.MAX_VALUE) {
             clear(progress);

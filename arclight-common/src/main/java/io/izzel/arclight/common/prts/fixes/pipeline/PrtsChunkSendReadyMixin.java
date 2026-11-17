@@ -4,6 +4,7 @@ package io.izzel.arclight.common.prts.fixes.pipeline;
 
 import io.izzel.arclight.api.ArclightPlatform;
 import io.izzel.arclight.common.mod.mixins.annotation.OnlyInPlatform;
+import io.izzel.arclight.common.prts.kernel.domain.chunk.ChunkRequestWiring;
 import io.izzel.arclight.common.prts.kernel.observe.ChunkPipelineProgress;
 import net.minecraft.server.level.ChunkMap;
 import net.minecraft.server.level.ServerLevel;
@@ -34,8 +35,23 @@ public abstract class PrtsChunkSendReadyMixin {
             String worldId = this.level.dimension().location().toString();
             long epoch = ChunkPipelineProgress.epochOf(worldId);
             ChunkPipelineProgress.noteSend(worldId, epoch, chunk.getPos().toLong());
+            ChunkRequestWiring.sendReady(worldId, chunk.getPos().toLong());
         } catch (Throwable ignored) {
             // observation must not disturb the host's send-ready notification
+        }
+    }
+
+    @Inject(method = "markChunkPendingToSend(Lnet/minecraft/world/level/chunk/LevelChunk;)V",
+        at = @At("HEAD"), require = 1)
+    private void prts$observeQueued(LevelChunk chunk, CallbackInfo ci) {
+        if (!ChunkPipelineProgress.installed()) {
+            return;
+        }
+        try {
+            String worldId = this.level.dimension().location().toString();
+            ChunkRequestWiring.queued(worldId, chunk.getPos().toLong());
+        } catch (Throwable ignored) {
+            // observation must not disturb the host's queued notification
         }
     }
 }
