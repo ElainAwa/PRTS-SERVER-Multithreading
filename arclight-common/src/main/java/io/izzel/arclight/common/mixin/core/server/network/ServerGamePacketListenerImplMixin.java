@@ -10,6 +10,7 @@ import io.izzel.arclight.common.bridge.core.server.MinecraftServerBridge;
 import io.izzel.arclight.common.bridge.core.server.level.ServerPlayerGameModeBridge;
 import io.izzel.arclight.common.bridge.core.server.players.PlayerListBridge;
 import io.izzel.arclight.common.mod.ArclightConstants;
+import io.izzel.arclight.common.paper.PaperAsyncChat;
 import io.izzel.arclight.common.mod.server.ArclightServer;
 import io.izzel.arclight.common.mod.util.thread.RunnableInPlace;
 import io.izzel.arclight.common.mod.util.ArclightCaptures;
@@ -1023,6 +1024,7 @@ public abstract class ServerGamePacketListenerImplMixin extends ServerCommonPack
             AsyncPlayerChatEvent event = new AsyncPlayerChatEvent(async, thisPlayer, s, new LazyPlayerSet(this.server));
             String originalFormat = event.getFormat(), originalMessage = event.getMessage();
             this.cserver.getPluginManager().callEvent(event);
+            PaperAsyncChat.fire(this.cserver.getPluginManager(), event, async);
             if (PlayerChatEvent.getHandlerList().getRegisteredListeners().length != 0) {
                 PlayerChatEvent queueEvent = new PlayerChatEvent(thisPlayer, event.getMessage(), event.getFormat(), event.getRecipients());
                 queueEvent.setCancelled(event.isCancelled());

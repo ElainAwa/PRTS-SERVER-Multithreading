@@ -41,7 +41,7 @@ class PaperApiSignatureInventoryTest {
         expect("org/bukkit/event/player/PlayerJoinEvent", "joinMessage", "()Lnet/kyori/adventure/text/Component;", ADDED);
         addedBy("org/bukkit/event/player/PlayerJoinEvent", "joinMessage", "()Lnet/kyori/adventure/text/Component;",
             "io/izzel/arclight/common/mixin/paper/PaperJoinMessageMixin");
-        expect("io/papermc/paper/event/player/AsyncChatEvent", "getHandlers", "()Lorg/bukkit/event/HandlerList;", MISSING);
+        expect("io/papermc/paper/event/player/AsyncChatEvent", "getHandlers", "()Lorg/bukkit/event/HandlerList;", PRESENT);
         expect("org/bukkit/event/block/BlockBreakEvent", "isCancelled", "()Z", PRESENT);
         expect("org/bukkit/scheduler/BukkitScheduler", "runTask",
             "(Lorg/bukkit/plugin/Plugin;Ljava/lang/Runnable;)Lorg/bukkit/scheduler/BukkitTask;", PRESENT);
