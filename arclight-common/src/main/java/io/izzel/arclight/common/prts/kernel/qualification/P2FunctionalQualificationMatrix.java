@@ -25,7 +25,8 @@ import java.util.Set;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
-/** The P2 functional qualification matrix: 19 leaves from P2-G01 to P2-K03, each with its domain,
+/** The functional qualification matrix of this stage: 19 leaves from the first entity leaf to
+ * the last acceptance leaf, each with its domain,
  * its positive and negative evidence categories, its local test classes and its evidence directory.
  * Evaluation checks the declarations and the local test sources at run time, names every gap, and
  * reports a per-leaf verdict; a synthetic incomplete leaf is rejected with its exact gap. */
@@ -38,7 +39,7 @@ public final class P2FunctionalQualificationMatrix {
         NOT_MEASURED
     }
 
-    /** One P2 leaf and the evidence it must bring. */
+    /** One mandatory leaf and the evidence it must bring. */
     public record Leaf(String id, String domain, List<String> positive, List<String> negative,
                        List<String> tests, String evidenceDir, boolean productionEffective,
                        List<String> notes) {
