@@ -487,11 +487,19 @@ public final class PipelineBatchLedger implements PrtsPipelineBatches.TaskSink {
      * installs between the read and the cancellation is re-read, so the cancellation still lands
      * while the task is resident. */
     public void released(Object processor, long cell, boolean clearQueue) {
+        released(processor, cell, clearQueue, null);
+    }
+
+    /** Releases one queued batch; a named subscriber cancels only its own mailbox's tasks. */
+    public void released(Object processor, long cell, boolean clearQueue, String subscriberId) {
         if (!clearQueue) {
             return;
         }
         for (TrackedTask task : pending.values()) {
             if (!accepts(task) || task.processor() != processor || task.id().cell() != cell) {
+                continue;
+            }
+            if (subscriberId != null && !subscriberId.equals(task.id().mailbox())) {
                 continue;
             }
             for (;;) {

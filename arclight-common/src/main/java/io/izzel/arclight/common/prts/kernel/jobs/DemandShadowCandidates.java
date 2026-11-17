@@ -186,6 +186,10 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         private final PipelineBatchLedger.BatchId batch;
         private final TaskStamp stamp;
         private final String status;
+        /** Every status the same task served; a second different one is another subscriber, not a
+         * conflict. */
+        private final java.util.LinkedHashSet<String> statuses =
+            new java.util.LinkedHashSet<>();
         private boolean conflicted;
         private boolean sealed;
 
@@ -195,6 +199,7 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
             this.batch = batch;
             this.stamp = stamp;
             this.status = status;
+            this.statuses.add(status);
         }
     }
 
@@ -231,6 +236,7 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
     private final Object planSource;
     private long statusOverflows;
     private long statusConflicts;
+    private long statusMerged;
     private long statusLate;
     private long statusDuplicates;
     private long statusReclaimed;
@@ -646,12 +652,14 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
             statusConflicts++;
             return;
         }
-        if (status.equals(entry.status)) {
+        if (status.equals(entry.status) || entry.statuses.contains(status)) {
             statusDuplicates++;
             return;
         }
-        entry.conflicted = true;
-        statusConflicts++;
+        // A second different status is another subscriber of the same production task: it is kept
+        // beside the first instead of conflicting the whole task away.
+        entry.statuses.add(status);
+        statusMerged++;
     }
 
     /** A retained batch's own status: the only kind that survives a lifecycle removal path. */
@@ -1062,6 +1070,11 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         return statusDuplicates;
     }
 
+    /** Statuses the same production task merged from another subscriber. */
+    long statusMerged() {
+        return statusMerged;
+    }
+
     long statusReclaimed() {
         return statusReclaimed;
     }
@@ -1101,6 +1114,7 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         statuses.clear();
         statusOverflows = 0L;
         statusConflicts = 0L;
+        statusMerged = 0L;
         statusLate = 0L;
         statusDuplicates = 0L;
         statusReclaimed = 0L;
