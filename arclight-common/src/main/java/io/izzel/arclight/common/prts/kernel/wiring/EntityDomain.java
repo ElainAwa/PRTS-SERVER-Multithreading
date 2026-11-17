@@ -546,14 +546,6 @@ public final class EntityDomain implements KernelDomain {
                     return;
                 }
             }
-            if (HOST_SKIP) {
-                // The plan lists the rows the owner intends to run; the host entry consumes it
-                // before its existing ownership decision and counts the confirmed rows.
-                List<Integer> ownerRows = claimedRows(plan);
-                HostSkipPlan.Plan skipPlan = HostSkipPlan.of(ownerRows);
-                HostSkipPlan.verifyNoDoubleTick(skipPlan, ownerRows, List.of());
-                HostSkipPlan.publish(skipPlan, tick);
-            }
             long dispatchedRows = 0L;
             for (WorkPlan.WorkTask task : orderedTasks) {
                 dispatchedRows += task.entityCount();
@@ -580,6 +572,15 @@ public final class EntityDomain implements KernelDomain {
                     pending = DispatchPass.dispatch(plan, runtime.pool(), body(plan),
                         runtime.arena(), readings, ledger, orderedTasks);
                 }
+            }
+            if (HOST_SKIP) {
+                // The dispatch above runs the ownership plan point that claims this tick's rows, so
+                // the skip list is published only now; publishing it before the claims would hand
+                // the host entry an empty plan and the owner rows would never be skipped.
+                List<Integer> ownerRows = claimedRows(plan);
+                HostSkipPlan.Plan skipPlan = HostSkipPlan.of(ownerRows);
+                HostSkipPlan.verifyNoDoubleTick(skipPlan, ownerRows, List.of());
+                HostSkipPlan.publish(skipPlan, tick);
             }
             // The declarations submitted here are taken by the next plan the kernel builds; that
             // plan is the one that seats this pass, so its sequence is this module's next one.
