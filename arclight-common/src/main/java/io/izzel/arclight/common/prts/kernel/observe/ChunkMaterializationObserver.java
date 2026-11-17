@@ -139,6 +139,8 @@ public final class ChunkMaterializationObserver implements PrtsChunkMaterializat
     public void materialized(long ticket, String worldId, long chunkPos, String status,
                              int generation) {
         accept(ticket, worldId, chunkPos, status, generation, tick);
+        io.izzel.arclight.common.prts.kernel.domain.chunk.ChunkRequestWiring.materialized(
+            worldId, chunkPos, status);
     }
 
     @Override

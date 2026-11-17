@@ -189,11 +189,14 @@ public final class ChunkDemandObserver implements PrtsChunkDemand.DemandTap {
         // ask reaches anyone: the count is the one the ask without a chunk keeps, and no row of this
         // face is per chunk.
         demandStarted(worldId, status, requireChunk);
+        io.izzel.arclight.common.prts.kernel.domain.chunk.ChunkRequestWiring.syncOpened(worldId,
+            chunkX, chunkZ, status, 0L);
     }
 
     @Override
     public void demandFinished(String worldId, String status, boolean blocking, boolean answered) {
         countDemandFinished(worldId, status, blocking, answered);
+        io.izzel.arclight.common.prts.kernel.domain.chunk.ChunkRequestWiring.syncFinished(answered);
         DemandTap second = secondPath;
         if (second == null) {
             return;
@@ -307,6 +310,8 @@ public final class ChunkDemandObserver implements PrtsChunkDemand.DemandTap {
         if (!openFutureStamp()) {
             return;
         }
+        io.izzel.arclight.common.prts.kernel.domain.chunk.ChunkRequestWiring.demandOpened(worldId,
+            chunkX, chunkZ, status, token, taskToken);
         DemandTap second = secondPath;
         if (second == null) {
             return;
@@ -368,6 +373,8 @@ public final class ChunkDemandObserver implements PrtsChunkDemand.DemandTap {
     public void futureCompleted(String worldId, String status, long startedNanos, boolean answered,
                                 long token) {
         countFutureCompleted(worldId, status, startedNanos, answered);
+        io.izzel.arclight.common.prts.kernel.domain.chunk.ChunkRequestWiring.futureFinished(
+            worldId, status, token, answered);
         DemandTap second = secondPath;
         if (second == null) {
             return;
@@ -382,6 +389,10 @@ public final class ChunkDemandObserver implements PrtsChunkDemand.DemandTap {
      * hand it to the reader that asked for the stage. */
     @Override
     public void registrationConfirmed(String worldId, String status, long token, boolean ok) {
+        if (!ok) {
+            io.izzel.arclight.common.prts.kernel.domain.chunk.ChunkRequestWiring
+                .registrationFailed(token);
+        }
         DemandTap second = secondPath;
         if (second == null) {
             return;

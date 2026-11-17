@@ -30,6 +30,12 @@ public final class PrtsPipelineBatches {
 
         void released(Object processor, long cell, boolean clearQueue);
 
+        /** A release that names the subscriber to cancel; the default keeps the old release. */
+        default void released(Object processor, long cell, boolean clearQueue,
+                              String subscriberId) {
+            released(processor, cell, clearQueue);
+        }
+
         /** The task whose body the calling thread runs, or null; the identity stays opaque. */
         default Object currentTask() {
             return null;
@@ -109,9 +115,15 @@ public final class PrtsPipelineBatches {
 
     /** Reports a sorter queue release; only a queue-clearing release can cancel a resident task. */
     public static void released(Object processor, long cell, boolean clearQueue) {
+        released(processor, cell, clearQueue, null);
+    }
+
+    /** Reports a release that cancels only the named subscriber's resident tasks. */
+    public static void released(Object processor, long cell, boolean clearQueue,
+                                String subscriberId) {
         TaskSink current = sink;
         if (current != null) {
-            current.released(processor, cell, clearQueue);
+            current.released(processor, cell, clearQueue, subscriberId);
         }
     }
 }

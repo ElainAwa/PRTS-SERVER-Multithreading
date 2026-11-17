@@ -43,10 +43,17 @@ public final class PrtsChunkSorterSubmit {
         return PrtsPipelineBatches.wrap(minted, task);
     }
 
-    /** Marks the tasks one sorter queue clears as cancelled; the task body still decides. */
+    /** Marks the tasks one sorter queue clears as cancelled; the task body still decides. The
+     * cancellation names the subscriber of the queue so another subscriber's tasks stay alive. */
     public static void release(ProcessorHandle<?> processor, long cell, boolean clearQueue) {
+        release(processor, cell, clearQueue, processor == null ? null : processor.name());
+    }
+
+    /** Marks one queue clear for one named subscriber; the other subscribers are untouched. */
+    public static void release(ProcessorHandle<?> processor, long cell, boolean clearQueue,
+                               String subscriberId) {
         if (clearQueue) {
-            PrtsPipelineBatches.released(processor, cell, true);
+            PrtsPipelineBatches.released(processor, cell, true, subscriberId);
         }
     }
 }

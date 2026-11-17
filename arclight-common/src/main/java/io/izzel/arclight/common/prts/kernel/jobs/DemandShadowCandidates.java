@@ -186,6 +186,9 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         private final PipelineBatchLedger.BatchId batch;
         private final TaskStamp stamp;
         private final String status;
+        /** The subscriber that recorded the status, and its deadline when the call names one. */
+        private final String subscriberId;
+        private final long deadlineNanos;
         /** Every status the same task served; a second different one is another subscriber, not a
          * conflict. */
         private final java.util.LinkedHashSet<String> statuses =
@@ -194,11 +197,13 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
         private boolean sealed;
 
         private StatusEntry(PipelineBatchLedger.TrackedTask task, PipelineBatchLedger.BatchId batch,
-                            TaskStamp stamp, String status) {
+                            TaskStamp stamp, String status, long token) {
             this.task = task;
             this.batch = batch;
             this.stamp = stamp;
             this.status = status;
+            this.subscriberId = "chunk:" + token;
+            this.deadlineNanos = 0L;
             this.statuses.add(status);
         }
     }
@@ -640,7 +645,8 @@ public final class DemandShadowCandidates implements PrtsChunkDemand.DemandTap {
             statusOverflows++;
             return;
         }
-        statuses.put(task, new StatusEntry(task, batch, stampOf(id, batch, token), status));
+        statuses.put(task, new StatusEntry(task, batch, stampOf(id, batch, token), status,
+            token));
     }
 
     private void registerOnEntry(StatusEntry entry, String status) {

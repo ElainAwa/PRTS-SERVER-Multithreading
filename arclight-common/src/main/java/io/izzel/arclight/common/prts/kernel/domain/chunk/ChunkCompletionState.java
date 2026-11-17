@@ -41,6 +41,9 @@ public final class ChunkCompletionState {
     private long holderGen = -1L;
     private final EnumSet<ChunkCompletionLayer> reached =
         EnumSet.noneOf(ChunkCompletionLayer.class);
+    /** The layers a production event really reported; a layer never reported stays NOT_OBSERVED. */
+    private final EnumSet<ChunkCompletionLayer> observed =
+        EnumSet.noneOf(ChunkCompletionLayer.class);
     private int staleResults;
 
     /** Marks one layer of one holder generation; an older generation never advances the state. */
@@ -53,10 +56,12 @@ public final class ChunkCompletionState {
         if (holderGen > this.holderGen) {
             this.holderGen = holderGen;
             reached.clear();
+            observed.clear();
         }
         if (this.holderGen < 0L) {
             this.holderGen = holderGen;
         }
+        observed.add(layer);
         if (reached.add(layer)) {
             return MarkResult.ADVANCED;
         }
@@ -89,6 +94,11 @@ public final class ChunkCompletionState {
     /** Whether the holder generation reached the final acknowledgement. */
     public synchronized boolean acknowledged() {
         return reached.contains(ChunkCompletionLayer.ACK);
+    }
+
+    /** Whether one layer was really reported; an unobserved layer is NOT_OBSERVED, never true. */
+    public synchronized boolean observed(ChunkCompletionLayer layer) {
+        return observed.contains(layer);
     }
 
     public synchronized Snapshot snapshot() {

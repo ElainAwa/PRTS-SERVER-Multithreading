@@ -2,6 +2,7 @@
 package io.izzel.arclight.common.prts.kernel.domain.chunk;
 
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -13,10 +14,17 @@ import java.util.Set;
  * The subscriber ledger of the chunk requests: one production task may serve several subscribers
  * with different target statuses and deadlines, every subscriber is delivered on its own, a cancel
  * removes only the named subscriber and never kills the others, and a result of an older holder
- * generation is refused instead of being delivered. The ledger is a contract layer; it performs no
- * load, no generation and no send.
+ * generation is refused and evicted. The ledger is bounded: it keeps at most {@code cap} entries,
+ * a settled (delivered or cancelled) entry leaves the ledger at once, an older holder generation is
+ * evicted on advance, and a registration that cannot fit is refused and counted instead of dropping
+ * a pending subscriber. It performs no load, no generation and no send.
  */
 public final class ChunkSubscriberLedger {
+
+    /** The default bound of the pending entries one ledger keeps. */
+    public static final int DEFAULT_CAP = 4096;
+    /** The default bound of the holder-generation records one ledger keeps. */
+    public static final int DEFAULT_HOLDERS_CAP = 4096;
 
     /** Where one subscriber of one request stands. */
     public enum State {
@@ -41,11 +49,43 @@ public final class ChunkSubscriberLedger {
     private record Key(long chunkPos, long holderGen, String subscriberId, String targetStatus) {
     }
 
+    private final int cap;
+    private final int holdersCap;
     private final Map<Key, Entry> entries = new LinkedHashMap<>();
-    private final Map<Long, Long> holders = new LinkedHashMap<>();
+    /** Bounded holder-generation LRU: a chunk that left the recorder's memory is evicted oldest. */
+    private final Map<Long, Long> holders;
+    private long holdersEvicted;
     private int staleResults;
+    private long deliveredCount;
+    private long cancelledCount;
+    private long evicted;
+    private long refused;
 
-    /** Registers one subscriber's request; a stale holder generation is refused. */
+    /** One ledger with the default bound. */
+    public ChunkSubscriberLedger() {
+        this(DEFAULT_CAP, DEFAULT_HOLDERS_CAP);
+    }
+
+    /** One ledger with an explicit pending bound; a non-positive bound refuses every entry. */
+    public ChunkSubscriberLedger(int cap) {
+        this(cap, DEFAULT_HOLDERS_CAP);
+    }
+
+    /** One ledger with explicit pending and holder-record bounds. */
+    public ChunkSubscriberLedger(int cap, int holdersCap) {
+        if (cap < 0 || holdersCap < 0) {
+            throw new IllegalArgumentException("a ledger cap cannot be negative");
+        }
+        this.cap = cap;
+        this.holdersCap = holdersCap;
+        this.holders = new LinkedHashMap<>();
+    }
+
+    /**
+     * Registers one subscriber's request. A settled entry leaves the ledger at once, an older holder
+     * generation is refused, and a full ledger rejects the new registration (counting the refusal)
+     * rather than dropping a pending subscriber.
+     */
     public synchronized Entry register(ChunkRequestIdentity identity) {
         Objects.requireNonNull(identity, "identity");
         long current = holders.getOrDefault(identity.chunkPos(), 0L);
@@ -53,11 +93,18 @@ public final class ChunkSubscriberLedger {
             staleResults++;
             return new Entry(identity, State.CANCELLED);
         }
-        holders.merge(identity.chunkPos(), identity.holderGen(), Math::max);
+        touchHolder(identity.chunkPos(), identity.holderGen());
         Key key = key(identity);
         Entry existing = entries.get(key);
         if (existing != null) {
             return existing;
+        }
+        if (entries.size() >= cap) {
+            evictSettled();
+        }
+        if (entries.size() >= cap) {
+            refused++;
+            return new Entry(identity, State.CANCELLED);
         }
         Entry entry = new Entry(identity, State.PENDING);
         entries.put(key, entry);
@@ -66,8 +113,8 @@ public final class ChunkSubscriberLedger {
 
     /**
      * Delivers every pending subscriber of one production completion whose target status is reached
-     * by the achieved status; a stale holder generation delivers nothing. Each subscriber is counted
-     * and delivered on its own, so a later different status cannot swallow it.
+     * by the achieved status; a stale holder generation delivers nothing. A delivered entry leaves
+     * the ledger immediately, so the ledger size only counts pending subscribers.
      */
     public synchronized Completion complete(ChunkRequestIdentity completion, String achievedStatus) {
         Objects.requireNonNull(completion, "completion");
@@ -77,20 +124,18 @@ public final class ChunkSubscriberLedger {
             staleResults++;
             return new Completion(0, 1);
         }
-        holders.merge(completion.chunkPos(), completion.holderGen(), Math::max);
+        touchHolder(completion.chunkPos(), completion.holderGen());
         int delivered = 0;
-        List<Key> keys = new ArrayList<>(entries.keySet());
-        for (Key key : keys) {
-            Entry entry = entries.get(key);
-            if (entry.state() != State.PENDING) {
-                continue;
-            }
-            ChunkRequestIdentity identity = entry.identity();
+        Iterator<Map.Entry<Key, Entry>> walk = entries.entrySet().iterator();
+        while (walk.hasNext()) {
+            Map.Entry<Key, Entry> held = walk.next();
+            ChunkRequestIdentity identity = held.getValue().identity();
             if (!identity.sameProduction(completion)
                 || !satisfies(achievedStatus, identity.targetStatus())) {
                 continue;
             }
-            entries.put(key, new Entry(identity, State.DELIVERED));
+            walk.remove();
+            deliveredCount++;
             delivered++;
         }
         return new Completion(delivered, 0);
@@ -100,48 +145,90 @@ public final class ChunkSubscriberLedger {
     public synchronized int cancel(String subscriberId) {
         Objects.requireNonNull(subscriberId, "subscriberId");
         int cancelled = 0;
-        for (Map.Entry<Key, Entry> held : entries.entrySet()) {
-            Entry entry = held.getValue();
-            if (entry.state() == State.PENDING
-                && entry.identity().subscriberId().equals(subscriberId)) {
-                entries.put(held.getKey(), new Entry(entry.identity(), State.CANCELLED));
+        Iterator<Map.Entry<Key, Entry>> walk = entries.entrySet().iterator();
+        while (walk.hasNext()) {
+            Entry entry = walk.next().getValue();
+            if (entry.identity().subscriberId().equals(subscriberId)) {
+                walk.remove();
+                cancelledCount++;
                 cancelled++;
             }
         }
         return cancelled;
     }
 
-    /** Advances the holder generation of one chunk; an older generation becomes stale. */
+    /** Advances the holder generation of one chunk and evicts the entries of the older one. */
     public synchronized void advanceHolder(long chunkPos, long holderGen) {
-        holders.merge(chunkPos, holderGen, Math::max);
-    }
-
-    /** The state of one subscriber's request, or null when it never registered. */
-    public synchronized Entry state(ChunkRequestIdentity identity) {
-        Entry entry = entries.get(key(identity));
-        return entry == null ? null : new Entry(entry.identity(), visibleState(entry));
-    }
-
-    /** How many entries one state holds. */
-    public synchronized int count(State state) {
-        int count = 0;
-        for (Entry entry : entries.values()) {
-            if (visibleState(entry) == state) {
-                count++;
+        long current = holders.getOrDefault(chunkPos, 0L);
+        if (holderGen <= current) {
+            return;
+        }
+        touchHolder(chunkPos, holderGen);
+        Iterator<Map.Entry<Key, Entry>> walk = entries.entrySet().iterator();
+        while (walk.hasNext()) {
+            Entry entry = walk.next().getValue();
+            if (entry.identity().chunkPos() == chunkPos
+                && entry.identity().holderGen() < holderGen) {
+                walk.remove();
+                staleResults++;
+                evicted++;
             }
         }
-        return count;
+    }
+
+    /** The state of one pending request, or null once it settled, was evicted or was never known. */
+    public synchronized Entry state(ChunkRequestIdentity identity) {
+        return entries.get(key(identity));
+    }
+
+    /** How many subscribers one state currently holds; settled counts are cumulative. */
+    public synchronized int count(State state) {
+        if (state == State.PENDING) {
+            return entries.size();
+        }
+        return (int) (state == State.DELIVERED ? deliveredCount : cancelledCount);
     }
 
     /** The subscribers currently pending, in registration order. */
     public synchronized Set<String> pendingSubscribers() {
         Set<String> subscribers = new LinkedHashSet<>();
         for (Entry entry : entries.values()) {
-            if (visibleState(entry) == State.PENDING) {
-                subscribers.add(entry.identity().subscriberId());
-            }
+            subscribers.add(entry.identity().subscriberId());
         }
         return Set.copyOf(subscribers);
+    }
+
+    /** The current number of pending entries. */
+    public synchronized int size() {
+        return entries.size();
+    }
+
+    public int cap() {
+        return cap;
+    }
+
+    /** The entries evicted by a holder generation advance. */
+    public synchronized long evicted() {
+        return evicted;
+    }
+
+    /** The registrations refused because the ledger was full. */
+    public synchronized long refused() {
+        return refused;
+    }
+
+    /** Holder-generation records dropped by the bounded holder LRU. */
+    public synchronized long holdersEvicted() {
+        return holdersEvicted;
+    }
+
+    public int holdersCap() {
+        return holdersCap;
+    }
+
+    /** The tracked chunk positions, for the lifecycle evidence. */
+    public synchronized int holderCount() {
+        return holders.size();
     }
 
     /** Results refused because their holder generation was older than the current one. */
@@ -149,13 +236,33 @@ public final class ChunkSubscriberLedger {
         return staleResults;
     }
 
-    /** The entry state after a holder advance: an older pending entry is stale and not delivered. */
-    private State visibleState(Entry entry) {
-        if (entry.state() != State.PENDING) {
-            return entry.state();
+    /** Drops every registration and counter; test and evidence wiring only. */
+    public synchronized void reset() {
+        entries.clear();
+        holders.clear();
+        staleResults = 0;
+        holdersEvicted = 0;
+        deliveredCount = 0;
+        cancelledCount = 0;
+        evicted = 0;
+        refused = 0;
+    }
+
+    private void touchHolder(long chunkPos, long holderGen) {
+        if (!holders.containsKey(chunkPos) && holders.size() >= holdersCap) {
+            Iterator<Long> eldest = holders.keySet().iterator();
+            if (eldest.hasNext()) {
+                eldest.next();
+                eldest.remove();
+                holdersEvicted++;
+            }
         }
-        long current = holders.getOrDefault(entry.identity().chunkPos(), 0L);
-        return entry.identity().holderGen() < current ? State.CANCELLED : State.PENDING;
+        holders.put(chunkPos, Math.max(holders.getOrDefault(chunkPos, 0L), holderGen));
+    }
+
+    private void evictSettled() {
+        // Nothing settled stays in the map, so this is only reachable when every entry is pending;
+        // kept as the explicit hook that a future settled-cache would use.
     }
 
     private static boolean satisfies(String achieved, String needed) {
