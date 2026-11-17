@@ -67,18 +67,24 @@ public final class P2FunctionalQualificationMatrix {
         leaf(STAGE_ROOT + "-G01", "entity", List.of("complete-update", "publish"),
             List.of("stale-generation", "mid-exception", "capacity"),
             List.of("EntityCommitStateRevisionRereadTest"), "G01", false),
-        leaf(STAGE_ROOT + "-G02", "entity", List.of("owner-partition", "two-owner"),
-            List.of("conflict", "stale-generation", "cancel"),
-            List.of("MergedProductionSubscriberTest"), "G02", false),
+        leaf(STAGE_ROOT + "-G02", "entity", List.of("decision-node", "event-admission",
+                "random-stream"),
+            List.of("unknown-listener", "reentrant", "reseed"),
+            List.of("AirDecisionContractTest", "DamageDecisionParityTest",
+                "StreamKeyDerivationTest"), "G02", false),
         leaf(STAGE_ROOT + "-G03", "entity", List.of("program", "compat-lane"),
             List.of("overreach", "noai-substitution"),
             List.of("NoRpcNoAwaitTest"), "G03", false),
-        leaf(STAGE_ROOT + "-G04", "entity", List.of("migration", "drop-transaction"),
-            List.of("duplicate-consume", "unload-late"),
-            List.of("InventoryConversionConservationTest"), "G04", false),
-        leaf(STAGE_ROOT + "-G05", "entity", List.of("dense-completion", "settlement"),
+        leaf(STAGE_ROOT + "-G04", "entity", List.of("interaction", "migration", "drop",
+                "publish"),
+            List.of("duplicate-consume", "unload-late", "half-state"),
+            List.of("DamageFormulaParityTest", "MigrationNoDoubleTickTest", "DropAddOnceTest",
+                "PublishReadCommittedTest"), "G04", false),
+        leaf(STAGE_ROOT + "-G05", "entity", List.of("support-matrix", "two-owner",
+                "dense-completion", "settlement"),
             List.of("leak", "unsettled", "noai-substitution"),
-            List.of("SingleSharedRuntimePoolInProductionTest"), "G05", false),
+            List.of("SupportMatrixTest", "MultiOwnerInstallTest",
+                "DenseCompletionConservationTest", "SettlementTerminalTest"), "G05", false),
         leaf(STAGE_ROOT + "-H01", "chunk", List.of("request-identity", "completion-layers"),
             List.of("swallowed-subscriber", "stale-generation", "fake-ticking"),
             List.of("ProductionCompletionWorldKeyTest", "ProductionSendReadyAndQueuedLayerTest"),
@@ -212,7 +218,10 @@ public final class P2FunctionalQualificationMatrix {
         }
         try (Stream<Path> walk = Files.walk(root)) {
             walk.filter(path -> path.toString().endsWith(".java"))
-                .forEach(path -> sources.add(path.getFileName().toString()));
+                .forEach(path -> {
+                    String name = path.getFileName().toString();
+                    sources.add(name.substring(0, name.length() - ".java".length()));
+                });
         } catch (Exception unreadable) {
             return Set.of();
         }
