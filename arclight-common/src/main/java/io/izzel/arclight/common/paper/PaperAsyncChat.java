@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.paper;
 
+import io.papermc.paper.chat.ChatRenderer;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import net.kyori.adventure.audience.Audience;
 import net.kyori.adventure.text.Component;
@@ -20,7 +21,7 @@ public final class PaperAsyncChat {
     public static void fire(PluginManager plugins, AsyncPlayerChatEvent legacy, boolean async) {
         Component original = component(legacy.getMessage());
         AsyncChatEvent paper = new AsyncChatEvent(async, legacy.getPlayer(), viewers(legacy.getRecipients()),
-            (source, displayName, message, viewer) -> message, original, original, null);
+            ChatRenderer.defaultRenderer(), original, original, null);
         plugins.callEvent(paper);
         apply(legacy, original, paper);
     }
