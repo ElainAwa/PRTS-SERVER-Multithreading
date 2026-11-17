@@ -11,7 +11,7 @@ import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.commit.CommitLog;
 import io.izzel.arclight.common.prts.kernel.commit.CommitTrace;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
-import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
+import io.izzel.arclight.common.prts.kernel.diff.DiffLocator;
 import io.izzel.arclight.common.prts.kernel.diff.DomainHash;
 import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchPass;
@@ -93,7 +93,7 @@ public final class EntityDomain implements KernelDomain {
     private final JobGraphAdapter jobAdapter;
     private final DispatchReadings readings = new DispatchReadings();
     private final TaskLedger ledger = new TaskLedger(0L);
-    private final DiffProbe probe = new DiffProbe();
+    private final DiffLocator probe = new DiffLocator();
     private final MergeSegment merge = new MergeSegment();
     private final DispatchWriteBack writeBack;
     /** Landed reports grouped by the plan sequence that seats their pass, not by the tick they
@@ -354,7 +354,7 @@ public final class EntityDomain implements KernelDomain {
                     frame == null ? "none" : Long.toHexString(frame.value()),
                     frame == null ? "none" : frame.algorithmId()));
             }
-            DiffProbe.DiffReport fork = probe.report();
+            DiffLocator.DiffReport fork = probe.report();
             if (fork.firstForkTick() >= 0) {
                 EVIDENCE.info(segBreakLine(fork));
             }
@@ -818,7 +818,7 @@ public final class EntityDomain implements KernelDomain {
 
     /** The row the descent named, as one line: the entity id and the offset of the row in the
      * frame, which is what a segment break has to answer with. */
-    private static String segBreakLine(DiffProbe.DiffReport fork) {
+    private static String segBreakLine(DiffLocator.DiffReport fork) {
         return "[PRTS] seg-break: entity_id=" + fork.firstForkEntityId() + " host_ordinal="
             + fork.firstForkHostOrdinal() + " tick=" + fork.firstForkTick() + " world="
             + fork.firstForkWorld() + " region=" + fork.firstForkRegion() + " batch="

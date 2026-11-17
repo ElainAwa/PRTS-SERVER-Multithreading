@@ -21,7 +21,7 @@ import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.shares.WorldResChildBudget;
 import io.izzel.arclight.common.prts.support.PrtsChunkFlow;
 import io.izzel.arclight.common.prts.support.PrtsChunkMaterialization;
-import io.izzel.arclight.common.prts.support.PrtsLoadProbe;
+import io.izzel.arclight.common.prts.support.PrtsLoadWatcher;
 import io.izzel.arclight.common.prts.support.PrtsPipelineRows;
 import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
@@ -65,7 +65,7 @@ import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
 import io.izzel.arclight.common.prts.kernel.sites.ThreadOrigin;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaPassthrough;
-import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
+import io.izzel.arclight.common.prts.kernel.diff.DiffLocator;
 import io.izzel.arclight.common.prts.kernel.waitpoints.CoverageReport;
 import io.izzel.arclight.common.prts.kernel.waitpoints.SiteInventory.WaitClass;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitLadder;
@@ -845,7 +845,7 @@ public final class KernelReadings {
      * first fork down to one row and one field, and what the comparison could not place. Every field
      * is an observation request; no gate reads one. */
     private static void differential(List<String> lines, KernelModule module) {
-        DiffProbe.DiffReport report = module.arms().report();
+        DiffLocator.DiffReport report = module.arms().report();
         add(lines, "diff.observation_only", 1);
         add(lines, "diff.arms", 2);
         add(lines, "diff.tick_pairs", report.tickPairs());
@@ -986,7 +986,7 @@ public final class KernelReadings {
     /** The two formal event rows appear only after a complete observed RCON root, so a missing
      * line means the source was not covered rather than a measured zero. */
     private static void eventOrderFace(List<String> lines) {
-        BukkitEventOrderProbe.reading().ifPresent(reading -> {
+        BukkitEventOrderObserver.reading().ifPresent(reading -> {
             add(lines, "event.order_violation", reading.orderViolation());
             add(lines, "event.nesting_depth", reading.nestingDepth());
         });
@@ -2730,7 +2730,7 @@ public final class KernelReadings {
         LoadThreadObserver watcher = module.loadThread();
         double interval = LoadThreadObserver.SAMPLE_INTERVAL_MILLIS;
         add(lines, "load.observation_only", 1);
-        add(lines, "load.probe_installed", PrtsLoadProbe.installed() ? 1 : 0);
+        add(lines, "load.probe_installed", PrtsLoadWatcher.installed() ? 1 : 0);
         add(lines, "load.sampler_running", watcher.installed() ? 1 : 0);
         add(lines, "load.sampler_interval_ms", format(interval));
         add(lines, "wait.park.thread", safe(watcher.threadName()));

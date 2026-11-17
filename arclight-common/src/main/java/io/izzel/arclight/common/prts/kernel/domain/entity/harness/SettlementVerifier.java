@@ -12,7 +12,7 @@ import java.util.Objects;
  * still bound. The probe reads plain facts, so the same contract can be attached to a window and
  * checked by tests; it writes nothing and never waits.
  */
-public final class SettlementProbe {
+public final class SettlementVerifier {
 
     /** The plain numbers one stop reports; every field is read after the close, never during it. */
     public record Facts(long arenaPinned, long arenaActiveClaims, long workOffered,
@@ -46,7 +46,7 @@ public final class SettlementProbe {
         Facts read();
     }
 
-    private SettlementProbe() {
+    private SettlementVerifier() {
     }
 
     /** Reads the source and decides the stop. */

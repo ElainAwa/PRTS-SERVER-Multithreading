@@ -8,7 +8,7 @@ import java.util.Optional;
  * snapshot the same fireEvent will iterate; skipped listeners are a legal subsequence, reordering
  * or an unknown listener is a violation. It retains no Event, Listener or Plugin object in a
  * published reading. */
-public final class BukkitEventOrderProbe {
+public final class BukkitEventOrderObserver {
 
     static final int MAX_LISTENERS = 512;
     static final int MAX_DEPTH = 64;
@@ -23,7 +23,7 @@ public final class BukkitEventOrderProbe {
     private static volatile boolean covered;
     private static volatile boolean invalid;
 
-    private BukkitEventOrderProbe() {
+    private BukkitEventOrderObserver() {
     }
 
     /** Installs the probe; it is inert until the kernel installs it. */

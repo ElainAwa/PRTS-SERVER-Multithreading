@@ -5,10 +5,10 @@ import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.WorldLifecycleWiring;
 import io.izzel.arclight.common.prts.config.PrtsConfigManager;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
-import io.izzel.arclight.common.prts.kernel.observe.BukkitEventOrderProbe;
+import io.izzel.arclight.common.prts.kernel.observe.BukkitEventOrderObserver;
 import io.izzel.arclight.common.prts.kernel.observe.CloseSealWriter;
 import io.izzel.arclight.common.prts.kernel.wiring.KernelWiring;
-import io.izzel.arclight.common.prts.support.PrtsLoadProbe;
+import io.izzel.arclight.common.prts.support.PrtsLoadWatcher;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -57,7 +57,7 @@ public final class PrtsKernelEvents {
             module.installWaitSiteTap();
             module.installLoadProbe();
             module.installUnloadDelivery();
-            BukkitEventOrderProbe.install();
+            BukkitEventOrderObserver.install();
             PrtsEntityOwnershipEvents.syncSubscription(true);
             NeoForge.EVENT_BUS.register(INSTANCE);
             subscribed = true;
@@ -67,7 +67,7 @@ public final class PrtsKernelEvents {
         module.removeWaitSiteTap();
         module.removeLoadProbe();
         module.removeUnloadDelivery();
-        BukkitEventOrderProbe.uninstall();
+        BukkitEventOrderObserver.uninstall();
         PrtsEntityOwnershipEvents.syncSubscription(false);
         NeoForge.EVENT_BUS.unregister(INSTANCE);
         subscribed = false;
@@ -84,7 +84,7 @@ public final class PrtsKernelEvents {
     /** Opens the tick window the load sampler classifies its waits against. */
     @SubscribeEvent
     public void onServerTickPre(ServerTickEvent.Pre event) {
-        PrtsLoadProbe.tickEntered();
+        PrtsLoadWatcher.tickEntered();
         KernelModule module = KernelModule.instance();
         module.noteTickSource(event.getServer());
         module.noteTickThread(event.getServer().getRunningThread());
@@ -96,7 +96,7 @@ public final class PrtsKernelEvents {
      * adopted it has run: the owner is bound inside the tick and a chain is taken at most once. */
     @SubscribeEvent
     public void onServerTick(ServerTickEvent.Post event) {
-        PrtsLoadProbe.tickLeft();
+        PrtsLoadWatcher.tickLeft();
         List<String> worlds = new ArrayList<>();
         for (ServerLevel level : event.getServer().getAllLevels()) {
             worlds.add(level.dimension().location().toString());

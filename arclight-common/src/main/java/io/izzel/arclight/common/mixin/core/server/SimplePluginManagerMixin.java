@@ -3,7 +3,7 @@ package io.izzel.arclight.common.mixin.core.server;
 
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
-import io.izzel.arclight.common.prts.kernel.observe.BukkitEventOrderProbe;
+import io.izzel.arclight.common.prts.kernel.observe.BukkitEventOrderObserver;
 import org.bukkit.event.Event;
 import org.bukkit.event.HandlerList;
 import org.bukkit.event.server.RemoteServerCommandEvent;
@@ -17,7 +17,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 /** Reads the real Bukkit fireEvent loop without changing it: the HandlerList snapshot is the
  * expected order and each real RegisteredListener.callEvent is compared in place. The delegate is
  * called exactly once; no listener list, priority, registration, cancel, result or exception path
- * is altered. */
+ * is altered. The reading class is an observer, not a probe: its name only says what it reads. */
 @Mixin(value = SimplePluginManager.class, remap = false)
 public abstract class SimplePluginManagerMixin {
 
@@ -25,7 +25,7 @@ public abstract class SimplePluginManagerMixin {
     private void prts$beginFire(Event event, CallbackInfo ci) {
         HandlerList handlers = event.getHandlers();
         RegisteredListener[] expected = handlers == null ? null : handlers.getRegisteredListeners();
-        BukkitEventOrderProbe.begin(expected, event instanceof RemoteServerCommandEvent);
+        BukkitEventOrderObserver.begin(expected, event instanceof RemoteServerCommandEvent);
     }
 
     @WrapOperation(method = "fireEvent", require = 1,
@@ -33,12 +33,12 @@ public abstract class SimplePluginManagerMixin {
             target = "Lorg/bukkit/plugin/RegisteredListener;callEvent(Lorg/bukkit/event/Event;)V"))
     private void prts$noteListener(RegisteredListener listener, Event event,
                                    Operation<Void> original) {
-        BukkitEventOrderProbe.invokedCurrent(listener);
+        BukkitEventOrderObserver.invokedCurrent(listener);
         original.call(listener, event);
     }
 
     @Inject(method = "fireEvent", at = @At("RETURN"), require = 1, remap = false)
     private void prts$endFire(Event event, CallbackInfo ci) {
-        BukkitEventOrderProbe.end(false);
+        BukkitEventOrderObserver.end(false);
     }
 }

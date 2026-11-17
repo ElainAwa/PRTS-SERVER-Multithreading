@@ -2,7 +2,7 @@
 package io.izzel.arclight.common.prts.kernel.wiring;
 
 import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
-import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
+import io.izzel.arclight.common.prts.kernel.diff.DiffLocator;
 import io.izzel.arclight.common.prts.kernel.diff.DomainHash;
 import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
 import io.izzel.arclight.common.prts.kernel.diff.StateHasher;
@@ -55,7 +55,7 @@ final class EntityDomainSelfCheck {
             DispatchPass pass = DispatchPass.dispatch(plan, pool, EntityIntegrator.INSTANCE, arena,
                 readings, ledger);
             MergeSegment.Frame frame = merge.merge(pass, System.nanoTime() + 2_000_000_000L, arena,
-                readings, new DiffProbe(), null, HashWhitelist.bitexact(), DOMAIN_ID, null);
+                readings, new DiffLocator(), null, HashWhitelist.bitexact(), DOMAIN_ID, null);
             lines.add("selftest.dispatch_tasks=" + plan.taskCount());
             lines.add("selftest.dispatch_worker_exec=" + readings.execByThread("prts-worker-0"));
             lines.add("selftest.dispatch_executed=" + readings.executed());
@@ -122,7 +122,7 @@ final class EntityDomainSelfCheck {
             merge.bindOwnerThread(Thread.currentThread());
             DispatchPass pass = DispatchPass.dispatch(plan, pool, EntityIntegrator.INSTANCE, arena,
                 readings, ledger);
-            merge.merge(pass, System.nanoTime() + 2_000_000_000L, arena, readings, new DiffProbe(),
+            merge.merge(pass, System.nanoTime() + 2_000_000_000L, arena, readings, new DiffLocator(),
                 null, HashWhitelist.bitexact(), DOMAIN_ID, writeBack);
             CommitSegment segment = new CommitSegment(intents, () -> true, () -> 64);
             segment.bindOwnerThread(Thread.currentThread());
@@ -267,9 +267,9 @@ final class EntityDomainSelfCheck {
             row.velY(), row.velZ(), row.flags() ^ 1L, row.slotGeneration(), row.segmentRef()));
         DomainHash before = StateHasher.hash(DOMAIN_ID, tick, rows, HashWhitelist.bitexact());
         DomainHash after = StateHasher.hash(DOMAIN_ID, tick, changed, HashWhitelist.bitexact());
-        DiffProbe probe = new DiffProbe();
+        DiffLocator probe = new DiffLocator();
         probe.compare(after, before);
-        DiffProbe.DiffReport fork = probe.report();
+        DiffLocator.DiffReport fork = probe.report();
         boolean moved = before.value() != after.value();
         boolean headerHeld = before.segmentHeaderDigest() == after.segmentHeaderDigest();
         boolean located = fork.firstForkHostOrdinal() == 3L

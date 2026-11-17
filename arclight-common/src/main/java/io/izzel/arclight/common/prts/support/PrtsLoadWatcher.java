@@ -5,23 +5,23 @@ package io.izzel.arclight.common.prts.support;
  * The seam the platform reports its tick boundary through. A sampler can only tell a wait inside a
  * tick from the wait between two ticks if it is told where the boundary is, and this seam is that
  * one bit: entered when the tick body starts, left when it ends. Both calls are no-ops while no
- * probe is installed, so the seam costs one volatile read on a path the platform already runs.
+ * watcher is installed, so the seam costs one volatile read on a path the platform already runs.
  */
-public final class PrtsLoadProbe {
+public final class PrtsLoadWatcher {
 
-    public interface Probe {
+    public interface Watcher {
 
         void tickEntered();
 
         void tickLeft();
     }
 
-    private static volatile Probe probe;
+    private static volatile Watcher probe;
 
-    private PrtsLoadProbe() {
+    private PrtsLoadWatcher() {
     }
 
-    public static void install(Probe watcher) {
+    public static void install(Watcher watcher) {
         probe = watcher;
     }
 
@@ -29,19 +29,19 @@ public final class PrtsLoadProbe {
         return probe != null;
     }
 
-    public static Probe watcher() {
+    public static Watcher watcher() {
         return probe;
     }
 
     public static void tickEntered() {
-        Probe watcher = probe;
+        Watcher watcher = probe;
         if (watcher != null) {
             watcher.tickEntered();
         }
     }
 
     public static void tickLeft() {
-        Probe watcher = probe;
+        Watcher watcher = probe;
         if (watcher != null) {
             watcher.tickLeft();
         }

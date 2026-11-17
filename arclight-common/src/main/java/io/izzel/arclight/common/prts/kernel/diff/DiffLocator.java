@@ -15,7 +15,7 @@ import java.util.TreeMap;
  * row, and the sidecar answers the entity id of that offset, so a fork is placed on one row without
  * walking a map. A frame that kept no sidecar still descends through the group maps, where it can
  * name the entity but not the offset. */
-public final class DiffProbe {
+public final class DiffLocator {
 
     private long tickPairs;
     private long equal;

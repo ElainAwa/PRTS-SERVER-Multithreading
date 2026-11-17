@@ -4,7 +4,7 @@ package io.izzel.arclight.common.prts.kernel.dispatch;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaScratch;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaSlot;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
-import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
+import io.izzel.arclight.common.prts.kernel.diff.DiffLocator;
 import io.izzel.arclight.common.prts.kernel.diff.DomainHash;
 import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
 import io.izzel.arclight.common.prts.kernel.diff.StateHasher;
@@ -59,7 +59,7 @@ public final class MergeSegment {
 
     /** Merges one dispatched pass, comparing the two arms for the domain alone. */
     public Frame merge(DispatchPass pass, long deadlineNanos, ArenaLedger arena,
-                       DispatchReadings readings, DiffProbe probe, HashWhitelist whitelist,
+                       DispatchReadings readings, DiffLocator probe, HashWhitelist whitelist,
                        String domainId, DispatchWriteBack writeBack) {
         return merge(pass, deadlineNanos, arena, readings, probe, null, whitelist, domainId,
             writeBack);
@@ -67,7 +67,7 @@ public final class MergeSegment {
 
     /** Merges one dispatched pass; the mirror carries the same pair to the module's differential. */
     public Frame merge(DispatchPass pass, long deadlineNanos, ArenaLedger arena,
-                       DispatchReadings readings, DiffProbe probe, DiffProbe mirror,
+                       DispatchReadings readings, DiffLocator probe, DiffLocator mirror,
                        HashWhitelist whitelist, String domainId, DispatchWriteBack writeBack) {
         Thread owner = ownerThread;
         if (owner != null && owner != Thread.currentThread()) {

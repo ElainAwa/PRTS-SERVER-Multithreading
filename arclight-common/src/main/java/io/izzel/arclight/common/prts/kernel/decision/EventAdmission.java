@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.decision;
 
-import io.izzel.arclight.common.prts.kernel.observe.BukkitEventOrderProbe;
+import io.izzel.arclight.common.prts.kernel.observe.BukkitEventOrderObserver;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -128,7 +128,7 @@ public final class EventAdmission {
      * The read-only observation of the host event order for the caller's evidence. It is never an
      * admission input: a missing reading admits nothing and changes no verdict.
      */
-    public Optional<BukkitEventOrderProbe.Reading> eventOrderWitness() {
-        return BukkitEventOrderProbe.reading();
+    public Optional<BukkitEventOrderObserver.Reading> eventOrderWitness() {
+        return BukkitEventOrderObserver.reading();
     }
 }

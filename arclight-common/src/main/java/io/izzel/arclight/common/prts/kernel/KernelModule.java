@@ -72,7 +72,7 @@ import io.izzel.arclight.common.prts.kernel.sites.WorldLifecycleOwner;
 import io.izzel.arclight.common.prts.kernel.sites.WorldSetReadout;
 import io.izzel.arclight.common.prts.kernel.sites.WorldWriteGuard;
 import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
-import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
+import io.izzel.arclight.common.prts.kernel.diff.DiffLocator;
 import io.izzel.arclight.common.prts.kernel.waitpoints.SiteInventory.WaitClass;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitLadder;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry;
@@ -81,7 +81,7 @@ import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSite;
 import io.izzel.arclight.common.prts.kernel.decision.B1DecisionGate;
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityQueryReadings;
-import io.izzel.arclight.common.prts.kernel.observe.BukkitEventOrderProbe;
+import io.izzel.arclight.common.prts.kernel.observe.BukkitEventOrderObserver;
 import io.izzel.arclight.common.prts.kernel.observe.HealthReadings;
 import io.izzel.arclight.common.prts.kernel.observe.MaterializedUnloadedReadings;
 import io.izzel.arclight.common.prts.kernel.observe.QuotaCostReadings;
@@ -254,7 +254,7 @@ public final class KernelModule {
 
     private final ArenaLedger arena = new ArenaLedger();
     private final ArenaPassthrough passthrough = new ArenaPassthrough();
-    private final DiffProbe arms = new DiffProbe();
+    private final DiffLocator arms = new DiffLocator();
     private final PlanClockSeam planClock = new PlanClockSeam();
     private final List<KernelDomain> domains = new ArrayList<>();
     /** Domains that execute but are not declared: a second owner site is driven and shut down, and
@@ -1876,7 +1876,7 @@ public final class KernelModule {
 
     /** The differential of the two arms. The controlled leg compares the arm a run computed with the
      * arm the host path produced; a pair is counted once it was compared, not once it was equal. */
-    public DiffProbe arms() {
+    public DiffLocator arms() {
         return arms;
     }
 
@@ -4172,7 +4172,7 @@ public final class KernelModule {
         QuotaMachineWindow.reset();
         MachineTickDeferral.resetIfIdle();
         DeviceTickDeferral.resetIfIdle();
-        BukkitEventOrderProbe.reset();
+        BukkitEventOrderObserver.reset();
         rconDeferral.resetQueued();
         rconActionPending = false;
         MaterializedUnloadedReadings.reset();

@@ -2,7 +2,7 @@
 package io.izzel.arclight.common.prts.kernel.observe;
 
 import io.izzel.arclight.common.prts.support.PrtsCpuClock;
-import io.izzel.arclight.common.prts.support.PrtsLoadProbe;
+import io.izzel.arclight.common.prts.support.PrtsLoadWatcher;
 
 import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.LongAdder;
  * signature heuristic and not an attribution. The interval and the stall threshold are declared
  * values, not measured ones.
  */
-public final class LoadThreadObserver implements PrtsLoadProbe.Probe {
+public final class LoadThreadObserver implements PrtsLoadWatcher.Watcher {
 
     /** One finished tick as the boundary read it: how long its body took, how much of that the
      * thread was parked, how much cpu it used, and whether the body was a wait stall or a busy one. */
@@ -183,7 +183,7 @@ public final class LoadThreadObserver implements PrtsLoadProbe.Probe {
         startedAtNanos = System.nanoTime();
         PrtsCpuClock.enable();
         noteGc();
-        PrtsLoadProbe.install(this);
+        PrtsLoadWatcher.install(this);
         Thread sampler = new Thread(this::loop, "prts-load-sampler");
         sampler.setDaemon(true);
         sampler.start();
@@ -195,7 +195,7 @@ public final class LoadThreadObserver implements PrtsLoadProbe.Probe {
         }
         installed = false;
         running = false;
-        PrtsLoadProbe.install(null);
+        PrtsLoadWatcher.install(null);
         inTick = false;
         episodeClass = null;
     }

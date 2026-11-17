@@ -63,7 +63,7 @@ import io.izzel.arclight.common.prts.kernel.waitpoints.observe.WaitSiteObserver;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaPassthrough;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaSlot;
-import io.izzel.arclight.common.prts.kernel.diff.DiffProbe;
+import io.izzel.arclight.common.prts.kernel.diff.DiffLocator;
 import io.izzel.arclight.common.prts.kernel.diff.DomainHash;
 import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
 import io.izzel.arclight.common.prts.kernel.diff.StateHasher;
@@ -1591,7 +1591,7 @@ public final class KernelSelfCheck {
      * same fixture, because a comparison that agreed on everything would prove nothing. */
     private static List<String> armMatrix(List<String> failures, long tick) {
         List<String> lines = new ArrayList<>();
-        DiffProbe probe = new DiffProbe();
+        DiffLocator probe = new DiffLocator();
         List<StateHasher.Slice> computed = armRows(8);
         List<StateHasher.Slice> produced = armRows(8);
         for (int offset = 0; offset < 8; offset++) {
@@ -1606,7 +1606,7 @@ public final class KernelSelfCheck {
             row.entitySeq(), row.x(), row.y(), row.z(), row.yaw(), row.pitch(), row.velX(),
             row.velY(), row.velZ(), row.flags() ^ 1L, row.slotGeneration(), row.segmentRef()));
         probe.compare(arm(DOMAIN_ID, tick, deviated), arm(DOMAIN_ID, tick, produced));
-        DiffProbe.DiffReport report = probe.report();
+        DiffLocator.DiffReport report = probe.report();
         lines.add("selftest.arm_agreeing_window=" + pairsAfterAgreeing + "/" + equalAfterAgreeing);
         lines.add("selftest.arm_deviated_pair=" + (report.tickPairs() - pairsAfterAgreeing) + "/"
             + (report.equal() - equalAfterAgreeing));
