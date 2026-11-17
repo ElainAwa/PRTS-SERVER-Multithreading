@@ -376,6 +376,7 @@ public final class EntityCandidateView {
             this.velY = java.util.Arrays.copyOf(this.velY, next);
             this.velZ = java.util.Arrays.copyOf(this.velZ, next);
             this.flags = java.util.Arrays.copyOf(this.flags, next);
+            this.classTags = java.util.Arrays.copyOf(this.classTags, next);
         }
     }
 }
