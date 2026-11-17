@@ -123,9 +123,7 @@ public final class EntityDomain implements KernelDomain {
     private boolean sharedRuntime;
     private MergeSegment.Frame lastFrame = MergeSegment.Frame.empty();
     /** The compute-only program body of the dormant internal switch; null until first used. */
-    /** The dormant host-skip plan of the last dispatch: listed only, nothing in this build consumes
-     * it as a skip decision. Off, it stays the empty plan. */
-    private HostSkipPlan.Plan hostSkipPlan = HostSkipPlan.dormant();
+
     /** The last real cohort this domain dispatched; the evidence tick observes it read-only. */
     private ExecutionCohort lastCohort;
     /** Rows of the pass handed out by this domain; booked as settled only when its merge lands. */
@@ -304,6 +302,10 @@ public final class EntityDomain implements KernelDomain {
 
     @Override
     public void tick(long tick) {
+        if (HOST_SKIP) {
+            HostSkipPlan.beginTick(tick);
+            EntityTickOwnership.bindHostSkip(row -> HostSkipPlan.current().skips(row));
+        }
         // The due window of this server tick was frozen by the level ticks that just ran; it is
         // taken before any early return, so a tick this domain does not dispatch leaves no window
         // behind for the next one.
@@ -545,9 +547,12 @@ public final class EntityDomain implements KernelDomain {
                 }
             }
             if (HOST_SKIP) {
-                // Dormant evidence wiring: the plan lists the rows the owner intends to run; no
-                // host entry consumes the list yet, so the host behaviour is unchanged.
-                hostSkipPlan = HostSkipPlan.of(claimedRows(plan));
+                // The plan lists the rows the owner intends to run; the host entry consumes it
+                // before its existing ownership decision and counts the confirmed rows.
+                List<Integer> ownerRows = claimedRows(plan);
+                HostSkipPlan.Plan skipPlan = HostSkipPlan.of(ownerRows);
+                HostSkipPlan.verifyNoDoubleTick(skipPlan, ownerRows, List.of());
+                HostSkipPlan.publish(skipPlan, tick);
             }
             long dispatchedRows = 0L;
             for (WorkPlan.WorkTask task : orderedTasks) {

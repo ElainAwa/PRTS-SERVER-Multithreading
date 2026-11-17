@@ -5,12 +5,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-/**
- * The dormant host-skip plan of one dispatch: it lists the rows whose original host tick the owner
- * intends to run, so the host entry can skip exactly those rows and never both. The plan is off
- * unless its internal property is set, an off plan lists nothing, and the listed rows are checked
- * against the rows the owner actually took so one row is never skipped and run.
- */
+/** The host-skip plan of one dispatch: the rows whose host tick the owner runs; the host entry
+ * reads it through the bound predicate and the single-authority guard keeps one row on one side. */
 public final class HostSkipPlan {
 
     /** The internal dormant property of the host-skip plan; it is not a configuration key. */
@@ -35,8 +31,30 @@ public final class HostSkipPlan {
     }
 
     private static final Plan DORMANT = new Plan(List.of());
+    private static Plan currentPlan = DORMANT;
+    private static long currentTick = Long.MIN_VALUE;
 
     private HostSkipPlan() {
+    }
+
+    /** Starts one tick: the previous tick's plan is cleared before anything can consume it. */
+    public static synchronized void beginTick(long tick) {
+        currentPlan = DORMANT;
+        currentTick = tick;
+    }
+
+    /** Publishes this tick's plan; the caller is the one server tick thread of the domain. */
+    public static synchronized void publish(Plan plan, long tick) {
+        currentPlan = plan == null ? DORMANT : plan;
+        currentTick = tick;
+    }
+
+    public static synchronized Plan current() {
+        return currentPlan;
+    }
+
+    public static synchronized long publishedTick() {
+        return currentTick;
     }
 
     /** Whether the dormant property is set; off in every shipped build. */
@@ -71,6 +89,25 @@ public final class HostSkipPlan {
             }
         }
         return new Plan(distinct);
+    }
+
+    /** The single-authority guard: every owner row must be skipped here, and no host row may be. */
+    public static Plan verifyNoDoubleTick(Plan plan, List<Integer> ownerRows,
+                                          List<Integer> hostRows) {
+        Objects.requireNonNull(plan, "plan");
+        Objects.requireNonNull(ownerRows, "ownerRows");
+        Objects.requireNonNull(hostRows, "hostRows");
+        for (Integer owner : ownerRows) {
+            if (!plan.skips(owner)) {
+                throw new IllegalStateException("owner row is not in the skip plan: " + owner);
+            }
+        }
+        for (Integer host : hostRows) {
+            if (plan.skips(host)) {
+                throw new IllegalStateException("host row is listed as skipped: " + host);
+            }
+        }
+        return plan;
     }
 
     /** Refuses a plan that would skip a row the owner also runs: one row, one tick. */

@@ -87,6 +87,23 @@ public final class EntityTickOwnership {
         sharedExecutor = executor;
     }
 
+    /** The tick-scoped host-skip handoff; the domain binds it on the server tick thread. */
+    private static volatile java.util.function.IntPredicate hostSkip;
+
+    /** Binds the current tick's host-skip rows; null when the domain's plan is off. */
+    public static void bindHostSkip(java.util.function.IntPredicate rows) {
+        hostSkip = rows;
+    }
+
+    /** Whether the handoff names one row and the owner is armed. */
+    static int planEntry(int entityId, boolean ownershipArmed) {
+        java.util.function.IntPredicate rows = hostSkip;
+        if (rows == null || !ownershipArmed) {
+            return RUN_HOST_TICK;
+        }
+        return rows.test(entityId) ? SKIP_HOST_TICK : RUN_HOST_TICK;
+    }
+
     /** Whether this entity id was claimed for the current tick; the dispatch snapshot must not
      * also freeze a claimed row, or the same row would be computed and written twice. */
     public static boolean claimedForDispatch(int entityId) {
@@ -127,6 +144,8 @@ public final class EntityTickOwnership {
     static final LongAdder DISARMS = new LongAdder();
     /** Rows whose original tick the host did not run. */
     static final LongAdder HOST_SKIPPED = new LongAdder();
+    /** Rows the published host-skip plan confirmed at the host entry. */
+    static final LongAdder PLAN_SKIPPED = new LongAdder();
     /** Rows a host entry left to the host: every row it reached except the skipped ones. */
     static final LongAdder HOST_EXECUTED = new LongAdder();
     /** Tokens withdrawn at the host entry, the left end of the fallback pair. */
@@ -334,7 +353,8 @@ public final class EntityTickOwnership {
 
     /** Whether this process declares the fixture; false means every entry point returns at once. */
     public static String planDiagnostic() {
-        return "planEntries=" + PLAN_ENTRIES.sum() + " live=" + live() + " armed=" + armed()
+        return "planEntries=" + PLAN_ENTRIES.sum() + " planSkipped=" + PLAN_SKIPPED.sum()
+            + " live=" + live() + " armed=" + armed()
             + " testPlanProvider=" + (testPlanProvider != null) + " windowOpen=" + windowOpen
             + " traceReadRows=" + traceReadRows + " traceLevelsRead=" + traceLevelsRead
             + " nonNullLevels=" + DIAG_NONNULL_LEVELS.sum() + " nullLevels=" + DIAG_NULL_LEVELS.sum()
@@ -611,6 +631,10 @@ public final class EntityTickOwnership {
                 noteTrace(serverLevel, entity.getId());
                 verdict = lookup(entity, serverLevel);
                 noteEntry(entity.getId(), verdict == SKIP_HOST_TICK);
+                if (verdict == SKIP_HOST_TICK
+                    && planEntry(entity.getId(), true) == SKIP_HOST_TICK) {
+                    PLAN_SKIPPED.increment();
+                }
             }
         } catch (Throwable fault) {
             // A host entry must never throw: whatever failed in the lookup hands the row back.
