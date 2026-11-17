@@ -99,6 +99,50 @@ public final class ArenaPassthrough {
         return slot(worldId).generation;
     }
 
+    /** One keyed slot: the chunk position inside the world key, so two chunks never share bytes. */
+    public record KeyedResult(boolean held, byte[] payload, long holderGen, boolean stale) {
+    }
+
+    private record KeyedKey(String worldId, long chunkPos) {
+    }
+
+    private static final class KeyedSlot {
+
+        private byte[] held;
+        private long holderGen;
+    }
+
+    private final Map<KeyedKey, KeyedSlot> keyedSlots = new LinkedHashMap<>();
+    private long keyedStaleReads;
+
+    /** Keeps one unknown payload for one chunk position and moves its holder generation. */
+    public synchronized long writeKeyed(String worldId, long chunkPos, long holderGen,
+                                        byte[] payload) {
+        KeyedSlot slot = keyedSlots.computeIfAbsent(new KeyedKey(worldId, chunkPos),
+            key -> new KeyedSlot());
+        slot.held = payload == null ? null : Arrays.copyOf(payload, payload.length);
+        slot.holderGen = holderGen;
+        return holderGen;
+    }
+
+    /** Reads one chunk's payload; an older holder generation is a stale read, not a fake payload. */
+    public synchronized KeyedResult readKeyed(String worldId, long chunkPos, long holderGen) {
+        KeyedSlot slot = keyedSlots.get(new KeyedKey(worldId, chunkPos));
+        if (slot == null || slot.held == null) {
+            return new KeyedResult(false, null, 0L, false);
+        }
+        if (slot.holderGen != holderGen) {
+            keyedStaleReads++;
+            return new KeyedResult(false, null, slot.holderGen, true);
+        }
+        return new KeyedResult(true, Arrays.copyOf(slot.held, slot.held.length),
+            slot.holderGen, false);
+    }
+
+    public synchronized long keyedStaleReads() {
+        return keyedStaleReads;
+    }
+
     public synchronized Reading reading() {
         long held = 0L;
         long bytes = 0L;

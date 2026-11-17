@@ -7,17 +7,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-/**
- * The dormant owner partition: with its internal property set, the tasks of one frozen plan are
- * dealt to the owner sites by their seat in the frozen order, so the union of the sites is the
- * whole plan, their intersection is empty and every site sees the plan order. Dealing by seat
- * keeps the split even for the neighbouring region names of one spawn area, which a hash of the
- * region name can put on one side. With the property off every task keeps site zero and the single
- * owner runs the whole plan unchanged.
- */
+/** Deals the frozen plan seats to the owner sites; off, site zero keeps the whole plan. */
 public final class OwnerPartition {
 
-    /** The internal dormant property; it is not a configuration key. */
+    /** The internal dormant property, not a configuration key. */
     public static final String PROPERTY = "arclight.prts.ownerPartition";
 
     private OwnerPartition() {
@@ -28,7 +21,7 @@ public final class OwnerPartition {
         return Boolean.getBoolean(PROPERTY);
     }
 
-    /** The tasks one site runs, in the frozen plan order; off means the whole plan on site zero. */
+    /** The tasks one site runs, in the frozen plan order. */
     public static List<WorkTask> assign(List<WorkTask> tasks, int siteIndex, int siteCount) {
         Objects.requireNonNull(tasks, "tasks");
         if (siteCount <= 0 || siteIndex < 0 || siteIndex >= siteCount) {

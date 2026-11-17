@@ -7,27 +7,17 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAdder;
 
-/**
- * The shared per-tick row claim of two owner sites: the first site that claims one (world, entity
- * sequence) inside one server tick owns that row for the tick, a later site finds the row taken and
- * skips it instead of running it a second time. The claim state is one map per tick and moves on
- * with the tick, so a row is claimable again on the next tick; the conflict counters are evidence
- * only and no decision reads them. With one owner site the claim always succeeds and the default
- * path sees no change.
- */
+/** The per-tick row claim shared by two owner sites; a later site skips what is taken. */
 public final class OwnerTickClaim {
 
     private record RowKey(String worldId, int entitySeq) {
-    }
-
-    private record Owner(String siteId) {
     }
 
     private final Map<Long, Map<RowKey, String>> claims = new ConcurrentHashMap<>();
     private final Map<Long, Map<String, LongAdder>> conflicts = new ConcurrentHashMap<>();
     private final LongAdder totalConflicts = new LongAdder();
 
-    /** Claims one row for one site in one tick; false means another site already owns the row. */
+    /** Claims one row for one site in one tick; false means another site owns it. */
     public boolean claim(long tick, String siteId, String worldId, int entitySeq) {
         Objects.requireNonNull(siteId, "siteId");
         Objects.requireNonNull(worldId, "worldId");
@@ -59,7 +49,7 @@ public final class OwnerTickClaim {
         return totalConflicts.sum();
     }
 
-    /** Keeps only the newest tick: older claim maps are no longer reachable from the tick loop. */
+    /** Keeps only the newest tick. */
     public void retainTick(long tick) {
         claims.keySet().removeIf(older -> older < tick);
         conflicts.keySet().removeIf(older -> older < tick);

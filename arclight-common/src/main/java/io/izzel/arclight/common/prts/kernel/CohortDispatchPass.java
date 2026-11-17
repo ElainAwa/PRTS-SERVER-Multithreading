@@ -382,7 +382,7 @@ public final class CohortDispatchPass {
                     side.readings().noteBackpressure();
                     yield TaskOutcome.fellback(batchId, 0, thread, settlement.terminalCode());
                 }
-                case PENDING, READY, RUNNING -> null;
+                case PENDING, READY, RUNNING, WAITING -> null;
             };
         }
     }

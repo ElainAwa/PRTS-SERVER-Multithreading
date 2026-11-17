@@ -1,12 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.domain.entity.twoowner;
 
-/**
- * The stable evidence lines of the two-owner window: the per-site tick line and the stop settlement
- * line. Every field has a fixed name so the line can be grepped; a value the caller cannot read is
- * written as {@code N/A} and never as zero. The lines are written only while the two-owner property
- * is on; no readout key is added.
- */
+/** The greppable tick and stop settlement lines of the two-owner window. */
 public final class TwoOwnerEvidence {
 
     /** The placeholder of a value the caller could not read. */
@@ -15,7 +10,7 @@ public final class TwoOwnerEvidence {
     private TwoOwnerEvidence() {
     }
 
-    /** One per-site tick line: plan shape, folded rows, arena pin and conflict counters. */
+    /** One per-site tick line. */
     public static String tickLine(long tick, String siteId, long planTasks, long rows,
                                   long dispatched, long settled, long failed, long arenaPinned,
                                   long planRows, long doneRows, long conflictSkipped,
@@ -36,7 +31,7 @@ public final class TwoOwnerEvidence {
             + " done_total=" + number(doneTotal);
     }
 
-    /** One stop settlement line: the arena, account and intent truth after the close. */
+    /** One stop settlement line. */
     public static String settlementLine(String siteId, long arenaPinned, long arenaReleased,
                                         long claims, long accountsOpen, long accountsClosed,
                                         long intentsApplied, long intentsRefused,
@@ -53,7 +48,6 @@ public final class TwoOwnerEvidence {
             + " rows_done_total=" + number(rowsDoneTotal);
     }
 
-    /** A negative value means the caller could not read the counter. */
     private static String number(long value) {
         return value < 0L ? NOT_AVAILABLE : Long.toString(value);
     }

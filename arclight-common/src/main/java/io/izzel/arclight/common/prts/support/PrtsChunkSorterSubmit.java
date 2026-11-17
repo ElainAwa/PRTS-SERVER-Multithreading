@@ -43,8 +43,7 @@ public final class PrtsChunkSorterSubmit {
         return PrtsPipelineBatches.wrap(minted, task);
     }
 
-    /** Marks the tasks one sorter queue clears as cancelled; the task body still decides. The
-     * cancellation names the subscriber of the queue so another subscriber's tasks stay alive. */
+    /** Marks the tasks one sorter queue clears as cancelled; the task body still decides. */
     public static void release(ProcessorHandle<?> processor, long cell, boolean clearQueue) {
         release(processor, cell, clearQueue, processor == null ? null : processor.name());
     }

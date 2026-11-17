@@ -348,6 +348,13 @@ public final class GenericJobExecutor {
             chargeFailed = true;
             if (failure == null) failure = t;
         }
+        if (failure == null && account != null
+            && account.bucket(node.key()) == WorkAccount.Bucket.WAIT_RESULT) {
+            // The body handed the unit to a capability provider: the asynchronous completion owns
+            // the terminal state, so returning from body.run is not DONE.
+            cohort.markWaiting(node.key());
+            return;
+        }
         cohort.markOutcome(node.key(), failure, chargeFailed);
     }
 
@@ -402,7 +409,7 @@ public final class GenericJobExecutor {
             case CANCELLED -> WorkAccount.Outcome.CANCELLED_NO_EFFECT;
             case CANCELLED_AFTER_EFFECT -> WorkAccount.Outcome.PARTIAL_FAULT;
             case REJECTED -> WorkAccount.Outcome.REJECTED_BEFORE_EFFECT;
-            case PENDING, READY, RUNNING -> null;
+            case PENDING, READY, RUNNING, WAITING -> null;
         };
     }
 

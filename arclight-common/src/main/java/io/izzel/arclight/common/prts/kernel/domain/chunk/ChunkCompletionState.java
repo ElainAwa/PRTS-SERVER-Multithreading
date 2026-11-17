@@ -4,12 +4,7 @@ package io.izzel.arclight.common.prts.kernel.domain.chunk;
 import java.util.EnumSet;
 import java.util.Objects;
 
-/**
- * The completion state of one chunk under one holder generation: the eight layers are marked
- * separately, so loaded and entity-ticking are two different facts, and a result that names an
- * older holder generation is refused instead of advancing the newer one. A new generation starts
- * with no layer reached.
- */
+/** The completion layers of one chunk under one holder generation; loaded is not entity-ticking. */
 public final class ChunkCompletionState {
 
     /** What one mark did. */
@@ -41,12 +36,11 @@ public final class ChunkCompletionState {
     private long holderGen = -1L;
     private final EnumSet<ChunkCompletionLayer> reached =
         EnumSet.noneOf(ChunkCompletionLayer.class);
-    /** The layers a production event really reported; a layer never reported stays NOT_OBSERVED. */
     private final EnumSet<ChunkCompletionLayer> observed =
         EnumSet.noneOf(ChunkCompletionLayer.class);
     private int staleResults;
 
-    /** Marks one layer of one holder generation; an older generation never advances the state. */
+    /** Marks one layer of one holder generation; an older generation never advances it. */
     public synchronized MarkResult mark(long holderGen, ChunkCompletionLayer layer) {
         Objects.requireNonNull(layer, "layer");
         if (this.holderGen >= 0L && holderGen < this.holderGen) {
@@ -73,7 +67,7 @@ public final class ChunkCompletionState {
         return reached.contains(ChunkCompletionLayer.LOADED);
     }
 
-    /** Whether the holder generation has entered entity ticking; loaded alone is not this. */
+    /** Whether the holder generation entered entity ticking; loaded alone is not this. */
     public synchronized boolean entityTicking() {
         return reached.contains(ChunkCompletionLayer.ENTITY_TICKING);
     }
@@ -96,7 +90,7 @@ public final class ChunkCompletionState {
         return reached.contains(ChunkCompletionLayer.ACK);
     }
 
-    /** Whether one layer was really reported; an unobserved layer is NOT_OBSERVED, never true. */
+    /** Whether one layer was really reported; an unobserved layer is not true. */
     public synchronized boolean observed(ChunkCompletionLayer layer) {
         return observed.contains(layer);
     }

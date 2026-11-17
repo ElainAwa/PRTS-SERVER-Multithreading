@@ -67,6 +67,7 @@ public final class ExecutionCohort {
         PENDING,
         READY,
         RUNNING,
+        WAITING,
         DONE,
         FAILED,
         FAILED_AFTER_EFFECT,
@@ -312,6 +313,13 @@ public final class ExecutionCohort {
             witness.attempt++;
         }
         return true;
+    }
+
+    /** Leaves an asynchronous node non-terminal while its capability provider answers. */
+    synchronized void markWaiting(String key) {
+        State state = key == null ? null : states.get(key);
+        if (state != State.RUNNING) return;
+        states.put(key, State.WAITING);
     }
 
     synchronized void markRejected(String key) {
