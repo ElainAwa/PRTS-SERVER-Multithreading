@@ -260,6 +260,8 @@ public final class KernelModule {
     /** Domains that execute but are not declared: a second owner site is driven and shut down, and
      * its readings stay out of the module's domain declarations. */
     private final List<KernelDomain> ownerDomains = new ArrayList<>();
+    /** Whether the domains were already closed at the platform stop. */
+    private boolean domainsClosed;
     private final io.izzel.arclight.common.prts.kernel.domain.entity.twoowner.OwnerTickClaim
         ownerTickClaim = new io.izzel.arclight.common.prts.kernel.domain.entity.twoowner
             .OwnerTickClaim();
@@ -1935,6 +1937,17 @@ public final class KernelModule {
         for (KernelDomain domain : domains) {
             domain.notePlanBoundary();
         }
+    }
+
+    /** Closes the domains once, at the platform stop after the world flush; a second call is a
+     * no-op, so the tick path that stops a disabled kernel and the stopping event cannot close the
+     * runtime twice. */
+    public void closeDomains() {
+        if (domainsClosed) {
+            return;
+        }
+        domainsClosed = true;
+        shutdownDomains();
     }
 
     private void shutdownDomains() {

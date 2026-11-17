@@ -154,7 +154,13 @@ public final class PrtsKernelEvents {
             seal.errored(error);
             throw error;
         } finally {
-            seal.terminal(worlds, module);
+            try {
+                seal.terminal(worlds, module);
+            } finally {
+                // The domains close after the world flush and the terminal snapshot: a pending pass
+                // is aborted, the arena is released and the owner settlement is written once.
+                module.closeDomains();
+            }
         }
     }
 }
