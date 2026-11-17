@@ -682,13 +682,15 @@ public final class EntityDomain implements KernelDomain {
         return StableReadSource.Capture.of(identity, generation, revision, snapshot);
     }
 
-    /** Lists the claimed rows of this plan for the dormant host-skip plan; nothing consumes it yet. */
+    /** Lists the claimed entity ids of this plan: the host entry matches one by entity id, so the
+     * plan must carry that same key and never the row index of this view. */
     private List<Integer> claimedRows(WorkPlan plan) {
         List<Integer> rows = new ArrayList<>();
         for (EntityCandidateView view : plan.views()) {
             for (int row = 0; row < view.count(); row++) {
-                if (EntityTickOwnership.claimedForDispatch((int) view.entitySeq(row))) {
-                    rows.add(row);
+                int entityId = (int) view.entitySeq(row);
+                if (EntityTickOwnership.claimedForDispatch(entityId)) {
+                    rows.add(entityId);
                 }
             }
         }
