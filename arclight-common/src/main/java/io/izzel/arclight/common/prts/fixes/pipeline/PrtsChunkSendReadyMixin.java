@@ -42,7 +42,9 @@ public abstract class PrtsChunkSendReadyMixin {
         }
     }
 
-    @Inject(method = "markChunkPendingToSend(Lnet/minecraft/server/level/ServerPlayer;Lnet/minecraft/world/level/chunk/LevelChunk;)V",
+    @Inject(method = "markChunkPendingToSend("
+        + "Lnet/minecraft/server/level/ServerPlayer;"
+        + "Lnet/minecraft/world/level/chunk/LevelChunk;)V",
         at = @At("HEAD"), require = 1)
     private static void prts$observeQueued(ServerPlayer player, LevelChunk chunk, CallbackInfo ci) {
         if (!ChunkPipelineProgress.installed()) {
