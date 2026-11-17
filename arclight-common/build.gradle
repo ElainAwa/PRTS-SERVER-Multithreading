@@ -35,6 +35,14 @@ dependencies {
     implementation libs.spigot.api
     // Vendored for the signature inventory. A snapshot coordinate would make the offline test fetch.
     paperApi files('src/test/resources/paper/paper-api-1.21.1-R0.1-SNAPSHOT.jar')
+    // Vendored so an offline compile does not resolve Adventure 4.17 from the network.
+    implementation files(
+        'src/main/resources/paper/adventure-api-4.17.0.jar',
+        'src/main/resources/paper/adventure-key-4.17.0.jar',
+        'src/main/resources/paper/adventure-text-serializer-legacy-4.17.0.jar',
+        'src/main/resources/paper/examination-api-1.3.0.jar',
+        'src/main/resources/paper/examination-string-1.3.0.jar'
+    )
     implementation libs.jline
     implementation libs.terminalconsoleappender
     implementation libs.specialsource

@@ -38,7 +38,9 @@ class PaperApiSignatureInventoryTest {
         expect("org/bukkit/plugin/PluginDescriptionFile", "getAPIVersion", "()Ljava/lang/String;", PRESENT);
         expect("io/papermc/paper/plugin/bootstrap/PluginBootstrap", "bootstrap",
             "(Lio/papermc/paper/plugin/bootstrap/BootstrapContext;)V", PRESENT);
-        expect("org/bukkit/event/player/PlayerJoinEvent", "joinMessage", "()Lnet/kyori/adventure/text/Component;", MISSING);
+        expect("org/bukkit/event/player/PlayerJoinEvent", "joinMessage", "()Lnet/kyori/adventure/text/Component;", ADDED);
+        addedBy("org/bukkit/event/player/PlayerJoinEvent", "joinMessage", "()Lnet/kyori/adventure/text/Component;",
+            "io/izzel/arclight/common/mixin/paper/PaperJoinMessageMixin");
         expect("io/papermc/paper/event/player/AsyncChatEvent", "getHandlers", "()Lorg/bukkit/event/HandlerList;", MISSING);
         expect("org/bukkit/event/block/BlockBreakEvent", "isCancelled", "()Z", PRESENT);
         expect("org/bukkit/scheduler/BukkitScheduler", "runTask",
@@ -46,7 +48,7 @@ class PaperApiSignatureInventoryTest {
         expect("org/bukkit/scheduler/BukkitScheduler", "runTaskAsynchronously",
             "(Lorg/bukkit/plugin/Plugin;Ljava/lang/Runnable;)Lorg/bukkit/scheduler/BukkitTask;", PRESENT);
         expect("org/bukkit/command/PluginCommand", "getPlugin", "()Lorg/bukkit/plugin/Plugin;", PRESENT);
-        expect("net/kyori/adventure/text/Component", "text", "(Ljava/lang/String;)Lnet/kyori/adventure/text/TextComponent;", MISSING);
+        expect("net/kyori/adventure/text/Component", "text", "(Ljava/lang/String;)Lnet/kyori/adventure/text/TextComponent;", PRESENT);
         outsideVendoredJar("net/kyori/adventure/text/Component", "text", "(Ljava/lang/String;)Lnet/kyori/adventure/text/TextComponent;");
         expect("org/bukkit/inventory/meta/components/FoodComponent", "getNutrition", "()I", PRESENT);
         expect("org/bukkit/entity/Player", "getPlayerProfile", "()Lcom/destroystokyo/paper/profile/PlayerProfile;", ADDED);
