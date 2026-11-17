@@ -8,10 +8,14 @@ import io.izzel.arclight.common.prts.kernel.SharedRuntime;
 import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
+import io.izzel.arclight.common.prts.kernel.commit.CommitController;
 import io.izzel.arclight.common.prts.kernel.commit.CommitLog;
+import io.izzel.arclight.common.prts.kernel.commit.CommitReservation;
 import io.izzel.arclight.common.prts.kernel.commit.CommitTrace;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.diff.DiffLocator;
+import io.izzel.arclight.common.prts.kernel.domain.accept.ThreeLedgerRealChain;
+import io.izzel.arclight.common.prts.kernel.generic.ExecutionCohort;
 import io.izzel.arclight.common.prts.kernel.diff.DomainHash;
 import io.izzel.arclight.common.prts.kernel.diff.HashWhitelist;
 import io.izzel.arclight.common.prts.kernel.dispatch.DispatchPass;
@@ -122,6 +126,8 @@ public final class EntityDomain implements KernelDomain {
     /** The dormant host-skip plan of the last dispatch: listed only, nothing in this build consumes
      * it as a skip decision. Off, it stays the empty plan. */
     private HostSkipPlan.Plan hostSkipPlan = HostSkipPlan.dormant();
+    /** The last real cohort this domain dispatched; the evidence tick observes it read-only. */
+    private ExecutionCohort lastCohort;
     /** Rows of the pass handed out by this domain; booked as settled only when its merge lands. */
     private long pendingRows;
     /** Rows this domain settled since its last evidence line. */
@@ -319,6 +325,17 @@ public final class EntityDomain implements KernelDomain {
                 module.intents().orderViolationCount(), selfEntityMs());
             EVIDENCE.info(readings.evidenceLine(dispatchArena(), window));
             EVIDENCE.info(writeBack.sampleLine());
+            if (KernelSettings.enabled() && lastCohort != null) {
+                CommitController controller = module.commitController();
+                CommitReservation reservations = controller == null ? null
+                    : controller.reservations();
+                long oldest = reservations == null ? -1L : reservations.oldestPendingAge();
+                String chainWorld = lastCohort.graph().nodes().isEmpty() ? ""
+                    : lastCohort.graph().nodes().get(0).worldId();
+                EVIDENCE.info(ThreeLedgerRealChain.evidenceLine(SharedRuntime.shared().account(),
+                    lastCohort, module.owners(), module.arena(), module.intents(), chainWorld,
+                    oldest));
+            }
             // The census is observation only: it says which rows a takeover could claim and what
             // those rows cost the host, and no decision of this domain reads it.
             EVIDENCE.info(PrtsEntityCapability.censusLine());
@@ -692,7 +709,8 @@ public final class EntityDomain implements KernelDomain {
         JobGraph planned = latest == null ? null : latest.graph();
         CohortDispatchPass.ExecutionSide side = new CohortDispatchPass.ExecutionSide(runtime.pool(),
             runtime.executor(), runtime.arena(), readings, ledger);
-        return CohortDispatchPass.dispatch(plan, side, body(plan), orderedTasks, planned);
+        return CohortDispatchPass.dispatch(plan, side, body(plan), orderedTasks, planned,
+            cohort -> lastCohort = cohort);
     }
 
     @Override

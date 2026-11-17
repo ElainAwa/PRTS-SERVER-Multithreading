@@ -5,10 +5,13 @@ import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
 import io.izzel.arclight.common.prts.kernel.generic.ExecutionCohort;
 import io.izzel.arclight.common.prts.kernel.intent.IntentQueue;
+import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
 import io.izzel.arclight.common.prts.kernel.jobs.WorkAccount;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /** The minimal real three-ledger chain: for every unit of one real work account it joins the
  business account's unit view, the execution cohort's witness and the live resource counts under
@@ -40,6 +43,27 @@ public final class ThreeLedgerRealChain {
     public static Report join(WorkAccount account, ExecutionCohort cohort, OwnerRegistry owners,
                               ArenaLedger arena, IntentQueue intents, String worldId,
                               long oldestObligationAge) {
+        return joinUnits(account, cohort, owners, arena, intents, worldId, oldestObligationAge,
+            null);
+    }
+
+    /** Joins only the units one cohort planned, so a long-lived account is not read as one tick. */
+    public static Report joinCohort(WorkAccount account, ExecutionCohort cohort,
+                                    OwnerRegistry owners, ArenaLedger arena, IntentQueue intents,
+                                    String worldId, long oldestObligationAge) {
+        Set<String> keys = new LinkedHashSet<>();
+        if (cohort != null) {
+            for (JobGraph.Node node : cohort.graph().nodes()) {
+                keys.add(node.key());
+            }
+        }
+        return joinUnits(account, cohort, owners, arena, intents, worldId, oldestObligationAge,
+            keys);
+    }
+
+    private static Report joinUnits(WorkAccount account, ExecutionCohort cohort,
+                                    OwnerRegistry owners, ArenaLedger arena, IntentQueue intents,
+                                    String worldId, long oldestObligationAge, Set<String> keys) {
         List<String> unbound = new ArrayList<>();
         if (account == null) {
             unbound.add("business-account");
@@ -61,6 +85,9 @@ public final class ThreeLedgerRealChain {
         List<String> violations = new ArrayList<>();
         long joined = 0L;
         for (WorkAccount.UnitView unit : account.snapshot().units()) {
+            if (keys != null && !keys.contains(unit.key())) {
+                continue;
+            }
             ExecutionCohort.Witness witness = cohort == null ? null : cohort.witness(unit.key());
             boolean effectBound = witness != null;
             boolean terminal = effectBound && witness.terminal();
@@ -88,6 +115,23 @@ public final class ThreeLedgerRealChain {
         }
         return new Report(List.copyOf(rows), joined, List.copyOf(unbound),
             List.copyOf(violations), resource);
+    }
+
+    /** One bounded evidence line over the real ledgers; read-only and consumed by the evidence path. */
+    public static String evidenceLine(WorkAccount account, ExecutionCohort cohort,
+                                      OwnerRegistry owners, ArenaLedger arena, IntentQueue intents,
+                                      String worldId, long oldestObligationAge) {
+        Report report = joinCohort(account, cohort, owners, arena, intents, worldId,
+            oldestObligationAge);
+        return "three-ledger units=" + report.rows().size() + " joined=" + report.joined()
+            + " unbound=" + (report.unboundSources().isEmpty() ? "none"
+                : String.join(",", report.unboundSources()))
+            + " violations=" + (report.violations().isEmpty() ? "none"
+                : String.join(",", report.violations()))
+            + " owners=" + report.resource().ownerTokens()
+            + " pinned=" + report.resource().arenaPinned()
+            + " intents=" + report.resource().intents()
+            + " oldestAge=" + report.resource().oldestObligationAge();
     }
 
     private static long parseOrdinal(String text) {
