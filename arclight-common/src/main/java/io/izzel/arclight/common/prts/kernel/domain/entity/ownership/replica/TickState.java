@@ -7,6 +7,7 @@
  */
 package io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica;
 
+import io.izzel.arclight.common.prts.kernel.domain.entity.EntityRowFields;
 import net.minecraft.core.BlockPos;
 
 /** The frozen state of one row of one tick. */
@@ -117,6 +118,14 @@ public final class TickState {
     public int waitTime;
     /** The life of a cloud row; past wait time plus life its tick discards the row. */
     public int duration;
+    /** The S2a frozen read fields of the row; null until the plan point captures them. */
+    public EntityRowFields frozen;
+    /** The typed identity witnesses of the row: world lifecycle, logical ordinal and revision. */
+    public String worldId;
+    public long worldIncarnation;
+    public long logicalOrdinal;
+    public long revision;
+
     /** Whether the tick ran the radius branch, so the commit repeats the data write. */
     public boolean radiusStepped;
     /** Whether the tick changed the wait flag, so the commit repeats the data write. */

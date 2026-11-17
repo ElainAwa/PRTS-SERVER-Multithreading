@@ -38,6 +38,7 @@ import io.izzel.arclight.common.prts.support.PrtsHostTickCalls;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.ArmorStandTick;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.TickModels;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.TickState;
+import io.izzel.arclight.common.prts.kernel.domain.entity.LiveEntityAccess;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.WholeTickModel;
 import io.izzel.arclight.common.prts.support.PrtsEntityRescope;
 import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
@@ -95,6 +96,35 @@ public final class EntityTickOwnership {
         hostSkip = rows;
     }
 
+    /** The typed identity of one frozen plan-point row. */
+    record TypedUpdate(String unitId, long ordinal, String worldId, long worldIncarnation,
+                       long generation, long revision) {
+    }
+
+    /** Names a plan/verdict mismatch; a mismatch is counted, never cancelled or lost. */
+    static String planMismatch(int verdict, boolean planned) {
+        if (planned && verdict != SKIP_HOST_TICK) {
+            PLAN_RUN_FALLBACK.increment();
+            return "plan-owner-run";
+        }
+        if (!planned && verdict == SKIP_HOST_TICK) {
+            PLAN_SKIP_UNPLANNED.increment();
+            return "owner-skip-plan-missing";
+        }
+        return "";
+    }
+
+    static TypedUpdate typedUpdate(int entityId, long ordinal, String worldId, long incarnation,
+                                   long generation, long revision) {
+        return new TypedUpdate("entity:" + entityId + "#" + ordinal, ordinal, worldId, incarnation,
+            generation, revision);
+    }
+
+    /** Whether the current tick carries a host-skip handoff at all. */
+    static boolean planActive() {
+        return hostSkip != null;
+    }
+
     /** Whether the handoff names one row and the owner is armed. */
     static int planEntry(int entityId, boolean ownershipArmed) {
         java.util.function.IntPredicate rows = hostSkip;
@@ -146,6 +176,9 @@ public final class EntityTickOwnership {
     static final LongAdder HOST_SKIPPED = new LongAdder();
     /** Rows the published host-skip plan confirmed at the host entry. */
     static final LongAdder PLAN_SKIPPED = new LongAdder();
+    static final LongAdder PLAN_RUN_FALLBACK = new LongAdder();
+    static final LongAdder PLAN_SKIP_UNPLANNED = new LongAdder();
+    static final LongAdder TYPED_UPDATES = new LongAdder();
     /** Rows a host entry left to the host: every row it reached except the skipped ones. */
     static final LongAdder HOST_EXECUTED = new LongAdder();
     /** Tokens withdrawn at the host entry, the left end of the fallback pair. */
@@ -354,6 +387,9 @@ public final class EntityTickOwnership {
     /** Whether this process declares the fixture; false means every entry point returns at once. */
     public static String planDiagnostic() {
         return "planEntries=" + PLAN_ENTRIES.sum() + " planSkipped=" + PLAN_SKIPPED.sum()
+            + " planMismatchFallback=" + PLAN_RUN_FALLBACK.sum()
+            + " planMismatchUnplanned=" + PLAN_SKIP_UNPLANNED.sum()
+            + " typedUpdates=" + TYPED_UPDATES.sum()
             + " live=" + live() + " armed=" + armed()
             + " testPlanProvider=" + (testPlanProvider != null) + " windowOpen=" + windowOpen
             + " traceReadRows=" + traceReadRows + " traceLevelsRead=" + traceLevelsRead
@@ -578,6 +614,13 @@ public final class EntityTickOwnership {
             }
             TickState state = new TickState();
             model.capture(entity, state);
+            // The same tick thread freezes the S2a scalar matrix once; the typed identity follows it.
+            state.frozen = LiveEntityAccess.readFields(entity);
+            state.worldId = worldIdOf(level);
+            state.worldIncarnation = worldEpoch;
+            state.logicalOrdinal = tick;
+            state.revision = entity.tickCount + 1L;
+            TYPED_UPDATES.increment();
             // The capability of the row is frozen here, from values read once on the tick thread:
             // the whole-tick model is the proof that this row's tick is pure kinematics, and the
             // row-level recheck says whether this row is one that model still covers. Every value
@@ -631,9 +674,14 @@ public final class EntityTickOwnership {
                 noteTrace(serverLevel, entity.getId());
                 verdict = lookup(entity, serverLevel);
                 noteEntry(entity.getId(), verdict == SKIP_HOST_TICK);
-                if (verdict == SKIP_HOST_TICK
-                    && planEntry(entity.getId(), true) == SKIP_HOST_TICK) {
+                boolean planActive = planActive();
+                boolean planned = planActive
+                    && planEntry(entity.getId(), true) == SKIP_HOST_TICK;
+                if (planned && verdict == SKIP_HOST_TICK) {
                     PLAN_SKIPPED.increment();
+                }
+                if (planActive) {
+                    planMismatch(verdict, planned);
                 }
             }
         } catch (Throwable fault) {
