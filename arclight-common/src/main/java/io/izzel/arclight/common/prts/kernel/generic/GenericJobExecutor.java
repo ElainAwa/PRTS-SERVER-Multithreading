@@ -261,7 +261,8 @@ public final class GenericJobExecutor {
         cohort.onSettled(settlement -> {
             WorkAccount.Outcome outcome = outcomeOf(settlement.state());
             if (outcome == null) return;
-            if (account.close(settlement.key(), outcome, settlement.terminalCode())) {
+            if (account.close(accountUnitId(cohort, settlement.key()), outcome,
+                settlement.terminalCode())) {
                 account.settle();
             }
         });
@@ -395,9 +396,16 @@ public final class GenericJobExecutor {
         if (account == null) return;
         JobGraph graph = cohort.graph();
         for (JobGraph.Node node : graph.nodes()) {
-            account.offer(node.key(), node.key(), node.worldId(), node.domainId());
-            account.seat(node.key(), graph.planSequence(), graph.tickIndex(), node.position());
+            String unitId = accountUnitId(cohort, node.key());
+            account.offer(unitId, node.key(), node.worldId(), node.domainId());
+            account.seat(unitId, graph.planSequence(), graph.tickIndex(), node.position());
         }
+    }
+
+    /** The one unit identity of a node: its key joined with the declared logical update ordinal. */
+    private static String accountUnitId(ExecutionCohort cohort, String key) {
+        JobGraph.Node node = cohort.graph().nodeByKey(key);
+        return WorkAccount.unitId(key, node == null ? 0L : node.logicalUpdateOrdinal());
     }
 
     private static WorkAccount.Outcome outcomeOf(ExecutionCohort.State state) {

@@ -98,9 +98,10 @@ public final class CohortDispatchPass {
                 continue;
             }
             ArenaSlot.Lease lease = slot.lease(plan.planEpoch());
-            String key = keyOf(task, plan.tickIndex(), byKey);
+            String key = keyOf(task, byKey);
             String baseKey = DispatchWriteBack.nodeKey(task);
-            Unit unit = new Unit(key, baseKey, batch, body, token, slot, lease, side);
+            Unit unit = new Unit(key, baseKey, plan.tickIndex(), batch, body, token, slot, lease,
+                side);
             units.add(unit);
             byKey.put(key, unit);
             byBaseKey.put(baseKey, unit);
@@ -172,8 +173,8 @@ public final class CohortDispatchPass {
         return WorkAccount.unitId(DispatchWriteBack.nodeKey(task), plan.tickIndex());
     }
 
-    private static String keyOf(WorkTask task, long tickIndex, Map<String, Unit> taken) {
-        String key = WorkAccount.unitId(DispatchWriteBack.nodeKey(task), tickIndex);
+    private static String keyOf(WorkTask task, Map<String, Unit> taken) {
+        String key = DispatchWriteBack.nodeKey(task);
         if (!taken.containsKey(key)) {
             return key;
         }
@@ -251,7 +252,7 @@ public final class CohortDispatchPass {
             predecessors, successors, task.entityCount(),
             task.worldId() + "/" + DOMAIN + "/" + task.regionId(), task.cancelScope(), List.of(ref),
             List.of(ref), List.of(), ShareClass.ENTITY, JobDeclaration.SiteClass.PARALLEL, BATCH_KIND,
-            Math.max(1, task.entityCount()), false, position);
+            Math.max(1, task.entityCount()), false, position, null, unit.ordinal());
     }
 
     private enum Fault {
@@ -266,6 +267,7 @@ public final class CohortDispatchPass {
     private static final class Unit {
 
         private final String key;
+        private final long ordinal;
         private final String baseKey;
         private final WorkBatch batch;
         private final WorkBody body;
@@ -280,10 +282,11 @@ public final class CohortDispatchPass {
         private volatile String code = "";
         private volatile long checksum;
 
-        private Unit(String key, String baseKey, WorkBatch batch, WorkBody body, CancelToken token,
-                     ArenaSlot slot, ArenaSlot.Lease lease, ExecutionSide side) {
+        private Unit(String key, String baseKey, long ordinal, WorkBatch batch, WorkBody body,
+                     CancelToken token, ArenaSlot slot, ArenaSlot.Lease lease, ExecutionSide side) {
             this.key = key;
             this.baseKey = baseKey;
+            this.ordinal = ordinal;
             this.batch = batch;
             this.body = body;
             this.token = token;
@@ -299,6 +302,10 @@ public final class CohortDispatchPass {
 
         private String baseKey() {
             return baseKey;
+        }
+
+        private long ordinal() {
+            return ordinal;
         }
 
         private WorkBatch batch() {

@@ -406,7 +406,8 @@ public final class JobGraphBuilder {
                 next.worldId(), next.domainId(), next.level(), next.predecessors(), next.successors(),
                 next.priority(), next.affinity(), next.cancelScope(), next.readSet(), next.writeSet(),
                 next.ownerDemands(), next.shareClass(), next.siteClass(), next.batchKind(),
-                next.batchBound(), next.splitIntent(), ordered.size(), next.range());
+                next.batchBound(), next.splitIntent(), ordered.size(), next.range(),
+                next.logicalUpdateOrdinal());
             ordered.add(placed);
             positions.put(placed.nodeId(), placed.position());
             if (placed.root()) {
@@ -460,6 +461,7 @@ public final class JobGraphBuilder {
             declaration.priority(), declaration.affinity(), declaration.cancelScope(),
             declaration.readSet(), declaration.writeSet(), declaration.ownerDemands(),
             declaration.shareClass(), declaration.siteClass(), declaration.batchKind(),
-            declaration.batchBound(), declaration.crossesDomains(), position, declaration.range());
+            declaration.batchBound(), declaration.crossesDomains(), position, declaration.range(),
+            declaration.logicalUpdateOrdinal());
     }
 }

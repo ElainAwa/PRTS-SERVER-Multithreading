@@ -31,7 +31,8 @@ public record JobGraph(long tickIndex, long planSequence, long worldSetGeneratio
                        List<JobDeclaration.DomainRef> writeSet,
                        List<JobDeclaration.OwnerDemand> ownerDemands, ShareClass shareClass,
                        JobDeclaration.SiteClass siteClass, int batchKind, int batchBound,
-                       boolean splitIntent, int position, JobDeclaration.WriteRange range) {
+                       boolean splitIntent, int position, JobDeclaration.WriteRange range,
+                       long logicalUpdateOrdinal) {
 
         /** A node frozen from a declaration that declared no range: the shape every node had before a
          * range could be declared. */
@@ -44,7 +45,20 @@ public record JobGraph(long tickIndex, long planSequence, long worldSetGeneratio
                     boolean splitIntent, int position) {
             this(nodeId, key, handle, worldId, domainId, level, predecessors, successors, priority,
                 affinity, cancelScope, readSet, writeSet, ownerDemands, shareClass, siteClass,
-                batchKind, batchBound, splitIntent, position, null);
+                batchKind, batchBound, splitIntent, position, null, 0L);
+        }
+
+        /** A node without a declared range but with the update ordinal. */
+        public Node(long nodeId, String key, long handle, String worldId, String domainId, int level,
+                    List<String> predecessors, List<Long> successors, int priority, String affinity,
+                    String cancelScope, List<JobDeclaration.DomainRef> readSet,
+                    List<JobDeclaration.DomainRef> writeSet,
+                    List<JobDeclaration.OwnerDemand> ownerDemands, ShareClass shareClass,
+                    JobDeclaration.SiteClass siteClass, int batchKind, int batchBound,
+                    boolean splitIntent, int position, long logicalUpdateOrdinal) {
+            this(nodeId, key, handle, worldId, domainId, level, predecessors, successors, priority,
+                affinity, cancelScope, readSet, writeSet, ownerDemands, shareClass, siteClass,
+                batchKind, batchBound, splitIntent, position, null, logicalUpdateOrdinal);
         }
 
         public Node {
@@ -53,6 +67,12 @@ public record JobGraph(long tickIndex, long planSequence, long worldSetGeneratio
             readSet = List.copyOf(readSet);
             writeSet = List.copyOf(writeSet);
             ownerDemands = List.copyOf(ownerDemands);
+        }
+
+        /** The unit identity this node joins the business account under. */
+        public String unitId() {
+            return io.izzel.arclight.common.prts.kernel.jobs.WorkAccount.unitId(key,
+                logicalUpdateOrdinal);
         }
 
         public boolean root() {
