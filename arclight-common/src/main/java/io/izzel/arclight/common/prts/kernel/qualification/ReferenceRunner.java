@@ -35,6 +35,14 @@ public final class ReferenceRunner {
         DualReferenceParityHarness.Result run(ReferenceInput input);
     }
 
+    /** The named refusal of a reference entry; the host adapter throws it when unbound. */
+    public static final class ReferenceRefusal extends RuntimeException {
+
+        public ReferenceRefusal(String message) {
+            super(message);
+        }
+    }
+
     /** One mode's result with its named status. */
     public record ModeResult(Mode mode, String status, DualReferenceParityHarness.Result result,
                              String reason) {
@@ -114,11 +122,21 @@ public final class ReferenceRunner {
         List<Mode> order = new ArrayList<>(List.of(Mode.A_HOST_SERIAL, Mode.B_NATIVE_SERIAL,
             Mode.C_OWNER_PARALLEL));
         Map<Mode, ModeResult> results = new LinkedHashMap<>();
-        ModeResult a = hostSerial != null && hostAuthorized && hostSerial.available()
-            ? new ModeResult(Mode.A_HOST_SERIAL, "PASS", hostSerial.run(input), "")
-            : new ModeResult(Mode.A_HOST_SERIAL, "NOT_RUN", null,
+        ModeResult a;
+        if (hostSerial != null && hostAuthorized && hostSerial.available()) {
+            try {
+                a = new ModeResult(Mode.A_HOST_SERIAL, "PASS", hostSerial.run(input), "");
+            } catch (ReferenceRefusal refusal) {
+                a = new ModeResult(Mode.A_HOST_SERIAL, "REFUSED", null, refusal.getMessage());
+            } catch (Throwable failure) {
+                a = new ModeResult(Mode.A_HOST_SERIAL, "REFUSED", null,
+                    "host-serial-failed:" + failure.getClass().getSimpleName());
+            }
+        } else {
+            a = new ModeResult(Mode.A_HOST_SERIAL, "NOT_RUN", null,
                 hostSerial == null ? "host-serial-adapter-absent"
                     : "host-serial-live-not-authorized");
+        }
         results.put(Mode.A_HOST_SERIAL, a);
         ModeResult b = execute(nativeSerial, input);
         results.put(Mode.B_NATIVE_SERIAL, b);
