@@ -12,6 +12,8 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
+import io.izzel.arclight.common.prts.kernel.domain.entity.interaction.PoiSingleWinnerWiring;
+
 import java.util.Optional;
 import java.util.function.BiPredicate;
 import java.util.function.Predicate;
