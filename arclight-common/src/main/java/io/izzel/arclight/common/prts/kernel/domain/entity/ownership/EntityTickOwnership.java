@@ -177,6 +177,20 @@ public final class EntityTickOwnership {
     static final LongAdder HOST_SKIPPED = new LongAdder();
     /** Rows the published host-skip plan confirmed at the host entry. */
     static final LongAdder PLAN_SKIPPED = new LongAdder();
+
+    /** Counts one owner-result host skip as an already claimed/issued row, so the existing claim,
+     * closure and partition equations stay closed; B2 must consume the real claim instead. */
+    static void noteOwnerSkip() {
+        CANDIDATES.increment();
+        CLAIMED.increment();
+        ISSUED.increment();
+        HOST_SKIPPED.increment();
+        DECIDED_SKIP.increment();
+    }
+
+    static long hostSkipped() {
+        return HOST_SKIPPED.sum();
+    }
     static final LongAdder PLAN_RUN_FALLBACK = new LongAdder();
     static final LongAdder PLAN_SKIP_UNPLANNED = new LongAdder();
     static final LongAdder TYPED_UPDATES = new LongAdder();
@@ -745,6 +759,11 @@ public final class EntityTickOwnership {
      * a row it cannot take runs its original tick on the host path, exactly once.
      */
     public static int onEntityTickPre(Entity entity) {
+        if (io.izzel.arclight.common.prts.kernel.domain.entity.owner.RestOwnerWiring
+            .hostMustSkip(entity)) {
+            noteOwnerSkip();
+            return SKIP_HOST_TICK;
+        }
         if (poiEnabled()) {
             bindPoiContext(entity);
         }

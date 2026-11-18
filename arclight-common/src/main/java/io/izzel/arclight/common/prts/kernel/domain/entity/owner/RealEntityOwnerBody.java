@@ -73,9 +73,11 @@ public final class RealEntityOwnerBody {
         } catch (Throwable failedAfterEffect) {
             TERMINALS.increment();
             window.quarantine(failedAfterEffect.getClass().getSimpleName());
+            RestOwnerWiring.record(villager, Result.TERMINAL);
             return Result.TERMINAL;
         }
         RUNS.increment();
+        RestOwnerWiring.record(villager, Result.EXECUTED);
         return Result.EXECUTED;
     }
 }
