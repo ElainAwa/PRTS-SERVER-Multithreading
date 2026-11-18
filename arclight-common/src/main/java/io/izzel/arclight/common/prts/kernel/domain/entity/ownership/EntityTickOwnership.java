@@ -578,7 +578,11 @@ public final class EntityTickOwnership {
         long tick = server.getTickCount();
         beginTickRecord(tick);
         long startedAt = System.nanoTime();
-        OwnershipLease lease = new OwnershipLease(tick, MAX_ROWS, nextToken);
+        // The lease only ever holds the rows this plan point walks, so its capacity is the trace it
+        // is about to read, capped by the declared memory guard: the guard still bounds the leases,
+        // while the arrays no longer pay for a capacity the tick does not use.
+        int leaseCapacity = Math.max(1, Math.min(MAX_ROWS, traceReadRows));
+        OwnershipLease lease = new OwnershipLease(tick, leaseCapacity, nextToken);
         for (int row = 0; row < traceReadRows; row++) {
             ServerLevel level = traceLevelsRead[row];
             if (level == null) {
