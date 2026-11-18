@@ -61,6 +61,30 @@ public final class ArmorStandTick {
 
     /** The first condition that keeps this row out of the ownership set, or {@link #REPLICABLE}. */
     public static int refusal(ArmorStand stand) {
+        int state = refusalState(stand);
+        if (state != REPLICABLE) {
+            return state;
+        }
+        EntityQueryReadings.noteQuery();
+        if (!stand.level().getEntities(stand, stand.getBoundingBox().inflate(0.5D),
+            EntitySelector.pushableBy(stand)).isEmpty()) {
+            return STATE;
+        }
+        return REPLICABLE;
+    }
+
+    /** The same refusal when the caller already read the inflated neighbour box once this tick. */
+    public static int refusal(ArmorStand stand, boolean pushedNeighbour) {
+        int state = refusalState(stand);
+        if (state != REPLICABLE) {
+            return state;
+        }
+        return pushedNeighbour ? STATE : REPLICABLE;
+    }
+
+    /** The declared conditions that need no neighbour read; the caller adds the box verdict. */
+    private static int refusalState(ArmorStand stand) {
+
         // A row with physics runs LivingEntity#travel, and that call decides motion from block
         // collisions, the friction of the block below and fall damage. A worker may not read the
         // world, so those rows are out of the model rather than approximated.
@@ -132,14 +156,6 @@ public final class ArmorStandTick {
             || livingState.prts$lastHurtByPlayer() != null
             || stand.getLastHurtMob() != null || stand.getLastHurtByMob() != null
             || stand.hurtTime != 0 || stand.invulnerableTime != 0 || stand.deathTime != 0) {
-            return STATE;
-        }
-        // The armour stand pushes the rideable minecarts within 0.2 blocks of its centre, and the
-        // living push walks everything pushable that overlaps it. A pushable entity within half a
-        // block is inside the inflated box of the row, so this one query refuses both cases.
-        EntityQueryReadings.noteQuery();
-        if (!stand.level().getEntities(stand, stand.getBoundingBox().inflate(0.5D),
-            EntitySelector.pushableBy(stand)).isEmpty()) {
             return STATE;
         }
         return REPLICABLE;

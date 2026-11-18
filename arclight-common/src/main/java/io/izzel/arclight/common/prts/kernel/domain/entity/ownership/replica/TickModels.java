@@ -126,6 +126,11 @@ public final class TickModels {
         }
 
         @Override
+        public int refusal(Entity entity, boolean pushedNeighbour) {
+            return ArmorStandTick.refusal((ArmorStand) entity, pushedNeighbour);
+        }
+
+        @Override
         public void capture(Entity entity, TickState state) {
             ArmorStandTick.capture((ArmorStand) entity, state);
         }

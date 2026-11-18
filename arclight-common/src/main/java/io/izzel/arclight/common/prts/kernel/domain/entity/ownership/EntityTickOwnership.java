@@ -583,6 +583,12 @@ public final class EntityTickOwnership {
         // while the arrays no longer pay for a capacity the tick does not use.
         int leaseCapacity = Math.max(1, Math.min(MAX_ROWS, traceReadRows));
         OwnershipLease lease = new OwnershipLease(tick, leaseCapacity, nextToken);
+        // The rows of one plan point usually stand in one world; its identity, generation and
+        // segment frame are read once per level instead of once per row.
+        ServerLevel planLevel = null;
+        String planWorldId = null;
+        long planWorldEpoch = 0L;
+        SegmentWork planSegment = null;
         for (int row = 0; row < traceReadRows; row++) {
             ServerLevel level = traceLevelsRead[row];
             if (level == null) {
@@ -604,8 +610,14 @@ public final class EntityTickOwnership {
             int slot = TickModels.slotOf(entity);
             TakeoverWhitelist.noteSeen(slot, entity.getClass());
             EntityOwnershipCensus.observe(entity, profile);
-            long worldEpoch = worldEpochOf(level);
-            SegmentWork segment = SEGMENTS.of(level, worldIdOf(level), worldEpoch, tick);
+            if (level != planLevel) {
+                planLevel = level;
+                planWorldId = worldIdOf(level);
+                planWorldEpoch = worldEpochOf(level);
+                planSegment = SEGMENTS.of(level, planWorldId, planWorldEpoch, tick);
+            }
+            long worldEpoch = planWorldEpoch;
+            SegmentWork segment = planSegment;
             if (worldEpoch <= 0L) {
                 // The lifecycle guard does not track this world, so the row is not a row this
                 // takeover may answer for: it is watched, never claimed.
@@ -638,7 +650,7 @@ public final class EntityTickOwnership {
             model.capture(entity, state);
             // The same tick thread freezes the S2a scalar matrix once; the typed identity follows it.
             state.frozen = LiveEntityAccess.readFields(entity);
-            state.worldId = worldIdOf(level);
+            state.worldId = planWorldId;
             state.worldIncarnation = worldEpoch;
             state.logicalOrdinal = tick;
             state.revision = entity.tickCount + 1L;

@@ -81,17 +81,31 @@ final class OwnershipEligibility {
         boolean fire = entity.isOnFire();
         boolean fluid = entity.isInWater() || entity.isInLava() || entity.isInPowderSnow;
         EntityEligibility.Fact neighbours = EntityEligibility.Fact.UNREAD;
+        boolean pushedNeighbour = false;
+        boolean neighbourRead = false;
         if (model != null && !fire && !fluid) {
+            // The inflated box is a superset of the exact box the eligibility fact needs: one scan
+            // answers both when it is empty, and only a non-empty inflated box asks for the exact
+            // box as well. The model then reuses this verdict instead of scanning again.
             EntityQueryReadings.noteQuery();
-            neighbours = level.getEntities(entity, entity.getBoundingBox(),
-                EntitySelector.pushableBy(entity)).isEmpty()
-                ? EntityEligibility.Fact.NO : EntityEligibility.Fact.YES;
+            pushedNeighbour = !level.getEntities(entity, entity.getBoundingBox().inflate(0.5D),
+                EntitySelector.pushableBy(entity)).isEmpty();
+            neighbourRead = true;
+            if (pushedNeighbour) {
+                EntityQueryReadings.noteQuery();
+                neighbours = level.getEntities(entity, entity.getBoundingBox(),
+                    EntitySelector.pushableBy(entity)).isEmpty()
+                    ? EntityEligibility.Fact.NO : EntityEligibility.Fact.YES;
+            } else {
+                neighbours = EntityEligibility.Fact.NO;
+            }
         }
         EntityEligibility.Reason reason = EntityEligibility.classify(
             EntityEligibility.observedFacts(player, foreignClass, removed, riding, aiMob,
                 itemOrProjectile, modelFact, read(fire), read(fluid), neighbours));
         if (reason == EntityEligibility.Reason.ELIGIBLE && model != null) {
-            int refusal = model.refusal(entity);
+            int refusal = neighbourRead ? model.refusal(entity, pushedNeighbour)
+                : model.refusal(entity);
             if (refusal != WholeTickModel.REPLICABLE) {
                 model.noteRefusal(refusal);
                 reason = EntityEligibility.Reason.MODEL;

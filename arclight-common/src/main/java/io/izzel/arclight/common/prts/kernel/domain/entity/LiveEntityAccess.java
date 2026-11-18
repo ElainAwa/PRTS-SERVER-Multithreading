@@ -17,8 +17,17 @@ import org.bukkit.Bukkit;
 import org.bukkit.World;
 import org.bukkit.craftbukkit.v.CraftWorld;
 
+import java.util.Set;
+
 /** The one place the write-back reaches a live entity; everything here runs on the thread that owns the tick. */
 public final class LiveEntityAccess {
+
+    /** The group names of one row shape; the set is shared because the names depend only on the
+     * row's class hierarchy, and one plan point reads thousands of rows with the same shape. */
+    private static final Set<String> LIFECYCLE_GROUPS = Set.of("LIFECYCLE");
+    private static final Set<String> LIVING_GROUPS = Set.of("LIFECYCLE", "HEALTH", "AIR");
+    private static final Set<String> MOB_GROUPS = Set.of("LIFECYCLE", "HEALTH", "AIR", "MOB",
+        "BRAIN", "GOAL", "NAVIGATION");
 
     private LiveEntityAccess() {
     }
@@ -70,8 +79,7 @@ public final class LiveEntityAccess {
         boolean removed = entity.isRemoved();
         boolean passenger = entity.isPassenger();
         int tickCount = entity.tickCount;
-        java.util.Set<String> groups = new java.util.LinkedHashSet<>();
-        groups.add("LIFECYCLE");
+        Set<String> groups = LIFECYCLE_GROUPS;
         double health = -1.0;
         double maxHealth = -1.0;
         int air = -1;
@@ -81,8 +89,7 @@ public final class LiveEntityAccess {
             maxHealth = living.getMaxHealth();
             air = living.getAirSupply();
             maxAir = living.getMaxAirSupply();
-            groups.add("HEALTH");
-            groups.add("AIR");
+            groups = LIVING_GROUPS;
         }
         boolean hasTarget = false;
         boolean noAi = false;
@@ -118,10 +125,7 @@ public final class LiveEntityAccess {
             navPath = mob.getNavigation().getPath() != null;
             navProgress = mob.getNavigation().isInProgress();
             navValue = navPath ? 1.0 : 0.0;
-            groups.add("MOB");
-            groups.add("BRAIN");
-            groups.add("GOAL");
-            groups.add("NAVIGATION");
+            groups = MOB_GROUPS;
         }
         return new EntityRowFields(removed, passenger, tickCount, health, maxHealth, air, maxAir,
             hasTarget, noAi, brainMask, goalMask, priorityMask, -1, -1, navPath, navProgress,

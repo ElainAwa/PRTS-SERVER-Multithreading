@@ -24,6 +24,13 @@ public interface WholeTickModel {
     /** The first condition that keeps this row out of the model, or {@link #REPLICABLE}. */
     int refusal(Entity entity);
 
+    /** The same refusal when the caller has already read the row's inflated neighbour box this
+     * tick; a model whose refusal is a pure function of the row and that verdict overrides it so
+     * the plan point does not scan the same section twice. */
+    default int refusal(Entity entity, boolean pushedNeighbour) {
+        return refusal(entity);
+    }
+
     /** Whether the row is still one this model covers, judged without a world query; the host
      * entry rechecks it between the plan point and the tick, and a false sends the row to the host. */
     default boolean retains(Entity entity) {
