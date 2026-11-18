@@ -271,6 +271,10 @@ public final class EntityTickOwnership {
     static final LongAdder ORDER_VIOLATIONS = new LongAdder();
 
     private static volatile OwnershipLease current;
+
+    /** The entity ids the plan point claimed this tick; the host-skip plan carries these ids, so
+     * it does not depend on a later reader still holding the lease (the entry closes it first). */
+    private static volatile java.util.List<Integer> claimedRows = java.util.List.of();
     // True while an armed plan point has opened a window whose frames are not closed yet.
     private static boolean windowOpen;
     private static volatile boolean disarmed;
@@ -650,6 +654,7 @@ public final class EntityTickOwnership {
             }
         }
         nextToken = lease.lastToken();
+        recordClaimedRows(lease);
         Executor target = sharedExecutor;
         lease.publish(target != null ? target : Runnable::run, Math.max(1, workerCount() * 4));
         PLAN_NANOS.add(System.nanoTime() - startedAt);
@@ -1353,8 +1358,23 @@ public final class EntityTickOwnership {
         return coverage() * cMoveNanos() - (double) added / (double) candidates;
     }
 
+    /** The entity ids the plan point claimed this tick, in claim order. */
+    public static java.util.List<Integer> claimedRowsSnapshot() {
+        return claimedRows;
+    }
+
+    /** Records the claimed row entities of one lease; one id per row, in issue order. */
+    static void recordClaimedRows(OwnershipLease lease) {
+        java.util.List<Integer> rows = new java.util.ArrayList<>(lease.rows());
+        for (int index = 0; index < lease.rows(); index++) {
+            rows.add(lease.capability(index).entityId());
+        }
+        claimedRows = java.util.List.copyOf(rows);
+    }
+
     /** Clears every counter and forgets the trace; the readout reset and the tests use it. */
     public static void reset() {
+        claimedRows = java.util.List.of();
         EntityOwnershipCensus.reset();
         ISSUED.reset();
         CANDIDATES.reset();
@@ -1785,6 +1805,7 @@ public final class EntityTickOwnership {
 
     static void install(OwnershipLease lease, SegmentWork... segments) {
         ISSUED.add(lease.rows());
+        recordClaimedRows(lease);
         CLAIMED.add(lease.rows());
         for (int index = 0; index < lease.rows(); index++) {
             OwnershipLease.EntityCapability capability = lease.capability(index);

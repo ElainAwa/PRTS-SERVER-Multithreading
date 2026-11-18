@@ -577,7 +577,7 @@ public final class EntityDomain implements KernelDomain {
                 // The dispatch above runs the ownership plan point that claims this tick's rows, so
                 // the skip list is published only now; publishing it before the claims would hand
                 // the host entry an empty plan and the owner rows would never be skipped.
-                List<Integer> ownerRows = claimedRows(plan);
+                List<Integer> ownerRows = claimedRows();
                 HostSkipPlan.Plan skipPlan = HostSkipPlan.of(ownerRows);
                 HostSkipPlan.verifyNoDoubleTick(skipPlan, ownerRows, List.of());
                 HostSkipPlan.publish(skipPlan, tick);
@@ -683,19 +683,11 @@ public final class EntityDomain implements KernelDomain {
         return StableReadSource.Capture.of(identity, generation, revision, snapshot);
     }
 
-    /** Lists the claimed entity ids of this plan: the host entry matches one by entity id, so the
-     * plan must carry that same key and never the row index of this view. */
-    private List<Integer> claimedRows(WorkPlan plan) {
-        List<Integer> rows = new ArrayList<>();
-        for (EntityCandidateView view : plan.views()) {
-            for (int row = 0; row < view.count(); row++) {
-                int entityId = (int) view.entitySeq(row);
-                if (EntityTickOwnership.claimedForDispatch(entityId)) {
-                    rows.add(entityId);
-                }
-            }
-        }
-        return rows;
+    /** The entity ids the plan point claimed this tick: the host entry matches one by entity id,
+     * so the plan carries the ownership claims themselves, not a later reader of the lease (the
+     * fixture's tick-post closes that lease before this domain's post-tick runs). */
+    private List<Integer> claimedRows() {
+        return EntityTickOwnership.claimedRowsSnapshot();
     }
 
     /** One dispatch of the frozen plan on the shared runtime: the tasks become the nodes of an
