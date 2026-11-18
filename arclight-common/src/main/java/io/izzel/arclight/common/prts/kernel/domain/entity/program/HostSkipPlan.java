@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.domain.entity.program;
 
+import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -12,21 +14,50 @@ public final class HostSkipPlan {
     /** The internal dormant property of the host-skip plan; it is not a configuration key. */
     public static final String PROPERTY = "arclight.prts.hostSkip";
 
-    /** The plan of one dispatch: whether it is armed and which rows it may skip. */
-    public record Plan(List<Integer> skipRows) {
+    /** The plan of one dispatch: whether it is armed and which rows it may skip. The rows are
+     * kept once as a list for evidence and once as an int set for the per-row decision, so the host
+     * entry and the single-authority guard answer in constant time instead of scanning the list. */
+    public static final class Plan {
 
-        public Plan {
-            skipRows = List.copyOf(skipRows);
+        private final List<Integer> skipRows;
+        private final IntOpenHashSet lookup;
+
+        public Plan(List<Integer> skipRows) {
+            this.skipRows = List.copyOf(skipRows);
+            this.lookup = new IntOpenHashSet(this.skipRows.size());
+            for (Integer row : this.skipRows) {
+                this.lookup.add(row.intValue());
+            }
         }
 
         /** Whether the plan skips one row. */
         public boolean skips(int row) {
-            return skipRows.contains(row);
+            return lookup.contains(row);
         }
 
         /** The rows this plan skips, in one stable order. */
         public List<Integer> skipSet() {
             return skipRows;
+        }
+
+        /** The rows this plan skips, in one stable order. */
+        public List<Integer> skipRows() {
+            return skipRows;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof Plan plan && skipRows.equals(plan.skipRows);
+        }
+
+        @Override
+        public int hashCode() {
+            return skipRows.hashCode();
+        }
+
+        @Override
+        public String toString() {
+            return "Plan" + skipRows;
         }
     }
 
@@ -114,9 +145,9 @@ public final class HostSkipPlan {
     public static Plan verifyNoDoubleTick(Plan plan, List<Integer> ownerRows) {
         Objects.requireNonNull(plan, "plan");
         Objects.requireNonNull(ownerRows, "ownerRows");
-        for (Integer skipped : plan.skipRows()) {
-            if (ownerRows.contains(skipped)) {
-                throw new IllegalStateException("row would be skipped and run: " + skipped);
+        for (Integer owner : ownerRows) {
+            if (plan.skips(owner)) {
+                throw new IllegalStateException("row would be skipped and run: " + owner);
             }
         }
         return plan;

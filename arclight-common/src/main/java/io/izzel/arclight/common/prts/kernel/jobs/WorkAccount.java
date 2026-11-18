@@ -130,6 +130,8 @@ public final class WorkAccount {
 
     private final Map<String, Entry> units = new LinkedHashMap<>();
     private long sequence;
+    /** Open units of this window; the settled answer is this counter, not a scan of the map. */
+    private int openUnits;
     private boolean settled;
 
     /** Offers one unit. Returns true only when this call registered a new identity. */
@@ -138,6 +140,7 @@ public final class WorkAccount {
             return false;
         }
         units.put(unit.unitId(), new Entry(unit, sequence++));
+        openUnits++;
         settled = false;
         return true;
     }
@@ -304,6 +307,7 @@ public final class WorkAccount {
         }
         entry.closure = new Closure(outcome, code);
         entry.bucket = null;
+        openUnits--;
         settled = allClosed();
         return true;
     }
@@ -502,12 +506,7 @@ public final class WorkAccount {
     }
 
     private boolean allClosed() {
-        for (Entry entry : units.values()) {
-            if (entry.closure == null) {
-                return false;
-            }
-        }
-        return true;
+        return openUnits == 0;
     }
 
     private static double nonNegative(double value) {

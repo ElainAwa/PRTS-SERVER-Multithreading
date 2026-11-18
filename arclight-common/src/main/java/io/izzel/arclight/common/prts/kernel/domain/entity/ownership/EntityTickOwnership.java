@@ -680,6 +680,9 @@ public final class EntityTickOwnership {
             HostSkipPlan.Plan skipPlan = HostSkipPlan.of(ownerRows);
             HostSkipPlan.verifyNoDoubleTick(skipPlan, ownerRows, java.util.List.of());
             HostSkipPlan.publish(skipPlan, currentTickIndex);
+            // The host entries of this tick read the plan directly; they do not re-enter the
+            // synchronized accessor once per row.
+            bindHostSkip(skipPlan::skips);
         }
     }
 
