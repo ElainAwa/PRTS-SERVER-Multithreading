@@ -43,7 +43,6 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.twoowner.TwoOwnerSetup
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityRowIdentity;
 import io.izzel.arclight.common.prts.kernel.domain.entity.LiveEntityAccess;
 import io.izzel.arclight.common.prts.kernel.domain.entity.program.EntityProgramBody;
-import io.izzel.arclight.common.prts.kernel.domain.entity.program.HostSkipPlan;
 import io.izzel.arclight.common.prts.kernel.domain.entity.program.LiveRowSnapshot;
 import io.izzel.arclight.common.prts.kernel.domain.entity.program.StableReadSource;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
@@ -134,7 +133,6 @@ public final class EntityDomain implements KernelDomain {
     private long twoOwnerRowsDoneTotal = -1L;
     /** Rows this domain handed to a pass over the process, before the merge settles them. */
     private long twoOwnerOfferedTotal;
-    private static final boolean HOST_SKIP = Boolean.getBoolean(HostSkipPlan.PROPERTY);
 
     public EntityDomain(KernelModule module) {
         this(module, module.ownerContext().primarySite());
@@ -302,10 +300,6 @@ public final class EntityDomain implements KernelDomain {
 
     @Override
     public void tick(long tick) {
-        if (HOST_SKIP) {
-            HostSkipPlan.beginTick(tick);
-            EntityTickOwnership.bindHostSkip(row -> HostSkipPlan.current().skips(row));
-        }
         // The due window of this server tick was frozen by the level ticks that just ran; it is
         // taken before any early return, so a tick this domain does not dispatch leaves no window
         // behind for the next one.
@@ -573,15 +567,6 @@ public final class EntityDomain implements KernelDomain {
                         runtime.arena(), readings, ledger, orderedTasks);
                 }
             }
-            if (HOST_SKIP) {
-                // The dispatch above runs the ownership plan point that claims this tick's rows, so
-                // the skip list is published only now; publishing it before the claims would hand
-                // the host entry an empty plan and the owner rows would never be skipped.
-                List<Integer> ownerRows = claimedRows();
-                HostSkipPlan.Plan skipPlan = HostSkipPlan.of(ownerRows);
-                HostSkipPlan.verifyNoDoubleTick(skipPlan, ownerRows, List.of());
-                HostSkipPlan.publish(skipPlan, tick);
-            }
             // The declarations submitted here are taken by the next plan the kernel builds; that
             // plan is the one that seats this pass, so its sequence is this module's next one.
             pendingSeatPlanSequence = module.planSequence() + 1L;
@@ -681,13 +666,6 @@ public final class EntityDomain implements KernelDomain {
             LiveEntityAccess.velY(entity), LiveEntityAccess.velZ(entity),
             LiveEntityAccess.readFields(entity));
         return StableReadSource.Capture.of(identity, generation, revision, snapshot);
-    }
-
-    /** The entity ids the plan point claimed this tick: the host entry matches one by entity id,
-     * so the plan carries the ownership claims themselves, not a later reader of the lease (the
-     * fixture's tick-post closes that lease before this domain's post-tick runs). */
-    private List<Integer> claimedRows() {
-        return EntityTickOwnership.claimedRowsSnapshot();
     }
 
     /** One dispatch of the frozen plan on the shared runtime: the tasks become the nodes of an

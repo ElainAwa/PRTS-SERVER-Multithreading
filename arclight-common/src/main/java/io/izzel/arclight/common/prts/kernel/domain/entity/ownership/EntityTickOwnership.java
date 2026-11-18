@@ -38,6 +38,7 @@ import io.izzel.arclight.common.prts.support.PrtsHostTickCalls;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.ArmorStandTick;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.TickModels;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.TickState;
+import io.izzel.arclight.common.prts.kernel.domain.entity.program.HostSkipPlan;
 import io.izzel.arclight.common.prts.kernel.domain.entity.LiveEntityAccess;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.replica.WholeTickModel;
 import io.izzel.arclight.common.prts.support.PrtsEntityRescope;
@@ -275,6 +276,10 @@ public final class EntityTickOwnership {
     /** The entity ids the plan point claimed this tick; the host-skip plan carries these ids, so
      * it does not depend on a later reader still holding the lease (the entry closes it first). */
     private static volatile java.util.List<Integer> claimedRows = java.util.List.of();
+
+    /** Whether the host entry that just ran found its answer still pending (a designed fallback,
+     * not a plan/verdict disagreement); the mismatch counters skip exactly that case. */
+    private static boolean lastPending;
     // True while an armed plan point has opened a window whose frames are not closed yet.
     private static boolean windowOpen;
     private static volatile boolean disarmed;
@@ -546,6 +551,12 @@ public final class EntityTickOwnership {
     /** The plan point of one tick: freeze the eligible rows, issue their tokens, dispatch them. */
     public static void onServerTickPre(MinecraftServer server) {
         PLAN_ENTRIES.increment();
+        if (HostSkipPlan.enabled()) {
+            // The skip handoff is scoped to this tick: the plan is cleared and bound before the
+            // host entity ticks, then published with the rows the plan point claims below.
+            HostSkipPlan.beginTick(server.getTickCount());
+            bindHostSkip(row -> HostSkipPlan.current().skips(row));
+        }
         if (Boolean.getBoolean("arclight.prts.perTickDiag")) {
             System.out.println("[PRTS] plan-entry live=" + live() + " armed=" + armed()
                 + " testPlanProvider=" + (testPlanProvider != null)
@@ -659,6 +670,14 @@ public final class EntityTickOwnership {
         lease.publish(target != null ? target : Runnable::run, Math.max(1, workerCount() * 4));
         PLAN_NANOS.add(System.nanoTime() - startedAt);
         current = lease;
+        if (HostSkipPlan.enabled()) {
+            // The host entry consumes this tick's plan, so it carries exactly the rows claimed by
+            // this plan point and a row set change cannot make it disagree across tick boundaries.
+            java.util.List<Integer> ownerRows = claimedRowsSnapshot();
+            HostSkipPlan.Plan skipPlan = HostSkipPlan.of(ownerRows);
+            HostSkipPlan.verifyNoDoubleTick(skipPlan, ownerRows, java.util.List.of());
+            HostSkipPlan.publish(skipPlan, currentTickIndex);
+        }
     }
 
     /** The internal POI single-winner property; off in every shipped build. */
@@ -724,7 +743,8 @@ public final class EntityTickOwnership {
                 if (planned && verdict == SKIP_HOST_TICK) {
                     PLAN_SKIPPED.increment();
                 }
-                if (planActive) {
+                if (planActive && !lastPending) {
+                    // A pending answer is the designed fallback, not a plan/verdict disagreement.
                     planMismatch(verdict, planned);
                 }
             }
@@ -793,6 +813,7 @@ public final class EntityTickOwnership {
      * then skip. */
     static int decideRow(LiveRow live, SegmentWork segment) {
         lastWithdrawn = false;
+        lastPending = false;
         OwnershipLease lease = current;
         if (lease == null) {
             absent(segment, live.entityId());
@@ -866,6 +887,7 @@ public final class EntityTickOwnership {
             // of the host, and the row runs its original tick exactly once. This is the only branch
             // a worker that did not finish in time can take, and it takes it without waiting.
             DECIDED_PENDING.increment();
+            lastPending = true;
             withdraw(lease, index, false);
             return -1;
         }
