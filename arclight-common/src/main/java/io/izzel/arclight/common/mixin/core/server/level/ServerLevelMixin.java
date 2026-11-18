@@ -356,6 +356,13 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
             .enter(ownerLevel, EntityDueCapture.current(ownerLevel.getServer().getTickCount()));
     }
 
+    @Inject(method = "tick", at = @At(value = "INVOKE", shift = At.Shift.AFTER,
+        target = "Lnet/minecraft/world/level/entity/EntityTickList;forEach(Ljava/util/function/Consumer;)V"))
+    private void prts$closeOwnerPhase(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
+        io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
+            .endTick((ServerLevel) (Object) this);
+    }
+
     @Decorate(method = "tickChunk", at = @At(value = "INVOKE", ordinal = 0, target = "Lnet/minecraft/util/RandomSource;nextInt(I)I"))
     private int arclight$modifyThunderChance(RandomSource instance, int i) throws Throwable {
         return (int) DecorationOps.callsite().invoke(instance, i == 100000 ? spigotConfig.thunderChance : i);
