@@ -135,7 +135,7 @@ public final class TickState {
     /** Test-only worker answer; the host commit seam may read it once. */
     public Object modelAnswer;
 
-    /** Copies another state over this one; the worker answers on a copy of the captured row. */
+    /** Copies every field of another state over this one. */
     public void copyFrom(TickState other) {
         entityId = other.entityId;
         tickCount = other.tickCount;

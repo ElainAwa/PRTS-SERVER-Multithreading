@@ -22,6 +22,7 @@ import net.minecraft.tags.FluidTags;
 import net.minecraft.world.entity.Pose;
 import net.minecraft.world.entity.decoration.ArmorStand;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Portal;
 import net.minecraft.world.phys.Vec3;
 
@@ -56,7 +57,31 @@ public final class ArmorStandTick {
     private static final LongAdder COMPUTE_NANOS = new LongAdder();
     private static final LongAdder COMPUTE_ROWS = new LongAdder();
 
+    // The refusal and the capture of one row both ask whether the row's own block is a portal. The
+    // plan point runs both back to back on the tick thread, so the capture reuses the verdict of the
+    // refusal: every second read would cross the chunk demand seam, and the plan point walks every
+    // row of the tier per tick. A row of another tick or level misses and reads the block again.
+    private static ArmorStand ownBlockRow;
+    private static Level ownBlockLevel;
+    private static int ownBlockTick;
+    private static boolean ownBlockPortal;
+
     private ArmorStandTick() {
+    }
+
+    /** Whether the row's own block is a portal, read at most once per row and tick. */
+    private static boolean ownBlockIsPortal(ArmorStand stand) {
+        Level level = stand.level();
+        int tick = stand.tickCount;
+        if (stand == ownBlockRow && level == ownBlockLevel && tick == ownBlockTick) {
+            return ownBlockPortal;
+        }
+        boolean portal = level.getBlockState(stand.blockPosition()).getBlock() instanceof Portal;
+        ownBlockRow = stand;
+        ownBlockLevel = level;
+        ownBlockTick = tick;
+        ownBlockPortal = portal;
+        return portal;
     }
 
     /** The first condition that keeps this row out of the ownership set, or {@link #REPLICABLE}. */
@@ -137,7 +162,7 @@ public final class ArmorStandTick {
         }
         PrtsEntityTickStateMixin entityState = entityState(stand);
         if (stand.getPortalCooldown() != 0 || entityState.prts$portalProcess() != null
-            || stand.level().getBlockState(stand.blockPosition()).getBlock() instanceof Portal) {
+            || ownBlockIsPortal(stand)) {
             return PORTAL;
         }
         PrtsLivingEntityTickStateMixin livingState = livingState(stand);
@@ -227,8 +252,7 @@ public final class ArmorStandTick {
         state.swimAmountO = livingState.prts$swimAmountO();
         state.appliedScale = livingState.prts$appliedScale();
         state.portalCooldown = stand.getPortalCooldown();
-        state.inPortal = stand.level().getBlockState(stand.blockPosition()).getBlock()
-            instanceof Portal;
+        state.inPortal = ownBlockIsPortal(stand);
         state.lastPosMoved = !stand.blockPosition().equals(livingState.prts$lastPos());
     }
 

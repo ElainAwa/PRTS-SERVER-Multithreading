@@ -580,7 +580,7 @@ public final class EntityTickOwnership {
         long startedAt = System.nanoTime();
         // The lease only ever holds the rows this plan point walks, so its capacity is the trace it
         // is about to read, capped by the declared memory guard: the guard still bounds the leases,
-        // while the arrays no longer pay for a capacity the tick does not use.
+        // and the arrays no longer pay for a capacity the tick does not use.
         int leaseCapacity = Math.max(1, Math.min(MAX_ROWS, traceReadRows));
         OwnershipLease lease = new OwnershipLease(tick, leaseCapacity, nextToken);
         // The rows of one plan point usually stand in one world; its identity, generation and

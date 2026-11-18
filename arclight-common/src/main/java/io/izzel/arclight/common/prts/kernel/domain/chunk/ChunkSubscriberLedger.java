@@ -1,6 +1,9 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.domain.chunk;
 
+import it.unimi.dsi.fastutil.longs.Long2LongLinkedOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongIterator;
+
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -47,13 +50,25 @@ public final class ChunkSubscriberLedger {
     }
 
     private record Key(long chunkPos, long holderGen, String subscriberId, String targetStatus) {
+
+        /** Mix the packed position and generation so the pending map never treeifies. */
+        @Override
+        public int hashCode() {
+            int hash = (int) (chunkPos ^ (chunkPos >>> 32));
+            hash = hash * 0x9E3779B9;
+            hash ^= (int) (holderGen ^ (holderGen >>> 32));
+            hash = hash * 0x85EBCA6B;
+            hash ^= subscriberId.hashCode();
+            hash = hash * 0xC2B2AE35;
+            return hash ^ targetStatus.hashCode();
+        }
     }
 
     private final int cap;
     private final int holdersCap;
     private final Map<Key, Entry> entries = new LinkedHashMap<>();
     /** Bounded holder-generation LRU: a chunk that left the recorder's memory is evicted oldest. */
-    private final Map<Long, Long> holders;
+    private final Long2LongLinkedOpenHashMap holders;
     private long holdersEvicted;
     private int staleResults;
     private long deliveredCount;
@@ -78,7 +93,7 @@ public final class ChunkSubscriberLedger {
         }
         this.cap = cap;
         this.holdersCap = holdersCap;
-        this.holders = new LinkedHashMap<>();
+        this.holders = new Long2LongLinkedOpenHashMap();
     }
 
     /**
@@ -88,7 +103,7 @@ public final class ChunkSubscriberLedger {
      */
     public synchronized Entry register(ChunkRequestIdentity identity) {
         Objects.requireNonNull(identity, "identity");
-        long current = holders.getOrDefault(identity.chunkPos(), 0L);
+        long current = holders.get(identity.chunkPos());
         if (identity.holderGen() < current) {
             staleResults++;
             return new Entry(identity, State.CANCELLED);
@@ -119,7 +134,7 @@ public final class ChunkSubscriberLedger {
     public synchronized Completion complete(ChunkRequestIdentity completion, String achievedStatus) {
         Objects.requireNonNull(completion, "completion");
         Objects.requireNonNull(achievedStatus, "achievedStatus");
-        long current = holders.getOrDefault(completion.chunkPos(), 0L);
+        long current = holders.get(completion.chunkPos());
         if (completion.holderGen() < current) {
             staleResults++;
             return new Completion(0, 1);
@@ -159,7 +174,7 @@ public final class ChunkSubscriberLedger {
 
     /** Advances the holder generation of one chunk and evicts the entries of the older one. */
     public synchronized void advanceHolder(long chunkPos, long holderGen) {
-        long current = holders.getOrDefault(chunkPos, 0L);
+        long current = holders.get(chunkPos);
         if (holderGen <= current) {
             return;
         }
@@ -250,14 +265,14 @@ public final class ChunkSubscriberLedger {
 
     private void touchHolder(long chunkPos, long holderGen) {
         if (!holders.containsKey(chunkPos) && holders.size() >= holdersCap) {
-            Iterator<Long> eldest = holders.keySet().iterator();
+            LongIterator eldest = holders.keySet().iterator();
             if (eldest.hasNext()) {
-                eldest.next();
+                eldest.nextLong();
                 eldest.remove();
                 holdersEvicted++;
             }
         }
-        holders.put(chunkPos, Math.max(holders.getOrDefault(chunkPos, 0L), holderGen));
+        holders.put(chunkPos, Math.max(holders.get(chunkPos), holderGen));
     }
 
     private void evictSettled() {

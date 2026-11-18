@@ -56,7 +56,6 @@ final class OwnershipLease {
     private int rows;
     private final EntityCapability[] capabilities;
     private final long[] tokens;
-    private final TickState[] captured;
     private final TickState[] answers;
     private final WholeTickModel[] models;
     private final boolean[] looked;
@@ -74,7 +73,6 @@ final class OwnershipLease {
         this.nextToken = firstToken;
         this.capabilities = new EntityCapability[capacity];
         this.tokens = new long[capacity];
-        this.captured = new TickState[capacity];
         this.answers = new TickState[capacity];
         this.models = new WholeTickModel[capacity];
         this.looked = new boolean[capacity];
@@ -103,12 +101,10 @@ final class OwnershipLease {
         int index = rows++;
         capabilities[index] = capability;
         tokens[index] = nextToken++;
-        // The worker owns its own copy: the captured state stays the record of what the plan point
-        // saw, and a failed or late answer cannot corrupt a row the host may still run.
-        TickState answer = new TickState();
-        answer.copyFrom(state);
-        captured[index] = state;
-        answers[index] = answer;
+        // The worker owns the captured state from here on: the plan point hands it over instead of
+        // copying it, and a failed or late answer still cannot corrupt a row the host may run,
+        // because the host entry reads the live row, never the state, to decide that.
+        answers[index] = state;
         models[index] = model;
         states.set(index, PENDING);
         indexById.put(entityId, index);

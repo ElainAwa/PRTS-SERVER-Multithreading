@@ -9,6 +9,8 @@ package io.izzel.arclight.common.prts.kernel.domain.entity.ownership;
 
 import java.util.concurrent.atomic.LongAdder;
 
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import net.minecraft.world.entity.Entity;
 
@@ -23,9 +25,14 @@ public final class EntityOwnershipCensus {
 
     private static final int MAX_KEYS = 128;
     private static final String DUMP_PATH = System.getProperty("arclight.prts.entityOwnershipCensusPath");
-    private static final Map<String, Counters> BY_KEY = new Object2ObjectOpenHashMap<>();
+    /** Class rows hold the per-trait counters; the string key is only built for a readout. */
+    private static final Map<String, ClassRow> BY_CLASS = new Object2ObjectOpenHashMap<>();
+    private static int entryCount;
     private static long c0Rows;
     private static long otherRows;
+    /** Hot per-row counter: the plan point is the only writer, so a plain volatile field is
+     * enough (it is read by the evidence thread without a lock). */
+    private static volatile long observeCalls;
 
     static {
         if (DUMP_PATH != null && !DUMP_PATH.isEmpty()) {
@@ -45,13 +52,12 @@ public final class EntityOwnershipCensus {
 
     /** Counts one row whose profile the plan point already classified once for this tick. */
     static void observe(Entity entity, EntityTraitClassifier.Profile profile) {
-        OBSERVE_CALLS.increment();
+        observeCalls++;
         if (profile == null) {
             PROFILE_NULL.increment();
             // Observation-only fallback: an unclassifiable row still gets a C1 row and is booked
             // as refused, so the census stays accounted without changing any claim/decision.
-            String key = entity.getClass().getName() + "|unresolved|0";
-            Counters counters = counters(key);
+            Counters counters = counters(entity.getClass().getName(), "unresolved", 0L);
             counters.observed++;
             counters.refused++;
             return;
@@ -60,7 +66,7 @@ public final class EntityOwnershipCensus {
             c0Rows++;
             return;
         }
-        counters(key(profile)).observed++;
+        counters(profile).observed++;
     }
 
     public static void claimed(Entity entity) {
@@ -69,7 +75,7 @@ public final class EntityOwnershipCensus {
 
     static void claimed(EntityTraitClassifier.Profile profile) {
         if (profile != null && (profile.traits() & EntityTraitClassifier.T_C0_PLAYER) == 0L) {
-            counters(key(profile)).claimed++;
+            counters(profile).claimed++;
         }
     }
 
@@ -79,7 +85,7 @@ public final class EntityOwnershipCensus {
 
     static void refused(EntityTraitClassifier.Profile profile) {
         if (profile != null && (profile.traits() & EntityTraitClassifier.T_C0_PLAYER) == 0L) {
-            counters(key(profile)).refused++;
+            counters(profile).refused++;
         }
     }
 
@@ -89,11 +95,10 @@ public final class EntityOwnershipCensus {
 
     static void fallback(EntityTraitClassifier.Profile profile) {
         if (profile != null && (profile.traits() & EntityTraitClassifier.T_C0_PLAYER) == 0L) {
-            counters(key(profile)).fallback++;
+            counters(profile).fallback++;
         }
     }
 
-    /** Class-level recording seam; the key uses the same class/modid/trait shape. */
     /** Adds the observed host time of one row to its class/modid/trait key. */
     public static void hostRun(Entity entity, long hostNanos) {
         hostRun(EntityOwnershipCensus.profileOf(entity), hostNanos);
@@ -101,14 +106,13 @@ public final class EntityOwnershipCensus {
 
     static void hostRun(EntityTraitClassifier.Profile profile, long hostNanos) {
         if (profile != null && (profile.traits() & EntityTraitClassifier.T_C0_PLAYER) == 0L) {
-            Counters counters = counters(key(profile));
+            Counters counters = counters(profile);
             counters.hostRuns++;
             counters.hostNanos += Math.max(0L, hostNanos);
         }
     }
 
     private static final LongAdder RECORD_CALLS = new LongAdder();
-    private static final LongAdder OBSERVE_CALLS = new LongAdder();
     private static final LongAdder PROFILE_NULL = new LongAdder();
     private static final LongAdder CLASSIFY_THROW = new LongAdder();
     private static final LongAdder SNAPSHOT_CALLS = new LongAdder();
@@ -122,7 +126,7 @@ public final class EntityOwnershipCensus {
 
     /** Test-only observe/profile diagnostic line; no formal reading key. */
     public static String observeDiagnostic() {
-        return "observeCalls=" + OBSERVE_CALLS.sum() + " profileNull=" + PROFILE_NULL.sum()
+        return "observeCalls=" + observeCalls + " profileNull=" + PROFILE_NULL.sum()
             + " classifyThrow=" + CLASSIFY_THROW.sum() + " recordCalls=" + RECORD_CALLS.sum()
             + " snapshotCalls=" + SNAPSHOT_CALLS.sum() + " resetCalls=" + RESET_CALLS.sum()
             + " firstClassifyError=" + FIRST_CLASSIFY_ERROR;
@@ -134,8 +138,7 @@ public final class EntityOwnershipCensus {
             c0Rows++;
             return;
         }
-        String key = type.getName() + '|' + modId + '|' + Long.toHexString(traits);
-        Counters counters = counters(key);
+        Counters counters = counters(type.getName(), modId, traits);
         switch (outcome) {
             case OBSERVED -> counters.observed++;
             case CLAIMED -> counters.claimed++;
@@ -159,12 +162,14 @@ public final class EntityOwnershipCensus {
         SNAPSHOT_CALLS.increment();
         long observed = 0L, claimed = 0L, refused = 0L, fallback = 0L, hostRuns = 0L, hostNanos = 0L;
         java.util.List<Row> rows = new java.util.ArrayList<>();
-        for (Map.Entry<String, Counters> entry : BY_KEY.entrySet()) {
-            Counters c = entry.getValue();
-            observed += c.observed; claimed += c.claimed; refused += c.refused;
-            fallback += c.fallback; hostRuns += c.hostRuns; hostNanos += c.hostNanos;
-            rows.add(new Row(entry.getKey(), c.observed, c.claimed, c.refused, c.fallback,
-                c.hostRuns, c.hostNanos));
+        for (ClassRow classRow : BY_CLASS.values()) {
+            for (Long2ObjectMap.Entry<Counters> entry : classRow.byTraits.long2ObjectEntrySet()) {
+                Counters c = entry.getValue();
+                observed += c.observed; claimed += c.claimed; refused += c.refused;
+                fallback += c.fallback; hostRuns += c.hostRuns; hostNanos += c.hostNanos;
+                rows.add(new Row(key(classRow.className, classRow.modId, entry.getLongKey()),
+                    c.observed, c.claimed, c.refused, c.fallback, c.hostRuns, c.hostNanos));
+            }
         }
         return new Snapshot(observed, claimed, refused, fallback, hostRuns, hostNanos,
             Math.max(0L, observed - claimed - refused), c0Rows, otherRows, java.util.List.copyOf(rows));
@@ -174,18 +179,20 @@ public final class EntityOwnershipCensus {
     public static String evidenceLine() {
         StringBuilder builder = new StringBuilder("[PRTS] entity-ownership:");
         int count = 0;
-        for (Map.Entry<String, Counters> entry : BY_KEY.entrySet()) {
-            if (count++ > 0) {
-                builder.append(';');
+        for (ClassRow classRow : BY_CLASS.values()) {
+            for (Long2ObjectMap.Entry<Counters> entry : classRow.byTraits.long2ObjectEntrySet()) {
+                if (count++ > 0) {
+                    builder.append(';');
+                }
+                Counters value = entry.getValue();
+                builder.append(key(classRow.className, classRow.modId, entry.getLongKey())).append('=')
+                    .append(value.observed).append(',')
+                    .append(value.claimed).append(',')
+                    .append(value.refused).append(',')
+                    .append(value.fallback).append(',')
+                    .append(value.hostRuns).append(',')
+                    .append(value.hostNanos);
             }
-            Counters value = entry.getValue();
-            builder.append(entry.getKey()).append('=')
-                .append(value.observed).append(',')
-                .append(value.claimed).append(',')
-                .append(value.refused).append(',')
-                .append(value.fallback).append(',')
-                .append(value.hostRuns).append(',')
-                .append(value.hostNanos);
         }
         builder.append(" c0=").append(c0Rows).append(" other=").append(otherRows);
         return builder.toString();
@@ -226,7 +233,9 @@ public final class EntityOwnershipCensus {
 
     public static void reset() {
         RESET_CALLS.increment();
-        BY_KEY.clear();
+        BY_CLASS.clear();
+        entryCount = 0;
+        observeCalls = 0L;
         c0Rows = 0L;
         otherRows = 0L;
     }
@@ -245,22 +254,52 @@ public final class EntityOwnershipCensus {
         }
     }
 
-    private static String key(EntityTraitClassifier.Profile profile) {
-        return profile.className() + '|' + profile.modId() + '|' + Long.toHexString(profile.traits());
+    private static Counters counters(EntityTraitClassifier.Profile profile) {
+        return counters(profile.className(), profile.modId(), profile.traits());
     }
 
-    private static Counters counters(String key) {
-        Counters existing = BY_KEY.get(key);
+    /**
+     * The counters of one class/modid/trait row. The class is found by the name the profile already
+     * carries and the counters by the trait bits, so the per-tick path allocates no key string; the
+     * {@code class|mod|traits} key is only composed when a readout walks the census.
+     */
+    private static Counters counters(String className, String modId, long traits) {
+        ClassRow classRow = BY_CLASS.get(className);
+        if (classRow == null) {
+            if (entryCount >= MAX_KEYS) {
+                otherRows++;
+                return new Counters();
+            }
+            classRow = new ClassRow(className, modId);
+            BY_CLASS.put(className, classRow);
+        }
+        Counters existing = classRow.byTraits.get(traits);
         if (existing != null) {
             return existing;
         }
-        if (BY_KEY.size() >= MAX_KEYS) {
+        if (entryCount >= MAX_KEYS) {
             otherRows++;
             return new Counters();
         }
+        entryCount++;
         Counters created = new Counters();
-        BY_KEY.put(key, created);
+        classRow.byTraits.put(traits, created);
         return created;
+    }
+
+    private static String key(String className, String modId, long traits) {
+        return className + '|' + modId + '|' + Long.toHexString(traits);
+    }
+
+    private static final class ClassRow {
+        final String className;
+        final String modId;
+        final Long2ObjectOpenHashMap<Counters> byTraits = new Long2ObjectOpenHashMap<>();
+
+        ClassRow(String className, String modId) {
+            this.className = className;
+            this.modId = modId;
+        }
     }
 
     private static final class Counters {

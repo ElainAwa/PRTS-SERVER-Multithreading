@@ -32,6 +32,18 @@ public final class ChunkRequestWiring {
     private record PendingRequest(long chunkPos, String worldId, String status, long subscriberSeq) {
     }
 
+    /** The reusable synchronous scratch: one instance per calling thread, overwritten per call. */
+    private static final class Scratch {
+        long chunkPos;
+        String worldId;
+        String status;
+        long subscriberSeq;
+        ChunkRequestIdentity identity;
+        boolean armed;
+    }
+
+    private static final String NO_SUBSCRIBER = "chunk:N/A";
+
     private static final ChunkSubscriberLedger LEDGER = new ChunkSubscriberLedger();
     private record CompletionKey(String worldId, long chunkPos) {
     }
@@ -40,7 +52,7 @@ public final class ChunkRequestWiring {
         new ConcurrentHashMap<>();
     private static final java.util.LinkedHashMap<Long, PendingRequest> TOKENS =
         new java.util.LinkedHashMap<>();
-    private static final ThreadLocal<PendingRequest> SYNC = new ThreadLocal<>();
+    private static final ThreadLocal<Scratch> SYNC = ThreadLocal.withInitial(Scratch::new);
     private static long tokensEvicted;
     private static long completionsEvicted;
     private static long syncLeaks;
@@ -112,14 +124,17 @@ public final class ChunkRequestWiring {
         if (subscriberSeq <= 0L) {
             subscriberSeq = SYNC_SEQ.incrementAndGet();
         }
-        PendingRequest leaked = SYNC.get();
-        if (leaked != null) {
+        Scratch scratch = SYNC.get();
+        if (scratch.armed) {
             syncLeaks++;
         }
-        PendingRequest request = new PendingRequest(chunkPos(chunkX, chunkZ), worldId, status,
-            subscriberSeq);
-        SYNC.set(request);
-        LEDGER.register(identity(worldId, chunkX, chunkZ, status, subscriberSeq, null));
+        scratch.chunkPos = chunkPos(chunkX, chunkZ);
+        scratch.worldId = worldId;
+        scratch.status = status;
+        scratch.subscriberSeq = subscriberSeq;
+        scratch.identity = identity(worldId, chunkX, chunkZ, status, subscriberSeq, null);
+        scratch.armed = true;
+        LEDGER.register(scratch.identity);
     }
 
     /** One finished future completes every subscriber the achieved status satisfies; the call
@@ -147,12 +162,16 @@ public final class ChunkRequestWiring {
 
     /** One synchronous ask that answered completes its own subscriber only. */
     public static void syncFinished(boolean satisfied) {
-        PendingRequest request = SYNC.get();
-        SYNC.remove();
-        if (!satisfied || request == null) {
+        Scratch scratch = SYNC.get();
+        if (!scratch.armed) {
             return;
         }
-        complete(request.worldId(), request.chunkPos(), request.status());
+        scratch.armed = false;
+        if (!satisfied) {
+            return;
+        }
+        // The identity captured by syncOpened is the completion identity; it is not rebuilt here.
+        LEDGER.complete(scratch.identity, scratch.status);
     }
 
     /** One materialized chunk advances only the layers the materialization really reports. */
@@ -187,7 +206,7 @@ public final class ChunkRequestWiring {
         synchronized (COMPLETIONS) {
             COMPLETIONS.clear();
         }
-        SYNC.remove();
+        SYNC.get().armed = false;
         tokensEvicted = 0;
         completionsEvicted = 0;
         syncLeaks = 0;
@@ -222,12 +241,12 @@ public final class ChunkRequestWiring {
         return LEDGER.cancel(subscriberId);
     }
 
-    /** The subscriber id of one production call: its token, or "N/A" when the call names none. */
+    /** The subscriber id of one production call: its token, or the static N/A constant. */
     public static String subscriberId(long token, Object taskToken) {
         if (token > 0L) {
             return "chunk:" + token;
         }
-        return taskToken == null ? "chunk:N/A" : "task:" + System.identityHashCode(taskToken);
+        return taskToken == null ? NO_SUBSCRIBER : "task:" + System.identityHashCode(taskToken);
     }
 
     private static void complete(String worldId, long chunkPos, String achievedStatus) {
