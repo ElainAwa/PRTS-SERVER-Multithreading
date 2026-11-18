@@ -31,6 +31,7 @@ public final class PoiSingleWinnerWiring {
         return update.unitId() + "#" + update.ordinal();
     }
 
+    /** Test-only reset of the singleton claim store; the store is owned by the server tick thread. */
     public static void resetForTests() {
         store = new PoiClaimStore();
     }
