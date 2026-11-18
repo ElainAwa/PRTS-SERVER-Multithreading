@@ -60,7 +60,7 @@ final class OwnershipLease {
     private final WholeTickModel[] models;
     private final boolean[] looked;
     private final AtomicIntegerArray states;
-    private final Int2IntOpenHashMap indexById = new Int2IntOpenHashMap();
+    private final Int2IntOpenHashMap indexById;
     private final LongAdder settled = new LongAdder();
     private final LongAdder lateDropped = new LongAdder();
     private final LongAdder faults = new LongAdder();
@@ -77,6 +77,7 @@ final class OwnershipLease {
         this.models = new WholeTickModel[capacity];
         this.looked = new boolean[capacity];
         this.states = new AtomicIntegerArray(capacity);
+        this.indexById = new Int2IntOpenHashMap(Math.max(1, capacity));
         this.indexById.defaultReturnValue(-1);
     }
 

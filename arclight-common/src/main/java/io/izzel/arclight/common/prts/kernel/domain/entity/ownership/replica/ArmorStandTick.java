@@ -19,9 +19,9 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySelector;
 import net.minecraft.tags.FluidTags;
+import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.Pose;
 import net.minecraft.world.entity.decoration.ArmorStand;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Portal;
 import net.minecraft.world.phys.Vec3;
@@ -432,12 +432,14 @@ public final class ArmorStandTick {
     }
 
     private static boolean equipmentEmpty(ArmorStand stand) {
-        for (ItemStack stack : stand.getAllSlots()) {
-            if (!stack.isEmpty()) {
-                return false;
-            }
-        }
-        return true;
+        // ArmorStand has exactly these six equipment slots; direct reads avoid the iterator
+        // allocation of getAllSlots while keeping the any-slot-non-empty rule.
+        return stand.getItemBySlot(EquipmentSlot.MAINHAND).isEmpty()
+            && stand.getItemBySlot(EquipmentSlot.OFFHAND).isEmpty()
+            && stand.getItemBySlot(EquipmentSlot.HEAD).isEmpty()
+            && stand.getItemBySlot(EquipmentSlot.CHEST).isEmpty()
+            && stand.getItemBySlot(EquipmentSlot.LEGS).isEmpty()
+            && stand.getItemBySlot(EquipmentSlot.FEET).isEmpty();
     }
 
     private static PrtsEntityTickStateMixin entityState(Entity entity) {

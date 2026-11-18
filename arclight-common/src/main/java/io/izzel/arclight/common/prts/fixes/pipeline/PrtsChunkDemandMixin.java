@@ -46,8 +46,17 @@ public abstract class PrtsChunkDemandMixin {
     @org.spongepowered.asm.mixin.Unique
     private boolean prts$absentAtCall;
 
+    /** One cache belongs to one level; the id is built once and read for every later ask. */
+    @org.spongepowered.asm.mixin.Unique
+    private String prts$cachedWorldId;
+
     private String prts$worldId() {
-        return level.dimension().location().toString();
+        String cached = prts$cachedWorldId;
+        if (cached == null) {
+            cached = level.dimension().location().toString();
+            prts$cachedWorldId = cached;
+        }
+        return cached;
     }
 
     @Inject(method = "getChunk", at = @At("HEAD"))

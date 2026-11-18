@@ -30,7 +30,11 @@ public final class HostVisibleState {
      * updates the previous position and the tick counter, and marks the impulse the tracker sends
      * on. Purely local to the tick thread; it never waits and never reads the world. */
     public static void commit(Entity entity, TickState state) {
-        entity.setPos(state.x, state.y, state.z);
+        // A model may move or keep the row; skip setPos only when the live position already equals
+        // the target, so the bounding box and every host-visible value stay identical.
+        if (entity.getX() != state.x || entity.getY() != state.y || entity.getZ() != state.z) {
+            entity.setPos(state.x, state.y, state.z);
+        }
         entity.xo = state.xo;
         entity.yo = state.yo;
         entity.zo = state.zo;
