@@ -593,18 +593,21 @@ public final class EntityTickOwnership {
             }
             long rowStartedAt = System.nanoTime();
             int entityId = entity.getId();
+            // One classification per row per tick: the census counters of this row all read the
+            // profile frozen here instead of walking the class hierarchy once per counter.
+            EntityTraitClassifier.Profile profile = EntityOwnershipCensus.profileOf(entity);
             long entityEpoch = entityEpochOf(entityId, tick);
             int slot = TickModels.slotOf(entity);
             TakeoverWhitelist.noteSeen(slot, entity.getClass());
-            EntityOwnershipCensus.observe(entity);
+            EntityOwnershipCensus.observe(entity, profile);
             long worldEpoch = worldEpochOf(level);
             SegmentWork segment = SEGMENTS.of(level, worldIdOf(level), worldEpoch, tick);
             if (worldEpoch <= 0L) {
                 // The lifecycle guard does not track this world, so the row is not a row this
                 // takeover may answer for: it is watched, never claimed.
                 WORLD_NOT_LIVE.increment();
-                EntityOwnershipCensus.fallback(entity);
-                EntityOwnershipCensus.hostRun(entity, System.nanoTime() - rowStartedAt);
+                EntityOwnershipCensus.fallback(profile);
+                EntityOwnershipCensus.hostRun(profile, System.nanoTime() - rowStartedAt);
                 observe(segment, entityId, entityEpoch, OwnershipEligibility.LIFECYCLE);
                 continue;
             }
@@ -614,16 +617,16 @@ public final class EntityTickOwnership {
             }
             if (reason != OwnershipEligibility.WIDENED) {
                 REASON_COUNTS[reason].increment();
-                EntityOwnershipCensus.refused(entity);
-                EntityOwnershipCensus.fallback(entity);
-                EntityOwnershipCensus.hostRun(entity, System.nanoTime() - rowStartedAt);
+                EntityOwnershipCensus.refused(profile);
+                EntityOwnershipCensus.fallback(profile);
+                EntityOwnershipCensus.hostRun(profile, System.nanoTime() - rowStartedAt);
                 // A refused row is watched, not owned: booked as observed, it carries no token.
                 observe(segment, entityId, entityEpoch, reason);
                 continue;
             }
             WholeTickModel model = EntityModelRegistry.modelOf(entity);
             if (model == null || lease.rows() >= MAX_ROWS || lease.indexOf(entityId) >= 0) {
-                EntityOwnershipCensus.hostRun(entity, System.nanoTime() - rowStartedAt);
+                EntityOwnershipCensus.hostRun(profile, System.nanoTime() - rowStartedAt);
                 observe(segment, entityId, entityEpoch, OwnershipEligibility.MODEL);
                 continue;
             }
@@ -655,8 +658,8 @@ public final class EntityTickOwnership {
                 ISSUED.increment();
                 CLAIMED.increment();
                 TakeoverWhitelist.noteClaimed(slot);
-                EntityOwnershipCensus.claimed(entity);
-                EntityOwnershipCensus.hostRun(entity, System.nanoTime() - rowStartedAt);
+                EntityOwnershipCensus.claimed(profile);
+                EntityOwnershipCensus.hostRun(profile, System.nanoTime() - rowStartedAt);
                 segment.book(ordinal, lease.token(index));
                 if (FaultInjection.ownershipObserveClaims()) {
                     // The declared fault: the frame has to report one row in both sets.

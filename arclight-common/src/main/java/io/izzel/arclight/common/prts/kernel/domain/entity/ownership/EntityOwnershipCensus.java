@@ -40,8 +40,12 @@ public final class EntityOwnershipCensus {
 
     /** Counts one row that reached the plan point; C0 players are counted separately. */
     public static void observe(Entity entity) {
+        observe(entity, EntityOwnershipCensus.profileOf(entity));
+    }
+
+    /** Counts one row whose profile the plan point already classified once for this tick. */
+    static void observe(Entity entity, EntityTraitClassifier.Profile profile) {
         OBSERVE_CALLS.increment();
-        EntityTraitClassifier.Profile profile = profileOf(entity);
         if (profile == null) {
             PROFILE_NULL.increment();
             // Observation-only fallback: an unclassifiable row still gets a C1 row and is booked
@@ -60,21 +64,30 @@ public final class EntityOwnershipCensus {
     }
 
     public static void claimed(Entity entity) {
-        EntityTraitClassifier.Profile profile = profileOf(entity);
+        claimed(EntityOwnershipCensus.profileOf(entity));
+    }
+
+    static void claimed(EntityTraitClassifier.Profile profile) {
         if (profile != null && (profile.traits() & EntityTraitClassifier.T_C0_PLAYER) == 0L) {
             counters(key(profile)).claimed++;
         }
     }
 
     public static void refused(Entity entity) {
-        EntityTraitClassifier.Profile profile = profileOf(entity);
+        refused(EntityOwnershipCensus.profileOf(entity));
+    }
+
+    static void refused(EntityTraitClassifier.Profile profile) {
         if (profile != null && (profile.traits() & EntityTraitClassifier.T_C0_PLAYER) == 0L) {
             counters(key(profile)).refused++;
         }
     }
 
     public static void fallback(Entity entity) {
-        EntityTraitClassifier.Profile profile = profileOf(entity);
+        fallback(EntityOwnershipCensus.profileOf(entity));
+    }
+
+    static void fallback(EntityTraitClassifier.Profile profile) {
         if (profile != null && (profile.traits() & EntityTraitClassifier.T_C0_PLAYER) == 0L) {
             counters(key(profile)).fallback++;
         }
@@ -83,7 +96,10 @@ public final class EntityOwnershipCensus {
     /** Class-level recording seam; the key uses the same class/modid/trait shape. */
     /** Adds the observed host time of one row to its class/modid/trait key. */
     public static void hostRun(Entity entity, long hostNanos) {
-        EntityTraitClassifier.Profile profile = profileOf(entity);
+        hostRun(EntityOwnershipCensus.profileOf(entity), hostNanos);
+    }
+
+    static void hostRun(EntityTraitClassifier.Profile profile, long hostNanos) {
         if (profile != null && (profile.traits() & EntityTraitClassifier.T_C0_PLAYER) == 0L) {
             Counters counters = counters(key(profile));
             counters.hostRuns++;
@@ -215,7 +231,9 @@ public final class EntityOwnershipCensus {
         otherRows = 0L;
     }
 
-    private static EntityTraitClassifier.Profile profileOf(Entity entity) {
+    /** The profile of one row; the plan point classifies once and hands the same profile to every
+     * counter of that row, so one tick does not scan the class hierarchy several times per row. */
+    static EntityTraitClassifier.Profile profileOf(Entity entity) {
         try {
             return EntityTraitClassifier.classify(entity);
         } catch (Throwable throwable) {

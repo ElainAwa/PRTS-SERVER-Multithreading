@@ -118,8 +118,21 @@ public final class EntityTraitClassifier {
         return new Profile(bits, methods, type.getName(), modId);
     }
 
-    /** Methods declared below Entity that a model must account for. */
+    /** Methods declared below Entity that a model must account for. The answer is a property of
+     * the class alone, so it is computed once: the plan point asks it for every row of every tick,
+     * and the reflective scan of the superclass chain is far too expensive to repeat there. */
     static int methodMask(Class<?> type) {
+        return METHOD_MASKS.get(type);
+    }
+
+    private static final ClassValue<Integer> METHOD_MASKS = new ClassValue<>() {
+        @Override
+        protected Integer computeValue(Class<?> type) {
+            return methodMaskUncached(type);
+        }
+    };
+
+    private static int methodMaskUncached(Class<?> type) {
         int mask = 0;
         if (overrides(type, "tick")) mask |= M_ENTITY_TICK;
         if (overrides(type, "serverAiStep")) mask |= M_SERVER_AI;
