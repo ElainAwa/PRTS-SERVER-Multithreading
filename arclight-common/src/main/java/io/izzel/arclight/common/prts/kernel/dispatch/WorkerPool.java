@@ -178,8 +178,27 @@ public final class WorkerPool {
      * dispatched a world yet) the caller gets a rejection and falls back to its own path. */
     public Executor executor() {
         return task -> {
-            if (!submitRunnable(task)) {
-                throw new RejectedExecutionException("no live dispatch shard");
+            if (submitRunnable(task)) {
+                return;
+            }
+            // A side task is not a dispatch batch: when no dispatch lane exists yet (the plan point
+            // runs before the tick's first dispatch) the same workers take it from the domain-neutral
+            // queue. A pool that refuses even that runs the task on the caller, so a plan point never
+            // leaves a row without an answer.
+            GenericCancel token = new GenericCancel() {
+                @Override
+                public boolean cancelled() {
+                    return false;
+                }
+
+                @Override
+                public boolean cancel() {
+                    return false;
+                }
+            };
+            GenericHandle handle = submitGeneric(ignored -> task.run(), token);
+            if (handle == null) {
+                task.run();
             }
         };
     }
