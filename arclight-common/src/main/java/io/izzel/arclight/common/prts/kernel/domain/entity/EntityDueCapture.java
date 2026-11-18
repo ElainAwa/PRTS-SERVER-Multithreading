@@ -42,8 +42,13 @@ public final class EntityDueCapture {
      * the legacy loaded scan.
      */
     public static boolean armed() {
-        return KernelSettings.enabled() && KernelSettings.dispatchParallel()
-            && KernelSettings.jobGraph();
+        return armed(KernelSettings.enabled(), KernelSettings.dispatchParallel(),
+            KernelSettings.jobGraph(), Boolean.getBoolean("arclight.prts.entityRowOwner"));
+    }
+
+    static boolean armed(boolean kernelEnabled, boolean dispatchParallel, boolean jobGraph,
+                         boolean ownerPhase) {
+        return kernelEnabled && jobGraph && (dispatchParallel || ownerPhase);
     }
 
     /** Starts the freeze of one level's tick list; a new server tick drops the previous window. */
@@ -123,6 +128,14 @@ public final class EntityDueCapture {
     public static Window published(long serverTick) {
         SharedDueWindow shared = SHARED;
         return shared == null ? null : shared.take(serverTick);
+    }
+
+    /** The frozen window of the server tick if a capture finished; read-only, no publish. */
+    public static Window current(long serverTick) {
+        if (!captured || failed || windowTick != serverTick) {
+            return null;
+        }
+        return new Window(windowTick, List.copyOf(WORLDS));
     }
 
     /** The shared window cache of the current tick; test and evidence code only. */

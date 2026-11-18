@@ -329,9 +329,10 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
      * call is the iteration the host runs, so injecting at that call sees exactly the rows this
      * tick's iteration will visit; a tick head would run before other tick phases and an iteration
      * callback would freeze rows after earlier rows had already ticked. The capture does nothing
-     * unless the kernel, its plan switch and its job graph are all declared, so a process that does
-     * not run the kernel keeps the host loop unchanged; a failed freeze is dropped and the kernel
-     * keeps its legacy work source for the tick instead of planning a partial window.
+     * unless the kernel and its job graph are declared and either the dispatch plan or the owner
+     * phase is declared, so a process that does not run the kernel keeps the host loop unchanged; a
+     * failed freeze is dropped and the kernel keeps its legacy work source for the tick instead of
+     * planning a partial window.
      */
     @Inject(method = "tick", at = @At(value = "INVOKE", shift = At.Shift.BEFORE,
         target = "Lnet/minecraft/world/level/entity/EntityTickList;forEach(Ljava/util/function/Consumer;)V"))
@@ -348,6 +349,11 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
         } catch (Throwable failure) {
             EntityDueCapture.fail(failure);
         }
+        // The owner phase runs outside the freeze catch: its TERMINAL must propagate unchanged so
+        // the server keeps the vanilla crash semantics instead of being recorded as a failed freeze.
+        ServerLevel ownerLevel = (ServerLevel) (Object) this;
+        io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
+            .enter(ownerLevel, EntityDueCapture.current(ownerLevel.getServer().getTickCount()));
     }
 
     @Decorate(method = "tickChunk", at = @At(value = "INVOKE", ordinal = 0, target = "Lnet/minecraft/util/RandomSource;nextInt(I)I"))

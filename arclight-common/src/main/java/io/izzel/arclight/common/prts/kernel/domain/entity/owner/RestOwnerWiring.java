@@ -5,6 +5,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 
 import java.util.LinkedHashMap;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.Map;
 
 /** The default-off owner-result ledger for one level tick: a record is keyed by dimension and row,
@@ -17,6 +18,7 @@ public final class RestOwnerWiring {
     }
 
     private static final Map<String, Map<Integer, Scope>> RESULTS = new LinkedHashMap<>();
+    private static final LongAdder SKIPS = new LongAdder();
 
     private RestOwnerWiring() {
     }
@@ -91,7 +93,11 @@ public final class RestOwnerWiring {
             }
             return false;
         }
-        return skips(scope.result());
+        boolean skip = skips(scope.result());
+        if (skip) {
+            SKIPS.increment();
+        }
+        return skip;
     }
 
     private static boolean skips(RealEntityOwnerBody.Result result) {
@@ -106,6 +112,10 @@ public final class RestOwnerWiring {
             }
         }
         RESULTS.entrySet().removeIf(entry -> entry.getValue().isEmpty());
+    }
+
+    static long skips() {
+        return SKIPS.sum();
     }
 
     static synchronized int recorded() {
