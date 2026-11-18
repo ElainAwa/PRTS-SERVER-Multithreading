@@ -5,6 +5,9 @@ import net.kyori.adventure.audience.Audience;
 import net.kyori.adventure.text.Component;
 import org.bukkit.entity.Player;
 
+/**
+ * Renders one chat component for one viewer.
+ */
 public interface ChatRenderer {
 
     Component render(Player source, Component sourceDisplayName, Component message, Audience viewer);

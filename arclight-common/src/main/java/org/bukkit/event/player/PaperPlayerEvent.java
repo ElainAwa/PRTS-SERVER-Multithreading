@@ -3,8 +3,9 @@ package org.bukkit.event.player;
 
 import org.bukkit.entity.Player;
 
-// The async constructor on PlayerEvent is package-private. This subclass is the only way to mark
-// a paper chat event asynchronous without leaving the Bukkit event package.
+/**
+ * Marks a paper event asynchronous. The async constructor on the parent is package-private.
+ */
 public abstract class PaperPlayerEvent extends PlayerEvent {
 
     protected PaperPlayerEvent(Player who, boolean async) {

@@ -11,6 +11,9 @@ import org.bukkit.event.player.PaperPlayerEvent;
 
 import java.util.Set;
 
+/**
+ * Shared state of a paper chat event: viewers, renderer and the message components.
+ */
 public abstract class AbstractChatEvent extends PaperPlayerEvent implements Cancellable {
 
     private final Set<Audience> viewers;

@@ -9,7 +9,9 @@ import org.bukkit.Chunk;
 
 import java.util.concurrent.CompletableFuture;
 
-// Joins a chunk the server already has. The load flag stays false so this path does not start generation.
+/**
+ * Joins a chunk the server already has. The two-argument lookup does not start generation.
+ */
 public final class PaperChunkLoads {
 
     public static final boolean START_GENERATION = false;

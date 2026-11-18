@@ -5,7 +5,10 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.jar.JarFile;
 
-// A paper-plugin.yml without plugin.yml is refused. bootstrap is never called.
+/**
+ * Classifies a plugin jar. A paper-plugin.yml without plugin.yml is refused.
+ * The bootstrap callback is not called.
+ */
 public final class PaperPluginJars {
 
     public static final String BUKKIT = "BUKKIT";

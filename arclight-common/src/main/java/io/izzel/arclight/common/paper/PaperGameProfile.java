@@ -14,6 +14,9 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
+/**
+ * Reads a profile from the server's game profile. Writes and cache refresh throw.
+ */
 public final class PaperGameProfile implements PlayerProfile {
 
     private final GameProfile profile;

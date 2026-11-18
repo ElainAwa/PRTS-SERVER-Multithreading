@@ -9,6 +9,10 @@ import org.spongepowered.asm.mixin.Mixin;
 
 @Mixin(value = Player.class, remap = false)
 public interface PaperPlayerProfileApiMixin {
+    // Adds getPlayerProfile() on the player.
+    // Plugins ask the player for the profile, so a helper type would not match the call.
+    // Player is the type plugins hold, so the method is injected there.
+    // A player that is not a CraftPlayer throws. The profile reads and refuses writes.
 
     default PlayerProfile getPlayerProfile() {
         if (!(this instanceof CraftPlayer player)) {

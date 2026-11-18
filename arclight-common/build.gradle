@@ -10,13 +10,6 @@ loom {
     accessWidenerPath = file('src/main/resources/arclight.accesswidener')
 }
 
-configurations {
-    paperApi {
-        canBeConsumed = false
-        canBeResolved = true
-    }
-}
-
 dependencies {
     modImplementation libs.fabric.loader
 
@@ -33,16 +26,17 @@ dependencies {
 
     // spigot
     implementation libs.spigot.api
-    // Vendored for the signature inventory. A snapshot coordinate would make the offline test fetch.
-    paperApi files('src/test/resources/paper/paper-api-1.21.1-R0.1-SNAPSHOT.jar')
-    // Vendored so an offline compile does not resolve Adventure 4.17 from the network.
-    implementation files(
-        'src/main/resources/paper/adventure-api-4.17.0.jar',
-        'src/main/resources/paper/adventure-key-4.17.0.jar',
-        'src/main/resources/paper/adventure-text-serializer-legacy-4.17.0.jar',
-        'src/main/resources/paper/examination-api-1.3.0.jar',
-        'src/main/resources/paper/examination-string-1.3.0.jar'
+    // Checked-in copies. Coordinates stay out of the version catalog so a review machine
+    // does not have to resolve them, and the classes are shaded into the NeoForge jar.
+    def paperRuntime = files(
+        rootProject.file('third-party/paper/adventure-api-4.17.0.jar'),
+        rootProject.file('third-party/paper/adventure-key-4.17.0.jar'),
+        rootProject.file('third-party/paper/adventure-text-serializer-legacy-4.17.0.jar'),
+        rootProject.file('third-party/paper/examination-api-1.3.0.jar'),
+        rootProject.file('third-party/paper/examination-string-1.3.0.jar')
     )
+    compileOnly paperRuntime
+    runtimeOnly paperRuntime
     implementation libs.jline
     implementation libs.terminalconsoleappender
     implementation libs.specialsource
@@ -71,12 +65,6 @@ compileJava {
 
 test {
     useJUnitPlatform()
-    jvmArgumentProviders.add({
-        def serverFiles = configurations.runtimeClasspath.files + sourceSets.main.output.classesDirs.files
-        def server = serverFiles.collect { it.absolutePath }.join(File.pathSeparator)
-        def paper = configurations.paperApi.asPath
-        ["-Dpaper.inventory.serverClasspath=${server}", "-Dpaper.inventory.paperClasspath=${paper}"]
-    } as CommandLineArgumentProvider)
 }
 
 
