@@ -18,6 +18,11 @@ import java.util.concurrent.CompletableFuture;
 
 @Mixin(value = World.class, remap = false)
 public interface PaperWorldChunkApiMixin {
+    // Adds the async chunk lookups on World.
+    // Plugins call them on the world, so a helper type would not match the call.
+    // World is the type plugins hold, so the methods are injected there.
+    // A loaded chunk is returned as it is. The two-argument form does not start generation.
+    // A world that is not a CraftWorld completes with null.
 
     default CompletableFuture<Chunk> getChunkAtAsync(int x, int z) {
         if (!(this instanceof CraftWorld world)) {

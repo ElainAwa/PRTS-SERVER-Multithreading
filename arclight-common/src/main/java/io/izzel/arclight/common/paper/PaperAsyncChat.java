@@ -13,6 +13,9 @@ import java.util.AbstractSet;
 import java.util.Iterator;
 import java.util.Set;
 
+/**
+ * Fires the paper async chat event from the legacy string event.
+ */
 public final class PaperAsyncChat {
 
     private PaperAsyncChat() {

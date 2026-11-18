@@ -4,6 +4,9 @@ package io.izzel.arclight.common.paper;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 
+/**
+ * Converts a section-signed legacy string and an Adventure component.
+ */
 public final class PaperJoinMessages {
 
     private static final LegacyComponentSerializer LEGACY = LegacyComponentSerializer.legacySection();

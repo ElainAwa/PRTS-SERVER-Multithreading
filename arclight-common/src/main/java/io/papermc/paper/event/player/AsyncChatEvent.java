@@ -10,6 +10,9 @@ import org.bukkit.event.HandlerList;
 
 import java.util.Set;
 
+/**
+ * The asynchronous paper chat event.
+ */
 public final class AsyncChatEvent extends AbstractChatEvent {
 
     private static final HandlerList HANDLERS = new HandlerList();

@@ -29,6 +29,8 @@ constitutes the prominent notice required by GPL-3.0.
 | **Fabric Loader / Fabric API** | Fabric platform support (retained, not part of the verified build) | Apache-2.0 |
 | **Bukkit / Spigot API** (SpigotMC) | Plugin API | GPL-3.0 |
 | **Paper API** (PaperMC) | Paper plugin API surface: the `org.bukkit.event.player.PlayerAttemptPickupItemEvent` event class and the `Server`/`Bukkit#getMinecraftVersion` and `HumanEntity#open*` method declarations (re-implemented under `prts/modsupport`; upstream: `paper-api` in <https://github.com/PaperMC/Paper>) | MIT (Paper as a whole is GPL-3.0; the authors of this part elected MIT in Paper's `LICENSE.md`) |
+| **Adventure** (Kyori) | Text types for chat and join messages. The jars live in `third-party/paper/` and are shaded into the NeoForge mod jar. `adventure-api`, `adventure-key` and `adventure-text-serializer-legacy` are 4.17.0 from Maven Central. Checksums are in `SHA256SUMS` beside them | MIT |
+| **Examination** (Kyori) | Adventure's examination API. `examination-api` and `examination-string` are 1.3.0, also in `third-party/paper/`, from Maven Central | MIT |
 | **TerminalConsoleAppender** (Mojang) | Console ANSI support | LGPL-2.1 |
 | **JLine** | Terminal handling | BSD-3-Clause |
 | **Jansi** (fusesource) | Windows terminal ANSI | Apache-2.0 |

@@ -7,6 +7,9 @@ import java.util.Collection;
 import java.util.Set;
 import java.util.UUID;
 
+/**
+ * Paper's profile view. Reads come from the server profile. Writes are unsupported.
+ */
 public interface PlayerProfile extends org.bukkit.profile.PlayerProfile {
 
     @Override

@@ -3,6 +3,9 @@ package com.destroystokyo.paper.profile;
 
 import java.util.Objects;
 
+/**
+ * One signed property on a paper profile.
+ */
 public final class ProfileProperty {
 
     private final String name;
