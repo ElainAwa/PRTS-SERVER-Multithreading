@@ -12,6 +12,7 @@
   "mixins": [
     "PaperJoinMessageMixin",
     "PaperPlayerProfileApiMixin",
+    "PaperPluginLoadMixin",
     "PaperWorldChunkApiMixin"
   ]
 }
