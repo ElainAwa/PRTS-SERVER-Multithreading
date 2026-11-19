@@ -248,11 +248,16 @@ public final class ServerThreadOwnerPhase {
             OwnerWorkerPermit.enter();
             OwnerRandomOwnership.begin(row.level(), row.entity(), row.hostStep(),
                 row.phase().tick);
+            OwnerBodyLease lease = OwnerBodyLease.acquire(row.level(), row.entity(),
+                row.phase().tick);
             long scope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
                 .EntityTickOwnership.beginOwnerBodyScope(row.entity());
             try {
                 executed[slot] = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
             } finally {
+                if (lease != null) {
+                    lease.release();
+                }
                 StageCounters.add("ownerRandomDraws", OwnerRandomOwnership.endAndDraws());
                 io.izzel.arclight.common.prts.kernel.domain.entity.ownership
                     .EntityTickOwnership.endOwnerBodyScope(scope);
