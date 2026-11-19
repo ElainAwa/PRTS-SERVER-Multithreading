@@ -39,8 +39,8 @@ public final class PoiSingleWinnerWiring {
     /** Whether the take must be refused before the host effect. */
     public static boolean denyTake(BlockPos pos) {
         EntityTickOwnership.TypedUpdate update = EntityTickOwnership.poiContext();
-        if (!enabled() || update == null) {
-            return false;
+        if (!enabled() || update == null || !EntityTickOwnership.hasPoiScope()) {
+            return EntityTickOwnership.ownerCallWithoutScope();
         }
         return !PoiAdmission.admitOwned(store, PoiAdmission.Operation.TAKE,
             recordKey(update, pos), holder(update), POLICY).singleWinner();
@@ -49,8 +49,8 @@ public final class PoiSingleWinnerWiring {
     /** Whether the release must be refused before the host effect. */
     public static boolean denyRelease(BlockPos pos) {
         EntityTickOwnership.TypedUpdate update = EntityTickOwnership.poiContext();
-        if (!enabled() || update == null) {
-            return false;
+        if (!enabled() || update == null || !EntityTickOwnership.hasPoiScope()) {
+            return EntityTickOwnership.ownerCallWithoutScope();
         }
         return !PoiAdmission.admitOwned(store, PoiAdmission.Operation.RELEASE,
             recordKey(update, pos), holder(update), POLICY).singleWinner();

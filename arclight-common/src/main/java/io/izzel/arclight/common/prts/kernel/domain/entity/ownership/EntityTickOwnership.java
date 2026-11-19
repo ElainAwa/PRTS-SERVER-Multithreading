@@ -180,13 +180,6 @@ public final class EntityTickOwnership {
 
     /** Counts one owner-result host skip as an already claimed/issued row, so the existing claim,
      * closure and partition equations stay closed; B2 must consume the real claim instead. */
-    /** Binds the POI context for a pending owner row without taking an entry verdict or cancelling. */
-    public static void onOwnerBodyPending(Entity entity) {
-        if (poiEnabled()) {
-            bindPoiContext(entity);
-        }
-    }
-
     /** Counts the one owner-body host skip at the original call site. */
     public static void noteOwnerBodyExecuted() {
         noteOwnerSkip();
@@ -730,22 +723,123 @@ public final class EntityTickOwnership {
 
     /** The internal POI single-winner property; off in every shipped build. */
     public static final String POI_SINGLE_WINNER_PROPERTY = "arclight.prts.poiSingleWinner";
-    private static volatile TypedUpdate poiContext;
 
     public static boolean poiEnabled() {
         return Boolean.getBoolean(POI_SINGLE_WINNER_PROPERTY);
     }
 
+    private static final ThreadLocal<java.util.ArrayDeque<TypedUpdate>> POI_SCOPES =
+        ThreadLocal.withInitial(java.util.ArrayDeque::new);
+    private static final ThreadLocal<Integer> POI_PRE_BOUND = ThreadLocal.withInitial(() -> 0);
+    private static volatile boolean poiEverBound;
+    private static final LongAdder POI_RESIDUAL = new LongAdder();
+    private record OwnerBinding(long threadId, TypedUpdate update) { }
+    private static final ThreadLocal<java.util.ArrayDeque<OwnerBinding>> OWNER_BINDINGS =
+        ThreadLocal.withInitial(java.util.ArrayDeque::new);
+    private static final java.util.concurrent.atomic.AtomicReference<OwnerBinding> CURRENT_OWNER =
+        new java.util.concurrent.atomic.AtomicReference<>();
+
     public static TypedUpdate poiContext() {
-        return poiContext;
+        return POI_SCOPES.get().peek();
+    }
+
+    public static boolean hasPoiScope() {
+        return !POI_SCOPES.get().isEmpty();
     }
 
     public static void bindPoiContext(TypedUpdate update) {
-        poiContext = update;
+        if (update != null) {
+            poiEverBound = true;
+            POI_SCOPES.get().push(update);
+        }
     }
 
     public static void clearPoiContext() {
-        poiContext = null;
+        java.util.ArrayDeque<TypedUpdate> scopes = POI_SCOPES.get();
+        if (!scopes.isEmpty()) {
+            scopes.pop();
+        }
+        if (scopes.isEmpty()) {
+            POI_SCOPES.remove();
+        }
+    }
+
+    public static void beginOwnerBodyScope(net.minecraft.world.entity.Entity entity) {
+        if (poiEnabled()) {
+            bindPoiContext(entity);
+            OwnerBinding binding = new OwnerBinding(Thread.currentThread().threadId(), poiContext());
+            OWNER_BINDINGS.get().push(binding);
+            CURRENT_OWNER.set(binding);
+        }
+    }
+
+    public static void endOwnerBodyScope() {
+        if (poiEnabled()) {
+            clearPoiContext();
+            java.util.ArrayDeque<OwnerBinding> bindings = OWNER_BINDINGS.get();
+            if (!bindings.isEmpty()) {
+                bindings.pop();
+            }
+            if (bindings.isEmpty()) {
+                OWNER_BINDINGS.remove();
+                CURRENT_OWNER.set(null);
+            } else {
+                CURRENT_OWNER.set(bindings.peek());
+            }
+        }
+    }
+
+    /** True when a native owner request lost its scope or arrives on the wrong thread. */
+    public static boolean ownerCallWithoutScope() {
+        OwnerBinding binding = CURRENT_OWNER.get();
+        return binding != null && (binding.threadId() != Thread.currentThread().threadId()
+            || !hasPoiScope() || poiContext() == null);
+    }
+
+    /** Legacy fallback body scope: the host tick still needs the single-winner context. */
+    public static void beginLegacyPoiFallback(net.minecraft.world.entity.Entity entity) {
+        if (poiEnabled()) {
+            bindPoiContext(entity);
+            markPrePoiBound();
+        }
+    }
+
+    public static void markPrePoiBound() {
+        POI_PRE_BOUND.set(POI_PRE_BOUND.get() + 1);
+    }
+
+    public static void clearPrePoiBound() {
+        int depth = POI_PRE_BOUND.get();
+        if (depth > 0) {
+            POI_PRE_BOUND.set(depth - 1);
+            clearPoiContext();
+            if (depth == 1) {
+                POI_PRE_BOUND.remove();
+            }
+        }
+    }
+
+    /** Clears any scope left by an aborted entity tick; returns the cleared depth for trace. */
+    public static int clearResidualPoiScopes() {
+        if (!poiEverBound || !poiEnabled()) {
+            return 0;
+        }
+        java.util.ArrayDeque<TypedUpdate> scopes = POI_SCOPES.get();
+        int depth = scopes.size();
+        if (depth > 0) {
+            scopes.clear();
+            POI_RESIDUAL.add(depth);
+        }
+        POI_SCOPES.remove();
+        POI_PRE_BOUND.remove();
+        poiEverBound = false;
+        OWNER_BINDINGS.remove();
+        CURRENT_OWNER.set(null);
+        return depth;
+    }
+
+    public static long poiResidualCount() {
+        return POI_RESIDUAL.sum();
     }
 
     private static void bindPoiContext(net.minecraft.world.entity.Entity entity) {
@@ -760,7 +854,7 @@ public final class EntityTickOwnership {
             bindPoiContext(typedUpdate(entity.getId(), currentTickIndex, worldId, incarnation,
                 -1L, -1L));
         } catch (Throwable unavailable) {
-            poiContext = null;
+            POI_SCOPES.remove();
         }
     }
 
@@ -778,6 +872,7 @@ public final class EntityTickOwnership {
         }
         if (poiEnabled()) {
             bindPoiContext(entity);
+            markPrePoiBound();
         }
         if (!armed()) {
             return RUN_HOST_TICK;
@@ -971,6 +1066,10 @@ public final class EntityTickOwnership {
 
     /** Closes the tick: recycle every lease that never reached the host, then check the accounts. */
     public static void onServerTickPost() {
+        int residual = clearResidualPoiScopes();
+        if (residual > 0) {
+            System.out.println("[PRTS] poi-scope residual=" + residual);
+        }
         if (!LIVE) {
             return;
         }

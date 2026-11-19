@@ -322,8 +322,7 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
     @Redirect(method = "tickNonPassenger", at = @At(value = "INVOKE",
         target = "Lnet/minecraft/world/entity/Entity;tick()V"))
     private void prts$ownerBodyAtTickCall(Entity entityIn) {
-        if (EntityRowOwnershipWindow.enabled()
-            && ServerThreadOwnerPhase.hasPending(entityIn)
+        if (ServerThreadOwnerPhase.hasPending(entityIn)
             && ServerThreadOwnerPhase.runPendingAtBody(entityIn)) {
             return;
         }

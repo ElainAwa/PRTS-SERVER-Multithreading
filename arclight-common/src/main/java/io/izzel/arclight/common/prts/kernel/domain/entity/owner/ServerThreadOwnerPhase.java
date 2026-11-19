@@ -27,6 +27,7 @@ public final class ServerThreadOwnerPhase {
     public static final int MAX_ROWS = 8;
     public static final String TRACE_PROPERTY = "arclight.prts.ownerPhaseTrace";
     private static final Map<String, LevelPhase> PENDING = new LinkedHashMap<>();
+    private static volatile boolean phaseActive;
     private static long totalSelected;
     private static long totalExecuted;
     private static long totalFallback;
@@ -43,6 +44,20 @@ public final class ServerThreadOwnerPhase {
         final Map<Integer, Slice> slice = new LinkedHashMap<>();
         int walkSelected;
         int walkExecuted;
+        int preSeen;
+        int expectedPost;
+        int postSeen;
+        int postDuplicate;
+        int leftGone;
+        int leftInactive;
+        int leftPreCanceled;
+        int leftNoPre;
+        int leftBodySkipped;
+        final java.util.Set<Integer> preSeenRows = new java.util.HashSet<>();
+        final java.util.Set<Integer> preCanceledRows = new java.util.HashSet<>();
+        final java.util.Set<Integer> inactiveRows = new java.util.HashSet<>();
+        final java.util.Set<Integer> expectedPostRows = new java.util.HashSet<>();
+        final java.util.Set<Integer> postSeenRows = new java.util.HashSet<>();
         int selected;
         int executed;
         int fallback;
@@ -77,11 +92,12 @@ public final class ServerThreadOwnerPhase {
                 + " total=" + selected.size());
         }
         PENDING.put(dimension, phase);
+        phaseActive = true;
     }
 
     /** Whether this entity is selected and still pending in the current level tick. */
     public static boolean hasPending(net.minecraft.world.entity.Entity entity) {
-        if (!EntityRowOwnershipWindow.enabled() || entity == null) {
+        if (!phaseActive || !EntityRowOwnershipWindow.enabled() || entity == null) {
             return false;
         }
         LevelPhase phase = PENDING.get(entity.level().dimension().location().toString());
@@ -101,9 +117,18 @@ public final class ServerThreadOwnerPhase {
         Slice slice = phase.slice.remove(entity.getId());
         if (slice == null) {
             phase.fallback++;
+            io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
+                .beginLegacyPoiFallback(entity);
+            noteExpectedPost(entity);
             return false;
         }
+        io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
+            .beginOwnerBodyScope(entity);
+        boolean fallbackHost = false;
         try {
+            if (io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection.ownBodyThrow()) {
+                throw new IllegalStateException("prts-" + "owner-body-fault");
+            }
             boolean executed = slice == Slice.WALK
                 ? RealEntityOwnerBody.runWalkOnServer((ServerLevel) entity.level(), villager)
                 : RealEntityOwnerBody.runRestedOnServer((ServerLevel) entity.level(), villager);
@@ -115,8 +140,11 @@ public final class ServerThreadOwnerPhase {
                 RestOwnerWiring.noteSkip();
                 io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
                     .noteOwnerBodyExecuted();
+                noteExpectedPost(entity);
             } else {
                 phase.fallback++;
+                noteExpectedPost(entity);
+                fallbackHost = true;
             }
             return executed;
         } catch (Throwable failure) {
@@ -125,7 +153,70 @@ public final class ServerThreadOwnerPhase {
             io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
                 .noteOwnerBodyExecuted();
             throw failure;
+        } finally {
+            io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
+                .endOwnerBodyScope();
+            if (fallbackHost) {
+                // The host body runs right after this return, so it keeps the legacy POI scope that
+                // the pre-tick listener used to bind for it; the post event clears it.
+                io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
+                    .beginLegacyPoiFallback(entity);
+            }
         }
+    }
+
+    /** Records that a pending row reached the normal Pre observer. */
+    public static void notePreSeen(net.minecraft.world.entity.Entity entity) {
+        LevelPhase phase = phaseOf(entity);
+        if (phase != null && phase.rows.get(entity.getId()) == entity) {
+            if (phase.preSeenRows.add(entity.getId())) {
+                phase.preSeen++;
+            }
+        }
+    }
+
+    /** Records a later-priority cancellation of a pending row; no body runs. */
+    public static void notePreCanceled(net.minecraft.world.entity.Entity entity) {
+        LevelPhase phase = phaseOf(entity);
+        if (phase != null && phase.rows.get(entity.getId()) == entity) {
+            phase.preCanceledRows.add(entity.getId());
+        }
+    }
+
+    /** Records an activation-range inactive skip of a pending row. */
+    public static void noteInactive(net.minecraft.world.entity.Entity entity) {
+        LevelPhase phase = phaseOf(entity);
+        if (phase != null && phase.rows.get(entity.getId()) == entity) {
+            phase.inactiveRows.add(entity.getId());
+        }
+    }
+
+    /** Records that a body at the call site successfully entered the host Post boundary. */
+    public static void noteExpectedPost(net.minecraft.world.entity.Entity entity) {
+        LevelPhase phase = phaseOf(entity);
+        if (phase != null && phase.expectedPostRows.add(entity.getId())) {
+            phase.expectedPost++;
+        }
+    }
+
+    /** Records an actual Post for a body that reached the call site; duplicate is diagnostic. */
+    public static void notePost(net.minecraft.world.entity.Entity entity) {
+        LevelPhase phase = phaseOf(entity);
+        if (phase == null || !phase.expectedPostRows.contains(entity.getId())) {
+            return;
+        }
+        if (!phase.postSeenRows.add(entity.getId())) {
+            phase.postDuplicate++;
+        } else {
+            phase.postSeen++;
+        }
+    }
+
+    private static LevelPhase phaseOf(net.minecraft.world.entity.Entity entity) {
+        if (!phaseActive || !EntityRowOwnershipWindow.enabled() || entity == null) {
+            return null;
+        }
+        return PENDING.get(entity.level().dimension().location().toString());
     }
 
     /** Reconciles and reports one level's owner phase after the host entity pass. */
@@ -134,26 +225,71 @@ public final class ServerThreadOwnerPhase {
             return;
         }
         LevelPhase phase = PENDING.remove(level.dimension().location().toString());
+        phaseActive = !PENDING.isEmpty();
         if (phase == null) {
             return;
         }
         long hostSkips = RestOwnerWiring.skips();
         long delta = hostSkips - phase.skipsAtStart;
-        // selected == executed + fallback + leftPending + terminal;
-        // hostSkipsDelta == executed + terminal (both entered the owner body once).
-        int left = phase.rows.size();
+        int leftGone = 0;
+        int leftInactive = 0;
+        int leftPreCanceled = 0;
+        int leftNoPre = 0;
+        int leftBodySkipped = 0;
+        for (java.util.Map.Entry<Integer, Villager> entry : phase.rows.entrySet()) {
+            Villager villager = entry.getValue();
+            int id = entry.getKey();
+            // Actual reached boundaries take precedence over removal/activation guesses.
+            if (phase.preCanceledRows.contains(id)) {
+                leftPreCanceled++;
+            } else if (phase.preSeenRows.contains(id)) {
+                leftBodySkipped++;
+            } else if (villager == null || villager.isRemoved() || !villager.isAlive()) {
+                leftGone++;
+            } else if (phase.inactiveRows.contains(id)) {
+                leftInactive++;
+            } else {
+                leftNoPre++;
+            }
+        }
+        int left = leftGone + leftInactive + leftPreCanceled + leftNoPre + leftBodySkipped;
         totalSelected += phase.selected;
         totalExecuted += phase.executed;
         totalFallback += phase.fallback;
         totalLeft += left;
         String line = "tick=" + phase.tick + " selected=" + phase.selected + " executed="
             + phase.executed + " fallback=" + phase.fallback + " terminal=" + phase.terminal
-            + " leftPending=" + left + " hostSkipsDelta=" + delta
-            + " hostSkipsTotal=" + hostSkips;
+            + " leftPending=" + left + " due=" + phase.preSeen + " leftGone=" + leftGone
+            + " leftInactive=" + leftInactive + " leftPreCanceled=" + leftPreCanceled
+            + " leftNoPre=" + leftNoPre + " leftBodySkipped=" + leftBodySkipped
+            + " expectedPost=" + phase.expectedPost + " postSeen=" + phase.postSeen
+            + " postDuplicate=" + phase.postDuplicate
+            + " hostSkipsDelta=" + delta + " hostSkipsTotal=" + hostSkips;
         if (!trace()) {
             return;
         }
+        boolean equation = phase.selected == phase.executed + phase.fallback + phase.terminal + left
+            && phase.preSeen == phase.executed + phase.fallback + phase.terminal
+                + leftPreCanceled + leftBodySkipped
+            && delta == phase.executed + phase.terminal;
         System.out.println("[PRTS] phaseEnd " + line);
+        if (phase.postSeen != phase.expectedPost) {
+            System.out.println("[PRTS] boundary mismatch expectedPost=" + phase.expectedPost
+                + " postSeen=" + phase.postSeen + " tick=" + phase.tick);
+        }
+        if (leftBodySkipped > 0) {
+            System.out.println("[PRTS] leftBodySkipped=" + leftBodySkipped + " tick=" + phase.tick);
+        }
+        if (leftNoPre > 0) {
+            System.out.println("[PRTS] leftNoPre=" + leftNoPre + " tick=" + phase.tick);
+        }
+        if (!equation) {
+            System.out.println("[PRTS] phaseEquation ok=false selected=" + phase.selected
+                + " executed=" + phase.executed + " fallback=" + phase.fallback
+                + " terminal=" + phase.terminal + " left=" + left + " due=" + phase.preSeen
+                + " preCanceled=" + leftPreCanceled + " bodySkipped=" + leftBodySkipped
+                + " hostSkipsDelta=" + delta);
+        }
         if (phase.walkSelected > 0) {
             System.out.println("[PRTS] owner-walk-end dim="
                 + level.dimension().location() + " selected=" + phase.walkSelected
@@ -165,9 +301,15 @@ public final class ServerThreadOwnerPhase {
             boolean header = !Files.exists(path);
             String row = line.replace(' ', '\t');
             String text = (header ? "tick\tselected\texecuted\tfallback\tterminal"
-                + "\tleftPending\thostSkipsDelta\thostSkipsTotal\n" : "") + row
+                + "\tleftPending\tdue\tleftGone\tleftInactive\tleftPreCanceled\tleftNoPre"
+                + "\tleftBodySkipped\texpectedPost\tpostSeen\tpostDuplicate\thostSkipsDelta"
+                + "\thostSkipsTotal\n" : "") + row
                 .replace("tick=", "").replace("selected=", "").replace("executed=", "")
                 .replace("fallback=", "").replace("terminal=", "").replace("leftPending=", "")
+                .replace("due=", "").replace("leftGone=", "").replace("leftInactive=", "")
+                .replace("leftPreCanceled=", "").replace("leftNoPre=", "")
+                .replace("leftBodySkipped=", "").replace("expectedPost=", "")
+                .replace("postSeen=", "").replace("postDuplicate=", "")
                 .replace("hostSkipsDelta=", "").replace("hostSkipsTotal=", "") + "\n";
             Files.writeString(path, text, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         } catch (IOException ignored) {

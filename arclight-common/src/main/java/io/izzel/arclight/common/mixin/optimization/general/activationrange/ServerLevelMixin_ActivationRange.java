@@ -28,6 +28,8 @@ public class ServerLevelMixin_ActivationRange {
     @Inject(method = "tickNonPassenger", cancellable = true, at = @At(value = "HEAD"))
     private void activationRange$inactiveTick(Entity entityIn, CallbackInfo ci) {
         if (arclight$applyInactive && !ActivationRange.checkIfActive(entityIn)) {
+            io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
+                .noteInactive(entityIn);
             ++entityIn.tickCount;
             if (((EntityBridge) entityIn).bridge$forge$canUpdate()) {
                 ((EntityBridge_ActivationRange) entityIn).bridge$inactiveTick();
