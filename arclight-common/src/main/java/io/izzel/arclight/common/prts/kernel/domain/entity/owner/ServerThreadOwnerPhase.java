@@ -43,6 +43,7 @@ public final class ServerThreadOwnerPhase {
     private static long totalLeft;
     private static volatile int lastSelected;
     public static final String BATCH_PROPERTY = "arclight.prts.ownerBatch";
+    public static final String BATCH_PARALLEL_PROPERTY = "arclight.prts.ownerBatchParallel";
     private record DeferredRow(LevelPhase phase, ServerLevel level, Villager villager,
                                net.minecraft.world.entity.Entity entity) {
     }
@@ -210,6 +211,11 @@ public final class ServerThreadOwnerPhase {
         return Boolean.getBoolean(BATCH_PROPERTY);
     }
 
+    /** Whether deferred bodies may overlap on several workers; off keeps one body in flight. */
+    private static boolean parallelBatches() {
+        return Boolean.getBoolean(BATCH_PARALLEL_PROPERTY);
+    }
+
     /** Whether this row's body was deferred to the end of the level pass. */
     public static boolean isDeferred(net.minecraft.world.entity.Entity entity) {
         return entity != null && DEFERRED_IDS.contains(entity.getId());
@@ -218,6 +224,52 @@ public final class ServerThreadOwnerPhase {
     /** Binds the platform Post replay the deferred rows need; a process that binds nothing keeps the host path. */
     public static void setPostReplay(java.util.function.Consumer<net.minecraft.world.entity.Entity> replay) {
         postReplay = replay;
+    }
+
+    private static void submitDeferred(SharedRuntime runtime, List<DeferredRow> rows, int index,
+                                       WorkerPool.GenericHandle[] handles, CancelToken[] tokens,
+                                       boolean[] executed) {
+        DeferredRow row = rows.get(index);
+        CancelToken token = new CancelToken(0L);
+        tokens[index] = token;
+        final int slot = index;
+        handles[index] = runtime.pool().submitGeneric(jobToken -> {
+            OwnerWorkerPermit.enter();
+            long scope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
+                .EntityTickOwnership.beginOwnerBodyScope(row.entity());
+            try {
+                executed[slot] = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
+            } finally {
+                io.izzel.arclight.common.prts.kernel.domain.entity.ownership
+                    .EntityTickOwnership.endOwnerBodyScope(scope);
+                OwnerWorkerPermit.exit();
+            }
+        }, token);
+        if (handles[index] == null) {
+            throw new IllegalStateException("owner batch refused to accept a deferred row");
+        }
+    }
+
+    private static void awaitOwner(WorkerPool.GenericHandle[] handles, int count,
+                                   MinecraftServer server, long deadline) {
+        while (true) {
+            boolean unsettled = false;
+            for (int index = 0; index < count; index++) {
+                if (handles[index] != null && !handles[index].future().isDone()) {
+                    unsettled = true;
+                    break;
+                }
+            }
+            if (!unsettled || System.nanoTime() > deadline) {
+                return;
+            }
+            OwnerReadDemand.service();
+            OwnerHostEventDispatch.service();
+            while (server.pollTask()) {
+                // Drains the host queue while the batch waits; chunk demand itself is served above.
+            }
+            Thread.yield();
+        }
     }
 
     /** Runs every deferred walk row on the shared workers, parks the host once on them, then replays
@@ -239,48 +291,29 @@ public final class ServerThreadOwnerPhase {
         CancelToken[] tokens = new CancelToken[count];
         boolean[] executed = new boolean[count];
         StageCounters.note("ownerBatchDeferred");
+        boolean parallel = parallelBatches();
         for (int index = 0; index < count; index++) {
-            DeferredRow row = rows.get(index);
-            CancelToken token = new CancelToken(0L);
-            tokens[index] = token;
-            final int slot = index;
-            handles[index] = runtime.pool().submitGeneric(jobToken -> {
-                OwnerWorkerPermit.enter();
-                long scope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
-                    .EntityTickOwnership.beginOwnerBodyScope(row.entity());
-                try {
-                    executed[slot] = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
-                } finally {
-                    io.izzel.arclight.common.prts.kernel.domain.entity.ownership
-                        .EntityTickOwnership.endOwnerBodyScope(scope);
-                    OwnerWorkerPermit.exit();
-                }
-            }, token);
-            if (handles[index] == null) {
-                throw new IllegalStateException("owner batch refused to accept a deferred row");
+            if (!parallel && index > 0) {
+                break;
             }
+            submitDeferred(runtime, rows, index, handles, tokens, executed);
         }
         MinecraftServer server = rows.get(0).level().getServer();
         long deadline = System.nanoTime()
             + java.util.concurrent.TimeUnit.SECONDS.toNanos(20L);
         System.out.println("[PRTS] owner-batch start rows=" + count);
-        while (true) {
-            boolean unsettled = false;
-            for (WorkerPool.GenericHandle handle : handles) {
-                if (!handle.future().isDone()) {
-                    unsettled = true;
-                    break;
+        if (!parallel) {
+            for (int index = 0; index < count; index++) {
+                if (index > 0) {
+                    submitDeferred(runtime, rows, index, handles, tokens, executed);
                 }
+                awaitOwner(handles, index + 1, server, deadline);
             }
-            if (!unsettled || System.nanoTime() > deadline) {
-                break;
+        } else {
+            for (int index = 1; index < count; index++) {
+                submitDeferred(runtime, rows, index, handles, tokens, executed);
             }
-            OwnerReadDemand.service();
-            OwnerHostEventDispatch.service();
-            while (server.pollTask()) {
-                // Drains the host queue while the batch waits; chunk demand itself is served above.
-            }
-            Thread.yield();
+            awaitOwner(handles, count, server, deadline);
         }
         for (WorkerPool.GenericHandle handle : handles) {
             if (!handle.future().isDone()) {

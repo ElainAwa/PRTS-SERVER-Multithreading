@@ -116,6 +116,11 @@ public class ArclightServer {
     }
 
     public static boolean isPrimaryThread() {
+        // An owner worker runs the entity body while the host is parked on it; primary-thread checks
+        // inside that body describe that execution context, not a foreign thread.
+        if (io.izzel.arclight.common.prts.kernel.auth.OwnerWorkerPermit.allowed()) {
+            return true;
+        }
         if (server == null) {
             return Thread.currentThread().equals(getMinecraftServer().getRunningThread());
         } else {

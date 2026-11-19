@@ -474,4 +474,17 @@ public abstract class CraftServerMixin implements CraftServerBridge {
             }
         }
     }
+
+    /** Behaviour: an owner worker reports the owner execution context as primary for the one body it
+     * runs, so events it constructs carry the synchronous shape the parked host can dispatch. Why
+     * here: every plugin event reads this predicate before its dispatch. Invariant: only the owner
+     * permit window is affected; failure keeps the host dispatch rejecting. */
+    @org.spongepowered.asm.mixin.injection.Inject(method = "isPrimaryThread",
+        at = @org.spongepowered.asm.mixin.injection.At("HEAD"), cancellable = true)
+    private void prts$ownerPrimary(
+        org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable<Boolean> cir) {
+        if (io.izzel.arclight.common.prts.kernel.auth.OwnerWorkerPermit.allowed()) {
+            cir.setReturnValue(true);
+        }
+    }
 }
