@@ -18,6 +18,13 @@ public final class StageCounters {
         COUNTS.computeIfAbsent(stage, key -> new LongAdder()).increment();
     }
 
+    /** Adds a batch of entries to one stage counter; used where one body counts several draws. */
+    public static void add(String stage, long count) {
+        if (count > 0L) {
+            COUNTS.computeIfAbsent(stage, key -> new LongAdder()).add(count);
+        }
+    }
+
     /** Prints one sorted line per stage; diagnostic only. */
     public static void dump() {
         COUNTS.entrySet().stream()

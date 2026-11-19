@@ -45,7 +45,7 @@ public final class ServerThreadOwnerPhase {
     public static final String BATCH_PROPERTY = "arclight.prts.ownerBatch";
     public static final String BATCH_PARALLEL_PROPERTY = "arclight.prts.ownerBatchParallel";
     private record DeferredRow(LevelPhase phase, ServerLevel level, Villager villager,
-                               net.minecraft.world.entity.Entity entity) {
+                               net.minecraft.world.entity.Entity entity, long hostStep) {
     }
     private static final List<DeferredRow> DEFERRED = new ArrayList<>();
     private static final Set<Integer> DEFERRED_IDS = new HashSet<>();
@@ -58,6 +58,7 @@ public final class ServerThreadOwnerPhase {
 
     private static final class LevelPhase {
         final Map<Integer, Villager> rows = new LinkedHashMap<>();
+        final Map<Integer, Long> hostSteps = new LinkedHashMap<>();
         final Map<Integer, Slice> slice = new LinkedHashMap<>();
         int walkSelected;
         int walkExecuted;
@@ -98,6 +99,13 @@ public final class ServerThreadOwnerPhase {
         lastSelected = selected.size();
         for (Villager villager : selected) {
             phase.rows.put(villager.getId(), villager);
+        }
+        for (EntityDueWindow.World world : window.worlds()) {
+            for (EntityDueWindow.Row row : world.rows()) {
+                if (phase.rows.containsKey(row.entityId())) {
+                    phase.hostSteps.put(row.entityId(), row.hostStep());
+                }
+            }
         }
         if (trace() && (!selected.isEmpty() || levelIdRows(window, dimension) > 0)) {
             System.out.println("[PRTS] owner-phase selected=" + selected.size()
@@ -140,7 +148,8 @@ public final class ServerThreadOwnerPhase {
             return false;
         }
         if (batchEnabled() && slice == Slice.WALK) {
-            DEFERRED.add(new DeferredRow(phase, (ServerLevel) entity.level(), villager, entity));
+            DEFERRED.add(new DeferredRow(phase, (ServerLevel) entity.level(), villager, entity,
+                phase.hostSteps.getOrDefault(entity.getId(), 0L)));
             DEFERRED_IDS.add(entity.getId());
             StageCounters.note("ownerBatchRowDeferred");
             return true;
@@ -237,13 +246,14 @@ public final class ServerThreadOwnerPhase {
         handles[index] = runtime.pool().submitGeneric(jobToken -> {
             StageCounters.note("ownerBatchBody");
             OwnerWorkerPermit.enter();
-            OwnerRandomOwnership.begin(row.level(), row.entity());
+            OwnerRandomOwnership.begin(row.level(), row.entity(), row.hostStep(),
+                row.phase().tick);
             long scope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
                 .EntityTickOwnership.beginOwnerBodyScope(row.entity());
             try {
                 executed[slot] = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
             } finally {
-                OwnerRandomOwnership.end();
+                StageCounters.add("ownerRandomDraws", OwnerRandomOwnership.endAndDraws());
                 io.izzel.arclight.common.prts.kernel.domain.entity.ownership
                     .EntityTickOwnership.endOwnerBodyScope(scope);
                 OwnerWorkerPermit.exit();

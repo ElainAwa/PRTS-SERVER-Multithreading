@@ -16,6 +16,7 @@ public final class OwnerRandomOwnership {
     public static final String PROPERTY = "arclight.prts.ownerThreadRandom";
 
     private static final ThreadLocal<RandomSource> BOUND = new ThreadLocal<>();
+    private static final ThreadLocal<long[]> DRAWS = new ThreadLocal<>();
 
     private OwnerRandomOwnership() {
     }
@@ -25,22 +26,35 @@ public final class OwnerRandomOwnership {
     }
 
     /** Binds and returns the row stream for one body on this worker; false leaves the shared stream. */
-    public static RandomSource begin(ServerLevel level, Entity entity) {
+    public static RandomSource begin(ServerLevel level, Entity entity, long planStep, long tick) {
         if (!enabled()) {
             return null;
         }
         long seed = level.getSeed()
             ^ entity.getUUID().getMostSignificantBits()
             ^ Long.rotateLeft(entity.getUUID().getLeastSignificantBits(), 17)
-            ^ entity.tickCount
+            ^ Long.rotateLeft(planStep, 31)
+            ^ tick
             ^ 0x9E3779B97F4A7C15L;
         RandomSource row = new LegacyRandomSource(seed);
         BOUND.set(row);
+        DRAWS.set(new long[1]);
         return row;
     }
 
-    public static void end() {
+    /** Counts one draw of the bound stream; called by the wrapper for every delegated call. */
+    public static void counted() {
+        long[] draws = DRAWS.get();
+        if (draws != null) {
+            draws[0]++;
+        }
+    }
+
+    public static long endAndDraws() {
+        long[] draws = DRAWS.get();
         BOUND.remove();
+        DRAWS.remove();
+        return draws == null ? 0L : draws[0];
     }
 
     public static RandomSource bound() {

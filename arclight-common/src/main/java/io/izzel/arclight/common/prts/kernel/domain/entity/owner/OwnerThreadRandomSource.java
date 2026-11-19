@@ -18,7 +18,11 @@ public final class OwnerThreadRandomSource implements RandomSource {
 
     private RandomSource active() {
         RandomSource row = OwnerRandomOwnership.bound();
-        return row == null ? base : row;
+        if (row == null) {
+            return base;
+        }
+        OwnerRandomOwnership.counted();
+        return row;
     }
 
     @Override
