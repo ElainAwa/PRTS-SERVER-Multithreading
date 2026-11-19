@@ -122,8 +122,8 @@ public final class ServerThreadOwnerPhase {
             noteExpectedPost(entity);
             return false;
         }
-        io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
-            .beginOwnerBodyScope(entity);
+        long ownerScope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
+            .EntityTickOwnership.beginOwnerBodyScope(entity);
         boolean fallbackHost = false;
         try {
             boolean executed = slice == Slice.WALK
@@ -152,7 +152,7 @@ public final class ServerThreadOwnerPhase {
             throw failure;
         } finally {
             io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
-                .endOwnerBodyScope();
+                .endOwnerBodyScope(ownerScope);
             if (fallbackHost) {
                 // The host body runs right after this return, so it keeps the legacy POI scope that
                 // the pre-tick listener used to bind for it; the post event clears it.

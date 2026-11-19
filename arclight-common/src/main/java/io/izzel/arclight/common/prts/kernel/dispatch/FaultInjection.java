@@ -13,21 +13,15 @@ import java.util.function.Function;
 
 /** Developer-only fault injection for the dispatch pipeline. It makes a batch miss its deadline in
  * a worker, and it keeps one pending pass that froze a declared world unmerged until that world
- * comes back with a new generation, so the lease refusal and the generation refusal happen on the
- * live path instead of on scratch objects.
- *
+ * comes back with a new generation, so the lease refusal and the generation refusal happen on the live path instead of on scratch objects.
  * <p><b>Off unless declared, and not for production.</b> The only way to arm it is the JVM property
  * {@code arclight.prts.inject}; no configuration file, no reload and no command reaches it, so a
- * shipped server runs without it. It changes no default, no reading name, no rejection code and no
- * configuration key, and the two hooks below cost one boolean read while it is off.
- *
+ * shipped server runs without it. It changes no default, no reading name, no rejection code and no configuration key, and the two hooks below cost one boolean read while it is off.
  * <p>The directive is a comma separated list: {@code delayMs=<n>} is how long a worker waits before
  * it runs a batch, {@code delayBatches=<n>} is how many batches take that wait (default one), and
  * {@code holdWorld=<id>|<id>} names the worlds one pending plan is held for. A token that cannot be
  * parsed is ignored, so a malformed directive disables the injection instead of failing a tick.
- *
- * <p>The same directive carries the faults of the ownership fixture, all zero by default, so a
- * process that declares nothing runs every row through the original path exactly once:
+ * <p>The same directive carries the faults of the ownership fixture, all zero by default, so a process that declares nothing runs every row through the original path exactly once:
  * {@code ownFail=<n>} makes the first n rows fail in the worker, {@code ownDelayMs=<n>} with
  * {@code ownDelayRows=<n>} makes its first rows answer too late to be used, {@code ownThrow=<n>}
  * makes its worker throw instead of answering, {@code ownEpochBreak=<n>} fails the token
@@ -36,30 +30,17 @@ import java.util.function.Function;
  * state instead of running the model. {@code ownSkipIgnored=<n>} keeps the platform from cancelling
  * the first n rows the host entry decided to skip, and {@code ownDoubleRun=<n>} runs the original
  * tick of the first n rows it decided to run a second time; the last four are the negative fixtures
- * of the equivalence harness and of the independent call counter, which have to report them.
- *
- * <p>The generation checks of the segment face carry their own faults, all zero by default:
- * {@code ownEntityBreak=<n>} fails the entity generation of the first n entries,
- * {@code ownSegmentBreak=<n>} fails the segment generation of the first n entries,
- * {@code ownOrdinalBreak=<n>} starts the first n frames as if the host had already passed their
- * first two ordinals, so the entry meets rows out of the frozen order, and
- * {@code ownObserveClaim=<n>} books a claimed row as observed as well, which the frame check of the
- * two row sets has to report.
- *
- *
- * <p>The two ladders and the wait walk have their own tokens, all zero by default and all read on
- * the live path: {@code ladderWalk=<n>} walks the resource ladder one rung per tick,
- * {@code ladderReturn=<n>} returns it one rung per tick, and {@code waitWalk=<n>} observes n waits
- * over the bound, taking the call-site classes in turn.
- *
+ * of the equivalence harness and of the independent call counter, which have to report them. <p>The generation checks of the segment face carry their own faults, all zero by default:
+ * {@code ownEntityBreak=<n>} fails the entity generation of the first n entries, {@code ownSegmentBreak=<n>} fails the segment generation of the first n entries,
+ * {@code ownOrdinalBreak=<n>} starts the first n frames as if the host had already passed their first two ordinals, so the entry meets rows out of the frozen order, and
+ * {@code ownObserveClaim=<n>} books a claimed row as observed as well, which the frame check of the two row sets has to report.
+ * <p>The two ladders and the wait walk have their own tokens, all zero by default and all read on the live path: {@code ladderWalk=<n>} walks the resource ladder one rung per tick,
+ * {@code ladderReturn=<n>} returns it one rung per tick, and {@code waitWalk=<n>} observes n waits over the bound, taking the call-site classes in turn.
  * <p>The frame digest has one fault of its own, off by default: {@code segBreak=<n>} deviates one
  * row of the parallel arm's digest input in each of the first n merges, and {@code segBreakRow=<n>}
- * picks that row (one-based, default the first). Only the frame the digest folds sees the deviated
- * value, so the descent has to name that row by entity id and row offset.
- *
+ * picks that row (one-based, default the first). Only the frame the digest folds sees the deviated value, so the descent has to name that row by entity id and row offset.
  * <p>The tick digest has its own fault, off by default: {@code tickDigestBreak=<n>} deviates one
- * field of the first n digest rows at or after {@code tickDigestBreakTick=<tick>}, so a comparison
- * of two runs has to name the tick, the world and the field of the first deviation.
+ * field of the first n digest rows at or after {@code tickDigestBreakTick=<tick>}, so a comparison of two runs has to name the tick, the world and the field of the first deviation.
  */
 public final class FaultInjection {
 
@@ -84,8 +65,7 @@ public final class FaultInjection {
     }
 
     /** Waits the injected time before one worker runs a batch; a no-op while nothing is declared.
-     * The caller starts its execution clock after this returns, so an injected wait never lands in
-     * the worker cost row. */
+     * The caller starts its execution clock after this returns, so an injected wait never lands in the worker cost row. */
     public static void pauseWorker() {
         pauseWorker(LIVE);
     }
@@ -110,10 +90,8 @@ public final class FaultInjection {
     }
 
     /** Whether this pending plan must stay unmerged: one of its tasks froze a declared world whose
-     * generation has not changed yet, or which is between its unload and its reload. One plan is
-     * held per declared world; the hold is spent when that world comes back with another
-     * generation, and also when a different plan reaches the check first, so a world that was
-     * already held once - including one dropped by a shutdown - is never held again. */
+     * generation has not changed yet, or which is between its unload and its reload. One plan is held per declared world; the hold is spent when that world comes back with another
+     * generation, and also when a different plan reaches the check first, so a world that was already held once - including one dropped by a shutdown - is never held again. */
     public static boolean holdsMerge(WorkPlan plan, Function<String, Long> epochOf) {
         return holdsMerge(LIVE, plan, epochOf);
     }
@@ -229,7 +207,7 @@ public final class FaultInjection {
                 || ownDelayNanos > 0L || ownEpochBreak > 0 || ownWiden > 0 || ownBreak > 0
                 || ownSkipIgnored > 0 || ownDoubleRun > 0 || ownThrow > 0 || ownEntityBreak > 0
                 || ownSegmentBreak > 0 || ownOrdinalBreak > 0 || ownObserveClaim > 0
-               
+
                 || segBreak > 0 || ladderWalk > 0 || ladderReturn > 0 || waitWalk > 0
                 || tickDigestBreak > 0;
         }
@@ -565,8 +543,7 @@ public final class FaultInjection {
     }
 
     /** How many rungs of the resource ladder this tick has to walk to, counted from one; zero while
-     * nothing is declared or after the declared number of ticks. One rung is added per tick, so the
-     * ladder is walked in order and a skipped rung is never the injection's doing. */
+     * nothing is declared or after the declared number of ticks. One rung is added per tick, so the ladder is walked in order and a skipped rung is never the injection's doing. */
     public static int ladderWalkStep() {
         return ladderWalkStep(LIVE);
     }
@@ -600,8 +577,7 @@ public final class FaultInjection {
     }
 
     /** Whether the digest row about to be folded has to carry a deviated value; off unless
-     * declared, and spent after the declared number of rows. The comparison of two runs has to
-     * name the tick, the world and the field of the first row this answered for. */
+     * declared, and spent after the declared number of rows. The comparison of two runs has to name the tick, the world and the field of the first row this answered for. */
     public static boolean tickDigestDeviates(long tick) {
         return tickDigestDeviates(LIVE, tick);
     }

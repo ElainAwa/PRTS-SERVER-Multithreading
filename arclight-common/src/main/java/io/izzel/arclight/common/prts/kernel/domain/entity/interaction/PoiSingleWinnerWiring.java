@@ -6,12 +6,10 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOw
 import io.izzel.arclight.common.prts.kernel.domain.entity.program.PoiAdmission;
 import net.minecraft.core.BlockPos;
 
-/** The POI single-winner wiring: the server tick thread binds the current typed update, the
- * PoiManager entry reads it and decides one winner per POI record. Without a bound context (property
- * off, worker, or a later tick) every entry falls back to the host path. */
+/** The POI single-winner wiring: the server tick thread binds the current typed update and the
+ * PoiManager entry decides one winner per record; without a bound context every entry falls back. */
 public final class PoiSingleWinnerWiring {
 
-    /** The one claim store of this process; only the server tick thread touches it in production. */
     private static PoiClaimStore store = new PoiClaimStore();
     private static final ExceptionPolicy POLICY = ExceptionPolicy.defaults();
 

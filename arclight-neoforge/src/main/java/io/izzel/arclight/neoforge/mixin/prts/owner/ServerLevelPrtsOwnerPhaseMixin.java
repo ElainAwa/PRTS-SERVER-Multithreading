@@ -10,11 +10,9 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
 
-/** Behaviour: observes the final Pre verdict at the wrapper's real consumption point. Why this
- * point: the wrapper calls fireEntityTickPre and reads its cancellation immediately, after all
- * listeners have run. Invariant: the event is fired exactly once and returned unchanged; only a
- * pending owner row records due/final-canceled, and an offline phase short-circuits. Failure
- * semantics: no listener is added, re-fired or cancelled here. */
+/** Behaviour: observe the final Pre verdict where the wrapper reads it, after dispatch. Why here: the
+ * cancellation is final only at that point. Invariant: fire once, return the same event, record only a
+ * pending row. Failure: nothing is re-fired or cancelled here. */
 @Mixin(ServerLevel.class)
 public abstract class ServerLevelPrtsOwnerPhaseMixin {
 

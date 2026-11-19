@@ -3,28 +3,19 @@
  * The ownership hook fixture: it claims the rows of one entity tick before the host runs them and
  * decides at the host entry whether a row keeps its original tick or is skipped under a settled
  * ownership token. Every row it cannot own is handed back to the host before the host continues,
- * so a row is either skipped or run, never both and never twice.
- *
- * <p><b>Off unless declared.</b> The only way to arm it is the JVM property
+ * so a row is either skipped or run, never both and never twice. <p><b>Off unless declared.</b> The only way to arm it is the JVM property
  * {@code arclight.prts.entityOwnership}; no configuration file, no reload and no command reaches
  * it, so a shipped server runs without it. It changes no default, no reading name, no rejection
  * code and no configuration key, and it never writes world state: a skipped row simply does not
- * run this tick. Its counters are observation only, and the host entry counts the two decisions
- * itself, so no number here is derived from what the pipeline committed.
- *
+ * run this tick. Its counters are observation only, and the host entry counts the two decisions itself, so no number here is derived from what the pipeline committed.
  * <p>The entry returns its decision to the platform binder, so the binder cancels the original tick
  * of exactly the rows this class counted as skipped. When the observation face is declared, a
- * separate counter of the original tick body is compared with the entry row by row, and one
- * timeline record per tick carries the order of the plan point, the entries and the close.
- *
+ * separate counter of the original tick body is compared with the entry row by row, and one timeline record per tick carries the order of the plan point, the entries and the close.
  * <p>The plan point freezes one capability per claimed row and the entry reads that record instead
- * of asking the world again; every claimed row ends in exactly one of four outcomes, and the four
- * are checked against the claim count on every tick.
- *
+ * of asking the world again; every claimed row ends in exactly one of four outcomes, and the four are checked against the claim count on every tick.
  * <p>The rows of one world of one tick are a segment: its ownership set, the rows it only observes,
  * and the world inputs and three generations they were frozen under. The two row sets are booked
- * apart and checked against each other on every frame; an observed row has no token and no answer,
- * so it can neither be committed nor counted as an ownership row.
+ * apart and checked against each other on every frame; an observed row has no token and no answer, so it can neither be committed nor counted as an ownership row.
  */
 package io.izzel.arclight.common.prts.kernel.domain.entity.ownership;
 
@@ -746,7 +737,6 @@ public final class EntityTickOwnership {
         new java.util.concurrent.atomic.AtomicLong();
     private static final LongAdder POI_PAIR_FAULTS = new LongAdder();
     private static volatile boolean poiEverBound;
-    private static volatile Thread poiBindingThread;
     private static final LongAdder POI_RESIDUAL = new LongAdder();
 
     /** The POI context of the current thread, only while its bound execution is this one. */
@@ -759,13 +749,9 @@ public final class EntityTickOwnership {
         return execution != null && execution.entityId() == scope.entityId() ? scope.update() : null;
     }
 
-    /** True when a POI write must not fall through to the old path: a foreign thread while a
-     * binding thread exists, or an admitted owner execution that lost its context. */
+    /** True when an admitted owner execution lost the POI context it should hold; an un-taken
+     * host call keeps its original path. */
     public static boolean poiCallRefused() {
-        Thread bound = poiBindingThread;
-        if (bound != null && Thread.currentThread() != bound) {
-            return true;
-        }
         ExecIdentity execution = EXECUTIONS.get().peek();
         return execution != null && execution.owner() && poiContext() == null;
     }
@@ -776,7 +762,6 @@ public final class EntityTickOwnership {
         if (update != null) {
             poiEverBound = true;
         }
-        poiBindingThread = Thread.currentThread();
         POI_SCOPES.get().push(new PoiScope(entity.getId(), update, Thread.currentThread(), token));
         EXECUTIONS.get().push(new ExecIdentity(owner, entity.getId()));
         return token;
@@ -813,21 +798,22 @@ public final class EntityTickOwnership {
         return token;
     }
 
-    /** Closes the owner body scope opened last on this thread. */
-    public static void endOwnerBodyScope() {
+    /** Closes the owner body scope whose token the caller received from its begin. */
+    public static void endOwnerBodyScope(long token) {
         if (!poiEnabled()) {
             return;
         }
         java.util.ArrayDeque<Long> tokens = OWNER_TOKENS.get();
-        if (tokens.isEmpty()) {
+        if (tokens.isEmpty() || tokens.peek() != token) {
+            // A duplicate or out-of-order close must not pop the enclosing owner scope.
             POI_PAIR_FAULTS.increment();
             return;
         }
-        long expected = tokens.pop();
+        tokens.pop();
         if (tokens.isEmpty()) {
             OWNER_TOKENS.remove();
         }
-        popScope(true, expected);
+        popScope(true, token);
     }
 
     /** Opens the legacy host pre-tick scope of one row; the post event closes it by token. */
@@ -873,6 +859,9 @@ public final class EntityTickOwnership {
         EXECUTIONS.remove();
         OWNER_TOKENS.remove();
         LEGACY_TOKENS.remove();
+        // This thread owns no scope after cleanup, so the next tick's fast path may skip the
+        // thread-local read until a new binding is made.
+        poiEverBound = false;
         return depth;
     }
 
@@ -903,7 +892,7 @@ public final class EntityTickOwnership {
     }
 
     /** Test-only: opens a synthetic owner body scope for one entity id; no production caller. */
-    public static void pushOwnerScopeForTests(int entityId, TypedUpdate update) {
+    public static long pushOwnerScopeForTests(int entityId, TypedUpdate update) {
         long token = SCOPE_TOKENS.incrementAndGet();
         if (update != null) {
             poiEverBound = true;
@@ -911,6 +900,7 @@ public final class EntityTickOwnership {
         POI_SCOPES.get().push(new PoiScope(entityId, update, Thread.currentThread(), token));
         EXECUTIONS.get().push(new ExecIdentity(true, entityId));
         OWNER_TOKENS.get().push(token);
+        return token;
     }
     private static TypedUpdate buildPoiContext(net.minecraft.world.entity.Entity entity) {
         try {
@@ -928,8 +918,7 @@ public final class EntityTickOwnership {
     /**
      * The host entry of one row: it reads the frozen capability of the row once, decides right there,
      * counts the decision and returns it, so the platform binder cancels exactly the rows this entry
-     * counted as skipped. It waits for no worker, throws nothing outward and asks the world nothing:
-     * a row it cannot take runs its original tick on the host path, exactly once.
+     * counted as skipped. It waits for no worker, throws nothing outward and asks the world nothing: a row it cannot take runs its original tick on the host path, exactly once.
      */
     public static int onEntityTickPre(Entity entity) {
         if (io.izzel.arclight.common.prts.kernel.domain.entity.owner.RestOwnerWiring
@@ -1023,8 +1012,7 @@ public final class EntityTickOwnership {
 
     /** The decision of one host entry: the frozen capability of the row, compared with the values
      * the entry read from the row itself and with the three generations of its segment. No world
-     * access, no wait; a non-negative return is the index of the answer the caller must commit and
-     * then skip. */
+     * access, no wait; a non-negative return is the index of the answer the caller must commit and then skip. */
     static int decideRow(LiveRow live, SegmentWork segment) {
         lastWithdrawn = false;
         lastPending = false;
@@ -1179,8 +1167,7 @@ public final class EntityTickOwnership {
      * Closes every segment frame of this tick: the ownership set and the observed rows of each world
      * are checked against each other, every ownership row is checked to end in exactly one outcome,
      * and the per-row generations each entry compared are summed into the tick record. A frame that
-     * fails either check is logged with the row that broke it and counted; nothing here can change
-     * what the tick did.
+     * fails either check is logged with the row that broke it and counted; nothing here can change what the tick did.
      */
     private static void closeSegmentFrames(OwnershipLease lease) {
         for (int at = 0; at < SEGMENTS.rows(); at++) {
@@ -1352,9 +1339,7 @@ public final class EntityTickOwnership {
     /**
      * Compares the rows one tick's host entries saw with the calls the independent counter made. A
      * row the entry skipped must show no call at all, on either path; a row it did not skip must
-     * show exactly one call of the host path, and never more body calls than path calls. Anything
-     * else is a row the two records disagree about.
-     *
+     * show exactly one call of the host path, and never more body calls than path calls. Anything else is a row the two records disagree about.
      * @return the number of rows the two records disagree about
      */
     static long crossCheckProbe(int[] ids, int rows, byte[] skips, IntUnaryOperator paths,
@@ -1536,8 +1521,7 @@ public final class EntityTickOwnership {
     }
 
     /** One line with the five quantities of the controlled takeover and the digest of the state the
-     * takeover answered with, so a reader gets the two host decisions, the fallback, the commits and
-     * the hash from one place of one run. */
+     * takeover answered with, so a reader gets the two host decisions, the fallback, the commits and the hash from one place of one run. */
     public static String takeoverLine(String hash, String algorithm) {
         return "[PRTS] entity-takeover: host_skip=" + HOST_SKIPPED.sum()
             + " host_execute=" + HOST_EXECUTED.sum()
@@ -1562,8 +1546,7 @@ public final class EntityTickOwnership {
     }
 
     /** The host whole-tick nanoseconds per row this run measured on the whitelisted classes it did
-     * not take over; zero while the host-cost observation is off. The batch criterion is the paired
-     * run, where the cost comes from the arm that runs every row on the host. */
+     * not take over; zero while the host-cost observation is off. The batch criterion is the paired run, where the cost comes from the arm that runs every row on the host. */
     static double cMoveNanos() {
         double weighted = 0.0;
         long rows = 0L;
@@ -1722,8 +1705,7 @@ public final class EntityTickOwnership {
 
     /**
      * Writes the segment frames of the observed ticks when the harness declared a trace path: one
-     * line per world slice with its row sets, its three generations and the verdict of the frame
-     * checks. Nothing is written while no path was declared.
+     * line per world slice with its row sets, its three generations and the verdict of the frame checks. Nothing is written while no path was declared.
      */
     static void dumpSegments() {
         if (TRACE_PATH == null || TRACE_PATH.isEmpty() || segmentFrameRows == 0) {
@@ -1765,8 +1747,7 @@ public final class EntityTickOwnership {
     }
 
     /** One evidence line for the segment face: the row sets, the frame checks and the three
-     * generations the entries compared. Every count is written per frame, none is derived from what
-     * a commit landed. */
+     * generations the entries compared. Every count is written per frame, none is derived from what a commit landed. */
     public static String segmentLine() {
         return "[PRTS] entity-segment: worlds=" + WORLD_TOTALS.size()
             + " frames=" + SEGMENT_FRAMES.sum()
@@ -1850,8 +1831,7 @@ public final class EntityTickOwnership {
 
     /**
      * Writes the timeline of the observed ticks when the harness declared a trace path: one line per
-     * tick with the order of its three phases, the counts of each phase and the verdict of the
-     * independent counter. Nothing is written while no path was declared.
+     * tick with the order of its three phases, the counts of each phase and the verdict of the independent counter. Nothing is written while no path was declared.
      */
     static void dumpTimeline() {
         if (TRACE_PATH == null || TRACE_PATH.isEmpty() || timelineRows == 0) {
@@ -1911,8 +1891,7 @@ public final class EntityTickOwnership {
     }
 
     /**
-     * The partition of every row a host entry saw: such a row either ran its original tick on the
-     * host path or was skipped, and a row that never reached an entry belongs to no partition.
+     * The partition of every row a host entry saw: such a row either ran its original tick on the host path or was skipped, and a row that never reached an entry belongs to no partition.
      */
     static boolean partitionOk() {
         return CANDIDATES.sum() == HOST_SKIPPED.sum() + HOST_EXECUTED.sum();
@@ -1937,8 +1916,7 @@ public final class EntityTickOwnership {
 
     /**
      * Hands a claim back in front of the host: the token is withdrawn, the row is counted as one the
-     * host runs, and the withdrawal is booked either as an answer that never arrived or as a token
-     * that no longer matched the row it was issued for.
+     * host runs, and the withdrawal is booked either as an answer that never arrived or as a token that no longer matched the row it was issued for.
      */
     private static void withdraw(OwnershipLease lease, int index, boolean mismatched) {
         lease.revoke(index);
