@@ -73,6 +73,7 @@
     "observation.PrtsBlockEntityTickCostMixin",
     "observation.PrtsNeighborUpdateCostMixin",
     "observation.PrtsMobAiDecisionMixin",
+    "program.PrtsMobNavigationSpanMixin",
     "observation.PrtsGoalSelectorDecisionMixin",
     "observation.PrtsPacketEncodeCostMixin",
     "observation.PrtsPacketDecodeCostMixin",
