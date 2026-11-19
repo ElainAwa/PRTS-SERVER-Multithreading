@@ -64,7 +64,8 @@ public record EntityUpdateProgram(ProgramKind kind, Input input, RwSet rw,
         TARGET,
         INVENTORY,
         DAMAGE,
-        POI_OCCUPANCY
+        POI_OCCUPANCY,
+        NAVIGATION
     }
 
     /** The frozen input of one update: the row identity and the state the program was frozen at. */
