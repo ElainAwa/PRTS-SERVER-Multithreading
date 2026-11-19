@@ -14,6 +14,11 @@ import io.izzel.arclight.common.prts.kernel.SharedRuntime;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerUnitPermit;
 import io.izzel.arclight.common.prts.kernel.domain.entity.CancelToken;
 import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
+import io.izzel.arclight.common.prts.kernel.generic.ExecutionCohort;
+import io.izzel.arclight.common.prts.kernel.generic.GenericJobExecutor;
+import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
+import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
+import io.izzel.arclight.common.prts.kernel.shares.ShareClass;
 import net.minecraft.server.MinecraftServer;
 
 import java.io.IOException;
@@ -236,42 +241,88 @@ public final class ServerThreadOwnerPhase {
         postReplay = replay;
     }
 
+    private static void runDeferredBody(DeferredRow row, int slot, OwnerUnitLedger unit,
+                                        boolean[] executed, boolean[] faulted) {
+        StageCounters.note("ownerBatchBody");
+        unit.started();
+        OwnerUnitPermit.enter(row.level().dimension().location().toString());
+        OwnerBodyLease lease = OwnerBodyLease.acquire(row.level(), row.entity(),
+            row.phase().tick, row.hostStep());
+        long scope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
+            .EntityTickOwnership.beginOwnerBodyScope(row.entity());
+        boolean bodyFaulted = true;
+        try {
+            executed[slot] = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
+            bodyFaulted = false;
+        } finally {
+            faulted[slot] = bodyFaulted;
+            if (lease != null) {
+                lease.release();
+            }
+            io.izzel.arclight.common.prts.kernel.domain.entity.ownership
+                .EntityTickOwnership.endOwnerBodyScope(scope);
+            OwnerUnitPermit.exit();
+        }
+    }
+
     private static void submitDeferred(SharedRuntime runtime, List<DeferredRow> rows, int index,
-                                       WorkerPool.GenericHandle[] handles, CancelToken[] tokens,
+                                       WorkerPool.GenericHandle[] handles,
                                        boolean[] executed, OwnerUnitLedger[] units,
-                                   boolean[] faulted) {
+                                       boolean[] faulted) {
         DeferredRow row = rows.get(index);
-        CancelToken token = new CancelToken(0L);
-        tokens[index] = token;
         final int slot = index;
         OwnerUnitLedger unit = OwnerUnitLedger.open(row.level(), row.entity(),
             row.phase().tick, index);
         units[index] = unit;
-        handles[index] = runtime.pool().submitGeneric(jobToken -> {
-            StageCounters.note("ownerBatchBody");
-            unit.started();
-            OwnerUnitPermit.enter(row.level().dimension().location().toString());
-            OwnerBodyLease lease = OwnerBodyLease.acquire(row.level(), row.entity(),
-                row.phase().tick, row.hostStep());
-            long scope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
-                .EntityTickOwnership.beginOwnerBodyScope(row.entity());
-            boolean bodyFaulted = true;
-            try {
-                executed[slot] = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
-                bodyFaulted = false;
-            } finally {
-                faulted[slot] = bodyFaulted;
-                if (lease != null) {
-                    lease.release();
-                }
-                io.izzel.arclight.common.prts.kernel.domain.entity.ownership
-                    .EntityTickOwnership.endOwnerBodyScope(scope);
-                OwnerUnitPermit.exit();
-            }
-        }, token);
+        handles[index] = runtime.pool().submitGeneric(
+            jobToken -> runDeferredBody(row, slot, unit, executed, faulted),
+            new CancelToken(0L));
         if (handles[index] == null) {
             throw new IllegalStateException("owner batch refused to accept a deferred row");
         }
+    }
+
+    private static String rowKey(DeferredRow row, int index) {
+        return "entity-state:" + row.entity().getUUID().getMostSignificantBits() + ":"
+            + row.entity().getUUID().getLeastSignificantBits() + ":" + row.phase().tick
+            + ":" + index;
+    }
+
+    /** Submits one parallel batch as a real frozen job graph through the generic executor; the
+     * returned handles are the cohort's, so rejections, witness state and terminal codes are the
+     * cohort's answer and not a private list. */
+    private static ExecutionCohort submitCohort(SharedRuntime runtime, List<DeferredRow> rows,
+                                                WorkerPool.GenericHandle[] handles,
+                                                boolean[] executed, OwnerUnitLedger[] units,
+                                                boolean[] faulted) {
+        int count = rows.size();
+        List<JobGraph.Node> nodes = new ArrayList<>(count);
+        List<Long> order = new ArrayList<>(count);
+        Map<String, Runnable> bodies = new LinkedHashMap<>();
+        for (int index = 0; index < count; index++) {
+            DeferredRow row = rows.get(index);
+            units[index] = OwnerUnitLedger.open(row.level(), row.entity(),
+                row.phase().tick, index);
+            String key = rowKey(row, index);
+            long nodeId = index + 1L;
+            nodes.add(new JobGraph.Node(nodeId, key, nodeId,
+                row.level().dimension().location().toString(), key, 0,
+                List.of(), List.of(), 0, "", "", List.of(), List.of(), List.of(),
+                ShareClass.ENTITY, JobDeclaration.SiteClass.PARALLEL, 0, 1, false, index));
+            order.add(nodeId);
+            final int slot = index;
+            final OwnerUnitLedger unit = units[index];
+            bodies.put(key, () -> runDeferredBody(row, slot, unit, executed, faulted));
+        }
+        JobGraph graph = new JobGraph(1L, 0L, 0L, nodes, order, new ArrayList<>(order),
+            List.of(), count, 0);
+        GenericJobExecutor executor = new GenericJobExecutor(runtime.pool());
+        GenericJobExecutor.Execution execution = executor.executeCohort(graph, bodies);
+        ExecutionCohort cohort = execution.cohort();
+        for (int index = 0; index < count; index++) {
+            handles[index] = cohort.handle(rowKey(rows.get(index), index));
+        }
+        return cohort;
     }
 
     private static void awaitOwner(WorkerPool.GenericHandle[] handles, int count,
@@ -317,13 +368,11 @@ public final class ServerThreadOwnerPhase {
         }
         int count = rows.size();
         WorkerPool.GenericHandle[] handles = new WorkerPool.GenericHandle[count];
-        CancelToken[] tokens = new CancelToken[count];
         OwnerUnitLedger[] units = new OwnerUnitLedger[count];
         boolean[] executed = new boolean[count];
         boolean[] faulted = new boolean[count];
         StageCounters.note("ownerBatchDeferred");
         boolean parallel = parallelBatches();
-        submitDeferred(runtime, rows, 0, handles, tokens, executed, units, faulted);
         MinecraftServer server = rows.get(0).level().getServer();
         long deadline = System.nanoTime()
             + java.util.concurrent.TimeUnit.SECONDS.toNanos(20L);
@@ -331,14 +380,12 @@ public final class ServerThreadOwnerPhase {
         if (!parallel) {
             for (int index = 0; index < count; index++) {
                 if (index > 0) {
-                    submitDeferred(runtime, rows, index, handles, tokens, executed, units, faulted);
+                    submitDeferred(runtime, rows, index, handles, executed, units, faulted);
                 }
                 awaitOwner(handles, index + 1, server, deadline);
             }
         } else {
-            for (int index = 1; index < count; index++) {
-                submitDeferred(runtime, rows, index, handles, tokens, executed, units, faulted);
-            }
+            submitCohort(runtime, rows, handles, executed, units, faulted);
             awaitOwner(handles, count, server, deadline);
         }
         for (WorkerPool.GenericHandle handle : handles) {
@@ -347,13 +394,20 @@ public final class ServerThreadOwnerPhase {
             }
         }
         System.out.println("[PRTS] owner-batch settled");
+        boolean unsettled = false;
         for (WorkerPool.GenericHandle handle : handles) {
-            if (!handle.future().isDone()) {
-                for (CancelToken token : tokens) {
-                    token.cancel();
-                }
-                throw new IllegalStateException("owner batch did not settle before the deadline");
+            if (handle == null || !handle.future().isDone()) {
+                unsettled = true;
+                break;
             }
+        }
+        if (unsettled) {
+            for (WorkerPool.GenericHandle pending : handles) {
+                if (pending != null) {
+                    pending.cancel();
+                }
+            }
+            throw new IllegalStateException("owner batch did not settle before the deadline");
         }
         Throwable firstFailure = null;
         for (int index = 0; index < count; index++) {
