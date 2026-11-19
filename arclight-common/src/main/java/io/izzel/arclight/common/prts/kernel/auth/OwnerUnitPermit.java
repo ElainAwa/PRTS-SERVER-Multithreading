@@ -45,6 +45,14 @@ public final class OwnerUnitPermit {
         return CURRENT.get() != null;
     }
 
+    /** Upgrades the current unit after the registry lease and the authority decision were granted. */
+    public static void authorize() {
+        Unit unit = CURRENT.get();
+        if (unit != null && !unit.authorized()) {
+            CURRENT.set(new Unit(unit.worldId(), unit.capabilities(), true));
+        }
+    }
+
     public static boolean authorized() {
         Unit unit = CURRENT.get();
         return unit != null && unit.authorized();
@@ -61,7 +69,7 @@ public final class OwnerUnitPermit {
         if (unit == null) {
             return false;
         }
-        return ENTITY_REASONS.contains(reason)
+        return unit.authorized() && ENTITY_REASONS.contains(reason)
             && unit.capabilities().contains(Capability.ENTITY_STATE);
     }
 

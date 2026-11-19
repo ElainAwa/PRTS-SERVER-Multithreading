@@ -253,6 +253,7 @@ public final class ServerThreadOwnerPhase {
                 OwnerBodyLease.enabled() && Boolean.getBoolean(OwnerBodyLease.AUTHORITY_PROPERTY));
             OwnerBodyLease lease = OwnerBodyLease.acquire(row.level(), row.entity(),
                 row.phase().tick, row.hostStep());
+            io.izzel.arclight.common.prts.kernel.auth.OwnerUnitPermit.authorize();
             long scope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
                 .EntityTickOwnership.beginOwnerBodyScope(row.entity());
             boolean faulted = true;
@@ -313,6 +314,11 @@ public final class ServerThreadOwnerPhase {
         SharedRuntime runtime = SharedRuntime.shared();
         if (runtime.pool() == null && !runtime.open()) {
             throw new IllegalStateException("owner batch pool is unavailable");
+        }
+        if (!OwnerBodyLease.enabled()
+            || !Boolean.getBoolean(OwnerBodyLease.AUTHORITY_PROPERTY)) {
+            throw new IllegalStateException(
+                "owner batch needs the admitted lease and the authority decision");
         }
         int count = rows.size();
         WorkerPool.GenericHandle[] handles = new WorkerPool.GenericHandle[count];
