@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.domain.entity.owner;
 
-import io.izzel.arclight.common.prts.kernel.auth.OwnerWorkerPermit;
+import io.izzel.arclight.common.prts.kernel.auth.OwnerUnitPermit;
 import org.bukkit.Bukkit;
 import org.bukkit.event.Event;
 
@@ -25,7 +25,7 @@ public final class OwnerHostEventDispatch {
 
     /** Whether this worker event should be handed to the host instead of dispatched locally. */
     public static boolean active() {
-        return OwnerWorkerPermit.allowed() && !ON_HOST.get();
+        return OwnerUnitPermit.eventShape() && !ON_HOST.get();
     }
 
     /** Queues one event for the parked host and waits for its dispatch. */

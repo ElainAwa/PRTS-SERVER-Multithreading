@@ -483,7 +483,7 @@ public abstract class CraftServerMixin implements CraftServerBridge {
         at = @org.spongepowered.asm.mixin.injection.At("HEAD"), cancellable = true)
     private void prts$ownerPrimary(
         org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable<Boolean> cir) {
-        if (io.izzel.arclight.common.prts.kernel.auth.OwnerWorkerPermit.allowed()) {
+        if (io.izzel.arclight.common.prts.kernel.auth.OwnerUnitPermit.eventShape()) {
             cir.setReturnValue(true);
         }
     }

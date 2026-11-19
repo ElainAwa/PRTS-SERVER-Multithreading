@@ -11,7 +11,7 @@ import net.minecraft.world.entity.schedule.Activity;
 
 import io.izzel.arclight.common.bridge.core.entity.EntityBridge;
 import io.izzel.arclight.common.prts.kernel.SharedRuntime;
-import io.izzel.arclight.common.prts.kernel.auth.OwnerWorkerPermit;
+import io.izzel.arclight.common.prts.kernel.auth.OwnerUnitPermit;
 import io.izzel.arclight.common.prts.kernel.domain.entity.CancelToken;
 import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
 import net.minecraft.server.MinecraftServer;
@@ -245,7 +245,8 @@ public final class ServerThreadOwnerPhase {
         final int slot = index;
         handles[index] = runtime.pool().submitGeneric(jobToken -> {
             StageCounters.note("ownerBatchBody");
-            OwnerWorkerPermit.enter();
+            OwnerUnitPermit.enter(row.level().dimension().location().toString(),
+                OwnerBodyLease.enabled() && Boolean.getBoolean(OwnerBodyLease.AUTHORITY_PROPERTY));
             OwnerBodyLease lease = OwnerBodyLease.acquire(row.level(), row.entity(),
                 row.phase().tick, row.hostStep());
             long scope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
@@ -258,7 +259,7 @@ public final class ServerThreadOwnerPhase {
                 }
                 io.izzel.arclight.common.prts.kernel.domain.entity.ownership
                     .EntityTickOwnership.endOwnerBodyScope(scope);
-                OwnerWorkerPermit.exit();
+                OwnerUnitPermit.exit();
             }
         }, token);
         if (handles[index] == null) {

@@ -48,7 +48,7 @@ public abstract class SimplePluginManagerMixin {
     @org.spongepowered.asm.mixin.injection.Inject(method = "callEvent", at = @org.spongepowered.asm.mixin.injection.At("HEAD"), cancellable = true)
     private void prts$ownerHostEvent(org.bukkit.event.Event event,
                                      org.spongepowered.asm.mixin.injection.callback.CallbackInfo ci) {
-        if (io.izzel.arclight.common.prts.kernel.auth.OwnerWorkerPermit.allowed()) {
+        if (io.izzel.arclight.common.prts.kernel.auth.OwnerUnitPermit.eventShape()) {
             io.izzel.arclight.common.prts.kernel.domain.entity.owner.OwnerHostEventDispatch
                 .dispatch(event);
             ci.cancel();

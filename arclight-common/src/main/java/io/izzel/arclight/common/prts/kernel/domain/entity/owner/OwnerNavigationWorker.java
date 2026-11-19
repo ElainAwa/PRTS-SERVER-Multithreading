@@ -2,7 +2,7 @@
 package io.izzel.arclight.common.prts.kernel.domain.entity.owner;
 
 import io.izzel.arclight.common.prts.kernel.SharedRuntime;
-import io.izzel.arclight.common.prts.kernel.auth.OwnerWorkerPermit;
+import io.izzel.arclight.common.prts.kernel.auth.OwnerUnitPermit;
 import io.izzel.arclight.common.prts.kernel.domain.entity.CancelToken;
 import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
 import net.minecraft.server.MinecraftServer;
@@ -52,11 +52,11 @@ public final class OwnerNavigationWorker {
         WorkerPool.GenericHandle handle;
         try {
             handle = runtime.pool().submitGeneric(token -> {
-                OwnerWorkerPermit.enter();
+                OwnerUnitPermit.enter("", false);
                 try {
                     navigation.tick();
                 } finally {
-                    OwnerWorkerPermit.exit();
+                    OwnerUnitPermit.exit();
                 }
             }, cancel);
         } catch (Throwable submissionFailure) {
