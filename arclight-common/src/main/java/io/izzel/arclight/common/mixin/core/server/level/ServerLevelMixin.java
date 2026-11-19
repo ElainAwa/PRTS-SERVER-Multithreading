@@ -28,6 +28,8 @@ import io.izzel.arclight.common.mod.util.ArclightCaptures;
 import io.izzel.arclight.common.mod.util.DelegateWorldInfo;
 import io.izzel.arclight.common.mod.util.DistValidate;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityDueCapture;
+import io.izzel.arclight.common.prts.kernel.domain.entity.owner.EntityRowOwnershipWindow;
+import io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase;
 import io.izzel.arclight.i18n.ArclightConfig;
 import io.izzel.arclight.mixin.Decorate;
 import io.izzel.arclight.mixin.DecorationOps;
@@ -99,8 +101,8 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
@@ -310,6 +312,22 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
     @Override
     public LevelStorageSource.LevelStorageAccess bridge$getConvertable() {
         return this.convertable;
+    }
+
+    /** Runs a pending owner body exactly at the original host call, then lets the wrapper fire its
+     * normal Post, profiler, passenger and post-tick steps; non-owner rows keep the original call.
+     * The redirect targets only this call site; the existing postTick injection at the same call
+     * remains after it, so no manual Post/portal is added and call-site redirects must not be
+     * combined without rechecking this order. */
+    @Redirect(method = "tickNonPassenger", at = @At(value = "INVOKE",
+        target = "Lnet/minecraft/world/entity/Entity;tick()V"))
+    private void prts$ownerBodyAtTickCall(Entity entityIn) {
+        if (EntityRowOwnershipWindow.enabled()
+            && ServerThreadOwnerPhase.hasPending(entityIn)
+            && ServerThreadOwnerPhase.runPendingAtBody(entityIn)) {
+            return;
+        }
+        entityIn.tick();
     }
 
     @Inject(method = "tickNonPassenger", at = @At(value = "INVOKE", shift = At.Shift.AFTER, target = "Lnet/minecraft/world/entity/Entity;tick()V"))

@@ -90,8 +90,11 @@ public final class PrtsEntityOwnershipEvents {
     @SubscribeEvent
     public void onEntityTickPre(EntityTickEvent.Pre event) {
         ENTITY_PRE.increment();
-        io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
-            .runPending(event.getEntity());
+        if (io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
+            .hasPending(event.getEntity())) {
+            EntityTickOwnership.onOwnerBodyPending(event.getEntity());
+            return;
+        }
         int verdict = EntityTickOwnership.onEntityTickPre(event.getEntity());
         if (verdict == EntityTickOwnership.SKIP_HOST_TICK && !FaultInjection.ownershipSkipsIgnored()) {
             event.setCanceled(true);

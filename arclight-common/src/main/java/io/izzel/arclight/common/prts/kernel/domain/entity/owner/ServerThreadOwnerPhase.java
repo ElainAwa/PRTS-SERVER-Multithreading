@@ -79,26 +79,28 @@ public final class ServerThreadOwnerPhase {
         PENDING.put(dimension, phase);
     }
 
-    /** Runs one pending owner row from the host pre-tick wrapper; false means host may tick. */
-    public static boolean runPending(net.minecraft.world.entity.Entity entity) {
-        if (entity == null) {
+    /** Whether this entity is selected and still pending in the current level tick. */
+    public static boolean hasPending(net.minecraft.world.entity.Entity entity) {
+        if (!EntityRowOwnershipWindow.enabled() || entity == null) {
             return false;
         }
-        String dimension = entity.level().dimension().location().toString();
-        LevelPhase phase = PENDING.get(dimension);
-        if (phase == null) {
+        LevelPhase phase = PENDING.get(entity.level().dimension().location().toString());
+        return phase != null && phase.rows.get(entity.getId()) == entity;
+    }
+
+    /** Runs a pending owner body at the original host tick call site; false means host may tick. */
+    public static boolean runPendingAtBody(net.minecraft.world.entity.Entity entity) {
+        if (!EntityRowOwnershipWindow.enabled() || entity == null) {
+            return false;
+        }
+        LevelPhase phase = PENDING.get(entity.level().dimension().location().toString());
+        if (phase == null || phase.rows.get(entity.getId()) != entity) {
             return false;
         }
         Villager villager = phase.rows.remove(entity.getId());
-        if (villager != entity) {
-            if (villager != null) {
-                phase.rows.put(entity.getId(), villager);
-            }
-            return false;
-        }
-        Slice slice = phase.slice.get(entity.getId());
+        Slice slice = phase.slice.remove(entity.getId());
         if (slice == null) {
-            phase.rows.put(entity.getId(), villager);
+            phase.fallback++;
             return false;
         }
         try {
@@ -110,12 +112,18 @@ public final class ServerThreadOwnerPhase {
                 if (slice == Slice.WALK) {
                     phase.walkExecuted++;
                 }
+                RestOwnerWiring.noteSkip();
+                io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
+                    .noteOwnerBodyExecuted();
             } else {
                 phase.fallback++;
             }
             return executed;
         } catch (Throwable failure) {
             phase.terminal++;
+            RestOwnerWiring.noteSkip();
+            io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
+                .noteOwnerBodyExecuted();
             throw failure;
         }
     }
@@ -131,6 +139,8 @@ public final class ServerThreadOwnerPhase {
         }
         long hostSkips = RestOwnerWiring.skips();
         long delta = hostSkips - phase.skipsAtStart;
+        // selected == executed + fallback + leftPending + terminal;
+        // hostSkipsDelta == executed + terminal (both entered the owner body once).
         int left = phase.rows.size();
         totalSelected += phase.selected;
         totalExecuted += phase.executed;

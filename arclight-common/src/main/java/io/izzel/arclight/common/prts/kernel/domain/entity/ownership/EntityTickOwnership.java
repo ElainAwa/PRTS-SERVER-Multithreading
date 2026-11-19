@@ -180,6 +180,18 @@ public final class EntityTickOwnership {
 
     /** Counts one owner-result host skip as an already claimed/issued row, so the existing claim,
      * closure and partition equations stay closed; B2 must consume the real claim instead. */
+    /** Binds the POI context for a pending owner row without taking an entry verdict or cancelling. */
+    public static void onOwnerBodyPending(Entity entity) {
+        if (poiEnabled()) {
+            bindPoiContext(entity);
+        }
+    }
+
+    /** Counts the one owner-body host skip at the original call site. */
+    public static void noteOwnerBodyExecuted() {
+        noteOwnerSkip();
+    }
+
     static void noteOwnerSkip() {
         CANDIDATES.increment();
         CLAIMED.increment();

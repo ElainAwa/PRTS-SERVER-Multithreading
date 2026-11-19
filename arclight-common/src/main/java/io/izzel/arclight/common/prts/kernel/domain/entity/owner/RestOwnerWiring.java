@@ -114,6 +114,11 @@ public final class RestOwnerWiring {
         RESULTS.entrySet().removeIf(entry -> entry.getValue().isEmpty());
     }
 
+    /** Counts the one host skip owned by a body executed at the original call site. */
+    static void noteSkip() {
+        SKIPS.increment();
+    }
+
     static long skips() {
         return SKIPS.sum();
     }
