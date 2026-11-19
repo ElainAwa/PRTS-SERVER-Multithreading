@@ -54,6 +54,7 @@ public class ArclightImplementer implements ILaunchPluginService {
         this.implementers.put("async", AsyncCatcher.INSTANCE);
         this.implementers.put("enum", new EnumDefinalizer());
         this.implementers.put("prtsNavSpan", new io.izzel.arclight.boot.asm.PrtsNavSpanSuccessor());
+        this.implementers.put("prtsAiStepLooting", new io.izzel.arclight.boot.asm.PrtsMobAiStepLooting());
         if (this.logger) {
             this.implementers.put("logger", new LoggerTransformer());
         }
