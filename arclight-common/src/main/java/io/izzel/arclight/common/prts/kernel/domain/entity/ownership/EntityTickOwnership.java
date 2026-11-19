@@ -737,6 +737,8 @@ public final class EntityTickOwnership {
         new java.util.concurrent.atomic.AtomicLong();
     private static final LongAdder POI_PAIR_FAULTS = new LongAdder();
     private static volatile boolean poiEverBound;
+    private static final java.util.concurrent.atomic.AtomicInteger ACTIVE_OWNER_EXECUTIONS =
+        new java.util.concurrent.atomic.AtomicInteger();
     private static final LongAdder POI_RESIDUAL = new LongAdder();
 
     /** The POI context of the current thread, only while its bound execution is this one. */
@@ -749,19 +751,20 @@ public final class EntityTickOwnership {
         return execution != null && execution.entityId() == scope.entityId() ? scope.update() : null;
     }
 
-    /** True when an admitted owner execution lost the POI context it should hold; an un-taken
-     * host call keeps its original path. */
+    /** True when an admitted owner execution lost the POI context it should hold, or a foreign
+     * thread calls while any owner execution is active; an un-taken host call keeps its path. */
     public static boolean poiCallRefused() {
         ExecIdentity execution = EXECUTIONS.get().peek();
-        return execution != null && execution.owner() && poiContext() == null;
+        if (execution != null && execution.owner() && poiContext() == null) {
+            return true;
+        }
+        return execution == null && ACTIVE_OWNER_EXECUTIONS.get() > 0;
     }
 
     private static long pushScope(net.minecraft.world.entity.Entity entity, boolean owner) {
         long token = SCOPE_TOKENS.incrementAndGet();
         TypedUpdate update = buildPoiContext(entity);
-        if (update != null) {
-            poiEverBound = true;
-        }
+        poiEverBound = true;
         POI_SCOPES.get().push(new PoiScope(entity.getId(), update, Thread.currentThread(), token));
         EXECUTIONS.get().push(new ExecIdentity(owner, entity.getId()));
         return token;
@@ -793,6 +796,7 @@ public final class EntityTickOwnership {
         long token = 0L;
         if (poiEnabled()) {
             token = pushScope(entity, true);
+            ACTIVE_OWNER_EXECUTIONS.incrementAndGet();
             OWNER_TOKENS.get().push(token);
         }
         return token;
@@ -813,6 +817,7 @@ public final class EntityTickOwnership {
         if (tokens.isEmpty()) {
             OWNER_TOKENS.remove();
         }
+        ACTIVE_OWNER_EXECUTIONS.updateAndGet(active -> active > 0 ? active - 1 : 0);
         popScope(true, token);
     }
 
@@ -846,13 +851,26 @@ public final class EntityTickOwnership {
 
     /** Clears any scope left by an aborted entity tick on this thread; returns the depth. */
     public static int clearResidualPoiScopes() {
-        if (!poiEverBound || !poiEnabled()) {
+        if (!poiEverBound) {
             return 0;
         }
         java.util.ArrayDeque<PoiScope> scopes = POI_SCOPES.get();
         int depth = scopes.size();
         if (depth > 0) {
+            int owners = 0;
+            java.util.Iterator<PoiScope> scopeIt = scopes.iterator();
+            java.util.Iterator<ExecIdentity> executionIt = EXECUTIONS.get().iterator();
+            while (scopeIt.hasNext() && executionIt.hasNext()) {
+                scopeIt.next();
+                if (executionIt.next().owner()) {
+                    owners++;
+                }
+            }
             scopes.clear();
+            if (owners > 0) {
+                int release = owners;
+                ACTIVE_OWNER_EXECUTIONS.updateAndGet(active -> Math.max(0, active - release));
+            }
             POI_RESIDUAL.add(depth);
         }
         POI_SCOPES.remove();
@@ -894,11 +912,10 @@ public final class EntityTickOwnership {
     /** Test-only: opens a synthetic owner body scope for one entity id; no production caller. */
     public static long pushOwnerScopeForTests(int entityId, TypedUpdate update) {
         long token = SCOPE_TOKENS.incrementAndGet();
-        if (update != null) {
-            poiEverBound = true;
-        }
+        poiEverBound = true;
         POI_SCOPES.get().push(new PoiScope(entityId, update, Thread.currentThread(), token));
         EXECUTIONS.get().push(new ExecIdentity(true, entityId));
+        ACTIVE_OWNER_EXECUTIONS.incrementAndGet();
         OWNER_TOKENS.get().push(token);
         return token;
     }
