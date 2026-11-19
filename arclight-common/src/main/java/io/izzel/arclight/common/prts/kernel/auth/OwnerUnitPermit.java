@@ -37,10 +37,11 @@ public final class OwnerUnitPermit {
     private OwnerUnitPermit() {
     }
 
-    /** Binds the calling thread as one admitted owner unit. */
-    public static void enter(String worldId, boolean authorized) {
+    /** Binds the calling thread as one owner unit without any right: nothing passes until a real
+     * lease receipt is bound by {@link #bindLease(String)}. */
+    public static void enter(String worldId) {
         CURRENT.set(new Unit(worldId, EnumSet.of(Capability.ENTITY_STATE,
-            Capability.CHUNK_DEMAND, Capability.EVENT_HOST), authorized, ""));
+            Capability.CHUNK_DEMAND, Capability.EVENT_HOST), false, ""));
     }
 
     public static void exit() {
@@ -129,13 +130,15 @@ public final class OwnerUnitPermit {
     /** The host-served chunk demand bridge is only for an admitted owner unit. */
     public static boolean chunkDemand() {
         Unit unit = CURRENT.get();
-        return unit != null && unit.capabilities().contains(Capability.CHUNK_DEMAND);
+        return unit != null && unit.authorized() && !unit.leasedDomain().isEmpty()
+            && unit.capabilities().contains(Capability.CHUNK_DEMAND);
     }
 
     /** Events an owner unit constructs carry the host dispatch shape; this is not a main-thread
      * claim: only the admitted unit window asks for it. */
     public static boolean eventShape() {
         Unit unit = CURRENT.get();
-        return unit != null && unit.capabilities().contains(Capability.EVENT_HOST);
+        return unit != null && unit.authorized() && !unit.leasedDomain().isEmpty()
+            && unit.capabilities().contains(Capability.EVENT_HOST);
     }
 }

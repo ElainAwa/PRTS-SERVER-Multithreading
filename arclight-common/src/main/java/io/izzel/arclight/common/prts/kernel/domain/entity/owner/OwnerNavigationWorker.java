@@ -52,7 +52,7 @@ public final class OwnerNavigationWorker {
         WorkerPool.GenericHandle handle;
         try {
             handle = runtime.pool().submitGeneric(token -> {
-                OwnerUnitPermit.enter("", false);
+                OwnerUnitPermit.enter("");
                 try {
                     navigation.tick();
                 } finally {

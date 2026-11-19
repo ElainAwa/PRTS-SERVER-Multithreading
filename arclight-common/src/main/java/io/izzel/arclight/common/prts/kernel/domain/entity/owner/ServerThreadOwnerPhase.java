@@ -249,8 +249,7 @@ public final class ServerThreadOwnerPhase {
         handles[index] = runtime.pool().submitGeneric(jobToken -> {
             StageCounters.note("ownerBatchBody");
             unit.started();
-            OwnerUnitPermit.enter(row.level().dimension().location().toString(),
-                OwnerBodyLease.enabled() && Boolean.getBoolean(OwnerBodyLease.AUTHORITY_PROPERTY));
+            OwnerUnitPermit.enter(row.level().dimension().location().toString());
             OwnerBodyLease lease = OwnerBodyLease.acquire(row.level(), row.entity(),
                 row.phase().tick, row.hostStep());
             long scope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
