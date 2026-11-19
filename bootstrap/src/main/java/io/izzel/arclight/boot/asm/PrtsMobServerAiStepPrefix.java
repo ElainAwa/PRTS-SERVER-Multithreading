@@ -103,6 +103,7 @@ public final class PrtsMobServerAiStepPrefix implements Implementer {
             }
         }
         MethodNode stage = new MethodNode(Opcodes.ACC_PRIVATE, STAGE, STAGE_DESC, null, null);
+        stage.instructions.add(TailRegionExtractor.stagePrologue("mobServerAiStepPrefix"));
         for (AbstractInsnNode node1 : region) {
             stage.instructions.add(node1.clone(labels));
         }

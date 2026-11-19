@@ -36,6 +36,16 @@ public final class TailRegionExtractor {
     private TailRegionExtractor() {
     }
 
+    /** Emits one stage-entry counter call to the observation face. */
+    public static InsnList stagePrologue(String stage) {
+        InsnList list = new InsnList();
+        list.add(new org.objectweb.asm.tree.LdcInsnNode(stage));
+        list.add(new MethodInsnNode(Opcodes.INVOKESTATIC,
+            "io/izzel/arclight/common/prts/kernel/domain/entity/owner/StageCounters",
+            "note", "(Ljava/lang/String;)V", false));
+        return list;
+    }
+
     private static AbstractInsnNode pushInt(int value) {
         if (value >= -1 && value <= 5) {
             return new InsnNode(Opcodes.ICONST_0 + value);
@@ -137,6 +147,7 @@ public final class TailRegionExtractor {
         }
         String stageDesc = multiEntry ? "(I)V" : "()V";
         MethodNode stage = new MethodNode(Opcodes.ACC_PRIVATE, stageName, stageDesc, null, null);
+        stage.instructions.add(stagePrologue(stageName));
         if (multiEntry) {
             LabelNode[] targets = new LabelNode[entries.size()];
             for (int index = 0; index < entries.size(); index++) {
