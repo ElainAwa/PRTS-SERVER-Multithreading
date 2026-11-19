@@ -142,6 +142,7 @@ public final class ServerThreadOwnerPhase {
         if (batchEnabled() && slice == Slice.WALK) {
             DEFERRED.add(new DeferredRow(phase, (ServerLevel) entity.level(), villager, entity));
             DEFERRED_IDS.add(entity.getId());
+            StageCounters.note("ownerBatchRowDeferred");
             return true;
         }
         long ownerScope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
@@ -234,6 +235,7 @@ public final class ServerThreadOwnerPhase {
         tokens[index] = token;
         final int slot = index;
         handles[index] = runtime.pool().submitGeneric(jobToken -> {
+            StageCounters.note("ownerBatchBody");
             OwnerWorkerPermit.enter();
             long scope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
                 .EntityTickOwnership.beginOwnerBodyScope(row.entity());
@@ -348,9 +350,11 @@ public final class ServerThreadOwnerPhase {
                 io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
                     .noteOwnerBodyExecuted();
                 noteExpectedPost(row.entity());
+                StageCounters.note("ownerBatchPortal");
                 ((EntityBridge) row.entity()).bridge$postTick();
                 java.util.function.Consumer<net.minecraft.world.entity.Entity> replay = postReplay;
                 if (replay != null) {
+                    StageCounters.note("ownerBatchPost");
                     replay.accept(row.entity());
                 }
             } else {
