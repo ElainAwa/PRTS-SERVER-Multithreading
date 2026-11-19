@@ -41,4 +41,17 @@ public abstract class SimplePluginManagerMixin {
     private void prts$endFire(Event event, CallbackInfo ci) {
         BukkitEventOrderObserver.end(false);
     }
+
+    /** Behaviour: a worker's plugin event is dispatched by the parked host, not on the worker. Why
+     * here: this is the one entry every plugin event passes through, so the thread guard is decided
+     * once. Invariant: host dispatch runs on the host thread; failure travels back to the worker. */
+    @org.spongepowered.asm.mixin.injection.Inject(method = "callEvent", at = @org.spongepowered.asm.mixin.injection.At("HEAD"), cancellable = true)
+    private void prts$ownerHostEvent(org.bukkit.event.Event event,
+                                     org.spongepowered.asm.mixin.injection.callback.CallbackInfo ci) {
+        if (io.izzel.arclight.common.prts.kernel.auth.OwnerWorkerPermit.allowed()) {
+            io.izzel.arclight.common.prts.kernel.domain.entity.owner.OwnerHostEventDispatch
+                .dispatch(event);
+            ci.cancel();
+        }
+    }
 }

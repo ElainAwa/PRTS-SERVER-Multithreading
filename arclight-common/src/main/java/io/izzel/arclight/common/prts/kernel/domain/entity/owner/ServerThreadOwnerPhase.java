@@ -276,6 +276,7 @@ public final class ServerThreadOwnerPhase {
                 break;
             }
             OwnerReadDemand.service();
+            OwnerHostEventDispatch.service();
             while (server.pollTask()) {
                 // Drains the host queue while the batch waits; chunk demand itself is served above.
             }
