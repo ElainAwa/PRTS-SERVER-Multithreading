@@ -60,6 +60,8 @@ public class ArclightImplementer implements ILaunchPluginService {
         this.implementers.put("prtsLivingAiStepTail",
             new io.izzel.arclight.boot.asm.PrtsLivingEntityAiStepTail());
         this.implementers.put("prtsMobTickTail", new io.izzel.arclight.boot.asm.PrtsMobTickTail());
+        this.implementers.put("prtsMobAiStepPrefix",
+            new io.izzel.arclight.boot.asm.PrtsMobServerAiStepPrefix());
         if (this.logger) {
             this.implementers.put("logger", new LoggerTransformer());
         }
