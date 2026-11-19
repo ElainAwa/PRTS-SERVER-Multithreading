@@ -8,6 +8,7 @@ import org.bukkit.event.Event;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CompletionException;
+import java.util.function.Supplier;
 
 /** The host decision channel for plugin events an owner worker raises: the worker queues the event
  * and parks, the parked host dispatches it on its own thread and hands the mutated event back. Only
@@ -17,7 +18,11 @@ public final class OwnerHostEventDispatch {
     private record Request(Event event, CompletableFuture<Void> future) {
     }
 
+    private record Call(Supplier<Object> action, CompletableFuture<Object> future) {
+    }
+
     private static final ConcurrentLinkedQueue<Request> REQUESTS = new ConcurrentLinkedQueue<>();
+    private static final ConcurrentLinkedQueue<Call> CALLS = new ConcurrentLinkedQueue<>();
     private static final ThreadLocal<Boolean> ON_HOST = ThreadLocal.withInitial(() -> Boolean.FALSE);
 
     private OwnerHostEventDispatch() {
@@ -47,6 +52,32 @@ public final class OwnerHostEventDispatch {
         }
     }
 
+    /** Runs one bounded host action on behalf of an admitted owner worker and hands its answer back:
+     * used where the original factory build and the original dispatch must happen on the same thread
+     * (for example an event whose construction captures the dispatching thread's shape). The action
+     * is queued on the same host channel; the worker never runs it itself. Outside an owner unit the
+     * action runs inline, so the default path is unchanged. */
+    @SuppressWarnings("unchecked")
+    public static <T> T callOnHost(Supplier<T> action) {
+        if (!OwnerUnitPermit.eventShape() || ON_HOST.get()) {
+            return action.get();
+        }
+        Call call = new Call((Supplier<Object>) action, new CompletableFuture<>());
+        CALLS.add(call);
+        try {
+            return (T) call.future().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw new IllegalStateException("owner host action failed", cause);
+        }
+    }
+
     /** Dispatches every queued event on the calling (host) thread; one failing event does not hide
      * the others and the original throwable travels back to its worker. */
     public static void service() {
@@ -58,6 +89,17 @@ public final class OwnerHostEventDispatch {
                 request.future().complete(null);
             } catch (Throwable failure) {
                 request.future().completeExceptionally(failure);
+            } finally {
+                ON_HOST.remove();
+            }
+        }
+        Call call;
+        while ((call = CALLS.poll()) != null) {
+            ON_HOST.set(Boolean.TRUE);
+            try {
+                call.future().complete(call.action().get());
+            } catch (Throwable failure) {
+                call.future().completeExceptionally(failure);
             } finally {
                 ON_HOST.remove();
             }

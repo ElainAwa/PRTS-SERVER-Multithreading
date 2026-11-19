@@ -285,9 +285,18 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
     private void arclight$gameEventEvent(Holder<GameEvent> holder, Vec3 pos, GameEvent.Context context, CallbackInfo ci) {
         var entity = context.sourceEntity();
         var i = holder.value().notificationRadius();
-        GenericGameEvent event = new GenericGameEvent(org.bukkit.GameEvent.getByKey(CraftNamespacedKey.fromMinecraft(BuiltInRegistries.GAME_EVENT.getKey(holder.value()))), new Location(this.getWorld(), pos.x(), pos.y(), pos.z()), (entity == null) ? null : entity.bridge$getBukkitEntity(), i, !Bukkit.isPrimaryThread());
-        Bukkit.getPluginManager().callEvent(event);
-        if (event.isCancelled()) {
+        boolean cancelled = io.izzel.arclight.common.prts.kernel.domain.entity.owner.OwnerHostEventDispatch
+            .callOnHost(() -> {
+                GenericGameEvent event = new GenericGameEvent(
+                    org.bukkit.GameEvent.getByKey(CraftNamespacedKey.fromMinecraft(
+                        BuiltInRegistries.GAME_EVENT.getKey(holder.value()))),
+                    new Location(this.getWorld(), pos.x(), pos.y(), pos.z()),
+                    (entity == null) ? null : entity.bridge$getBukkitEntity(), i,
+                    !Bukkit.isPrimaryThread());
+                Bukkit.getPluginManager().callEvent(event);
+                return event.isCancelled();
+            });
+        if (cancelled) {
             ci.cancel();
         }
     }

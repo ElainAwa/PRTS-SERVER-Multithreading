@@ -31,14 +31,22 @@ public class GameEventDispatcherMixin {
             DecorationOps.blackhole().invoke(i);
             return;
         }
-        GenericGameEvent event = new GenericGameEvent(CraftGameEvent.minecraftToBukkit(holder.value()),
-            new Location(craftWorld, vec3.x(), vec3.y(), vec3.z()), (entity == null) ? null : entity.bridge$getBukkitEntity(), i, !Bukkit.isPrimaryThread());
-        Bukkit.getPluginManager().callEvent(event);
-        if (event.isCancelled()) {
+        int finalRadius = i;
+        int decision = io.izzel.arclight.common.prts.kernel.domain.entity.owner.OwnerHostEventDispatch
+            .callOnHost(() -> {
+                GenericGameEvent event = new GenericGameEvent(
+                    CraftGameEvent.minecraftToBukkit(holder.value()),
+                    new Location(craftWorld, vec3.x(), vec3.y(), vec3.z()),
+                    (entity == null) ? null : entity.bridge$getBukkitEntity(), finalRadius,
+                    !Bukkit.isPrimaryThread());
+                Bukkit.getPluginManager().callEvent(event);
+                return event.isCancelled() ? -1 : event.getRadius();
+            });
+        if (decision < 0) {
             DecorationOps.cancel().invoke();
             return;
         }
-        i = event.getRadius();
+        i = decision;
         DecorationOps.blackhole().invoke(i);
     }
 }
