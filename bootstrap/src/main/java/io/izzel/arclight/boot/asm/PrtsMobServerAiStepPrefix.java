@@ -66,8 +66,7 @@ public final class PrtsMobServerAiStepPrefix implements Implementer {
             return false;
         }
         // The call region is the contiguous run of receiver/argument loads in front of the call;
-        // it may be the plain field load or the redirect handler's extra receiver slot. The prefix is
-        // everything before that run.
+        // it may be the plain field load or the redirect handler's extra receiver slot.
         int callStart = anchor;
         boolean navLoad = false;
         while (callStart > 0) {
@@ -83,39 +82,54 @@ public final class PrtsMobServerAiStepPrefix implements Implementer {
             break;
         }
         if (!navLoad) {
-            if (Boolean.getBoolean("arclight.prts.stageTrace")) {
-                StringBuilder shape = new StringBuilder();
-                for (int index = Math.max(0, anchor - 5); index <= anchor
-                    && index < instructions.length; index++) {
-                    AbstractInsnNode node = instructions[index];
-                    shape.append(index).append(':').append(node.getOpcode()).append(':');
-                    if (node instanceof FieldInsnNode field) {
-                        shape.append("F ").append(field.owner).append('.').append(field.name)
-                            .append(field.desc).append(' ');
-                    } else if (node instanceof MethodInsnNode call) {
-                        shape.append("M ").append(call.owner).append('.').append(call.name)
-                            .append(call.desc).append(' ');
-                    } else if (node instanceof VarInsnNode variable) {
-                        shape.append("V ").append(variable.var).append(' ');
+            return false;
+        }
+        // A cancellable HEAD keeps its early exit in the host; the lifted prefix starts at the first
+        // label after the host-side exit paths, so the stage only has a normal empty-stack return.
+        int regionStart = -1;
+        for (int candidate = 0; candidate < callStart; candidate++) {
+            boolean isEntry = candidate == 0 || instructions[candidate] instanceof LabelNode;
+            if (!isEntry) {
+                continue;
+            }
+            boolean regionClosed = true;
+            for (int index = candidate; index < callStart; index++) {
+                AbstractInsnNode node1 = instructions[index];
+                if (node1.getOpcode() >= Opcodes.IRETURN && node1.getOpcode() <= Opcodes.RETURN) {
+                    regionClosed = false;
+                    break;
+                }
+            }
+            if (!regionClosed) {
+                continue;
+            }
+            boolean hostClosed = true;
+            for (int index = 0; index < candidate && hostClosed; index++) {
+                if (instructions[index] instanceof JumpInsnNode jump) {
+                    for (int target = candidate; target < callStart; target++) {
+                        if (instructions[target] == jump.label && target != candidate) {
+                            hostClosed = false;
+                            break;
+                        }
                     }
                 }
-                System.out.println("[PRTS-ANCHOR2] " + shape);
             }
+            if (!hostClosed) {
+                continue;
+            }
+            regionStart = candidate;
+            break;
+        }
+        if (regionStart < 0) {
             return false;
         }
         List<AbstractInsnNode> region = new ArrayList<>();
-        for (int index = 0; index < callStart; index++) {
+        for (int index = regionStart; index < callStart; index++) {
             AbstractInsnNode node1 = instructions[index];
             if (node1 instanceof LineNumberNode) {
                 continue;
             }
-            if (node1 instanceof TableSwitchInsnNode || node1 instanceof LookupSwitchInsnNode
-                || node1 instanceof JumpInsnNode jump && jump.getOpcode() == Opcodes.GOTO
-                    && anchor < 0) {
-                return false;
-            }
-            if (node1 instanceof InsnNode insn && insn.getOpcode() >= Opcodes.IRETURN
-                && insn.getOpcode() <= Opcodes.RETURN) {
+            if (node1 instanceof TableSwitchInsnNode || node1 instanceof LookupSwitchInsnNode) {
                 return false;
             }
             region.add(node1);
@@ -129,41 +143,66 @@ public final class PrtsMobServerAiStepPrefix implements Implementer {
                 labels.put(label, new LabelNode());
             }
         }
+        LabelNode regionEntry = null;
         for (AbstractInsnNode node1 : region) {
-            if (node1 instanceof JumpInsnNode jump && !labels.containsKey(jump.label)) {
-                return false;
+            if (node1 instanceof LabelNode label) {
+                regionEntry = label;
+                break;
+            }
+        }
+        LabelNode callStartLabel = null;
+        for (int index = callStart; index < instructions.length; index++) {
+            if (instructions[index] instanceof LabelNode label) {
+                callStartLabel = label;
+                break;
+            }
+            if (!(instructions[index] instanceof LineNumberNode)) {
+                break;
+            }
+        }
+        List<JumpInsnNode> epilogueJumps = new ArrayList<>();
+        for (AbstractInsnNode node1 : region) {
+            if (node1 instanceof JumpInsnNode jump) {
+                if (labels.containsKey(jump.label)) {
+                    continue;
+                }
+                if (jump.label != callStartLabel) {
+                    return false;
+                }
+                epilogueJumps.add(jump);
             }
         }
         MethodNode stage = new MethodNode(Opcodes.ACC_PRIVATE, STAGE, STAGE_DESC, null, null);
-        stage.instructions.add(TailRegionExtractor.stagePrologue("mobServerAiStepPrefix"));
+        stage.instructions.add(TailRegionExtractor.stagePrologue(OWNER + "#" + "mobServerAiStepPrefix"));
         for (AbstractInsnNode node1 : region) {
             stage.instructions.add(node1.clone(labels));
         }
+        LabelNode epilogue = new LabelNode();
+        for (JumpInsnNode jump : epilogueJumps) {
+            jump.label = epilogue;
+        }
+        stage.instructions.add(epilogue);
         stage.instructions.add(new VarInsnNode(Opcodes.ALOAD, 1));
         stage.instructions.add(new InsnNode(Opcodes.ARETURN));
         stage.maxStack = Math.max(6, host.maxStack);
         stage.maxLocals = Math.max(2, host.maxLocals);
         node.methods.add(stage);
 
-        for (int index = 0; index < callStart; index++) {
+        LabelNode stageEntry = new LabelNode();
+        for (int index = 0; index < regionStart; index++) {
+            if (instructions[index] instanceof JumpInsnNode jump && jump.label == regionEntry) {
+                jump.label = stageEntry;
+            }
+        }
+        for (int index = regionStart; index < callStart; index++) {
             host.instructions.remove(instructions[index]);
         }
         InsnList call = new InsnList();
+        call.add(stageEntry);
         call.add(new VarInsnNode(Opcodes.ALOAD, 0));
         call.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, OWNER, STAGE, STAGE_DESC, false));
         call.add(new VarInsnNode(Opcodes.ASTORE, 1));
-        host.instructions.insert(call);
-        if (host.localVariables != null) {
-            List<org.objectweb.asm.tree.LocalVariableNode> kept = new ArrayList<>();
-            for (org.objectweb.asm.tree.LocalVariableNode variable : host.localVariables) {
-                if (host.instructions.contains(variable.start)
-                    && host.instructions.contains(variable.end)) {
-                    kept.add(variable);
-                }
-            }
-            host.localVariables.clear();
-            host.localVariables.addAll(kept);
-        }
+        host.instructions.insertBefore(instructions[callStart], call);
         host.localVariables = null;
         host.visibleLocalVariableAnnotations = null;
         host.invisibleLocalVariableAnnotations = null;

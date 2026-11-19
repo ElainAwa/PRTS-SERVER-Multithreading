@@ -89,7 +89,7 @@ public final class PrtsNavSpanSuccessor implements Implementer {
             return false;
         }
         MethodNode stage = new MethodNode(Opcodes.ACC_PRIVATE, STAGE, STAGE_DESC, null, null);
-        stage.instructions.add(TailRegionExtractor.stagePrologue("mobServerAiStepSuccessor"));
+        stage.instructions.add(TailRegionExtractor.stagePrologue(OWNER + "#" + "mobServerAiStepSuccessor"));
         for (AbstractInsnNode node1 : tail) {
             stage.instructions.add(node1.clone(null));
         }

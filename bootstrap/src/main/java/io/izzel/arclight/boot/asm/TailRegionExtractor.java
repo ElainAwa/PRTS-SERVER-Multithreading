@@ -147,7 +147,7 @@ public final class TailRegionExtractor {
         }
         String stageDesc = multiEntry ? "(I)V" : "()V";
         MethodNode stage = new MethodNode(Opcodes.ACC_PRIVATE, stageName, stageDesc, null, null);
-        stage.instructions.add(stagePrologue(stageName));
+        stage.instructions.add(stagePrologue(node.name + "#" + stageName + stageDesc));
         if (multiEntry) {
             LabelNode[] targets = new LabelNode[entries.size()];
             for (int index = 0; index < entries.size(); index++) {

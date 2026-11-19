@@ -103,7 +103,7 @@ public final class PrtsMobAiStepLooting implements Implementer {
             }
         }
         MethodNode stage = new MethodNode(Opcodes.ACC_PRIVATE, STAGE, STAGE_DESC, null, null);
-        stage.instructions.add(TailRegionExtractor.stagePrologue("mobAiStepLooting"));
+        stage.instructions.add(TailRegionExtractor.stagePrologue(OWNER + "#" + "mobAiStepLooting"));
         for (AbstractInsnNode node1 : region) {
             stage.instructions.add(node1.clone(labels));
         }
