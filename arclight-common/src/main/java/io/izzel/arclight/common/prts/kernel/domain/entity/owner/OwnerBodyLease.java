@@ -5,7 +5,10 @@ import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.auth.HolderKind;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerRegistry;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerToken;
+import io.izzel.arclight.common.prts.kernel.auth.WriteAttempt;
 import io.izzel.arclight.common.prts.kernel.auth.WriteLevel;
+import io.izzel.arclight.common.prts.kernel.auth.WriteVerdict;
+import io.izzel.arclight.common.prts.kernel.codes.WriteDisposition;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityObjectGenerations;
 import io.izzel.arclight.common.prts.kernel.domain.entity.OwnerContext;
 import net.minecraft.server.level.ServerLevel;
@@ -19,6 +22,8 @@ public final class OwnerBodyLease {
 
     /** The diagnostic switch; off in every shipped build. */
     public static final String PROPERTY = "arclight.prts.ownerBatchLease";
+    /** The diagnostic switch for the write-authority decision on the same row; off by default. */
+    public static final String AUTHORITY_PROPERTY = "arclight.prts.ownerBatchAuthority";
 
     private static final String ENTITY_STATE_PREFIX = "entity-state:";
     private static final java.util.concurrent.atomic.AtomicLong EPOCH =
@@ -40,7 +45,8 @@ public final class OwnerBodyLease {
     }
 
     /** Acquires the real object-domain lease for one row; a refusal is terminal. */
-    public static OwnerBodyLease acquire(ServerLevel level, Entity entity, long tick) {
+    public static OwnerBodyLease acquire(ServerLevel level, Entity entity, long tick,
+                                         long planOrder) {
         StageCounters.note("ownerBatchLeaseAcquire");
         if (!enabled()) {
             return null;
@@ -53,8 +59,10 @@ public final class OwnerBodyLease {
         long generation = EntityObjectGenerations.shared()
             .generationOf(worldId, uuidHigh, uuidLow);
         String domainId = ENTITY_STATE_PREFIX + uuidHigh + ":" + uuidLow + ":" + generation;
-        long expectedVersion = context.versions()
-            .carried(worldId, WriteLevel.OBJECT, domainId);
+        // The kernel's planning period is off in this diagnostic window, so the slot would answer
+        // NOT_CARRIED; the opt-in lease grants it locally instead of inventing a version.
+        context.versions().refresh(true);
+        long expectedVersion = context.versions().grant(worldId, WriteLevel.OBJECT, domainId);
         long epoch = EPOCH.incrementAndGet();
         OwnerToken token = new OwnerToken(worldId, WriteLevel.OBJECT, domainId, epoch,
             expectedVersion, tick, tick + 2L, HolderKind.REGISTERED,
@@ -64,7 +72,31 @@ public final class OwnerBodyLease {
             throw new IllegalStateException("owner batch lease refused");
         }
         StageCounters.note("ownerBatchLeaseHeld");
-        return new OwnerBodyLease(registry, token.domain(), context.primarySite().siteId());
+        OwnerBodyLease lease =
+            new OwnerBodyLease(registry, token.domain(), context.primarySite().siteId());
+        if (Boolean.getBoolean(AUTHORITY_PROPERTY)) {
+            WriteAttempt attempt = WriteAttempt
+                .builder(KernelModule.instance().authority().nextAttemptId(), worldId,
+                    context.primarySite().siteId())
+                .holder(HolderKind.REGISTERED, context.primarySite().siteId(),
+                    Thread.currentThread().getName())
+                .target(WriteLevel.OBJECT, domainId)
+                .domains(java.util.Set.of(domainId), java.util.Set.of())
+                .version(expectedVersion, tick, planOrder)
+                .worldEpoch(registry.worldEpochOf(worldId))
+                .admitted(true)
+                .declaredOwner(token)
+                .build();
+            WriteVerdict verdict = KernelModule.instance().authority().authorize(attempt);
+            if (verdict.disposition() != WriteDisposition.GRANT) {
+                StageCounters.note("ownerBatchAuthorityDeny");
+                lease.release();
+                throw new IllegalStateException("owner batch authority refused: "
+                    + verdict.disposition() + " " + verdict.reason());
+            }
+            StageCounters.note("ownerBatchAuthorityGrant");
+        }
+        return lease;
     }
 
     /** Releases the lease; a refusal here is terminal because the domain must not stay installed. */

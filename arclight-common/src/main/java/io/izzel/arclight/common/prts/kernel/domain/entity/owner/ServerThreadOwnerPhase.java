@@ -249,7 +249,7 @@ public final class ServerThreadOwnerPhase {
             OwnerRandomOwnership.begin(row.level(), row.entity(), row.hostStep(),
                 row.phase().tick);
             OwnerBodyLease lease = OwnerBodyLease.acquire(row.level(), row.entity(),
-                row.phase().tick);
+                row.phase().tick, row.hostStep());
             long scope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
                 .EntityTickOwnership.beginOwnerBodyScope(row.entity());
             try {
