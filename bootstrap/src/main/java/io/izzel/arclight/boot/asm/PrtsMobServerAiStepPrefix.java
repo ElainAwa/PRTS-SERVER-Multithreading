@@ -57,8 +57,7 @@ public final class PrtsMobServerAiStepPrefix implements Implementer {
         int anchor = -1;
         for (int index = 0; index < instructions.length; index++) {
             if (instructions[index] instanceof MethodInsnNode call
-                && call.getOpcode() == Opcodes.INVOKEVIRTUAL && NAV.equals(call.owner)
-                && "tick".equals(call.name) && "()V".equals(call.desc)) {
+                && PrtsStageAnchors.isNavigationCall(call)) {
                 anchor = index;
                 break;
             }

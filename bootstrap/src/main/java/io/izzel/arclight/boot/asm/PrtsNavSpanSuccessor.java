@@ -57,8 +57,7 @@ public final class PrtsNavSpanSuccessor implements Implementer {
         int anchor = -1;
         for (int index = 0; index < instructions.length; index++) {
             AbstractInsnNode node1 = instructions[index];
-            if (node1 instanceof MethodInsnNode call && call.getOpcode() == Opcodes.INVOKEVIRTUAL
-                && NAV.equals(call.owner) && "tick".equals(call.name) && "()V".equals(call.desc)) {
+            if (node1 instanceof MethodInsnNode call && PrtsStageAnchors.isNavigationCall(call)) {
                 anchor = index;
                 break;
             }
