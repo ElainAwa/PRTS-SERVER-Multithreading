@@ -91,6 +91,26 @@ public final class TailRegionExtractor {
                 labels.put(label, new LabelNode());
             }
         }
+        // A jump before the anchor that lands inside the moved region would lose its target in the
+        // host frame. A jump to the first label of the region only skips the anchored call itself,
+        // so it can be retargeted to the stage call; any deeper entry is refused instead of being
+        // split into two entries by hand.
+        LabelNode regionStart = null;
+        for (AbstractInsnNode node1 : region) {
+            if (node1 instanceof LabelNode label) {
+                regionStart = label;
+                break;
+            }
+        }
+        List<JumpInsnNode> retarget = new ArrayList<>();
+        for (int index = 0; index < anchorIndex; index++) {
+            if (instructions[index] instanceof JumpInsnNode jump && labels.containsKey(jump.label)) {
+                if (jump.label != regionStart) {
+                    return false;
+                }
+                retarget.add(jump);
+            }
+        }
         for (AbstractInsnNode node1 : region) {
             if (node1 instanceof JumpInsnNode jump && !labels.containsKey(jump.label)) {
                 return false;
@@ -120,6 +140,11 @@ public final class TailRegionExtractor {
             host.localVariables.addAll(kept);
         }
         InsnList call = new InsnList();
+        LabelNode stageEntry = new LabelNode();
+        call.add(stageEntry);
+        for (JumpInsnNode jump : retarget) {
+            jump.label = stageEntry;
+        }
         call.add(new VarInsnNode(Opcodes.ALOAD, 0));
         call.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, node.name, stageName, "()V", false));
         call.add(new InsnNode(Opcodes.RETURN));
