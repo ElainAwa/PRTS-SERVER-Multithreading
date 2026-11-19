@@ -97,6 +97,9 @@ public class AsyncCatcher implements Implementer {
         InsnList insnList = new InsnList();
         LabelNode labelNode = new LabelNode(new Label());
         LabelNode labelNode1 = new LabelNode(new Label());
+        insnList.add(new MethodInsnNode(Opcodes.INVOKESTATIC,
+            "io/izzel/arclight/common/prts/kernel/auth/OwnerWorkerPermit", "allowed", "()Z", false));
+        insnList.add(new JumpInsnNode(Opcodes.IFNE, labelNode));
         insnList.add(new MethodInsnNode(Opcodes.INVOKESTATIC, "io/izzel/arclight/common/mod/server/ArclightServer", "isPrimaryThread", "()Z"));
         insnList.add(new JumpInsnNode(Opcodes.IFNE, labelNode));
         instantiateCallback(node, methodNode, insnList);

@@ -22,6 +22,9 @@ public final class NavigationSpanStage {
     /** Runs the extracted navigation block; the caller keeps its own frame and profiler state. */
     public static void run(PathNavigation navigation) {
         RUNS.increment();
+        if (OwnerNavigationWorker.run(navigation)) {
+            return;
+        }
         navigation.tick();
     }
 

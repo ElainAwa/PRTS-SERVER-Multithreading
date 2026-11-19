@@ -126,6 +126,7 @@ public final class PrtsEntityOwnershipEvents {
                 + io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityOwnershipCensus.recordCalls()
                 + " " + EntityTickOwnership.planDiagnostic());
         }
+        io.izzel.arclight.common.prts.kernel.domain.entity.owner.OwnerNavigationWorker.close();
         EntityTickOwnership.clearResidualPoiScopes();
         if (Boolean.getBoolean("arclight.prts.perTickDiag")) {
             io.izzel.arclight.common.prts.kernel.domain.entity.owner.StageCounters.dump();

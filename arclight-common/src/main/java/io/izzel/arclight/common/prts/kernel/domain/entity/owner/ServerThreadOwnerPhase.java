@@ -125,6 +125,10 @@ public final class ServerThreadOwnerPhase {
         long ownerScope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
             .EntityTickOwnership.beginOwnerBodyScope(entity);
         boolean fallbackHost = false;
+        boolean walkBody = slice == Slice.WALK && OwnerNavigationWorker.enabled();
+        if (walkBody) {
+            OwnerNavigationWorker.enterOwnerBody();
+        }
         try {
             boolean executed = slice == Slice.WALK
                 ? RealEntityOwnerBody.runWalkOnServer((ServerLevel) entity.level(), villager)
@@ -151,6 +155,9 @@ public final class ServerThreadOwnerPhase {
                 .noteOwnerBodyExecuted();
             throw failure;
         } finally {
+            if (walkBody) {
+                OwnerNavigationWorker.leaveOwnerBody();
+            }
             io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
                 .endOwnerBodyScope(ownerScope);
             if (fallbackHost) {
