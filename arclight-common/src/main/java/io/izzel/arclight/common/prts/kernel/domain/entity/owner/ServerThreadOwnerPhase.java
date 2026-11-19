@@ -238,7 +238,8 @@ public final class ServerThreadOwnerPhase {
 
     private static void submitDeferred(SharedRuntime runtime, List<DeferredRow> rows, int index,
                                        WorkerPool.GenericHandle[] handles, CancelToken[] tokens,
-                                       boolean[] executed, OwnerUnitLedger[] units) {
+                                       boolean[] executed, OwnerUnitLedger[] units,
+                                   boolean[] faulted) {
         DeferredRow row = rows.get(index);
         CancelToken token = new CancelToken(0L);
         tokens[index] = token;
@@ -254,16 +255,12 @@ public final class ServerThreadOwnerPhase {
                 row.phase().tick, row.hostStep());
             long scope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
                 .EntityTickOwnership.beginOwnerBodyScope(row.entity());
-            boolean faulted = true;
+            boolean bodyFaulted = true;
             try {
                 executed[slot] = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
-                faulted = false;
+                bodyFaulted = false;
             } finally {
-                unit.close(faulted ? io.izzel.arclight.common.prts.kernel.jobs.WorkAccount
-                    .Outcome.PARTIAL_FAULT : executed[slot]
-                    ? io.izzel.arclight.common.prts.kernel.jobs.WorkAccount.Outcome.DONE
-                    : io.izzel.arclight.common.prts.kernel.jobs.WorkAccount
-                        .Outcome.REJECTED_BEFORE_EFFECT, faulted ? "body-fault" : "body-returned");
+                faulted[slot] = bodyFaulted;
                 if (lease != null) {
                     lease.release();
                 }
@@ -323,9 +320,10 @@ public final class ServerThreadOwnerPhase {
         CancelToken[] tokens = new CancelToken[count];
         OwnerUnitLedger[] units = new OwnerUnitLedger[count];
         boolean[] executed = new boolean[count];
+        boolean[] faulted = new boolean[count];
         StageCounters.note("ownerBatchDeferred");
         boolean parallel = parallelBatches();
-        submitDeferred(runtime, rows, 0, handles, tokens, executed, units);
+        submitDeferred(runtime, rows, 0, handles, tokens, executed, units, faulted);
         MinecraftServer server = rows.get(0).level().getServer();
         long deadline = System.nanoTime()
             + java.util.concurrent.TimeUnit.SECONDS.toNanos(20L);
@@ -333,13 +331,13 @@ public final class ServerThreadOwnerPhase {
         if (!parallel) {
             for (int index = 0; index < count; index++) {
                 if (index > 0) {
-                    submitDeferred(runtime, rows, index, handles, tokens, executed, units);
+                    submitDeferred(runtime, rows, index, handles, tokens, executed, units, faulted);
                 }
                 awaitOwner(handles, index + 1, server, deadline);
             }
         } else {
             for (int index = 1; index < count; index++) {
-                submitDeferred(runtime, rows, index, handles, tokens, executed, units);
+                submitDeferred(runtime, rows, index, handles, tokens, executed, units, faulted);
             }
             awaitOwner(handles, count, server, deadline);
         }
@@ -383,8 +381,17 @@ public final class ServerThreadOwnerPhase {
                     StageCounters.note("ownerBatchPost");
                     replay.accept(row.entity());
                 }
+                units[index].close(io.izzel.arclight.common.prts.kernel.jobs.WorkAccount
+                    .Outcome.DONE, "post-published");
             } else {
                 row.phase().terminal++;
+                if (!units[index].closed()) {
+                    units[index].close(faulted[index]
+                        ? io.izzel.arclight.common.prts.kernel.jobs.WorkAccount
+                            .Outcome.PARTIAL_FAULT
+                        : io.izzel.arclight.common.prts.kernel.jobs.WorkAccount
+                            .Outcome.REJECTED_BEFORE_EFFECT, "body-terminal");
+                }
                 if (firstFailure == null) {
                     firstFailure = new IllegalStateException("deferred owner body did not execute");
                 }

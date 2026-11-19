@@ -87,16 +87,9 @@ public final class OwnerUnitPermit {
                 return arguments.length > 0 && worldOf(arguments[0], unit);
             case "net/minecraft/server/level/ServerLevel#addEntity":
                 return arguments.length > 1 && sameEntity(arguments[1], unit);
-            case "net/minecraft/server/level/ServerLevel$EntityCallbacks#onTrackingStart":
-            case "net/minecraft/server/level/ServerLevel$EntityCallbacks#onTrackingEnd":
-                return arguments.length > 1 && worldOf(arguments[1], unit);
-            case "net/minecraft/server/level/ChunkMap$TrackedEntity#removePlayer":
-            case "net/minecraft/server/level/ChunkMap$TrackedEntity#updatePlayer":
-                return arguments.length > 1 && worldOf(arguments[1], unit);
             case "net/minecraft/server/level/ChunkMap#addEntity":
             case "net/minecraft/server/level/ChunkMap#removeEntity":
-                return arguments.length > 1 && (sameEntity(arguments[1], unit)
-                    || worldOf(arguments[1], unit));
+                return arguments.length > 1 && sameEntity(arguments[1], unit);
             case "net/minecraft/world/entity/LivingEntity#addEffect":
                 return arguments.length > 0 && sameEntity(arguments[0], unit);
             default:
