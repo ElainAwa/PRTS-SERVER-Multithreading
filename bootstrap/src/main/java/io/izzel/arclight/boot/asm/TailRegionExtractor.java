@@ -36,6 +36,16 @@ public final class TailRegionExtractor {
     private TailRegionExtractor() {
     }
 
+    private static AbstractInsnNode pushInt(int value) {
+        if (value >= -1 && value <= 5) {
+            return new InsnNode(Opcodes.ICONST_0 + value);
+        }
+        if (value >= Byte.MIN_VALUE && value <= Byte.MAX_VALUE) {
+            return new org.objectweb.asm.tree.IntInsnNode(Opcodes.BIPUSH, value);
+        }
+        return new org.objectweb.asm.tree.IntInsnNode(Opcodes.SIPUSH, value);
+    }
+
     /** @return whether the host was rewritten; false keeps the class untouched. */
     public static boolean extract(ClassNode node, String hostName, String hostDesc, Anchor anchor,
                                   String stageName) {
@@ -91,10 +101,9 @@ public final class TailRegionExtractor {
                 labels.put(label, new LabelNode());
             }
         }
-        // A jump before the anchor that lands inside the moved region would lose its target in the
-        // host frame. A jump to the first label of the region only skips the anchored call itself,
-        // so it can be retargeted to the stage call; any deeper entry is refused instead of being
-        // split into two entries by hand.
+        // A jump before the anchor that lands inside the moved region keeps its skip semantics only
+        // through a stage entry of its own: the region start is entry 0, every deeper target gets the
+        // next entry and the host branch becomes a trampoline call with that entry index.
         LabelNode regionStart = null;
         for (AbstractInsnNode node1 : region) {
             if (node1 instanceof LabelNode label) {
@@ -102,27 +111,50 @@ public final class TailRegionExtractor {
                 break;
             }
         }
-        List<JumpInsnNode> retarget = new ArrayList<>();
+        List<LabelNode> entries = new ArrayList<>();
+        if (regionStart != null) {
+            entries.add(regionStart);
+        }
+        Map<LabelNode, Integer> entryIndex = new HashMap<>();
+        if (regionStart != null) {
+            entryIndex.put(regionStart, 0);
+        }
         for (int index = 0; index < anchorIndex; index++) {
-            if (instructions[index] instanceof JumpInsnNode jump && labels.containsKey(jump.label)) {
-                if (jump.label != regionStart) {
-                    return false;
-                }
-                retarget.add(jump);
+            if (instructions[index] instanceof JumpInsnNode jump && labels.containsKey(jump.label)
+                && !entryIndex.containsKey(jump.label)) {
+                entryIndex.put(jump.label, entries.size());
+                entries.add(jump.label);
             }
+        }
+        boolean multiEntry = entries.size() > 1;
+        if (regionStart == null && !entries.isEmpty()) {
+            return false;
         }
         for (AbstractInsnNode node1 : region) {
             if (node1 instanceof JumpInsnNode jump && !labels.containsKey(jump.label)) {
                 return false;
             }
         }
-        MethodNode stage = new MethodNode(Opcodes.ACC_PRIVATE, stageName, "()V", null, null);
+        String stageDesc = multiEntry ? "(I)V" : "()V";
+        MethodNode stage = new MethodNode(Opcodes.ACC_PRIVATE, stageName, stageDesc, null, null);
+        if (multiEntry) {
+            LabelNode[] targets = new LabelNode[entries.size()];
+            for (int index = 0; index < entries.size(); index++) {
+                targets[index] = labels.get(entries.get(index));
+            }
+            if (targets[0] == null) {
+                return false;
+            }
+            stage.instructions.add(new VarInsnNode(Opcodes.ILOAD, 1));
+            stage.instructions.add(new TableSwitchInsnNode(0, entries.size() - 1,
+                targets[0], targets));
+        }
         for (AbstractInsnNode node1 : region) {
             stage.instructions.add(node1.clone(labels));
         }
         stage.instructions.add(new InsnNode(Opcodes.RETURN));
-        stage.maxStack = Math.max(6, host.maxStack);
-        stage.maxLocals = Math.max(1, host.maxLocals);
+        stage.maxStack = Math.max(6, host.maxStack + 1);
+        stage.maxLocals = Math.max(multiEntry ? 2 : 1, host.maxLocals);
         node.methods.add(stage);
 
         for (int index = anchorIndex + 1; index < instructions.length; index++) {
@@ -140,14 +172,38 @@ public final class TailRegionExtractor {
             host.localVariables.addAll(kept);
         }
         InsnList call = new InsnList();
-        LabelNode stageEntry = new LabelNode();
-        call.add(stageEntry);
-        for (JumpInsnNode jump : retarget) {
-            jump.label = stageEntry;
+        LabelNode normalEntry = new LabelNode();
+        List<LabelNode> trampolines = new ArrayList<>();
+        if (multiEntry) {
+            for (int index = 1; index < entries.size(); index++) {
+                trampolines.add(new LabelNode());
+            }
         }
+        for (int index = 0; index < anchorIndex; index++) {
+            if (instructions[index] instanceof JumpInsnNode jump) {
+                Integer entry = entryIndex.get(jump.label);
+                if (entry == null) {
+                    continue;
+                }
+                jump.label = entry == 0 ? normalEntry : trampolines.get(entry - 1);
+            }
+        }
+        call.add(normalEntry);
         call.add(new VarInsnNode(Opcodes.ALOAD, 0));
-        call.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, node.name, stageName, "()V", false));
+        if (multiEntry) {
+            call.add(new InsnNode(Opcodes.ICONST_0));
+            call.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, node.name, stageName, stageDesc, false));
+        } else {
+            call.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, node.name, stageName, stageDesc, false));
+        }
         call.add(new InsnNode(Opcodes.RETURN));
+        for (int index = 0; index < trampolines.size(); index++) {
+            call.add(trampolines.get(index));
+            call.add(new VarInsnNode(Opcodes.ALOAD, 0));
+            call.add(pushInt(index + 1));
+            call.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, node.name, stageName, stageDesc, false));
+            call.add(new InsnNode(Opcodes.RETURN));
+        }
         host.instructions.add(call);
         return true;
     }
