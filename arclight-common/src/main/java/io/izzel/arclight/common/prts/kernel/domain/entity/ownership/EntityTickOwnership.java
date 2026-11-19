@@ -728,113 +728,151 @@ public final class EntityTickOwnership {
         return Boolean.getBoolean(POI_SINGLE_WINNER_PROPERTY);
     }
 
-    private static final ThreadLocal<java.util.ArrayDeque<TypedUpdate>> POI_SCOPES =
+    /** One per-thread binding of a POI context to the execution it belongs to. */
+    private record PoiScope(int entityId, TypedUpdate update, Thread thread, long token) { }
+
+    /** The execution this thread is currently inside: an owner body or a legacy host pre-tick. */
+    private record ExecIdentity(boolean owner, int entityId) { }
+
+    private static final ThreadLocal<java.util.ArrayDeque<PoiScope>> POI_SCOPES =
         ThreadLocal.withInitial(java.util.ArrayDeque::new);
-    private static final ThreadLocal<Integer> POI_PRE_BOUND = ThreadLocal.withInitial(() -> 0);
+    private static final ThreadLocal<java.util.ArrayDeque<ExecIdentity>> EXECUTIONS =
+        ThreadLocal.withInitial(java.util.ArrayDeque::new);
+    private static final ThreadLocal<java.util.ArrayDeque<Long>> OWNER_TOKENS =
+        ThreadLocal.withInitial(java.util.ArrayDeque::new);
+    private static final ThreadLocal<java.util.ArrayDeque<Long>> LEGACY_TOKENS =
+        ThreadLocal.withInitial(java.util.ArrayDeque::new);
+    private static final java.util.concurrent.atomic.AtomicLong SCOPE_TOKENS =
+        new java.util.concurrent.atomic.AtomicLong();
+    private static final LongAdder POI_PAIR_FAULTS = new LongAdder();
     private static volatile boolean poiEverBound;
+    private static volatile Thread poiBindingThread;
     private static final LongAdder POI_RESIDUAL = new LongAdder();
-    private record OwnerBinding(long threadId, TypedUpdate update) { }
-    private static final ThreadLocal<java.util.ArrayDeque<OwnerBinding>> OWNER_BINDINGS =
-        ThreadLocal.withInitial(java.util.ArrayDeque::new);
-    private static final java.util.concurrent.atomic.AtomicReference<OwnerBinding> CURRENT_OWNER =
-        new java.util.concurrent.atomic.AtomicReference<>();
 
+    /** The POI context of the current thread, only while its bound execution is this one. */
     public static TypedUpdate poiContext() {
-        return POI_SCOPES.get().peek();
+        PoiScope scope = POI_SCOPES.get().peek();
+        if (scope == null || scope.update() == null || scope.thread() != Thread.currentThread()) {
+            return null;
+        }
+        ExecIdentity execution = EXECUTIONS.get().peek();
+        return execution != null && execution.entityId() == scope.entityId() ? scope.update() : null;
     }
 
-    public static boolean hasPoiScope() {
-        return !POI_SCOPES.get().isEmpty();
+    /** True when a POI write must not fall through to the old path: a foreign thread while a
+     * binding thread exists, or an admitted owner execution that lost its context. */
+    public static boolean poiCallRefused() {
+        Thread bound = poiBindingThread;
+        if (bound != null && Thread.currentThread() != bound) {
+            return true;
+        }
+        ExecIdentity execution = EXECUTIONS.get().peek();
+        return execution != null && execution.owner() && poiContext() == null;
     }
 
-    public static void bindPoiContext(TypedUpdate update) {
+    private static long pushScope(net.minecraft.world.entity.Entity entity, boolean owner) {
+        long token = SCOPE_TOKENS.incrementAndGet();
+        TypedUpdate update = buildPoiContext(entity);
         if (update != null) {
             poiEverBound = true;
-            POI_SCOPES.get().push(update);
         }
+        poiBindingThread = Thread.currentThread();
+        POI_SCOPES.get().push(new PoiScope(entity.getId(), update, Thread.currentThread(), token));
+        EXECUTIONS.get().push(new ExecIdentity(owner, entity.getId()));
+        return token;
     }
 
-    public static void clearPoiContext() {
-        java.util.ArrayDeque<TypedUpdate> scopes = POI_SCOPES.get();
-        if (!scopes.isEmpty()) {
-            scopes.pop();
+    private static void popScope(boolean owner, long expectedToken) {
+        java.util.ArrayDeque<PoiScope> scopes = POI_SCOPES.get();
+        java.util.ArrayDeque<ExecIdentity> executions = EXECUTIONS.get();
+        PoiScope scope = scopes.peek();
+        ExecIdentity execution = executions.peek();
+        if (scope == null || execution == null || scope.token() != expectedToken
+            || execution.owner() != owner || scope.entityId() != execution.entityId()) {
+            // A mismatched close must not pop another execution scope: the outer binding stays.
+            POI_PAIR_FAULTS.increment();
+            return;
         }
+        scopes.pop();
+        executions.pop();
         if (scopes.isEmpty()) {
             POI_SCOPES.remove();
         }
-    }
-
-    public static void beginOwnerBodyScope(net.minecraft.world.entity.Entity entity) {
-        if (poiEnabled()) {
-            bindPoiContext(entity);
-            OwnerBinding binding = new OwnerBinding(Thread.currentThread().threadId(), poiContext());
-            OWNER_BINDINGS.get().push(binding);
-            CURRENT_OWNER.set(binding);
+        if (executions.isEmpty()) {
+            EXECUTIONS.remove();
         }
     }
 
+    /** Opens the POI scope of one owner body; the token is closed by the matching exit. */
+    public static long beginOwnerBodyScope(net.minecraft.world.entity.Entity entity) {
+        long token = 0L;
+        if (poiEnabled()) {
+            token = pushScope(entity, true);
+            OWNER_TOKENS.get().push(token);
+        }
+        return token;
+    }
+
+    /** Closes the owner body scope opened last on this thread. */
     public static void endOwnerBodyScope() {
+        if (!poiEnabled()) {
+            return;
+        }
+        java.util.ArrayDeque<Long> tokens = OWNER_TOKENS.get();
+        if (tokens.isEmpty()) {
+            POI_PAIR_FAULTS.increment();
+            return;
+        }
+        long expected = tokens.pop();
+        if (tokens.isEmpty()) {
+            OWNER_TOKENS.remove();
+        }
+        popScope(true, expected);
+    }
+
+    /** Opens the legacy host pre-tick scope of one row; the post event closes it by token. */
+    public static void beginLegacyPoiScope(net.minecraft.world.entity.Entity entity) {
         if (poiEnabled()) {
-            clearPoiContext();
-            java.util.ArrayDeque<OwnerBinding> bindings = OWNER_BINDINGS.get();
-            if (!bindings.isEmpty()) {
-                bindings.pop();
-            }
-            if (bindings.isEmpty()) {
-                OWNER_BINDINGS.remove();
-                CURRENT_OWNER.set(null);
-            } else {
-                CURRENT_OWNER.set(bindings.peek());
-            }
+            LEGACY_TOKENS.get().push(pushScope(entity, false));
         }
     }
 
-    /** True when a native owner request lost its scope or arrives on the wrong thread. */
-    public static boolean ownerCallWithoutScope() {
-        OwnerBinding binding = CURRENT_OWNER.get();
-        return binding != null && (binding.threadId() != Thread.currentThread().threadId()
-            || !hasPoiScope() || poiContext() == null);
+    /** Closes the legacy host pre-tick scope opened last on this thread. */
+    public static void endLegacyPoiScope() {
+        if (!poiEnabled()) {
+            return;
+        }
+        java.util.ArrayDeque<Long> tokens = LEGACY_TOKENS.get();
+        if (tokens.isEmpty()) {
+            return;
+        }
+        long expected = tokens.pop();
+        if (tokens.isEmpty()) {
+            LEGACY_TOKENS.remove();
+        }
+        popScope(false, expected);
     }
 
     /** Legacy fallback body scope: the host tick still needs the single-winner context. */
     public static void beginLegacyPoiFallback(net.minecraft.world.entity.Entity entity) {
-        if (poiEnabled()) {
-            bindPoiContext(entity);
-            markPrePoiBound();
-        }
+        beginLegacyPoiScope(entity);
     }
 
-    public static void markPrePoiBound() {
-        POI_PRE_BOUND.set(POI_PRE_BOUND.get() + 1);
-    }
-
-    public static void clearPrePoiBound() {
-        int depth = POI_PRE_BOUND.get();
-        if (depth > 0) {
-            POI_PRE_BOUND.set(depth - 1);
-            clearPoiContext();
-            if (depth == 1) {
-                POI_PRE_BOUND.remove();
-            }
-        }
-    }
-
-    /** Clears any scope left by an aborted entity tick; returns the cleared depth for trace. */
+    /** Clears any scope left by an aborted entity tick on this thread; returns the depth. */
     public static int clearResidualPoiScopes() {
         if (!poiEverBound || !poiEnabled()) {
             return 0;
         }
-        java.util.ArrayDeque<TypedUpdate> scopes = POI_SCOPES.get();
+        java.util.ArrayDeque<PoiScope> scopes = POI_SCOPES.get();
         int depth = scopes.size();
         if (depth > 0) {
             scopes.clear();
             POI_RESIDUAL.add(depth);
         }
         POI_SCOPES.remove();
-        POI_PRE_BOUND.remove();
-        poiEverBound = false;
-        OWNER_BINDINGS.remove();
-        CURRENT_OWNER.set(null);
+        EXECUTIONS.remove();
+        OWNER_TOKENS.remove();
+        LEGACY_TOKENS.remove();
         return depth;
     }
 
@@ -842,22 +880,51 @@ public final class EntityTickOwnership {
         return POI_RESIDUAL.sum();
     }
 
-    private static void bindPoiContext(net.minecraft.world.entity.Entity entity) {
+    /** Scope closes whose token or execution did not match the open scope; must stay zero. */
+    public static long poiPairFaults() {
+        return POI_PAIR_FAULTS.sum();
+    }
+
+    /** Test-only: binds a synthetic legacy execution for the given update; no production caller. */
+    public static void bindPoiContextForTests(TypedUpdate update) {
+        if (update == null) {
+            return;
+        }
+        long token = SCOPE_TOKENS.incrementAndGet();
+        poiEverBound = true;
+        POI_SCOPES.get().push(new PoiScope(-1, update, Thread.currentThread(), token));
+        EXECUTIONS.get().push(new ExecIdentity(false, -1));
+        LEGACY_TOKENS.get().push(token);
+    }
+
+    /** Test-only: closes the last synthetic legacy binding of this thread. */
+    public static void clearPoiContextForTests() {
+        endLegacyPoiScope();
+    }
+
+    /** Test-only: opens a synthetic owner body scope for one entity id; no production caller. */
+    public static void pushOwnerScopeForTests(int entityId, TypedUpdate update) {
+        long token = SCOPE_TOKENS.incrementAndGet();
+        if (update != null) {
+            poiEverBound = true;
+        }
+        POI_SCOPES.get().push(new PoiScope(entityId, update, Thread.currentThread(), token));
+        EXECUTIONS.get().push(new ExecIdentity(true, entityId));
+        OWNER_TOKENS.get().push(token);
+    }
+    private static TypedUpdate buildPoiContext(net.minecraft.world.entity.Entity entity) {
         try {
-            net.minecraft.server.level.ServerLevel level = (net.minecraft.server.level.ServerLevel)
-                entity.level();
-            String worldId = worldIdOf(level);
-            long incarnation = worldEpochOf(level);
+            net.minecraft.server.level.ServerLevel level =
+                (net.minecraft.server.level.ServerLevel) entity.level();
             // The server tick is the only logical ordinal available at this entry; the lifecycle
             // generation and the state revision are not readable here and stay unbound (-1), so the
             // claim key never carries a made-up version.
-            bindPoiContext(typedUpdate(entity.getId(), currentTickIndex, worldId, incarnation,
-                -1L, -1L));
+            return typedUpdate(entity.getId(), currentTickIndex, worldIdOf(level),
+                worldEpochOf(level), -1L, -1L);
         } catch (Throwable unavailable) {
-            POI_SCOPES.remove();
+            return null;
         }
     }
-
     /**
      * The host entry of one row: it reads the frozen capability of the row once, decides right there,
      * counts the decision and returns it, so the platform binder cancels exactly the rows this entry
@@ -871,8 +938,7 @@ public final class EntityTickOwnership {
             return SKIP_HOST_TICK;
         }
         if (poiEnabled()) {
-            bindPoiContext(entity);
-            markPrePoiBound();
+            beginLegacyPoiScope(entity);
         }
         if (!armed()) {
             return RUN_HOST_TICK;

@@ -126,9 +126,6 @@ public final class ServerThreadOwnerPhase {
             .beginOwnerBodyScope(entity);
         boolean fallbackHost = false;
         try {
-            if (io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection.ownBodyThrow()) {
-                throw new IllegalStateException("prts-" + "owner-body-fault");
-            }
             boolean executed = slice == Slice.WALK
                 ? RealEntityOwnerBody.runWalkOnServer((ServerLevel) entity.level(), villager)
                 : RealEntityOwnerBody.runRestedOnServer((ServerLevel) entity.level(), villager);
@@ -172,6 +169,21 @@ public final class ServerThreadOwnerPhase {
             if (phase.preSeenRows.add(entity.getId())) {
                 phase.preSeen++;
             }
+        }
+    }
+
+    /** Observes the final Pre verdict at the wrapper's real consumption point. */
+    public static void observePreVerdict(net.minecraft.world.entity.Entity entity, boolean canceled) {
+        if (!phaseActive || entity == null) {
+            return;
+        }
+        LevelPhase phase = phaseOf(entity);
+        if (phase == null || phase.rows.get(entity.getId()) != entity) {
+            return;
+        }
+        notePreSeen(entity);
+        if (canceled) {
+            notePreCanceled(entity);
         }
     }
 

@@ -100,33 +100,13 @@ public final class PrtsEntityOwnershipEvents {
         }
     }
 
-    /** Observes the final Pre cancellation for a pending owner row without changing any behavior. */
-    @SubscribeEvent(priority = net.neoforged.bus.api.EventPriority.LOWEST,
-        receiveCanceled = true)
-    public void onEntityTickPreLowest(EntityTickEvent.Pre event) {
-        boolean pending = io.izzel.arclight.common.prts.kernel.domain.entity.owner
-            .ServerThreadOwnerPhase.hasPending(event.getEntity());
-        if (pending) {
-            io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
-                .notePreSeen(event.getEntity());
-        }
-        if (pending && io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection
-            .ownLatePreCancel()) {
-            event.setCanceled(true);
-        }
-        if (pending && event.isCanceled()) {
-            io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
-                .notePreCanceled(event.getEntity());
-        }
-    }
-
     /** The host path ran the tick of this row; the independent counter records it. */
     @SubscribeEvent
     public void onEntityTickPost(EntityTickEvent.Post event) {
         ENTITY_POST.increment();
         io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
             .notePost(event.getEntity());
-        EntityTickOwnership.clearPrePoiBound();
+        EntityTickOwnership.endLegacyPoiScope();
         PrtsHostTickCalls.notePath(event.getEntity());
     }
 
@@ -146,7 +126,7 @@ public final class PrtsEntityOwnershipEvents {
                 + io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityOwnershipCensus.recordCalls()
                 + " " + EntityTickOwnership.planDiagnostic());
         }
-        EntityTickOwnership.clearPoiContext();
+        EntityTickOwnership.clearResidualPoiScopes();
         EntityTickOwnership.shutdown();
     }
 }

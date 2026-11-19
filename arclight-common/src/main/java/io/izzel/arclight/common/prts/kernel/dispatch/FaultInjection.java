@@ -46,9 +46,6 @@ import java.util.function.Function;
  * {@code ownObserveClaim=<n>} books a claimed row as observed as well, which the frame check of the
  * two row sets has to report.
  *
- * <p>The low-priority review fixtures have their own tokens: {@code ownLatePreCancel=<n>} cancels
- * the first n pending owner rows at the low-priority observer; {@code ownBodyThrow=<n>} makes the
- * first n owner bodies throw the fixed review fault.
  *
  * <p>The two ladders and the wait walk have their own tokens, all zero by default and all read on
  * the live path: {@code ladderWalk=<n>} walks the resource ladder one rung per tick,
@@ -171,8 +168,6 @@ public final class FaultInjection {
         private final int ownSegmentBreak;
         private final int ownOrdinalBreak;
         private final int ownObserveClaim;
-        private final int ownLatePreCancel;
-        private final int ownBodyThrow;
         private final int segBreak;
         private final int segBreakRow;
         private final int ladderWalk;
@@ -193,8 +188,6 @@ public final class FaultInjection {
         private final AtomicLong ownSegmentBreakTaken = new AtomicLong();
         private final AtomicLong ownOrdinalBreakTaken = new AtomicLong();
         private final AtomicLong ownObserveClaimTaken = new AtomicLong();
-        private final AtomicLong ownLatePreCancelTaken = new AtomicLong();
-        private final AtomicLong ownBodyThrowTaken = new AtomicLong();
         private final AtomicLong segBreakTaken = new AtomicLong();
         private final AtomicLong ladderWalkTaken = new AtomicLong();
         private final AtomicLong ladderReturnTaken = new AtomicLong();
@@ -206,8 +199,7 @@ public final class FaultInjection {
         private Spec(long delayNanos, int delayBatches, Set<String> holdWorlds, int ownFail,
             long ownDelayNanos, int ownDelayRows, int ownEpochBreak, int ownWiden, int ownBreak,
             int ownSkipIgnored, int ownDoubleRun, int ownThrow, int ownEntityBreak,
-            int ownSegmentBreak, int ownOrdinalBreak, int ownObserveClaim, int ownLatePreCancel,
-            int ownBodyThrow, int segBreak,
+            int ownSegmentBreak, int ownOrdinalBreak, int ownObserveClaim, int segBreak,
             int segBreakRow, int ladderWalk, int ladderReturn, int waitWalk, int tickDigestBreak,
             long tickDigestBreakTick) {
             this.delayNanos = delayNanos;
@@ -226,8 +218,6 @@ public final class FaultInjection {
             this.ownSegmentBreak = ownSegmentBreak;
             this.ownOrdinalBreak = ownOrdinalBreak;
             this.ownObserveClaim = ownObserveClaim;
-            this.ownLatePreCancel = ownLatePreCancel;
-            this.ownBodyThrow = ownBodyThrow;
             this.segBreak = segBreak;
             this.segBreakRow = segBreakRow;
             this.ladderWalk = ladderWalk;
@@ -239,7 +229,7 @@ public final class FaultInjection {
                 || ownDelayNanos > 0L || ownEpochBreak > 0 || ownWiden > 0 || ownBreak > 0
                 || ownSkipIgnored > 0 || ownDoubleRun > 0 || ownThrow > 0 || ownEntityBreak > 0
                 || ownSegmentBreak > 0 || ownOrdinalBreak > 0 || ownObserveClaim > 0
-                || ownLatePreCancel > 0 || ownBodyThrow > 0
+               
                 || segBreak > 0 || ladderWalk > 0 || ladderReturn > 0 || waitWalk > 0
                 || tickDigestBreak > 0;
         }
@@ -261,8 +251,6 @@ public final class FaultInjection {
             int ownSegmentBreak = 0;
             int ownOrdinalBreak = 0;
             int ownObserveClaim = 0;
-            int ownLatePreCancel = 0;
-            int ownBodyThrow = 0;
             int segBreak = 0;
             int segBreakRow = 1;
             int ladderWalk = 0;
@@ -315,10 +303,7 @@ public final class FaultInjection {
                         ownOrdinalBreak = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
                     } else if ("ownObserveClaim".equals(name)) {
                         ownObserveClaim = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
-                    } else if ("ownLatePreCancel".equals(name)) {
-                        ownLatePreCancel = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
-                    } else if ("ownBodyThrow".equals(name)) {
-                        ownBodyThrow = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
+
                     } else if ("segBreak".equals(name)) {
                         segBreak = (int) clampNumber(value, 0L, ROWS_MAX, 0L);
                     } else if ("segBreakRow".equals(name)) {
@@ -339,7 +324,6 @@ public final class FaultInjection {
             return new Spec(delayMs * 1_000_000L, batches, worlds, ownFail, ownDelayMs * 1_000_000L,
                 ownDelayRows, ownEpochBreak, ownWiden, ownBreak, ownSkipIgnored, ownDoubleRun,
                 ownThrow, ownEntityBreak, ownSegmentBreak, ownOrdinalBreak, ownObserveClaim,
-                ownLatePreCancel, ownBodyThrow,
                 segBreak, segBreakRow, ladderWalk, ladderReturn, waitWalk, tickDigestBreak,
                 tickDigestBreakTick);
         }
@@ -418,14 +402,6 @@ public final class FaultInjection {
 
         int ownObserveClaim() {
             return ownObserveClaim;
-        }
-
-        int ownLatePreCancel() {
-            return ownLatePreCancel;
-        }
-
-        int ownBodyThrow() {
-            return ownBodyThrow;
         }
 
         int segBreak() {
@@ -649,15 +625,4 @@ public final class FaultInjection {
         return spec.ownThrow > 0 && spec.ownThrowTaken.getAndIncrement() < spec.ownThrow;
     }
 
-    /** Counts the first pending rows cancelled by the low-priority review fault. */
-    public static boolean ownLatePreCancel() {
-        return LIVE.ownLatePreCancel() > 0
-            && LIVE.ownLatePreCancelTaken.getAndIncrement() < LIVE.ownLatePreCancel();
-    }
-
-    /** Counts the first owner bodies that throw the fixed review fault. */
-    public static boolean ownBodyThrow() {
-        return LIVE.ownBodyThrow() > 0
-            && LIVE.ownBodyThrowTaken.getAndIncrement() < LIVE.ownBodyThrow();
-    }
 }

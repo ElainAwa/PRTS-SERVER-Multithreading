@@ -38,9 +38,14 @@ public final class PoiSingleWinnerWiring {
 
     /** Whether the take must be refused before the host effect. */
     public static boolean denyTake(BlockPos pos) {
+        if (!enabled()) {
+            return false;
+        }
         EntityTickOwnership.TypedUpdate update = EntityTickOwnership.poiContext();
-        if (!enabled() || update == null || !EntityTickOwnership.hasPoiScope()) {
-            return EntityTickOwnership.ownerCallWithoutScope();
+        if (update == null) {
+            // An admitted owner that lost its scope must not fall through to the old POI write; an
+            // un-taken host call keeps the original path.
+            return EntityTickOwnership.poiCallRefused();
         }
         return !PoiAdmission.admitOwned(store, PoiAdmission.Operation.TAKE,
             recordKey(update, pos), holder(update), POLICY).singleWinner();
@@ -48,9 +53,12 @@ public final class PoiSingleWinnerWiring {
 
     /** Whether the release must be refused before the host effect. */
     public static boolean denyRelease(BlockPos pos) {
+        if (!enabled()) {
+            return false;
+        }
         EntityTickOwnership.TypedUpdate update = EntityTickOwnership.poiContext();
-        if (!enabled() || update == null || !EntityTickOwnership.hasPoiScope()) {
-            return EntityTickOwnership.ownerCallWithoutScope();
+        if (update == null) {
+            return EntityTickOwnership.poiCallRefused();
         }
         return !PoiAdmission.admitOwned(store, PoiAdmission.Operation.RELEASE,
             recordKey(update, pos), holder(update), POLICY).singleWinner();
