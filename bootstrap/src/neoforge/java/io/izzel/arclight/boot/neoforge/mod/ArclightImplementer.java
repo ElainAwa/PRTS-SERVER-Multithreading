@@ -102,7 +102,15 @@ public class ArclightImplementer implements ILaunchPluginService {
             this.auditAcceptor.accept(new String[]{String.join(",", trails)});
         }
         if (Boolean.getBoolean("arclight.prts.stageTrace")) {
-            System.out.println("[PRTS-TRANSFORM] " + classNode.name + " " + trails);
+            StringBuilder stages = new StringBuilder();
+            for (var method : classNode.methods) {
+                if (method.name.startsWith("prts$")) {
+                    stages.append(method.name).append(',');
+                }
+            }
+            System.out.println("[PRTS-TRANSFORM] id=" + System.identityHashCode(classNode)
+                + " reason=" + reason + " " + classNode.name + " trails=" + trails
+                + " stages=" + stages);
         }
         return !trails.isEmpty();
     }

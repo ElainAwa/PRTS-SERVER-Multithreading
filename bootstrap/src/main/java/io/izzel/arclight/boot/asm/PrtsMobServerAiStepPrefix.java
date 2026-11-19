@@ -65,13 +65,46 @@ public final class PrtsMobServerAiStepPrefix implements Implementer {
         if (anchor < 2) {
             return false;
         }
-        if (!(instructions[anchor - 2] instanceof VarInsnNode self && self.getOpcode() == Opcodes.ALOAD)
-            || !(instructions[anchor - 1] instanceof FieldInsnNode field
-                && "navigation".equals(field.name))) {
+        // The call region is the contiguous run of receiver/argument loads in front of the call;
+        // it may be the plain field load or the redirect handler's extra receiver slot. The prefix is
+        // everything before that run.
+        int callStart = anchor;
+        boolean navLoad = false;
+        while (callStart > 0) {
+            AbstractInsnNode previous = instructions[callStart - 1];
+            if (previous instanceof VarInsnNode || previous instanceof FieldInsnNode) {
+                if (previous instanceof FieldInsnNode field
+                    && ("L" + NAV + ";").equals(field.desc)) {
+                    navLoad = true;
+                }
+                callStart--;
+                continue;
+            }
+            break;
+        }
+        if (!navLoad) {
+            if (Boolean.getBoolean("arclight.prts.stageTrace")) {
+                StringBuilder shape = new StringBuilder();
+                for (int index = Math.max(0, anchor - 5); index <= anchor
+                    && index < instructions.length; index++) {
+                    AbstractInsnNode node = instructions[index];
+                    shape.append(index).append(':').append(node.getOpcode()).append(':');
+                    if (node instanceof FieldInsnNode field) {
+                        shape.append("F ").append(field.owner).append('.').append(field.name)
+                            .append(field.desc).append(' ');
+                    } else if (node instanceof MethodInsnNode call) {
+                        shape.append("M ").append(call.owner).append('.').append(call.name)
+                            .append(call.desc).append(' ');
+                    } else if (node instanceof VarInsnNode variable) {
+                        shape.append("V ").append(variable.var).append(' ');
+                    }
+                }
+                System.out.println("[PRTS-ANCHOR2] " + shape);
+            }
             return false;
         }
         List<AbstractInsnNode> region = new ArrayList<>();
-        for (int index = 0; index < anchor - 2; index++) {
+        for (int index = 0; index < callStart; index++) {
             AbstractInsnNode node1 = instructions[index];
             if (node1 instanceof LineNumberNode) {
                 continue;
@@ -112,7 +145,7 @@ public final class PrtsMobServerAiStepPrefix implements Implementer {
         stage.maxLocals = Math.max(2, host.maxLocals);
         node.methods.add(stage);
 
-        for (int index = 0; index < anchor - 2; index++) {
+        for (int index = 0; index < callStart; index++) {
             host.instructions.remove(instructions[index]);
         }
         InsnList call = new InsnList();
