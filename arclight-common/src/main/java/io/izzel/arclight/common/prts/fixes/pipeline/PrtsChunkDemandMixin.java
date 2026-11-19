@@ -59,6 +59,16 @@ public abstract class PrtsChunkDemandMixin {
         return cached;
     }
 
+    @Inject(method = "getChunk", at = @At("HEAD"), cancellable = true)
+    private void prts$ownerReadDemand(int x, int z, ChunkStatus status, boolean blocking,
+                                      CallbackInfoReturnable<ChunkAccess> cir) {
+        if (blocking && Thread.currentThread() != mainThread
+            && io.izzel.arclight.common.prts.kernel.auth.OwnerWorkerPermit.allowed()) {
+            cir.setReturnValue(io.izzel.arclight.common.prts.kernel.domain.entity.owner.OwnerReadDemand
+                .await((ServerChunkCache) (Object) this, x, z, status, true));
+        }
+    }
+
     @Inject(method = "getChunk", at = @At("HEAD"))
     private void prts$demandOpened(int x, int z, ChunkStatus status, boolean blocking,
                                    CallbackInfoReturnable<ChunkAccess> cir) {

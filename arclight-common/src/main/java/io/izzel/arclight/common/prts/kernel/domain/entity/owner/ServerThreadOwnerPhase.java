@@ -264,14 +264,23 @@ public final class ServerThreadOwnerPhase {
         long deadline = System.nanoTime()
             + java.util.concurrent.TimeUnit.SECONDS.toNanos(20L);
         System.out.println("[PRTS] owner-batch start rows=" + count);
-        server.managedBlock(() -> {
+        while (true) {
+            boolean unsettled = false;
             for (WorkerPool.GenericHandle handle : handles) {
                 if (!handle.future().isDone()) {
-                    return System.nanoTime() > deadline;
+                    unsettled = true;
+                    break;
                 }
             }
-            return true;
-        });
+            if (!unsettled || System.nanoTime() > deadline) {
+                break;
+            }
+            OwnerReadDemand.service();
+            while (server.pollTask()) {
+                // Drains the host queue while the batch waits; chunk demand itself is served above.
+            }
+            Thread.yield();
+        }
         for (WorkerPool.GenericHandle handle : handles) {
             if (!handle.future().isDone()) {
                 dumpOwnerStacks();
