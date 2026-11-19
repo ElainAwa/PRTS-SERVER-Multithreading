@@ -52,6 +52,34 @@ public final class OwnerHostEventDispatch {
         }
     }
 
+    /** Runs one post/publish step on the host thread for a batch stage that already executed its
+     * body: outside the host thread the step is queued on the same channel and the worker parks; on
+     * the host it runs inline. */
+    public static void postOnHost(Runnable action) {
+        if (ON_HOST.get() || io.izzel.arclight.common.mod.server.ArclightServer
+            .isPrimaryThread()) {
+            action.run();
+            return;
+        }
+        Call call = new Call(() -> {
+            action.run();
+            return null;
+        }, new CompletableFuture<>());
+        CALLS.add(call);
+        try {
+            call.future().join();
+        } catch (CompletionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw new IllegalStateException("owner host post failed", cause);
+        }
+    }
+
     /** Runs one bounded host action on behalf of an admitted owner worker and hands its answer back:
      * used where the original factory build and the original dispatch must happen on the same thread
      * (for example an event whose construction captures the dispatching thread's shape). The action

@@ -266,43 +266,72 @@ public final class ServerThreadOwnerPhase {
             + ":" + index;
     }
 
-    /** Submits one batch as a real frozen job graph through the generic executor. Serial batches
-     * chain the nodes through their successors, so the graph itself is the serial strategy and the
-     * host keeps servicing its demand channels instead of blocking in a per-node future. */
+    private static void replayDeferredRow(DeferredRow row) {
+        row.phase().executed++;
+        row.phase().walkExecuted++;
+        RestOwnerWiring.noteSkip();
+        io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
+            .noteOwnerBodyExecuted();
+        noteExpectedPost(row.entity());
+        StageCounters.note("ownerBatchPortal");
+        ((EntityBridge) row.entity()).bridge$postTick();
+        java.util.function.Consumer<net.minecraft.world.entity.Entity> replay = postReplay;
+        if (replay != null) {
+            StageCounters.note("ownerBatchPost");
+            replay.accept(row.entity());
+        }
+    }
+
+    /** Submits one batch as a real frozen job graph through the generic executor. Every row is two
+     * nodes: its owner body and the post/publish step that depends on it. A serial batch chains the
+     * rows through their successors, so the graph itself is the serial strategy and the host keeps
+     * servicing its demand channels instead of blocking in a per-node future. */
     private static ExecutionCohort submitCohort(SharedRuntime runtime, List<DeferredRow> rows,
                                                 WorkerPool.GenericHandle[] handles,
                                                 boolean[] executed, boolean serial) {
         int count = rows.size();
-        List<JobGraph.Node> nodes = new ArrayList<>(count);
-        List<Long> order = new ArrayList<>(count);
+        List<JobGraph.Node> nodes = new ArrayList<>(count * 2);
+        List<Long> order = new ArrayList<>(count * 2);
         List<Long> ready = new ArrayList<>();
         Map<String, Runnable> bodies = new LinkedHashMap<>();
+        String previousPost = null;
         for (int index = 0; index < count; index++) {
             DeferredRow row = rows.get(index);
             String key = rowKey(row, index);
-            List<String> predecessors = serial && index > 0
-                ? List.of(rowKey(rows.get(index - 1), index - 1)) : List.of();
-            List<Long> successors = serial && index + 1 < count
-                ? List.of((long) index + 2L) : List.of();
-            long nodeId = index + 1L;
-            nodes.add(new JobGraph.Node(nodeId, key, nodeId,
+            String bodyKey = key + ":body";
+            String postKey = key + ":post";
+            long bodyId = index * 2L + 1L;
+            long postId = bodyId + 1L;
+            List<String> bodyPredecessors = serial && previousPost != null
+                ? List.of(previousPost) : List.of();
+            List<Long> bodySuccessors = List.of(postId);
+            nodes.add(new JobGraph.Node(bodyId, bodyKey, bodyId,
                 row.level().dimension().location().toString(), key, 0,
-                predecessors, successors, 0, "", "", List.of(), List.of(), List.of(),
-                ShareClass.ENTITY, JobDeclaration.SiteClass.PARALLEL, 0, 1, false, index));
-            order.add(nodeId);
-            if (predecessors.isEmpty()) {
-                ready.add(nodeId);
+                bodyPredecessors, bodySuccessors, 0, "", "", List.of(), List.of(), List.of(),
+                ShareClass.ENTITY, JobDeclaration.SiteClass.PARALLEL, 0, 1, false, index * 2));
+            long postPredecessor = bodyId;
+            nodes.add(new JobGraph.Node(postId, postKey, postId,
+                row.level().dimension().location().toString(), key, 0,
+                List.of(bodyKey), List.of(), 0, "", "", List.of(), List.of(), List.of(),
+                ShareClass.ENTITY, JobDeclaration.SiteClass.PARALLEL, 0, 1, false, index * 2 + 1));
+            order.add(bodyId);
+            order.add(postId);
+            if (bodyPredecessors.isEmpty()) {
+                ready.add(bodyId);
             }
             final int slot = index;
-            bodies.put(key, () -> runDeferredBody(row, slot, executed));
+            bodies.put(bodyKey, () -> runDeferredBody(row, slot, executed));
+            bodies.put(postKey, () -> io.izzel.arclight.common.prts.kernel.domain.entity.owner
+                .OwnerHostEventDispatch.postOnHost(() -> replayDeferredRow(row)));
+            previousPost = postKey;
         }
         JobGraph graph = new JobGraph(1L, 0L, 0L, nodes, order, ready,
-            List.of(), count, 0);
+            List.of(), count * 2, 0);
         GenericJobExecutor executor = new GenericJobExecutor(runtime.pool());
         GenericJobExecutor.Execution execution = executor.executeCohort(graph, bodies);
         ExecutionCohort cohort = execution.cohort();
         for (int index = 0; index < count; index++) {
-            handles[index] = cohort.handle(rowKey(rows.get(index), index));
+            handles[index] = cohort.handle(rowKey(rows.get(index), index) + ":post");
         }
         return cohort;
     }
@@ -392,24 +421,10 @@ public final class ServerThreadOwnerPhase {
                 }
             }
             boolean ok = !handles[index].future().isCompletedExceptionally() && executed[index];
-            if (ok) {
-                row.phase().executed++;
-                row.phase().walkExecuted++;
-                RestOwnerWiring.noteSkip();
-                io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
-                    .noteOwnerBodyExecuted();
-                noteExpectedPost(row.entity());
-                StageCounters.note("ownerBatchPortal");
-                ((EntityBridge) row.entity()).bridge$postTick();
-                java.util.function.Consumer<net.minecraft.world.entity.Entity> replay = postReplay;
-                if (replay != null) {
-                    StageCounters.note("ownerBatchPost");
-                    replay.accept(row.entity());
-                }
-            } else {
+            if (!ok) {
                 row.phase().terminal++;
                 if (firstFailure == null) {
-                    firstFailure = new IllegalStateException("deferred owner body did not execute");
+                    firstFailure = new IllegalStateException("deferred owner body or post did not complete");
                 }
             }
         }
