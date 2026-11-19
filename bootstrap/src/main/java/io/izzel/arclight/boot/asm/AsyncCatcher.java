@@ -15,6 +15,7 @@ import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.FrameNode;
 import org.objectweb.asm.tree.InsnList;
+import org.objectweb.asm.tree.IntInsnNode;
 import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.InvokeDynamicInsnNode;
 import org.objectweb.asm.tree.JumpInsnNode;
@@ -23,6 +24,7 @@ import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.TypeInsnNode;
+import org.objectweb.asm.tree.VarInsnNode;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.spongepowered.asm.util.Constants;
 
@@ -97,10 +99,13 @@ public class AsyncCatcher implements Implementer {
         InsnList insnList = new InsnList();
         LabelNode labelNode = new LabelNode(new Label());
         LabelNode labelNode1 = new LabelNode(new Label());
-        insnList.add(new LdcInsnNode(reason));
+        insnList.add(new LdcInsnNode(node.name));
+        insnList.add(new LdcInsnNode(methodNode.name));
+        insnList.add(new LdcInsnNode(methodNode.desc));
+        pushTargetArguments(insnList, methodNode);
         insnList.add(new MethodInsnNode(Opcodes.INVOKESTATIC,
-            "io/izzel/arclight/common/prts/kernel/auth/OwnerUnitPermit", "allows",
-            "(Ljava/lang/String;)Z", false));
+            "io/izzel/arclight/common/prts/kernel/auth/OwnerUnitPermit", "allowsTarget",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/Object;)Z", false));
         insnList.add(new JumpInsnNode(Opcodes.IFNE, labelNode));
         insnList.add(new MethodInsnNode(Opcodes.INVOKESTATIC, "io/izzel/arclight/common/mod/server/ArclightServer", "isPrimaryThread", "()Z"));
         insnList.add(new JumpInsnNode(Opcodes.IFNE, labelNode));
@@ -234,5 +239,52 @@ public class AsyncCatcher implements Implementer {
             }
         }
         throw new IllegalStateException("how this can happen?");
+    }
+
+    /** Loads the receiver and every argument of the guarded method into one Object array, so the
+     * permit can judge the concrete target the guard protects instead of its reason label. */
+    private static void pushTargetArguments(InsnList insnList, MethodNode methodNode) {
+        Type[] arguments = Type.getArgumentTypes(methodNode.desc);
+        boolean isStatic = (methodNode.access & Opcodes.ACC_STATIC) != 0;
+        int slots = arguments.length + (isStatic ? 0 : 1);
+        if (slots <= 127) {
+            insnList.add(new IntInsnNode(Opcodes.BIPUSH, slots));
+        } else {
+            insnList.add(new LdcInsnNode(slots));
+        }
+        insnList.add(new TypeInsnNode(Opcodes.ANEWARRAY, "java/lang/Object"));
+        int slot = 0;
+        int local = isStatic ? 0 : 1;
+        if (!isStatic) {
+            insnList.add(new InsnNode(Opcodes.DUP));
+            insnList.add(new IntInsnNode(Opcodes.BIPUSH, slot++));
+            insnList.add(new VarInsnNode(Opcodes.ALOAD, 0));
+            insnList.add(new InsnNode(Opcodes.AASTORE));
+        }
+        for (Type argument : arguments) {
+            insnList.add(new InsnNode(Opcodes.DUP));
+            insnList.add(new IntInsnNode(Opcodes.BIPUSH, slot++));
+            insnList.add(new VarInsnNode(argument.getOpcode(Opcodes.ILOAD), local));
+            box(insnList, argument);
+            insnList.add(new InsnNode(Opcodes.AASTORE));
+            local += argument.getSize();
+        }
+    }
+
+    private static void box(InsnList insnList, Type type) {
+        String owner;
+        String descriptor;
+        switch (type.getSort()) {
+            case Type.BOOLEAN -> { owner = "java/lang/Boolean"; descriptor = "(Z)Ljava/lang/Boolean;"; }
+            case Type.BYTE -> { owner = "java/lang/Byte"; descriptor = "(B)Ljava/lang/Byte;"; }
+            case Type.CHAR -> { owner = "java/lang/Character"; descriptor = "(C)Ljava/lang/Character;"; }
+            case Type.SHORT -> { owner = "java/lang/Short"; descriptor = "(S)Ljava/lang/Short;"; }
+            case Type.INT -> { owner = "java/lang/Integer"; descriptor = "(I)Ljava/lang/Integer;"; }
+            case Type.LONG -> { owner = "java/lang/Long"; descriptor = "(J)Ljava/lang/Long;"; }
+            case Type.FLOAT -> { owner = "java/lang/Float"; descriptor = "(F)Ljava/lang/Float;"; }
+            case Type.DOUBLE -> { owner = "java/lang/Double"; descriptor = "(D)Ljava/lang/Double;"; }
+            default -> { return; }
+        }
+        insnList.add(new MethodInsnNode(Opcodes.INVOKESTATIC, owner, "valueOf", descriptor, false));
     }
 }

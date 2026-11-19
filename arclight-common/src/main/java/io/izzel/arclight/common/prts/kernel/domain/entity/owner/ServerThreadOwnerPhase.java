@@ -253,7 +253,6 @@ public final class ServerThreadOwnerPhase {
                 OwnerBodyLease.enabled() && Boolean.getBoolean(OwnerBodyLease.AUTHORITY_PROPERTY));
             OwnerBodyLease lease = OwnerBodyLease.acquire(row.level(), row.entity(),
                 row.phase().tick, row.hostStep());
-            io.izzel.arclight.common.prts.kernel.auth.OwnerUnitPermit.authorize();
             long scope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
                 .EntityTickOwnership.beginOwnerBodyScope(row.entity());
             boolean faulted = true;

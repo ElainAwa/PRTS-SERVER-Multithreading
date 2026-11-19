@@ -1,6 +1,11 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.auth;
 
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
+
 import java.util.EnumSet;
 import java.util.Set;
 
@@ -16,7 +21,8 @@ public final class OwnerUnitPermit {
         EVENT_HOST
     }
 
-    private record Unit(String worldId, EnumSet<Capability> capabilities, boolean authorized) {
+    private record Unit(String worldId, EnumSet<Capability> capabilities, boolean authorized,
+                        String leasedDomain) {
     }
 
     private static final ThreadLocal<Unit> CURRENT = new ThreadLocal<>();
@@ -34,7 +40,7 @@ public final class OwnerUnitPermit {
     /** Binds the calling thread as one admitted owner unit. */
     public static void enter(String worldId, boolean authorized) {
         CURRENT.set(new Unit(worldId, EnumSet.of(Capability.ENTITY_STATE,
-            Capability.CHUNK_DEMAND, Capability.EVENT_HOST), authorized));
+            Capability.CHUNK_DEMAND, Capability.EVENT_HOST), authorized, ""));
     }
 
     public static void exit() {
@@ -45,11 +51,13 @@ public final class OwnerUnitPermit {
         return CURRENT.get() != null;
     }
 
-    /** Upgrades the current unit after the registry lease and the authority decision were granted. */
-    public static void authorize() {
+    /** Binds the admitted object domain after the registry lease and the authority decision were
+     * granted; a unit without a bound domain cannot pass a guarded surface. */
+    public static void bindLease(String domainId) {
         Unit unit = CURRENT.get();
-        if (unit != null && !unit.authorized()) {
-            CURRENT.set(new Unit(unit.worldId(), unit.capabilities(), true));
+        if (unit != null) {
+            CURRENT.set(new Unit(unit.worldId(), unit.capabilities(), true,
+                domainId == null ? "" : domainId));
         }
     }
 
@@ -63,14 +71,59 @@ public final class OwnerUnitPermit {
         return unit == null ? "" : unit.worldId();
     }
 
-    /** Whether the calling unit's admitted resources cover one guarded native surface. */
-    public static boolean allows(String reason) {
+    /** Whether the calling unit's admitted resources cover the native surface the guard protects:
+     * the same object domain the row leased, or (for server-side bookkeeping) the same world. Block
+     * and menu surfaces are never covered by an object-domain unit. */
+    public static boolean allowsTarget(String ownerClass, String method, String descriptor,
+                                       Object[] arguments) {
         Unit unit = CURRENT.get();
-        if (unit == null) {
+        if (unit == null || !unit.authorized() || unit.leasedDomain().isEmpty()) {
             return false;
         }
-        return unit.authorized() && ENTITY_REASONS.contains(reason)
-            && unit.capabilities().contains(Capability.ENTITY_STATE);
+        String target = ownerClass + "#" + method;
+        switch (target) {
+            case "net/minecraft/server/level/ServerLevel#getEntities":
+                return arguments.length > 0 && worldOf(arguments[0], unit);
+            case "net/minecraft/server/level/ServerLevel#addEntity":
+                return arguments.length > 1 && sameEntity(arguments[1], unit);
+            case "net/minecraft/server/level/ServerLevel$EntityCallbacks#onTrackingStart":
+            case "net/minecraft/server/level/ServerLevel$EntityCallbacks#onTrackingEnd":
+                return arguments.length > 1 && worldOf(arguments[1], unit);
+            case "net/minecraft/server/level/ChunkMap$TrackedEntity#removePlayer":
+            case "net/minecraft/server/level/ChunkMap$TrackedEntity#updatePlayer":
+                return arguments.length > 1 && worldOf(arguments[1], unit);
+            case "net/minecraft/server/level/ChunkMap#addEntity":
+            case "net/minecraft/server/level/ChunkMap#removeEntity":
+                return arguments.length > 1 && (sameEntity(arguments[1], unit)
+                    || worldOf(arguments[1], unit));
+            case "net/minecraft/world/entity/LivingEntity#addEffect":
+                return arguments.length > 0 && sameEntity(arguments[0], unit);
+            default:
+                return false;
+        }
+    }
+
+    private static boolean sameEntity(Object candidate, Unit unit) {
+        if (!(candidate instanceof Entity entity)) {
+            return false;
+        }
+        String expected = "entity-state:" + entity.getUUID().getMostSignificantBits() + ":"
+            + entity.getUUID().getLeastSignificantBits();
+        return unit.leasedDomain().startsWith(expected);
+    }
+
+    private static boolean worldOf(Object candidate, Unit unit) {
+        String worldId;
+        if (candidate instanceof ServerLevel level) {
+            worldId = level.dimension().location().toString();
+        } else if (candidate instanceof Entity entity) {
+            worldId = entity.level().dimension().location().toString();
+        } else if (candidate instanceof ServerPlayer player) {
+            worldId = player.level().dimension().location().toString();
+        } else {
+            return false;
+        }
+        return unit.worldId().equals(worldId);
     }
 
     /** The host-served chunk demand bridge is only for an admitted owner unit. */

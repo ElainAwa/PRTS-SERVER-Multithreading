@@ -72,6 +72,7 @@ public final class OwnerBodyLease {
             throw new IllegalStateException("owner batch lease refused");
         }
         StageCounters.note("ownerBatchLeaseHeld");
+        io.izzel.arclight.common.prts.kernel.auth.OwnerUnitPermit.bindLease(domainId);
         OwnerBodyLease lease =
             new OwnerBodyLease(registry, token.domain(), context.primarySite().siteId());
         if (Boolean.getBoolean(AUTHORITY_PROPERTY)) {
