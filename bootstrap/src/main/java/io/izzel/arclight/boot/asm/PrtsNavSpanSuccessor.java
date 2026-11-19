@@ -36,6 +36,13 @@ public final class PrtsNavSpanSuccessor implements Implementer {
     private static final String STAGE_DESC = "(Lnet/minecraft/util/profiling/ProfilerFiller;)V";
     private static final String PROFILER = "net/minecraft/util/profiling/ProfilerFiller";
 
+    private static void addInterface(ClassNode node) {
+        String name = "io/izzel/arclight/common/prts/kernel/domain/entity/owner/NavigationSectionStages";
+        if (!node.interfaces.contains(name)) {
+            node.interfaces.add(name);
+        }
+    }
+
     @Override
     public boolean processClass(ClassNode node) {
         if (!OWNER.equals(node.name)) {
@@ -88,7 +95,7 @@ public final class PrtsNavSpanSuccessor implements Implementer {
         if (!terminated || tail.isEmpty()) {
             return false;
         }
-        MethodNode stage = new MethodNode(Opcodes.ACC_PRIVATE, STAGE, STAGE_DESC, null, null);
+        MethodNode stage = new MethodNode(Opcodes.ACC_PUBLIC, STAGE, STAGE_DESC, null, null);
         stage.instructions.add(TailRegionExtractor.stagePrologue(OWNER + "#" + "mobServerAiStepSuccessor"));
         for (AbstractInsnNode node1 : tail) {
             stage.instructions.add(node1.clone(null));
@@ -97,6 +104,7 @@ public final class PrtsNavSpanSuccessor implements Implementer {
         stage.maxStack = Math.max(6, host.maxStack);
         stage.maxLocals = 2;
         node.methods.add(stage);
+        addInterface(node);
 
         for (int index = anchor + 1; index < instructions.length; index++) {
             host.instructions.remove(instructions[index]);

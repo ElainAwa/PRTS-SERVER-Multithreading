@@ -36,6 +36,13 @@ public final class PrtsMobServerAiStepPrefix implements Implementer {
     private static final String STAGE = "prts$serverAiStepPrefix";
     private static final String STAGE_DESC = "()Lnet/minecraft/util/profiling/ProfilerFiller;";
 
+    private static void addInterface(ClassNode node) {
+        String name = "io/izzel/arclight/common/prts/kernel/domain/entity/owner/NavigationSectionStages";
+        if (!node.interfaces.contains(name)) {
+            node.interfaces.add(name);
+        }
+    }
+
     @Override
     public boolean processClass(ClassNode node) {
         if (!OWNER.equals(node.name)) {
@@ -172,7 +179,7 @@ public final class PrtsMobServerAiStepPrefix implements Implementer {
                 epilogueJumps.add(jump);
             }
         }
-        MethodNode stage = new MethodNode(Opcodes.ACC_PRIVATE, STAGE, STAGE_DESC, null, null);
+        MethodNode stage = new MethodNode(Opcodes.ACC_PUBLIC, STAGE, STAGE_DESC, null, null);
         stage.instructions.add(TailRegionExtractor.stagePrologue(OWNER + "#" + "mobServerAiStepPrefix"));
         for (AbstractInsnNode node1 : region) {
             stage.instructions.add(node1.clone(labels));
@@ -187,6 +194,7 @@ public final class PrtsMobServerAiStepPrefix implements Implementer {
         stage.maxStack = Math.max(6, host.maxStack);
         stage.maxLocals = Math.max(2, host.maxLocals);
         node.methods.add(stage);
+        addInterface(node);
 
         LabelNode stageEntry = new LabelNode();
         for (int index = 0; index < regionStart; index++) {
