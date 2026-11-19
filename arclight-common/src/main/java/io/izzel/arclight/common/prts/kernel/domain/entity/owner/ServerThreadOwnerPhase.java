@@ -237,11 +237,13 @@ public final class ServerThreadOwnerPhase {
         handles[index] = runtime.pool().submitGeneric(jobToken -> {
             StageCounters.note("ownerBatchBody");
             OwnerWorkerPermit.enter();
+            OwnerRandomOwnership.begin(row.level(), row.entity());
             long scope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
                 .EntityTickOwnership.beginOwnerBodyScope(row.entity());
             try {
                 executed[slot] = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
             } finally {
+                OwnerRandomOwnership.end();
                 io.izzel.arclight.common.prts.kernel.domain.entity.ownership
                     .EntityTickOwnership.endOwnerBodyScope(scope);
                 OwnerWorkerPermit.exit();
@@ -294,12 +296,7 @@ public final class ServerThreadOwnerPhase {
         boolean[] executed = new boolean[count];
         StageCounters.note("ownerBatchDeferred");
         boolean parallel = parallelBatches();
-        for (int index = 0; index < count; index++) {
-            if (!parallel && index > 0) {
-                break;
-            }
-            submitDeferred(runtime, rows, index, handles, tokens, executed);
-        }
+        submitDeferred(runtime, rows, 0, handles, tokens, executed);
         MinecraftServer server = rows.get(0).level().getServer();
         long deadline = System.nanoTime()
             + java.util.concurrent.TimeUnit.SECONDS.toNanos(20L);

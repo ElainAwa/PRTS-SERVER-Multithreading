@@ -368,4 +368,23 @@ public abstract class LevelMixin implements WorldBridge, LevelAccessor, LevelWri
             arclight$blockInteractionOverride = null;
         }
     }
+
+    /** Behaviour: an owner-body level random comes from a per-row stream instead of the level's one
+     * legacy source. Why here: the field is final and every later holder captures this instance, so
+     * the wrapper must be installed when the level is built. Invariant: only the declared diagnostic
+     * switch changes the source; failure keeps the original instance. */
+    @com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation(method = "<init>",
+        at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/util/RandomSource;create()Lnet/minecraft/util/RandomSource;",
+            ordinal = 1))
+    private static RandomSource prts$ownerThreadRandom(
+        com.llamalad7.mixinextras.injector.wrapoperation.Operation<RandomSource> original) {
+        RandomSource base = original.call();
+        if (io.izzel.arclight.common.prts.kernel.domain.entity.owner.OwnerRandomOwnership
+            .enabled()) {
+            return new io.izzel.arclight.common.prts.kernel.domain.entity.owner
+                .OwnerThreadRandomSource(base);
+        }
+        return base;
+    }
 }
