@@ -101,6 +101,9 @@ public class ArclightImplementer implements ILaunchPluginService {
         if (this.auditAcceptor != null && !trails.isEmpty()) {
             this.auditAcceptor.accept(new String[]{String.join(",", trails)});
         }
+        if (Boolean.getBoolean("arclight.prts.stageTrace")) {
+            System.out.println("[PRTS-TRANSFORM] " + classNode.name + " " + trails);
+        }
         return !trails.isEmpty();
     }
 
