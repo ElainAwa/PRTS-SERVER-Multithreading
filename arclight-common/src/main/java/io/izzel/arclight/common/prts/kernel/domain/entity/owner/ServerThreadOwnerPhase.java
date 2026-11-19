@@ -246,8 +246,6 @@ public final class ServerThreadOwnerPhase {
         handles[index] = runtime.pool().submitGeneric(jobToken -> {
             StageCounters.note("ownerBatchBody");
             OwnerWorkerPermit.enter();
-            OwnerRandomOwnership.begin(row.level(), row.entity(), row.hostStep(),
-                row.phase().tick);
             OwnerBodyLease lease = OwnerBodyLease.acquire(row.level(), row.entity(),
                 row.phase().tick, row.hostStep());
             long scope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
@@ -258,7 +256,6 @@ public final class ServerThreadOwnerPhase {
                 if (lease != null) {
                     lease.release();
                 }
-                StageCounters.add("ownerRandomDraws", OwnerRandomOwnership.endAndDraws());
                 io.izzel.arclight.common.prts.kernel.domain.entity.ownership
                     .EntityTickOwnership.endOwnerBodyScope(scope);
                 OwnerWorkerPermit.exit();

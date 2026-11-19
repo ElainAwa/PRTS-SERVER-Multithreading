@@ -380,10 +380,9 @@ public abstract class LevelMixin implements WorldBridge, LevelAccessor, LevelWri
     private static RandomSource prts$ownerThreadRandom(
         com.llamalad7.mixinextras.injector.wrapoperation.Operation<RandomSource> original) {
         RandomSource base = original.call();
-        if (io.izzel.arclight.common.prts.kernel.domain.entity.owner.OwnerRandomOwnership
-            .enabled()) {
+        if (Boolean.getBoolean("arclight.prts.ownerSharedRandom")) {
             return new io.izzel.arclight.common.prts.kernel.domain.entity.owner
-                .OwnerThreadRandomSource(base);
+                .OwnerSharedRandomSource(base);
         }
         return base;
     }
