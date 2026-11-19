@@ -54,6 +54,10 @@ public final class ServerThreadOwnerPhase {
     }
     private static final List<DeferredRow> DEFERRED = new ArrayList<>();
     private static final Set<Integer> DEFERRED_IDS = new HashSet<>();
+    /** Bodies whose batch returned before the body stopped: the next batch must not start while one
+     * of them may still touch shared state. The references are kept until the future settles. */
+    private static final List<WorkerPool.GenericHandle> IN_FLIGHT =
+        new java.util.concurrent.CopyOnWriteArrayList<>();
     private static volatile java.util.function.Consumer<net.minecraft.world.entity.Entity> postReplay;
 
     private ServerThreadOwnerPhase() {
@@ -358,6 +362,24 @@ public final class ServerThreadOwnerPhase {
         }
     }
 
+    /** Waits for bodies a previous batch left in flight, servicing their host demand channels; false
+     * while any of them is still running at the deadline. */
+    private static boolean awaitInFlight(MinecraftServer server, long deadline) {
+        while (!IN_FLIGHT.isEmpty() && System.nanoTime() < deadline) {
+            OwnerReadDemand.service();
+            OwnerHostEventDispatch.service();
+            while (server.pollTask()) {
+                // The host keeps serving a stopped batch's demand until its bodies really stopped.
+            }
+            IN_FLIGHT.removeIf(handle -> handle.future().isDone());
+            if (!IN_FLIGHT.isEmpty()) {
+                Thread.yield();
+            }
+        }
+        IN_FLIGHT.removeIf(handle -> handle.future().isDone());
+        return IN_FLIGHT.isEmpty();
+    }
+
     /** Runs every deferred walk row, parks the host once on them, then replays the host Post/portal
      * for each row that really executed. A failure is terminal: no replay and no host fallback after
      * the body was admitted. */
@@ -382,8 +404,14 @@ public final class ServerThreadOwnerPhase {
         boolean[] executed = new boolean[count];
         StageCounters.note("ownerBatchDeferred");
         boolean serial = !parallelBatches();
-        submitCohort(runtime, rows, handles, executed, serial);
         MinecraftServer server = rows.get(0).level().getServer();
+        long fenceDeadline = System.nanoTime()
+            + java.util.concurrent.TimeUnit.SECONDS.toNanos(5L);
+        if (!awaitInFlight(server, fenceDeadline)) {
+            throw new IllegalStateException(
+                "owner batch refuses to start while a previous body is still running");
+        }
+        submitCohort(runtime, rows, handles, executed, serial);
         long deadline = System.nanoTime()
             + java.util.concurrent.TimeUnit.SECONDS.toNanos(20L);
         System.out.println("[PRTS] owner-batch start rows=" + count);
@@ -404,8 +432,9 @@ public final class ServerThreadOwnerPhase {
         }
         if (unsettled) {
             for (WorkerPool.GenericHandle pending : handles) {
-                if (pending != null) {
+                if (pending != null && !pending.future().isDone()) {
                     pending.cancel();
+                    IN_FLIGHT.add(pending);
                 }
             }
             throw new IllegalStateException("owner batch did not settle before the deadline");
