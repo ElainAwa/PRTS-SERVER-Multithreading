@@ -107,6 +107,9 @@ public final class PrtsNavSpanSuccessor implements Implementer {
         call.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, OWNER, STAGE, STAGE_DESC, false));
         call.add(new InsnNode(Opcodes.RETURN));
         host.instructions.add(call);
+        host.localVariables = null;
+        host.visibleLocalVariableAnnotations = null;
+        host.invisibleLocalVariableAnnotations = null;
         return true;
     }
 }

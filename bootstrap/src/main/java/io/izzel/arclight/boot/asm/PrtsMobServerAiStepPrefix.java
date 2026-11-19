@@ -131,6 +131,9 @@ public final class PrtsMobServerAiStepPrefix implements Implementer {
             host.localVariables.clear();
             host.localVariables.addAll(kept);
         }
+        host.localVariables = null;
+        host.visibleLocalVariableAnnotations = null;
+        host.invisibleLocalVariableAnnotations = null;
         return true;
     }
 }

@@ -216,6 +216,9 @@ public final class TailRegionExtractor {
             call.add(new InsnNode(Opcodes.RETURN));
         }
         host.instructions.add(call);
+        host.localVariables = null;
+        host.visibleLocalVariableAnnotations = null;
+        host.invisibleLocalVariableAnnotations = null;
         return true;
     }
 }
