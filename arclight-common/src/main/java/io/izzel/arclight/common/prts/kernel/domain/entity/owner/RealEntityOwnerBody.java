@@ -67,6 +67,28 @@ public final class RealEntityOwnerBody {
         return true;
     }
 
+    /** B3-S3: runs the original non-sleeping, non-PANIC/hurt walking AI tick on the server thread;
+     * false is a safe rejection before the tick, and a throwable after entering is TERMINAL. */
+    public static boolean runWalkOnServer(ServerLevel level, Villager villager) {
+        if (level == null || villager == null || villager.level() != level
+            || villager.isRemoved() || !villager.isAlive() || villager.isNoAi()
+            || villager.isPassenger()
+            || villager.getPose() == net.minecraft.world.entity.Pose.SLEEPING
+            || villager.getBrain().isActive(Activity.REST)) {
+            return false;
+        }
+        try {
+            villager.tick();
+        } catch (Throwable terminal) {
+            TERMINALS.increment();
+            RestOwnerWiring.record(villager, Result.TERMINAL);
+            throw terminal;
+        }
+        RUNS.increment();
+        RestOwnerWiring.record(villager, Result.EXECUTED);
+        return true;
+    }
+
     /** Runs the original REST tick on the real Villager inside the owner window. */
     public static Result runRest(EntityRowOwnershipWindow window, ServerLevel level,
                                  Villager villager) {

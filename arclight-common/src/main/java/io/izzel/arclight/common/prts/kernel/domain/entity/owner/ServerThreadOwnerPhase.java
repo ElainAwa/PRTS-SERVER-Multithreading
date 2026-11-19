@@ -19,9 +19,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** The B3-A owner phase: due sleeping REST villagers are selected per level, executed from the
- * host pre-tick wrapper, and reconciled at the end of the level's entity pass. Nothing is ticked
- * before the wrapper. */
+/** The owner phase: rest rows are selected first, then (when declared) walking/standing AI rows;
+ * both run from the host pre-tick wrapper. The walking slice is non-sleeping, non-PANIC/hurt AI
+ * Villagers and executes the original server-thread tick without REST intent contracts. */
 public final class ServerThreadOwnerPhase {
 
     public static final int MAX_ROWS = 8;
@@ -36,8 +36,13 @@ public final class ServerThreadOwnerPhase {
     private ServerThreadOwnerPhase() {
     }
 
+    private enum Slice { REST, WALK }
+
     private static final class LevelPhase {
         final Map<Integer, Villager> rows = new LinkedHashMap<>();
+        final Map<Integer, Slice> slice = new LinkedHashMap<>();
+        int walkSelected;
+        int walkExecuted;
         int selected;
         int executed;
         int fallback;
@@ -67,6 +72,10 @@ public final class ServerThreadOwnerPhase {
                 + " pending=" + phase.rows.size() + " reasons="
                 + histogram(window, dimension));
         }
+        if (trace() && phase.walkSelected > 0) {
+            System.out.println("[PRTS] owner-walk selected=" + phase.walkSelected
+                + " total=" + selected.size());
+        }
         PENDING.put(dimension, phase);
     }
 
@@ -87,11 +96,20 @@ public final class ServerThreadOwnerPhase {
             }
             return false;
         }
+        Slice slice = phase.slice.get(entity.getId());
+        if (slice == null) {
+            phase.rows.put(entity.getId(), villager);
+            return false;
+        }
         try {
-            boolean executed = RealEntityOwnerBody.runRestedOnServer(
-                (ServerLevel) entity.level(), villager);
+            boolean executed = slice == Slice.WALK
+                ? RealEntityOwnerBody.runWalkOnServer((ServerLevel) entity.level(), villager)
+                : RealEntityOwnerBody.runRestedOnServer((ServerLevel) entity.level(), villager);
             if (executed) {
                 phase.executed++;
+                if (slice == Slice.WALK) {
+                    phase.walkExecuted++;
+                }
             } else {
                 phase.fallback++;
             }
@@ -126,6 +144,11 @@ public final class ServerThreadOwnerPhase {
             return;
         }
         System.out.println("[PRTS] phaseEnd " + line);
+        if (phase.walkSelected > 0) {
+            System.out.println("[PRTS] owner-walk-end dim="
+                + level.dimension().location() + " selected=" + phase.walkSelected
+                + " executed=" + phase.walkExecuted + " total=" + phase.selected);
+        }
         try {
             Path path = Path.of("logs/owner-phase-end.tsv");
             Files.createDirectories(path.getParent());
@@ -175,14 +198,58 @@ public final class ServerThreadOwnerPhase {
             }
             if (selected.size() < MAX_ROWS) {
                 selected.add(villager);
+                phase.slice.put(villager.getId(), Slice.REST);
             } else {
                 phase.truncated++;
+            }
+        }
+        if (OwnerZoneAdmission.walkSlice()) {
+            for (EntityDueWindow.Row row : selectRowsWalk(window, levelId)) {
+                net.minecraft.world.entity.Entity entity = level.getEntity(row.entityId());
+                if (!(entity instanceof Villager villager) || !villager.isAlive()
+                    || villager.isRemoved() || villager.isNoAi() || villager.isPassenger()) {
+                    continue;
+                }
+                if (villager.getPose() == Pose.SLEEPING
+                    || villager.getBrain().isActive(Activity.REST)
+                    || villager.getBrain().isActive(Activity.PANIC)
+                    || villager.hurtTime != 0) {
+                    continue;
+                }
+                if (selected.size() < MAX_ROWS) {
+                    selected.add(villager);
+                    phase.slice.put(villager.getId(), Slice.WALK);
+                    phase.walkSelected++;
+                } else {
+                    phase.truncated++;
+                }
             }
         }
         if (phase.truncated > 0) {
             System.out.println("[PRTS] owner-phase truncated=" + phase.truncated);
         }
         return selected;
+    }
+
+    /** Pure walking-row selector; live pose/passenger checks happen in select. */
+    static List<EntityDueWindow.Row> selectRowsWalk(EntityDueCapture.Window window,
+                                                    String levelId) {
+        List<EntityDueWindow.Row> rows = new ArrayList<>();
+        if (window == null || levelId == null) {
+            return rows;
+        }
+        for (EntityDueWindow.World world : window.worlds()) {
+            if (!levelId.equals(world.worldId())) {
+                continue;
+            }
+            for (EntityDueWindow.Row row : world.rows()) {
+                if (OwnerZoneAdmission.admitsWalk(row) && row.classTag() != null
+                    && row.classTag().endsWith("Villager")) {
+                    rows.add(row);
+                }
+            }
+        }
+        return rows;
     }
 
     private static int levelIdRows(EntityDueCapture.Window window, String levelId) {
