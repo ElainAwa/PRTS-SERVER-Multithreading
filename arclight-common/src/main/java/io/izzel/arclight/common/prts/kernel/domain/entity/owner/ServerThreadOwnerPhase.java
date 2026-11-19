@@ -380,6 +380,23 @@ public final class ServerThreadOwnerPhase {
         return IN_FLIGHT.isEmpty();
     }
 
+    /** Waits for bodies a batch left in flight before the server stops and services their demand
+     * channels; false while any of them is still running at the deadline. */
+    public static boolean awaitInFlightOnStop(long waitMs) {
+        long deadline = System.nanoTime()
+            + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(waitMs);
+        while (!IN_FLIGHT.isEmpty() && System.nanoTime() < deadline) {
+            OwnerReadDemand.service();
+            OwnerHostEventDispatch.service();
+            IN_FLIGHT.removeIf(handle -> handle.future().isDone());
+            if (!IN_FLIGHT.isEmpty()) {
+                Thread.yield();
+            }
+        }
+        IN_FLIGHT.removeIf(handle -> handle.future().isDone());
+        return IN_FLIGHT.isEmpty();
+    }
+
     /** Runs every deferred walk row, parks the host once on them, then replays the host Post/portal
      * for each row that really executed. A failure is terminal: no replay and no host fallback after
      * the body was admitted. */

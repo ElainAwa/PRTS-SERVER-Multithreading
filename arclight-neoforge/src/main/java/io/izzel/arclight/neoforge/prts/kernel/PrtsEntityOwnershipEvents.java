@@ -120,6 +120,11 @@ public final class PrtsEntityOwnershipEvents {
 
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
+        if (!io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
+            .awaitInFlightOnStop(5_000L)) {
+            org.apache.logging.log4j.LogManager.getLogger("PRTS").warn(
+                "owner batch bodies are still running while the server stops");
+        }
         io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
             .stopSummary();
         if (Boolean.getBoolean("arclight.prts.perTickDiag")) {
