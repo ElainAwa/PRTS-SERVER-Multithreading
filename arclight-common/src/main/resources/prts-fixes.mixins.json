@@ -27,6 +27,7 @@
     "observation.PrtsEntityTickCallMixin",
     "observation.PrtsVillagerHostilesSensorMixin",
     "observation.PrtsServerLevelTickTraceMixin",
+    "navigation.PrtsPathStuckStepMixin",
     "observation.PrtsServerLevelNonPassengerTraceMixin",
     "observation.PrtsVillagerTickTraceMixin",
     "observation.PrtsEntityTickTraceMixin",
