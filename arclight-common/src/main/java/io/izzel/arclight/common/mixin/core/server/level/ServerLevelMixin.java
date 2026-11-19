@@ -331,11 +331,19 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
 
     @Inject(method = "tickNonPassenger", at = @At(value = "INVOKE", shift = At.Shift.AFTER, target = "Lnet/minecraft/world/entity/Entity;tick()V"))
     private void arclight$tickPortal(Entity entityIn, CallbackInfo ci) {
+        if (io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
+            .isDeferred(entityIn)) {
+            return;
+        }
         ((EntityBridge) entityIn).bridge$postTick();
     }
 
     @Inject(method = "tickPassenger", at = @At(value = "INVOKE", shift = At.Shift.AFTER, target = "Lnet/minecraft/world/entity/Entity;rideTick()V"))
     private void arclight$tickPortalPassenger(Entity ridingEntity, Entity passengerEntity, CallbackInfo ci) {
+        if (io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
+            .isDeferred(passengerEntity)) {
+            return;
+        }
         ((EntityBridge) passengerEntity).bridge$postTick();
     }
 
@@ -376,6 +384,8 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
     @Inject(method = "tick", at = @At(value = "INVOKE", shift = At.Shift.AFTER,
         target = "Lnet/minecraft/world/level/entity/EntityTickList;forEach(Ljava/util/function/Consumer;)V"))
     private void prts$closeOwnerPhase(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
+        io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
+            .finishDeferred();
         io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
             .endTick((ServerLevel) (Object) this);
     }

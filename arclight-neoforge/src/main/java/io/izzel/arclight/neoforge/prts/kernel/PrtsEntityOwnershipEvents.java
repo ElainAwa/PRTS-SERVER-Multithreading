@@ -14,6 +14,7 @@ import io.izzel.arclight.common.prts.support.PrtsHostTickCalls;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
+import net.neoforged.neoforge.event.EventHooks;
 import net.neoforged.neoforge.event.tick.EntityTickEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
@@ -63,6 +64,8 @@ public final class PrtsEntityOwnershipEvents {
             return;
         }
         if (wanted) {
+            io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
+                .setPostReplay(EventHooks::fireEntityTickPost);
             NeoForge.EVENT_BUS.register(INSTANCE);
             subscribed = true;
         } else {

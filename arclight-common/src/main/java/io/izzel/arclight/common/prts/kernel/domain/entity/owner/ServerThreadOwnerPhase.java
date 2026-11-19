@@ -9,6 +9,13 @@ import net.minecraft.world.entity.Pose;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.entity.schedule.Activity;
 
+import io.izzel.arclight.common.bridge.core.entity.EntityBridge;
+import io.izzel.arclight.common.prts.kernel.SharedRuntime;
+import io.izzel.arclight.common.prts.kernel.auth.OwnerWorkerPermit;
+import io.izzel.arclight.common.prts.kernel.domain.entity.CancelToken;
+import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
+import net.minecraft.server.MinecraftServer;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,6 +25,8 @@ import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.HashSet;
 
 /** The owner phase: rest rows are selected first, then (when declared) walking/standing AI rows;
  * both run from the host pre-tick wrapper. The walking slice is non-sleeping, non-PANIC/hurt AI
@@ -33,6 +42,13 @@ public final class ServerThreadOwnerPhase {
     private static long totalFallback;
     private static long totalLeft;
     private static volatile int lastSelected;
+    public static final String BATCH_PROPERTY = "arclight.prts.ownerBatch";
+    private record DeferredRow(LevelPhase phase, ServerLevel level, Villager villager,
+                               net.minecraft.world.entity.Entity entity) {
+    }
+    private static final List<DeferredRow> DEFERRED = new ArrayList<>();
+    private static final Set<Integer> DEFERRED_IDS = new HashSet<>();
+    private static volatile java.util.function.Consumer<net.minecraft.world.entity.Entity> postReplay;
 
     private ServerThreadOwnerPhase() {
     }
@@ -122,6 +138,11 @@ public final class ServerThreadOwnerPhase {
             noteExpectedPost(entity);
             return false;
         }
+        if (batchEnabled() && slice == Slice.WALK) {
+            DEFERRED.add(new DeferredRow(phase, (ServerLevel) entity.level(), villager, entity));
+            DEFERRED_IDS.add(entity.getId());
+            return true;
+        }
         long ownerScope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
             .EntityTickOwnership.beginOwnerBodyScope(entity);
         boolean fallbackHost = false;
@@ -166,6 +187,144 @@ public final class ServerThreadOwnerPhase {
                 io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
                     .beginLegacyPoiFallback(entity);
             }
+        }
+    }
+
+    private static void dumpOwnerStacks() {
+        Thread.getAllStackTraces().forEach((thread, stack) -> {
+            boolean owner = thread.getName().startsWith(SharedRuntime.THREAD_PREFIX)
+                || thread.getName().equals("Server thread");
+            if (!owner) {
+                return;
+            }
+            StringBuilder line = new StringBuilder("[PRTS] owner-batch stack " + thread.getName());
+            for (StackTraceElement element : stack) {
+                line.append(" <- ").append(element);
+            }
+            System.out.println(line);
+        });
+    }
+
+    /** Whether the opt-in batch deferral is declared; off in every shipped build. */
+    public static boolean batchEnabled() {
+        return Boolean.getBoolean(BATCH_PROPERTY);
+    }
+
+    /** Whether this row's body was deferred to the end of the level pass. */
+    public static boolean isDeferred(net.minecraft.world.entity.Entity entity) {
+        return entity != null && DEFERRED_IDS.contains(entity.getId());
+    }
+
+    /** Binds the platform Post replay the deferred rows need; a process that binds nothing keeps the host path. */
+    public static void setPostReplay(java.util.function.Consumer<net.minecraft.world.entity.Entity> replay) {
+        postReplay = replay;
+    }
+
+    /** Runs every deferred walk row on the shared workers, parks the host once on them, then replays
+     * the host Post/portal for each row in its original order. A failure is terminal: no replay and no
+     * host fallback after the body was admitted. */
+    public static void finishDeferred() {
+        if (DEFERRED.isEmpty()) {
+            return;
+        }
+        List<DeferredRow> rows = new ArrayList<>(DEFERRED);
+        DEFERRED.clear();
+        DEFERRED_IDS.clear();
+        SharedRuntime runtime = SharedRuntime.shared();
+        if (runtime.pool() == null && !runtime.open()) {
+            throw new IllegalStateException("owner batch pool is unavailable");
+        }
+        int count = rows.size();
+        WorkerPool.GenericHandle[] handles = new WorkerPool.GenericHandle[count];
+        CancelToken[] tokens = new CancelToken[count];
+        boolean[] executed = new boolean[count];
+        StageCounters.note("ownerBatchDeferred");
+        for (int index = 0; index < count; index++) {
+            DeferredRow row = rows.get(index);
+            CancelToken token = new CancelToken(0L);
+            tokens[index] = token;
+            final int slot = index;
+            handles[index] = runtime.pool().submitGeneric(jobToken -> {
+                OwnerWorkerPermit.enter();
+                long scope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
+                    .EntityTickOwnership.beginOwnerBodyScope(row.entity());
+                try {
+                    executed[slot] = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
+                } finally {
+                    io.izzel.arclight.common.prts.kernel.domain.entity.ownership
+                        .EntityTickOwnership.endOwnerBodyScope(scope);
+                    OwnerWorkerPermit.exit();
+                }
+            }, token);
+            if (handles[index] == null) {
+                throw new IllegalStateException("owner batch refused to accept a deferred row");
+            }
+        }
+        MinecraftServer server = rows.get(0).level().getServer();
+        long deadline = System.nanoTime()
+            + java.util.concurrent.TimeUnit.SECONDS.toNanos(20L);
+        System.out.println("[PRTS] owner-batch start rows=" + count);
+        server.managedBlock(() -> {
+            for (WorkerPool.GenericHandle handle : handles) {
+                if (!handle.future().isDone()) {
+                    return System.nanoTime() > deadline;
+                }
+            }
+            return true;
+        });
+        for (WorkerPool.GenericHandle handle : handles) {
+            if (!handle.future().isDone()) {
+                dumpOwnerStacks();
+            }
+        }
+        System.out.println("[PRTS] owner-batch settled");
+        for (WorkerPool.GenericHandle handle : handles) {
+            if (!handle.future().isDone()) {
+                for (CancelToken token : tokens) {
+                    token.cancel();
+                }
+                throw new IllegalStateException("owner batch did not settle before the deadline");
+            }
+        }
+        Throwable firstFailure = null;
+        for (int index = 0; index < count; index++) {
+            DeferredRow row = rows.get(index);
+            try {
+                handles[index].future().get();
+            } catch (Throwable failure) {
+                if (firstFailure == null) {
+                    firstFailure = failure;
+                }
+            }
+            boolean ok = handles[index].future().isCompletedExceptionally()
+                ? false : executed[index];
+            if (ok) {
+                row.phase().executed++;
+                row.phase().walkExecuted++;
+                RestOwnerWiring.noteSkip();
+                io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
+                    .noteOwnerBodyExecuted();
+                noteExpectedPost(row.entity());
+                ((EntityBridge) row.entity()).bridge$postTick();
+                java.util.function.Consumer<net.minecraft.world.entity.Entity> replay = postReplay;
+                if (replay != null) {
+                    replay.accept(row.entity());
+                }
+            } else {
+                row.phase().terminal++;
+                if (firstFailure == null) {
+                    firstFailure = new IllegalStateException("deferred owner body did not execute");
+                }
+            }
+        }
+        if (firstFailure != null) {
+            if (firstFailure instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (firstFailure instanceof Error error) {
+                throw error;
+            }
+            throw new IllegalStateException("deferred owner body failed", firstFailure);
         }
     }
 
