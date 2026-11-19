@@ -238,22 +238,33 @@ public final class ServerThreadOwnerPhase {
 
     private static void submitDeferred(SharedRuntime runtime, List<DeferredRow> rows, int index,
                                        WorkerPool.GenericHandle[] handles, CancelToken[] tokens,
-                                       boolean[] executed) {
+                                       boolean[] executed, OwnerUnitLedger[] units) {
         DeferredRow row = rows.get(index);
         CancelToken token = new CancelToken(0L);
         tokens[index] = token;
         final int slot = index;
+        OwnerUnitLedger unit = OwnerUnitLedger.open(row.level(), row.entity(),
+            row.phase().tick, index);
+        units[index] = unit;
         handles[index] = runtime.pool().submitGeneric(jobToken -> {
             StageCounters.note("ownerBatchBody");
+            unit.started();
             OwnerUnitPermit.enter(row.level().dimension().location().toString(),
                 OwnerBodyLease.enabled() && Boolean.getBoolean(OwnerBodyLease.AUTHORITY_PROPERTY));
             OwnerBodyLease lease = OwnerBodyLease.acquire(row.level(), row.entity(),
                 row.phase().tick, row.hostStep());
             long scope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
                 .EntityTickOwnership.beginOwnerBodyScope(row.entity());
+            boolean faulted = true;
             try {
                 executed[slot] = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
+                faulted = false;
             } finally {
+                unit.close(faulted ? io.izzel.arclight.common.prts.kernel.jobs.WorkAccount
+                    .Outcome.PARTIAL_FAULT : executed[slot]
+                    ? io.izzel.arclight.common.prts.kernel.jobs.WorkAccount.Outcome.DONE
+                    : io.izzel.arclight.common.prts.kernel.jobs.WorkAccount
+                        .Outcome.REJECTED_BEFORE_EFFECT, faulted ? "body-fault" : "body-returned");
                 if (lease != null) {
                     lease.release();
                 }
@@ -306,10 +317,11 @@ public final class ServerThreadOwnerPhase {
         int count = rows.size();
         WorkerPool.GenericHandle[] handles = new WorkerPool.GenericHandle[count];
         CancelToken[] tokens = new CancelToken[count];
+        OwnerUnitLedger[] units = new OwnerUnitLedger[count];
         boolean[] executed = new boolean[count];
         StageCounters.note("ownerBatchDeferred");
         boolean parallel = parallelBatches();
-        submitDeferred(runtime, rows, 0, handles, tokens, executed);
+        submitDeferred(runtime, rows, 0, handles, tokens, executed, units);
         MinecraftServer server = rows.get(0).level().getServer();
         long deadline = System.nanoTime()
             + java.util.concurrent.TimeUnit.SECONDS.toNanos(20L);
@@ -317,13 +329,13 @@ public final class ServerThreadOwnerPhase {
         if (!parallel) {
             for (int index = 0; index < count; index++) {
                 if (index > 0) {
-                    submitDeferred(runtime, rows, index, handles, tokens, executed);
+                    submitDeferred(runtime, rows, index, handles, tokens, executed, units);
                 }
                 awaitOwner(handles, index + 1, server, deadline);
             }
         } else {
             for (int index = 1; index < count; index++) {
-                submitDeferred(runtime, rows, index, handles, tokens, executed);
+                submitDeferred(runtime, rows, index, handles, tokens, executed, units);
             }
             awaitOwner(handles, count, server, deadline);
         }
@@ -372,6 +384,11 @@ public final class ServerThreadOwnerPhase {
                 if (firstFailure == null) {
                     firstFailure = new IllegalStateException("deferred owner body did not execute");
                 }
+            }
+        }
+        for (int index = 0; index < count; index++) {
+            if (units[index] != null && !units[index].closed()) {
+                throw new IllegalStateException("owner batch left a unit open");
             }
         }
         if (firstFailure != null) {
