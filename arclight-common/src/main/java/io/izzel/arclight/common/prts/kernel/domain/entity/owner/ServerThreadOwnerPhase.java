@@ -95,6 +95,7 @@ public final class ServerThreadOwnerPhase {
         int compat;
         int terminal;
         final java.util.Map<Integer, String> nativeSkips = new java.util.HashMap<>();
+        final java.util.Map<Integer, Integer> rowTicks = new java.util.HashMap<>();
         int truncated;
         long skipsAtStart;
         long tick;
@@ -128,6 +129,7 @@ public final class ServerThreadOwnerPhase {
         lastSelected = selected.size();
         for (Villager villager : selected) {
             phase.rows.put(villager.getId(), villager);
+            phase.rowTicks.put(villager.getId(), villager.tickCount);
         }
         for (EntityDueWindow.World world : window.worlds()) {
             for (EntityDueWindow.Row row : world.rows()) {
@@ -693,10 +695,21 @@ public final class ServerThreadOwnerPhase {
                     continue;
                 }
                 String cause = null;
+                net.minecraft.world.entity.Entity current = level.getEntity(entry.getKey());
+                int selectedTick = phase.rowTicks.getOrDefault(entry.getKey(), villager.tickCount);
                 if (villager.isRemoved() || !villager.isAlive()) {
                     cause = "removed";
                 } else if (phase.nativeSkips.containsKey(entry.getKey())) {
                     cause = phase.nativeSkips.get(entry.getKey());
+                } else if (current != villager) {
+                    // The level no longer holds this exact object under the id: the old row left the
+                    // entity list, so its frozen seat ends with it and the new object is admitted by
+                    // its own identity.
+                    cause = "replaced";
+                } else if (villager.tickCount == selectedTick) {
+                    // The pass did not tick this object at all: an inactive or discarded row. The
+                    // seat is closed without claiming the whole update had no effect elsewhere.
+                    cause = "inactive-tick";
                 }
                 if (trace()) {
                     System.out.println("[PRTS] native-left id=" + entry.getKey() + " alive="
@@ -738,7 +751,7 @@ public final class ServerThreadOwnerPhase {
             } else if ("removed".equals(phase.nativeSkips.get(id))
                 || villager == null || villager.isRemoved() || !villager.isAlive()) {
                 leftGone++;
-            } else if ("discarded".equals(phase.nativeSkips.get(id))
+            } else if (phase.nativeSkips.containsKey(id)
                 || phase.inactiveRows.contains(id)) {
                 leftInactive++;
             } else {
