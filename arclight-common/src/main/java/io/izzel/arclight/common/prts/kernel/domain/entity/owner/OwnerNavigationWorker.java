@@ -43,6 +43,19 @@ public final class OwnerNavigationWorker {
         if (!enabled() || navigation == null || !OWNER_BODY.get()) {
             return false;
         }
+        return runSpan(navigation);
+    }
+
+    /** Runs one declared program span: no whole-body owner marker is required, because the caller
+     * already admitted the span through the controlled chain. */
+    public static boolean runProgramSpan(PathNavigation navigation) {
+        if (!enabled() || navigation == null) {
+            return false;
+        }
+        return runSpan(navigation);
+    }
+
+    private static boolean runSpan(PathNavigation navigation) {
         SharedRuntime runtime = SharedRuntime.shared();
         if (runtime.pool() == null && !runtime.open()) {
             throw new IllegalStateException("owner navigation worker pool is unavailable");

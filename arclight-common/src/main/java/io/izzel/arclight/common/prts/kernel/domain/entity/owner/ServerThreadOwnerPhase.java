@@ -194,6 +194,10 @@ public final class ServerThreadOwnerPhase {
             || !sameLogicalRow((ServerLevel) entity.level(), selected, entity)) {
             return false;
         }
+        if (OwnerNativeProgram.enabled()) {
+            // The whole host tick stays in place; the declared span claims the row from its mixin.
+            return false;
+        }
         Villager villager = phase.rows.remove(entity.getId());
         Slice slice = phase.slice.remove(entity.getId());
         if (slice == null) {
@@ -906,6 +910,58 @@ public final class ServerThreadOwnerPhase {
             throw failure;
         }
         account.close(batchUnit, WorkAccount.Outcome.DONE, "batch-published");
+    }
+
+    /** Claims one declared navigation span for the opted-in native program path: the row is begun
+     * before the worker runs, the worker runs only that span, and the host writes the one terminal
+     * before the successor. The whole entity tick stays on the host, so there is no whole-body
+     * replay and no second inline span. */
+    public static boolean runNativeProgramSpan(net.minecraft.world.entity.Mob mob,
+                                               net.minecraft.world.entity.ai.navigation.PathNavigation navigation) {
+        if (!OwnerNativeProgram.enabled() || !OwnerNavigationWorker.enabled()
+            || !EntityRowOwnershipWindow.enabled() || !(mob instanceof Villager villager)
+            || !(mob.level() instanceof ServerLevel level)) {
+            return false;
+        }
+        LevelPhase phase = PENDING.get(level.dimension().location().toString());
+        if (phase == null || !(phase.rows.get(mob.getId()) instanceof Villager selected)
+            || !sameLogicalRow(level, selected, villager)) {
+            return false;
+        }
+        OwnerControlledWrite.Admission admission = OwnerControlledWrite.prepare(level, villager);
+        if (admission == null) {
+            return false;
+        }
+        io.izzel.arclight.common.prts.kernel.commit.CommitController.BeginResult begin =
+            admission.controller().beginControl(admission.request());
+        if (!begin.admitted()) {
+            phase.terminal++;
+            throw new IllegalStateException("native program span refused: "
+                + begin.code() + " " + begin.diagnostic());
+        }
+        phase.rows.remove(mob.getId());
+        phase.slice.remove(mob.getId());
+        io.izzel.arclight.common.prts.kernel.commit.CommitTicket ticket = begin.ticket();
+        try {
+            OwnerNavigationWorker.runProgramSpan(navigation);
+        } catch (RuntimeException | Error thrown) {
+            admission.controller().finishControl(ticket,
+                OwnerControlledWrite.partialOutcome(admission));
+            phase.terminal++;
+            throw thrown;
+        }
+        io.izzel.arclight.common.prts.kernel.commit.CommitController.SubmitResult result =
+            admission.controller().finishControl(ticket,
+                OwnerControlledWrite.publishedOutcome(admission));
+        if (!result.admitted()) {
+            phase.terminal++;
+            throw new IllegalStateException("native program span terminal refused: "
+                + result.code() + " " + result.diagnostic());
+        }
+        phase.executed++;
+        noteExpectedPost(mob);
+        admission.controller().consumePublished(ticket);
+        return true;
     }
 
     /** Records that a pending row reached the normal Pre observer. */

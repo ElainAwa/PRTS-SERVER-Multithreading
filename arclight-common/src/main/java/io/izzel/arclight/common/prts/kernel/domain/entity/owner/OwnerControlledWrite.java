@@ -164,6 +164,11 @@ public final class OwnerControlledWrite {
         return outcome(CommitTicket.Terminal.PARTIAL, admission.partial());
     }
 
+    /** The published outcome of one declared program span. */
+    static CommitTicket.Outcome publishedOutcome(Admission admission) {
+        return outcome(CommitTicket.Terminal.PUBLISHED, admission.published());
+    }
+
     private static CommitTicket.Outcome outcome(CommitTicket.Terminal terminal,
                                                 EffectStore.Effect effect) {
         return new CommitTicket.Outcome(terminal, OPERATION_KIND,
