@@ -28,25 +28,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class OwnerControlledWrite {
 
     private static final AtomicLong EFFECT_REFS = new AtomicLong(1L);
-    private static final java.util.Map<String, Long> REFUSALS =
-        new java.util.concurrent.ConcurrentHashMap<>();
 
-    private static volatile String lastRefusal = "";
-
-    private static void refuse(String reason) {
-        REFUSALS.merge(reason, 1L, Long::sum);
-        lastRefusal = reason;
-    }
-
-    /** The first check that refused the latest admission attempt; diagnostic only. */
-    public static String lastRefusal() {
-        return lastRefusal;
-    }
-
-    /** The admission refusals since boot, by the first check that refused; diagnostic only. */
-    public static String refusalSummary() {
-        return REFUSALS.toString();
-    }
     private static final String OPERATION_KIND = "entity-tick";
 
     public record Admission(CommitController controller, FrozenDeclarations.Entry entry,
@@ -64,17 +46,14 @@ public final class OwnerControlledWrite {
         KernelModule module = KernelModule.instance();
         CommitController controller = module.commitController();
         if (controller == null || !controller.executable()) {
-            refuse("controller");
             return null;
         }
         TickPlan plan = module.plans().latest();
         FrozenDeclarations declarations = module.declarations();
         if (plan == null) {
-            refuse("plan");
             return null;
         }
         if (declarations == null) {
-            refuse("declarations");
             return null;
         }
         String worldId = level.dimension().location().toString();
@@ -93,45 +72,37 @@ public final class OwnerControlledWrite {
             }
         }
         if (position < 0) {
-            refuse("seat");
             return null;
         }
         FrozenDeclarations.Entry entry = declarations.entryAt(new FrozenDeclarations.Seat(worldId,
             "entity", plan.planSequence(), position));
         if (entry == null) {
-            refuse("entry");
             return null;
         }
         if (entry.kind() != FrozenDeclarations.TargetKind.ENTITY) {
-            refuse("entry-kind");
             return null;
         }
         long version = module.versionSlots().grantedFor(plan.planSequence(), worldId,
             WriteLevel.REGION, "entity");
         if (version <= 0L) {
-            refuse("version");
             return null;
         }
         IdentityWitness.Source source = module.commits().identitySource();
         long liveEpoch = source.liveWorldEpoch(worldId);
         if (liveEpoch != entry.worldEpoch()) {
-            refuse("epoch:" + entry.worldEpoch() + "->" + liveEpoch);
             return null;
         }
         CommitNamespaces.Namespace carrier = controller.reservations().controller();
         IdentityWitness.Authorization authorization = source.liveAuthorization(plan.planSequence(),
             carrier, worldId, "entity", domain);
         if (!authorization.admitted()) {
-            refuse("live-auth:" + authorization.refusal());
             return null;
         }
         if (authorization.source().generation() != version) {
-            refuse("auth-source:" + authorization.source().generation() + "->" + version);
             return null;
         }
         long peek = module.versionSlots().peek(worldId, WriteLevel.REGION, "entity");
         if (peek != version) {
-            refuse("slot:" + version + "->" + peek);
             return null;
         }
         long effectRef = EFFECT_REFS.getAndIncrement();

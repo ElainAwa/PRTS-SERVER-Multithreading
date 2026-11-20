@@ -390,6 +390,15 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
             .enter(ownerLevel, EntityDueCapture.current(ownerLevel.getServer().getTickCount()));
     }
 
+    /** Observes the level's own discard decision for a pending owner row: the row will not reach
+     * its body in this pass, so its frozen seat ends natively instead of blocking later seats. */
+    @Inject(method = "shouldDiscardEntity", at = @At("RETURN"))
+    private void prts$ownerDiscardDecision(Entity entity, CallbackInfoReturnable<Boolean> cir) {
+        if (cir.getReturnValueZ()) {
+            ServerThreadOwnerPhase.noteNativeSkip((ServerLevel) (Object) this, entity, "discarded");
+        }
+    }
+
     @Inject(method = "tick", at = @At(value = "INVOKE", shift = At.Shift.AFTER,
         target = "Lnet/minecraft/world/level/entity/EntityTickList;forEach(Ljava/util/function/Consumer;)V"))
     private void prts$closeOwnerPhase(BooleanSupplier hasTimeLeft, CallbackInfo ci) {

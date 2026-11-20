@@ -149,6 +149,127 @@ public final class CommitReservation {
     private long witnessRefusals;
     private long driftRefusals;
     private boolean closed;
+    /** One frozen seat's real native terminal that left no controlled effect. It satisfies the
+     * declared order prefix but is never read as a stored line: no effect, revision or success is
+     * invented for it. */
+    public record SeatDisposition(String worldId, String domainId, long planSequence, int position,
+                                  String nodeKey, long instanceId, long worldEpoch,
+                                  String freezeLifecycleKey, long freezeGeneration, String cause) {
+    }
+
+    /** The disposition a seat may carry at most once per lifecycle, freeze and seat place. */
+    private record DispositionSlot(String lifecycleKey, long resetEpoch, String worldId,
+                                   String domainId, long planSequence, int position) {
+    }
+
+    public record DispositionResult(boolean disposed, boolean duplicate, String diagnostic) {
+
+        static DispositionResult refused(String diagnostic) {
+            return new DispositionResult(false, false, diagnostic);
+        }
+    }
+
+    private final java.util.Map<DispositionSlot, SeatDisposition> seatDispositions =
+        new java.util.LinkedHashMap<>();
+    private long seatsDisposed;
+    private long dispositionRefusals;
+
+    /** Count of seats whose real native terminal was recorded without an effect. */
+    public long seatsDisposed() {
+        return seatsDisposed;
+    }
+
+    /** Count of questioned dispositions that had no complete, current seat to stand on. */
+    public long dispositionRefusals() {
+        return dispositionRefusals;
+    }
+
+    /**
+     * Records that one declared seat ended in the host before any controlled effect: the row was
+     * natively discarded or left, no ticket of it published and no effect prefix exists. The seat
+     * must be the one this lifecycle's current freeze sealed; a seat already held, publishing or
+     * stored is refused. The call is idempotent for the same seat and identity and refuses a second
+     * identity or cause for the same place.
+     */
+    public DispositionResult disposeNoEffect(FrozenDeclarations declarations,
+                                             FrozenDeclarations.Entry entry, String nativeCause) {
+        if (Thread.currentThread() != ownerThread) {
+            offThreadRefusals++;
+            return DispositionResult.refused("off-owner-thread");
+        }
+        if (closed) {
+            return DispositionResult.refused("closed");
+        }
+        if (declarations == null || entry == null || entry.seat() == null
+            || !FrozenDeclarations.SEALED.equals(declarations.state())
+            || declarations.planSequence() != entry.seat().planSequence()
+            || !declarations.freeze().declared() || !entry.bindingDeclared()) {
+            dispositionRefusals++;
+            return DispositionResult.refused("declaration-not-current");
+        }
+        String worldId = entry.seat().worldId();
+        String domainId = entry.seat().domainId();
+        if (!CommitLog.liveWorldEpoch(entry.worldEpoch())
+            || log.identitySource().liveWorldEpoch(worldId) != entry.worldEpoch()) {
+            dispositionRefusals++;
+            return DispositionResult.refused("world-epoch-not-live");
+        }
+        long planSequence = entry.seat().planSequence();
+        int position = entry.seat().position();
+        if (log.placeSpent(worldId, domainId, planSequence, position)
+            || log.placeHeld(worldId, domainId, planSequence, position)) {
+            dispositionRefusals++;
+            return DispositionResult.refused("seat-held-or-stored");
+        }
+        for (CommitTicket ticket : tickets.values()) {
+            if (ticket.planSequence() != planSequence || ticket.position() != position
+                || !ticket.batch().worldId().equals(worldId)
+                || !ticket.batch().domainId().equals(domainId)) {
+                continue;
+            }
+            Phase phase = phases.get(ticket.ticketId());
+            if (phase != Phase.FINISHED) {
+                dispositionRefusals++;
+                return DispositionResult.refused("ticket-in-flight");
+            }
+        }
+        DispositionSlot slot = new DispositionSlot(controller().lifecycleKey(), epochs.current(),
+            worldId, domainId, planSequence, position);
+        SeatDisposition held = seatDispositions.get(slot);
+        String cause = nativeCause == null ? "" : nativeCause;
+        if (held != null) {
+            if (held.nodeKey().equals(entry.nodeKey()) && held.instanceId() == entry.instanceId()
+                && held.worldEpoch() == entry.worldEpoch()
+                && held.freezeLifecycleKey().equals(declarations.freeze().lifecycleKey())
+                && held.freezeGeneration() == declarations.freeze().generation()
+                && held.cause().equals(cause)) {
+                return new DispositionResult(true, true, "already-disposed");
+            }
+            dispositionRefusals++;
+            return DispositionResult.refused("seat-disposition-conflict");
+        }
+        seatDispositions.put(slot, new SeatDisposition(worldId, domainId, planSequence, position,
+            entry.nodeKey(), entry.instanceId(), entry.worldEpoch(),
+            declarations.freeze().lifecycleKey(), declarations.freeze().generation(), cause));
+        seatsDisposed++;
+        return new DispositionResult(true, false, "disposed");
+    }
+
+    /** Whether this exact seat of this exact freeze already has a native no-effect terminal. */
+    public boolean seatDisposed(FrozenDeclarations declarations, FrozenDeclarations.Entry entry) {
+        if (declarations == null || entry == null || entry.seat() == null) {
+            return false;
+        }
+        DispositionSlot slot = new DispositionSlot(controller().lifecycleKey(), epochs.current(),
+            entry.seat().worldId(), entry.seat().domainId(), entry.seat().planSequence(),
+            entry.seat().position());
+        SeatDisposition held = seatDispositions.get(slot);
+        return held != null && held.nodeKey().equals(entry.nodeKey())
+            && held.instanceId() == entry.instanceId() && held.worldEpoch() == entry.worldEpoch()
+            && held.freezeLifecycleKey().equals(declarations.freeze().lifecycleKey())
+            && held.freezeGeneration() == declarations.freeze().generation();
+    }
+
 
     public CommitReservation(CommitLog log, EffectStore store, CommitLog.OrderSource plans,
                              String ownerId, CommitNamespaces.ResetEpochs epochs) {
@@ -251,6 +372,18 @@ public final class CommitReservation {
             // write the log cannot take, so the request is refused before anything moves.
             requestRefusals++;
             return new ReserveResult(false, RejectCode.COMMIT_ORDER_VIOLATION, "place-held", null);
+        }
+        if (judged.declarations() != null) {
+            FrozenDeclarations.Entry entry = judged.declarations().entryAt(
+                new FrozenDeclarations.Seat(request.worldId(), request.domainId(),
+                    request.planSequence(), request.position()));
+            if (entry != null && seatDisposed(judged.declarations(), entry)) {
+                // The seat already ended natively before any effect: running it now would invent a
+                // second terminal for one frozen place.
+                requestRefusals++;
+                return new ReserveResult(false, RejectCode.COMMIT_ORDER_VIOLATION,
+                    "seat-cancelled", null);
+            }
         }
         CommitTicket.Covered covered = covered(request);
         CommitLog.RingSlot ringSlot = log.reserveSlot(request.worldId(), request.domainId(),
@@ -416,30 +549,19 @@ public final class CommitReservation {
      * minted under, and only where the pair may run it: a reservation whose place an earlier one of
      * the pair still holds does not start its side effect at all. Every refusal here leaves the
      * phases, the reservations and the places exactly where they were. */
-    /** The branch that refused the last beginPublish; diagnostic only while the controlled path is
-     * being brought up, never read by a decision. */
-    private String lastBeginRefusal = "";
-
-    public String lastBeginRefusal() {
-        return lastBeginRefusal;
-    }
-
     public boolean beginPublish(CommitTicket ticket) {
         if (Thread.currentThread() != ownerThread) {
             offThreadRefusals++;
-            lastBeginRefusal = "off-thread";
             return false;
         }
         if (ticket == null || tickets.get(ticket.ticketId()) != ticket) {
             unknownTicket++;
-            lastBeginRefusal = "unknown-ticket";
             return false;
         }
         if (ticket.logLifetime() != log.logLifetime() || ticket.effectSlot().storeId() != store.storeId()
             || ticket.controller().lifetime() != controller.lifetime()
             || ticket.controller().resetEpoch() != epochs.current()) {
             crossLogRefusals++;
-            lastBeginRefusal = "cross-log";
             return false;
         }
         if (frozenValuesMoved(ticket)) {
@@ -447,7 +569,6 @@ public final class CommitReservation {
             // a world that moved on or a grant that was retired refuses the start instead of the
             // frozen columns being replaced by today's values.
             driftRefusals++;
-            lastBeginRefusal = "frozen-values-moved";
             return false;
         }
         if (versionSource != null) {
@@ -459,12 +580,10 @@ public final class CommitReservation {
             if (revision == io.izzel.arclight.common.prts.kernel.auth.WriteVersionSlots.NOT_CARRIED
                 || revision != ticket.batch().expectedVersion()) {
                 publishRefusals++;
-                lastBeginRefusal = "state-revision";
                 return false;
             }
         }
         if (phases.get(ticket.ticketId()) != Phase.RESERVED) {
-            lastBeginRefusal = "not-reserved";
             return false;
         }
         if (!log.placeRunnable(ticket.batch().worldId(), ticket.batch().domainId(),
@@ -472,15 +591,12 @@ public final class CommitReservation {
             // An earlier place of this pair has not ended: the side effect of a later one waits for it
             // instead of running ahead of the line the ring is about to take.
             publishRefusals++;
-            lastBeginRefusal = "place-not-runnable";
             return false;
         }
-        String earlierPending = earlierSeatPendingDetail(ticket);
-        if (earlierPending != null) {
+        if (earlierSeatPending(ticket)) {
             // The frozen plan declares a place before this one that neither carries a stored line nor
             // a reservation: the side effect of this place would pass that prefix, so it waits.
             publishRefusals++;
-            lastBeginRefusal = "earlier-seat-pending " + earlierPending;
             return false;
         }
         phases.put(ticket.ticketId(), Phase.PUBLISHING);
@@ -490,36 +606,6 @@ public final class CommitReservation {
     /** Whether the frozen plan declares a place before this ticket's place that neither a stored line
      * nor a held reservation accounts for. The prefix is read from the sealed declarations, so a plan
      * that does not number its places consecutively is still judged on the places it declared. */
-    private String earlierSeatPendingDetail(CommitTicket ticket) {
-        if (!earlierSeatPending(ticket)) {
-            return null;
-        }
-        String worldId = ticket.batch().worldId();
-        String domainId = ticket.batch().domainId();
-        FrozenDeclarations declarations = log.identitySource().declarations(worldId, domainId,
-            ticket.planSequence());
-        StringBuilder detail = new StringBuilder("ticket=").append(ticket.position());
-        if (declarations != null) {
-            for (FrozenDeclarations.Entry entry : declarations.entries()) {
-                FrozenDeclarations.Seat seat = entry.seat();
-                if (seat == null || seat.planSequence() != ticket.planSequence()
-                    || seat.position() >= ticket.position()
-                    || !seat.worldId().equals(worldId) || !seat.domainId().equals(domainId)) {
-                    continue;
-                }
-                if (!log.seatStored(seat.worldId(), seat.domainId(), seat.planSequence(),
-                        seat.position())
-                    && !log.placeHeld(seat.worldId(), seat.domainId(), seat.planSequence(),
-                        seat.position())) {
-                    detail.append(" earlier=").append(seat.position()).append(" node=")
-                        .append(entry.nodeKey());
-                    break;
-                }
-            }
-        }
-        return detail.toString();
-    }
-
     private boolean earlierSeatPending(CommitTicket ticket) {
         CommitLog.Identity identity = ticket.identity();
         if (identity == null || identity.schemaVersion() != CommitLog.SCHEMA_TYPED) {
@@ -542,7 +628,8 @@ public final class CommitReservation {
             if (!log.seatStored(seat.worldId(), seat.domainId(), seat.planSequence(),
                     seat.position())
                 && !log.placeHeld(seat.worldId(), seat.domainId(), seat.planSequence(),
-                    seat.position())) {
+                    seat.position())
+                && !seatDisposed(declarations, entry)) {
                 return true;
             }
         }

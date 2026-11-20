@@ -140,9 +140,6 @@ public final class PrtsEntityOwnershipEvents {
                 + " reservation_refusals=" + commits.reservationRefusals()
                 + " typed_stored=" + commits.typedStored()
                 + " binding_refusal=" + module.commitBindingRefusal()
-                + " admission_refusals="
-                + io.izzel.arclight.common.prts.kernel.domain.entity.owner.OwnerControlledWrite
-                    .refusalSummary()
                 + " declarations_state=" + module.declarations().state() + "/"
                 + module.declarations().size()
                 + " plan_sequence=" + (module.plans().latest() == null ? -1L

@@ -68,6 +68,8 @@ public final class ServerThreadOwnerPhase {
     private enum Slice { REST, WALK }
 
     private static final class LevelPhase {
+
+        ServerLevel level;
         final Map<Integer, Villager> rows = new LinkedHashMap<>();
         final Map<Integer, Long> hostSteps = new LinkedHashMap<>();
         final Map<Integer, Slice> slice = new LinkedHashMap<>();
@@ -92,6 +94,7 @@ public final class ServerThreadOwnerPhase {
         int fallback;
         int compat;
         int terminal;
+        final java.util.Map<Integer, String> nativeSkips = new java.util.HashMap<>();
         int truncated;
         long skipsAtStart;
         long tick;
@@ -104,6 +107,7 @@ public final class ServerThreadOwnerPhase {
         }
         String dimension = level.dimension().location().toString();
         LevelPhase phase = new LevelPhase();
+        phase.level = level;
         phase.tick = level.getServer().getTickCount();
         phase.skipsAtStart = RestOwnerWiring.skips();
         List<Villager> selected = select(level, window, dimension, phase);
@@ -151,8 +155,8 @@ public final class ServerThreadOwnerPhase {
             return false;
         }
         LevelPhase phase = PENDING.get(entity.level().dimension().location().toString());
-        return phase != null && phase.rows.get(entity.getId()) instanceof Villager
-            && entity instanceof Villager;
+        return phase != null && phase.rows.get(entity.getId()) instanceof Villager selected
+            && entity.level() instanceof ServerLevel level && sameLogicalRow(level, selected, entity);
     }
 
     /** Runs a pending owner body at the original host tick call site; false means host may tick. */
@@ -161,19 +165,12 @@ public final class ServerThreadOwnerPhase {
             return false;
         }
         LevelPhase phase = PENDING.get(entity.level().dimension().location().toString());
-        if (phase == null || !(phase.rows.get(entity.getId()) instanceof Villager villager)) {
+        if (phase == null || !(phase.rows.get(entity.getId()) instanceof Villager selected)
+            || !sameLogicalRow((ServerLevel) entity.level(), selected, entity)) {
             return false;
         }
-        phase.rows.remove(entity.getId());
-        if (!(entity instanceof Villager current)) {
-            return false;
-        }
-        villager = current;
+        Villager villager = phase.rows.remove(entity.getId());
         Slice slice = phase.slice.remove(entity.getId());
-        if (trace()) {
-            System.out.println("[PRTS] owner-body id=" + entity.getId() + " slice=" + slice
-                + " batch=" + batchEnabled());
-        }
         if (slice == null) {
             phase.fallback++;
             io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
@@ -186,16 +183,7 @@ public final class ServerThreadOwnerPhase {
                 // Not admitted: the host keeps the original call at this very site, before any owner
                 // effect. This is a compat row of this tick, not a re-run after a deferred body.
                 phase.compat++;
-                if (trace()) {
-                    System.out.println("[PRTS] owner-compat id=" + entity.getId() + " reason="
-                        + OwnerControlledWrite.lastRefusal());
-                }
                 return false;
-            }
-            if (trace()) {
-                System.out.println("[PRTS] owner-defer id=" + entity.getId() + " pos="
-                    + OwnerControlledWrite.prepare((ServerLevel) entity.level(), entity).entry()
-                        .seat().position());
             }
             DEFERRED.add(new DeferredRow(phase, (ServerLevel) entity.level(), villager, entity,
                 phase.hostSteps.getOrDefault(entity.getId(), 0L)));
@@ -465,10 +453,7 @@ public final class ServerThreadOwnerPhase {
                 "owner batch needs the admitted lease and the authority decision");
         }
         int count = rows.size();
-        WorkerPool.GenericHandle[] handles = new WorkerPool.GenericHandle[count];
-        boolean[] executed = new boolean[count];
         StageCounters.note("ownerBatchDeferred");
-        boolean serial = !parallelBatches();
         MinecraftServer server = rows.get(0).level().getServer();
         long fenceDeadline = System.nanoTime()
             + java.util.concurrent.TimeUnit.SECONDS.toNanos(5L);
@@ -492,13 +477,10 @@ public final class ServerThreadOwnerPhase {
         }
         account.markReady(batchUnit);
         account.markRunning(batchUnit);
-        try {
-            submitCohort(runtime, rows, handles, executed, serial);
-        } catch (RuntimeException | Error submissionFailure) {
-            account.close(batchUnit, WorkAccount.Outcome.REJECTED_BEFORE_EFFECT,
-                "batch-submit-refused");
-            throw submissionFailure;
-        }
+        // The controlled rows are the only bodies this batch runs; a row the host already ended
+        // (removed or discarded) closes its seat as a native no-effect terminal before any later
+        // seat may start.
+        disposeNativeCancelledRows(rows);
         io.izzel.arclight.common.prts.kernel.wiring.OwnerNativeCommitBinding binding =
             io.izzel.arclight.common.prts.kernel.wiring.OwnerNativeCommitBinding.instance();
         java.util.List<DeferredRow> controlled = new java.util.ArrayList<>(rows);
@@ -528,8 +510,7 @@ public final class ServerThreadOwnerPhase {
                             .PUBLISHED) {
                     row.phase().terminal++;
                     throw new IllegalStateException("controlled entity write refused: "
-                        + result.code() + " " + result.diagnostic() + " begin="
-                        + admission.controller().reservations().lastBeginRefusal());
+                        + result.code() + " " + result.diagnostic());
                 }
                 replayDeferredRow(row);
             }
@@ -609,6 +590,121 @@ public final class ServerThreadOwnerPhase {
         return PENDING.get(entity.level().dimension().location().toString());
     }
 
+    /** Whether the passed entity is the same logical update this phase selected: world incarnation,
+     * UUID, object generation and the tick count read when the due window froze. A reused short id
+     * never inherits the row. */
+    static boolean sameLogicalRow(ServerLevel level, Villager selected,
+                                  net.minecraft.world.entity.Entity entity) {
+        if (selected == null || entity == null || level == null
+            || !(entity instanceof Villager) || selected != entity
+                && !selected.getUUID().equals(entity.getUUID())) {
+            return false;
+        }
+        String worldId = level.dimension().location().toString();
+        long generation = io.izzel.arclight.common.prts.kernel.domain.entity.EntityObjectGenerations
+            .shared().generationOf(worldId, entity.getUUID().getMostSignificantBits(),
+                entity.getUUID().getLeastSignificantBits());
+        long selectedGeneration = io.izzel.arclight.common.prts.kernel.domain.entity
+            .EntityObjectGenerations.shared().generationOf(worldId,
+                selected.getUUID().getMostSignificantBits(),
+                selected.getUUID().getLeastSignificantBits());
+        return generation == selectedGeneration && selected.tickCount == entity.tickCount;
+    }
+
+    /** Records the host's own terminal for one pending row that will not run its owner body: the
+     * entity was removed or discarded by the level pass. The frozen seat is disposed without an
+     * effect only when the same logical update is proven; every other case keeps the seat open. */
+    public static void noteNativeSkip(ServerLevel level,
+                                      net.minecraft.world.entity.Entity entity, String cause) {
+        if (!EntityRowOwnershipWindow.enabled() || level == null || entity == null) {
+            return;
+        }
+        LevelPhase phase = PENDING.get(level.dimension().location().toString());
+        if (phase == null) {
+            return;
+        }
+        Villager selected = phase.rows.get(entity.getId());
+        if (!sameLogicalRow(level, selected, entity)) {
+            return;
+        }
+        phase.nativeSkips.put(entity.getId(), cause);
+        io.izzel.arclight.common.prts.kernel.KernelModule module =
+            io.izzel.arclight.common.prts.kernel.KernelModule.instance();
+        io.izzel.arclight.common.prts.kernel.commit.CommitController controller =
+            module.commitController();
+        if (controller == null || !controller.executable()) {
+            return;
+        }
+        io.izzel.arclight.common.prts.kernel.plan.TickPlan plan = module.plans().latest();
+        io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations declarations =
+            module.declarations();
+        if (plan == null || declarations == null) {
+            return;
+        }
+        String worldId = level.dimension().location().toString();
+        long uuidHigh = entity.getUUID().getMostSignificantBits();
+        long uuidLow = entity.getUUID().getLeastSignificantBits();
+        long generation = io.izzel.arclight.common.prts.kernel.domain.entity.EntityObjectGenerations
+            .shared().generationOf(worldId, uuidHigh, uuidLow);
+        String nodeKey = io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations
+            .ENTITY_STATE_PREFIX + uuidHigh + ":" + uuidLow + ":" + generation;
+        int position = -1;
+        for (io.izzel.arclight.common.prts.kernel.plan.TickPlan.CommitStep step
+            : plan.commitOrder()) {
+            if (step.worldId().equals(worldId) && step.domainId().equals("entity")
+                && step.nodeKey().equals(nodeKey)) {
+                position = step.position();
+                break;
+            }
+        }
+        if (position < 0) {
+            return;
+        }
+        io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations.Entry entry =
+            declarations.entryAt(new io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations
+                .Seat(worldId, "entity", plan.planSequence(), position));
+        if (entry == null
+            || entry.kind() != io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations
+                .TargetKind.ENTITY) {
+            return;
+        }
+        controller.reservations().disposeNoEffect(declarations, entry, "native-" + cause);
+    }
+
+    /** Closes the seat of a declared row the host ended without an owner body, using only the
+     * native state of this same level pass; a still-live row stays open. */
+    private static void disposeNativeCancelledRows(java.util.List<DeferredRow> controlled) {
+        java.util.Set<Integer> started = new java.util.HashSet<>();
+        for (DeferredRow row : controlled) {
+            started.add(row.entity().getId());
+        }
+        for (java.util.Map.Entry<String, LevelPhase> levelEntry : PENDING.entrySet()) {
+            LevelPhase phase = levelEntry.getValue();
+            ServerLevel level = phase.level;
+            if (level == null) {
+                continue;
+            }
+            for (java.util.Map.Entry<Integer, Villager> entry : phase.rows.entrySet()) {
+                if (started.contains(entry.getKey())) {
+                    continue;
+                }
+                Villager villager = entry.getValue();
+                if (villager == null) {
+                    continue;
+                }
+                String cause = null;
+                if (villager.isRemoved() || !villager.isAlive()) {
+                    cause = "removed";
+                } else if (phase.nativeSkips.containsKey(entry.getKey())) {
+                    cause = phase.nativeSkips.get(entry.getKey());
+                }
+                if (cause != null) {
+                    noteNativeSkip(level, villager, cause);
+                }
+            }
+        }
+    }
+
     /** Reconciles and reports one level's owner phase after the host entity pass. */
     public static void endTick(ServerLevel level) {
         if (level == null) {
@@ -634,9 +730,11 @@ public final class ServerThreadOwnerPhase {
                 leftPreCanceled++;
             } else if (phase.preSeenRows.contains(id)) {
                 leftBodySkipped++;
-            } else if (villager == null || villager.isRemoved() || !villager.isAlive()) {
+            } else if ("removed".equals(phase.nativeSkips.get(id))
+                || villager == null || villager.isRemoved() || !villager.isAlive()) {
                 leftGone++;
-            } else if (phase.inactiveRows.contains(id)) {
+            } else if ("discarded".equals(phase.nativeSkips.get(id))
+                || phase.inactiveRows.contains(id)) {
                 leftInactive++;
             } else {
                 leftNoPre++;
