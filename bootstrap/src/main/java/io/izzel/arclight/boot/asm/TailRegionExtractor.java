@@ -56,9 +56,30 @@ public final class TailRegionExtractor {
         return new org.objectweb.asm.tree.IntInsnNode(Opcodes.SIPUSH, value);
     }
 
-    /** @return whether the host was rewritten; false keeps the class untouched. */
+    /** Moves the tail into a private stage called by the host, the pre-program shape. */
     public static boolean extract(ClassNode node, String hostName, String hostDesc, Anchor anchor,
                                   String stageName) {
+        return extractInternal(node, hostName, hostDesc, anchor, stageName, Opcodes.ACC_PRIVATE,
+            null, null);
+    }
+
+    /**
+     * Moves the tail into a public stage behind a public interface and replaces the host call by the
+     * program entry. The stage and interface are public because the transformed host lives in another
+     * module; the program entry decides whether an owner row declares the segment.
+     *
+     * @return whether the host was rewritten; false keeps the class untouched
+     */
+    public static boolean extractProgram(ClassNode node, String hostName, String hostDesc,
+                                          Anchor anchor, String stageName, String interfaceName,
+                                          String programOwner) {
+        return extractInternal(node, hostName, hostDesc, anchor, stageName, Opcodes.ACC_PUBLIC,
+            interfaceName, programOwner);
+    }
+
+    private static boolean extractInternal(ClassNode node, String hostName, String hostDesc,
+                                            Anchor anchor, String stageName, int stageAccess,
+                                            String interfaceName, String programOwner) {
         MethodNode host = null;
         for (MethodNode method : node.methods) {
             if (stageName.equals(method.name)) {
@@ -146,7 +167,7 @@ public final class TailRegionExtractor {
             }
         }
         String stageDesc = multiEntry ? "(I)V" : "()V";
-        MethodNode stage = new MethodNode(Opcodes.ACC_PRIVATE, stageName, stageDesc, null, null);
+        MethodNode stage = new MethodNode(stageAccess, stageName, stageDesc, null, null);
         stage.instructions.add(stagePrologue(node.name + "#" + stageName + stageDesc));
         if (multiEntry) {
             LabelNode[] targets = new LabelNode[entries.size()];
@@ -167,6 +188,9 @@ public final class TailRegionExtractor {
         stage.maxStack = Math.max(6, host.maxStack + 1);
         stage.maxLocals = Math.max(multiEntry ? 2 : 1, host.maxLocals);
         node.methods.add(stage);
+        if (interfaceName != null && !node.interfaces.contains(interfaceName)) {
+            node.interfaces.add(interfaceName);
+        }
 
         for (int index = anchorIndex + 1; index < instructions.length; index++) {
             host.instructions.remove(instructions[index]);
@@ -199,9 +223,20 @@ public final class TailRegionExtractor {
                 jump.label = entry == 0 ? normalEntry : trampolines.get(entry - 1);
             }
         }
+        String programDesc = "(L" + node.name + ";)V";
+        String programEntryDesc = "(L" + node.name + ";I)V";
         call.add(normalEntry);
         call.add(new VarInsnNode(Opcodes.ALOAD, 0));
-        if (multiEntry) {
+        if (programOwner != null) {
+            if (multiEntry) {
+                call.add(new InsnNode(Opcodes.ICONST_0));
+                call.add(new MethodInsnNode(Opcodes.INVOKESTATIC, programOwner, "run",
+                    programEntryDesc, false));
+            } else {
+                call.add(new MethodInsnNode(Opcodes.INVOKESTATIC, programOwner, "run",
+                    programDesc, false));
+            }
+        } else if (multiEntry) {
             call.add(new InsnNode(Opcodes.ICONST_0));
             call.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, node.name, stageName, stageDesc, false));
         } else {
@@ -212,7 +247,12 @@ public final class TailRegionExtractor {
             call.add(trampolines.get(index));
             call.add(new VarInsnNode(Opcodes.ALOAD, 0));
             call.add(pushInt(index + 1));
-            call.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, node.name, stageName, stageDesc, false));
+            if (programOwner != null) {
+                call.add(new MethodInsnNode(Opcodes.INVOKESTATIC, programOwner, "run",
+                    programEntryDesc, false));
+            } else {
+                call.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, node.name, stageName, stageDesc, false));
+            }
             call.add(new InsnNode(Opcodes.RETURN));
         }
         host.instructions.add(call);

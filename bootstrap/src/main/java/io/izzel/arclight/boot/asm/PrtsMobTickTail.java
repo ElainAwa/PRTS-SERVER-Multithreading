@@ -14,10 +14,12 @@ public final class PrtsMobTickTail implements Implementer {
         if (!OWNER.equals(node.name)) {
             return false;
         }
-        return TailRegionExtractor.extract(node, "tick", "()V",
+        return TailRegionExtractor.extractProgram(node, "tick", "()V",
             call -> call.getOpcode() == Opcodes.INVOKESPECIAL
                 && "net/minecraft/world/entity/LivingEntity".equals(call.owner)
                 && "tick".equals(call.name) && "()V".equals(call.desc),
-            "prts$tickTail");
+            "prts$mobTickTail",
+            "io/izzel/arclight/common/prts/kernel/domain/entity/owner/MobTickTailStages",
+            "io/izzel/arclight/common/prts/kernel/domain/entity/owner/MobTickTailProgram");
     }
 }

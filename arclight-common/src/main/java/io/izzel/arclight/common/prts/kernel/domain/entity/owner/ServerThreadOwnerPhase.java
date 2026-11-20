@@ -52,6 +52,9 @@ public final class ServerThreadOwnerPhase {
     private static volatile int lastSelected;
     public static final String BATCH_PROPERTY = "arclight.prts.ownerBatch";
     public static final String BATCH_PARALLEL_PROPERTY = "arclight.prts.ownerBatchParallel";
+    private static final java.util.Set<EntityUpdateSegmentPolicy.Segment> DECLARED_SEGMENTS =
+        java.util.Set.of(EntityUpdateSegmentPolicy.Segment.MOB_TICK_TAIL,
+            EntityUpdateSegmentPolicy.Segment.SERVER_AI_STEP_PREFIX);
     record DeferredRow(LevelPhase phase, ServerLevel level, Villager villager,
                                net.minecraft.world.entity.Entity entity, long hostStep) {
     }
@@ -211,9 +214,11 @@ public final class ServerThreadOwnerPhase {
             phase.compat++;
             return false;
         }
-        if (slice != Slice.WALK || !ServerAiStepPrefixProgram.admits(villager)) {
-            // The declared prefix segment is demand free only for a walking villager whose two
-            // selectors are empty; every other row keeps the host tick, in the existing compat bucket.
+        if (slice != Slice.WALK || !EntityUpdateSegmentPolicy.admitsWorker(DECLARED_SEGMENTS)
+            || !ServerAiStepPrefixProgram.admits(villager)) {
+            // Every segment this row will declare (mob tick tail and server-ai-step prefix) must be
+            // allowed, and the villager selectors must be empty; other rows keep the host tick in the
+            // existing compat bucket.
             phase.compat++;
             return false;
         }
