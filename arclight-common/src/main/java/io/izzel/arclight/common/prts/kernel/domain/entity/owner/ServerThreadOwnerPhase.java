@@ -104,8 +104,6 @@ public final class ServerThreadOwnerPhase {
         int terminal;
         final java.util.Map<Integer, String> nativeSkips = new java.util.HashMap<>();
         final java.util.Map<Integer, RowIdentity> identities = new java.util.HashMap<>();
-        final java.util.Map<Integer, OwnerControlledWrite.Admission> programAdmissions =
-            new java.util.HashMap<>();
         int truncated;
         long skipsAtStart;
         long tick;
@@ -126,8 +124,7 @@ public final class ServerThreadOwnerPhase {
         // that never starts would hold the pair's order and block every later controlled row.
         java.util.List<Villager> declared = new java.util.ArrayList<>(selected.size());
         for (Villager candidate : selected) {
-            if ((batchEnabled() || OwnerNativeProgram.enabled())
-                && phase.slice.get(candidate.getId()) == Slice.WALK) {
+            if (batchEnabled() && phase.slice.get(candidate.getId()) == Slice.WALK) {
                 declared.add(candidate);
             }
         }
@@ -150,15 +147,6 @@ public final class ServerThreadOwnerPhase {
                     .generationOf(dimension, villager.getUUID().getMostSignificantBits(),
                         villager.getUUID().getLeastSignificantBits()),
                 villager.tickCount));
-        }
-        if (OwnerNativeProgram.enabled()) {
-            for (Villager candidate : declared) {
-                OwnerControlledWrite.Admission admission =
-                    OwnerControlledWrite.prepare(level, candidate);
-                if (admission != null) {
-                    phase.programAdmissions.put(candidate.getId(), admission);
-                }
-            }
         }
         for (EntityDueWindow.World world : window.worlds()) {
             for (EntityDueWindow.Row row : world.rows()) {
@@ -207,10 +195,6 @@ public final class ServerThreadOwnerPhase {
             || !sameLogicalRow((ServerLevel) entity.level(), selected, entity)) {
             return false;
         }
-        if (OwnerNativeProgram.enabled()) {
-            // The whole host tick stays in place; the declared span claims the row from its mixin.
-            return false;
-        }
         Villager villager = phase.rows.remove(entity.getId());
         Slice slice = phase.slice.remove(entity.getId());
         if (slice == null) {
@@ -224,6 +208,12 @@ public final class ServerThreadOwnerPhase {
             // A row whose update can raise a plugin event with listeners stays on the host: that
             // decision has to be taken before any owner effect, and an owner thread cannot dispatch
             // a listener chain. This is the existing compat bucket, not a new refusal code.
+            phase.compat++;
+            return false;
+        }
+        if (slice != Slice.WALK || !ServerAiStepPrefixProgram.admits(villager)) {
+            // The declared prefix segment is demand free only for a walking villager whose two
+            // selectors are empty; every other row keeps the host tick, in the existing compat bucket.
             phase.compat++;
             return false;
         }
@@ -254,6 +244,7 @@ public final class ServerThreadOwnerPhase {
         long ownerScope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
             .EntityTickOwnership.beginOwnerBodyScope(entity);
         boolean fallbackHost = false;
+        EntityUpdateProgramContext.begin(programIdentity(phase, entity));
         try {
             boolean executed = slice == Slice.WALK
                 ? RealEntityOwnerBody.runWalkOnServer((ServerLevel) entity.level(), villager)
@@ -280,6 +271,7 @@ public final class ServerThreadOwnerPhase {
                 .noteOwnerBodyExecuted();
             throw failure;
         } finally {
+            EntityUpdateProgramContext.end();
             io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
                 .endOwnerBodyScope(ownerScope);
             if (fallbackHost) {
@@ -547,6 +539,7 @@ public final class ServerThreadOwnerPhase {
             return;
         }
         try {
+            EntityUpdateProgramContext.begin(programIdentity(row.phase(), row.entity()));
             OwnerBodyLease lease = null;
             long scope = 0L;
             boolean scopeStarted = false;
@@ -591,6 +584,7 @@ public final class ServerThreadOwnerPhase {
                 }
             }
         } finally {
+            EntityUpdateProgramContext.end();
             record.stage = OwnerControlledExecution.Stage.BODY_RETURNED;
             OwnerHostEventDispatch.postOnHost(
                 () -> ServerThreadOwnerPhase.completeLateControlled(record));
@@ -836,36 +830,16 @@ public final class ServerThreadOwnerPhase {
         account.close(batchUnit, WorkAccount.Outcome.DONE, "batch-published");
     }
 
-    /** Retired native program span gate: the serial navigation continuation has no production
-     * caller any more, so the host always runs the extracted navigation stage. The gate stays
-     * closed until a demand-free segment program is separately authorized; it never hands a span
-     * to a parked host and never starts a worker. */
-    public static boolean runNativeProgramSpan(net.minecraft.world.entity.Mob mob,
-                                               net.minecraft.world.entity.ai.navigation.PathNavigation navigation) {
-        return false;
-    }
 
-    /** Closes program seats that never reached their span this tick; the host never ran an owner
-     * body for them, so they count as the original host path, not as a replay. */
-    private static void disposeLeftProgramRows(LevelPhase phase) {
-        java.util.List<java.util.Map.Entry<Integer, OwnerControlledWrite.Admission>> left =
-            new java.util.ArrayList<>(phase.programAdmissions.entrySet());
-        for (java.util.Map.Entry<Integer, OwnerControlledWrite.Admission> entry : left) {
-            if (!phase.rows.containsKey(entry.getKey())) {
-                continue;
-            }
-            OwnerControlledWrite.Admission admission = entry.getValue();
-            io.izzel.arclight.common.prts.kernel.commit.CommitReservation.DispositionResult result =
-                admission.controller().reservations().disposeNoEffect(
-                    io.izzel.arclight.common.prts.kernel.KernelModule.instance().declarations(),
-                    admission.entry(), "program-span-not-reached");
-            if (result.disposed()) {
-                phase.rows.remove(entry.getKey());
-                phase.slice.remove(entry.getKey());
-                phase.fallback++;
-            }
-            phase.programAdmissions.remove(entry.getKey());
-        }
+    /** The identity one owner body binds for its program segments. */
+    private static EntityUpdateProgramContext.Identity programIdentity(LevelPhase phase,
+                                                                      net.minecraft.world.entity.Entity entity) {
+        RowIdentity row = phase.identities.get(entity.getId());
+        String worldId = row == null
+            ? entity.level().dimension().location().toString() : row.worldId();
+        long generation = row == null ? 0L : row.generation();
+        return new EntityUpdateProgramContext.Identity(worldId, entity.getId(), phase.tick,
+            generation);
     }
 
     /** Records that a pending row reached the normal Pre observer. */
@@ -1095,9 +1069,6 @@ public final class ServerThreadOwnerPhase {
         phaseActive = !PENDING.isEmpty();
         if (phase == null) {
             return;
-        }
-        if (OwnerNativeProgram.enabled()) {
-            disposeLeftProgramRows(phase);
         }
         long hostSkips = RestOwnerWiring.skips();
         long delta = hostSkips - phase.skipsAtStart;

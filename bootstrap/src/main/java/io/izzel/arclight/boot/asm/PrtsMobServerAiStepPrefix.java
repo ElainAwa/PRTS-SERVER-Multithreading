@@ -24,8 +24,9 @@ import java.util.Map;
 /**
  * Lifts the prefix of {@code Mob.serverAiStep} in front of the navigation field load into its own
  * stage that returns the profiler it opened, so prefix, span and successor of the navigation section
- * are all callable stages. The prefix owns its locals (this and the profiler it stores) and carries
- * no exception table; the host keeps the navigation field load and its call at the same position.
+ * are all callable stages. The host calls the program entry, which runs the same stage when no owner
+ * context is bound. The prefix owns its locals (this and the profiler it stores) and carries no
+ * exception table; the host keeps the navigation field load and its call at the same position.
  */
 public final class PrtsMobServerAiStepPrefix implements Implementer {
 
@@ -35,6 +36,8 @@ public final class PrtsMobServerAiStepPrefix implements Implementer {
     private static final String NAV = "net/minecraft/world/entity/ai/navigation/PathNavigation";
     private static final String STAGE = "prts$serverAiStepPrefix";
     private static final String STAGE_DESC = "()Lnet/minecraft/util/profiling/ProfilerFiller;";
+    private static final String PROGRAM =
+        "io/izzel/arclight/common/prts/kernel/domain/entity/owner/ServerAiStepPrefixProgram";
 
     private static void addInterface(ClassNode node) {
         String name = "io/izzel/arclight/common/prts/kernel/domain/entity/owner/NavigationSectionStages";
@@ -208,7 +211,8 @@ public final class PrtsMobServerAiStepPrefix implements Implementer {
         InsnList call = new InsnList();
         call.add(stageEntry);
         call.add(new VarInsnNode(Opcodes.ALOAD, 0));
-        call.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, OWNER, STAGE, STAGE_DESC, false));
+        call.add(new MethodInsnNode(Opcodes.INVOKESTATIC, PROGRAM, "run",
+            "(L" + OWNER + ";)Lnet/minecraft/util/profiling/ProfilerFiller;", false));
         call.add(new VarInsnNode(Opcodes.ASTORE, 1));
         host.instructions.insertBefore(instructions[callStart], call);
         host.localVariables = null;
