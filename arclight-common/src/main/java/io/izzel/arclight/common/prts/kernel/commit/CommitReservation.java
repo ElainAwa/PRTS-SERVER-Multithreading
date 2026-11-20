@@ -663,6 +663,36 @@ public final class CommitReservation {
             || authorization.validity().generation() != identity.authorizationGeneration();
     }
 
+    /** Gives back a begun ticket that provably never entered its effect: the dispatch refused it
+     * before any body ran and no shared access was taken. Only the caller that owns the dispatch
+     * decision may use this; an uncertain start keeps its PUBLISHING obligation instead. */
+    public ReleaseResult abandonUnstarted(CommitTicket ticket, String diagnostic) {
+        if (Thread.currentThread() != ownerThread) {
+            offThreadRefusals++;
+            return new ReleaseResult(false, "off-owner-thread");
+        }
+        if (ticket == null || tickets.get(ticket.ticketId()) != ticket) {
+            unknownTicket++;
+            return new ReleaseResult(false, "unknown-ticket");
+        }
+        if (ticket.logLifetime() != log.logLifetime()
+            || ticket.controller().lifetime() != controller.lifetime()
+            || ticket.controller().resetEpoch() != epochs.current()) {
+            staleRefusals++;
+            return new ReleaseResult(false, "stale-ticket");
+        }
+        if (phases.get(ticket.ticketId()) != Phase.PUBLISHING) {
+            requestRefusals++;
+            return new ReleaseResult(false, "not-publishing");
+        }
+        giveBack(ticket);
+        released++;
+        append(new TerminalEntry(ticket.ticketId(), ticket.identity().effectRef(), "RELEASED",
+            ticket.planSequence(), ticket.position(), 0, 0,
+            "abandon-unstarted" + (diagnostic == null || diagnostic.isEmpty() ? "" : "|" + diagnostic)));
+        return new ReleaseResult(true, "abandoned-unstarted");
+    }
+
     /** Writes the terminal line of a publishing ticket from the reservations it holds. */
     public FinalizeResult finalize(CommitTicket ticket, CommitTicket.Outcome outcome) {
         if (Thread.currentThread() != ownerThread) {

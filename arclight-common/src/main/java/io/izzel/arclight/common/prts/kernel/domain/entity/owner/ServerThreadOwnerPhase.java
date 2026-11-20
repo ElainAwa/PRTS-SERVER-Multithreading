@@ -331,6 +331,146 @@ public final class ServerThreadOwnerPhase {
             + ":" + index;
     }
 
+    /** Runs one begun row's real body on a worker and writes its terminal on the owner thread after
+     * the body answered. The ticket is begun here, so no enqueue is ever reported as a commit; a
+     * dispatch that refuses before the body could produce anything gives the begun ticket back, and
+     * an uncertain start keeps its obligation instead of inventing a line. */
+    private static void runControlledWorkerRow(SharedRuntime runtime, DeferredRow row,
+                                               OwnerControlledWrite.Admission admission) {
+        io.izzel.arclight.common.prts.kernel.commit.CommitController controller =
+            admission.controller();
+        io.izzel.arclight.common.prts.kernel.commit.CommitController.BeginResult begin =
+            controller.beginControl(admission.request());
+        if (!begin.admitted()) {
+            row.phase().terminal++;
+            throw new IllegalStateException("controlled entity write refused: "
+                + begin.code() + " " + begin.diagnostic());
+        }
+        io.izzel.arclight.common.prts.kernel.commit.CommitTicket ticket = begin.ticket();
+        WorkerPool pool = runtime.pool();
+        if (pool == null || !pool.accepting()) {
+            controller.abandonControl(ticket, "pool-unavailable");
+            row.phase().terminal++;
+            throw new IllegalStateException("controlled entity write has no worker to start");
+        }
+        io.izzel.arclight.common.prts.kernel.domain.entity.CancelToken token =
+            new io.izzel.arclight.common.prts.kernel.domain.entity.CancelToken(row.phase().tick);
+        java.util.concurrent.atomic.AtomicReference<io.izzel.arclight.common.prts.kernel.commit
+            .CommitTicket.Outcome> outcome =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<Throwable> failure =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        io.izzel.arclight.common.prts.kernel.generic.GenericCancel effectToken = token;
+        WorkerPool.GenericHandle handle = pool.submitGeneric(cancelled -> {
+            if (cancelled.cancelled()) {
+                return;
+            }
+            outcome.set(runControlledWorkerBody(row, admission, ticket, effectToken, failure));
+        }, token);
+        if (handle == null) {
+            controller.abandonControl(ticket, "dispatch-refused");
+            row.phase().terminal++;
+            throw new IllegalStateException("controlled entity write was not accepted by the pool");
+        }
+        IN_FLIGHT.add(handle);
+        handle.future().whenComplete((ignored, thrown) -> IN_FLIGHT.remove(handle));
+        long deadline = System.nanoTime()
+            + java.util.concurrent.TimeUnit.SECONDS.toNanos(5L);
+        MinecraftServer server = row.level().getServer();
+        while (!handle.future().isDone() && System.nanoTime() < deadline) {
+            OwnerReadDemand.service();
+            OwnerHostEventDispatch.service();
+            while (server.pollTask()) {
+                // The owner thread keeps servicing the host while the worker body runs.
+            }
+            Thread.yield();
+        }
+        if (!handle.future().isDone()) {
+            token.cancel();
+            row.phase().terminal++;
+            throw new IllegalStateException(
+                "controlled entity write did not answer before its deadline");
+        }
+        io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Outcome answered = outcome.get();
+        if (answered == null) {
+            if (!token.effectPossible()) {
+                controller.abandonControl(ticket, "worker-not-started");
+                row.phase().terminal++;
+                throw new IllegalStateException("controlled entity write never entered its effect");
+            }
+            row.phase().terminal++;
+            throw new IllegalStateException("controlled entity write outcome is unknown");
+        }
+        io.izzel.arclight.common.prts.kernel.commit.CommitController.SubmitResult result =
+            controller.finishControl(ticket, answered);
+        if (!result.admitted()
+            || result.terminal()
+                != io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Terminal.PUBLISHED) {
+            row.phase().terminal++;
+            throw new IllegalStateException("controlled entity write refused: "
+                + result.code() + " " + result.diagnostic());
+        }
+        if (failure.get() != null) {
+            row.phase().terminal++;
+            if (failure.get() instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (failure.get() instanceof Error errorFailure) {
+                throw errorFailure;
+            }
+            throw new IllegalStateException("controlled entity body failed", failure.get());
+        }
+        replayDeferredRow(row);
+    }
+
+    /** The real permitted body segment of one ticket on a worker thread: the ticket identity is
+     * checked against the declaration before the first write, then the existing owner unit permit and
+     * body lease govern the walk action. */
+    private static io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Outcome
+        runControlledWorkerBody(DeferredRow row, OwnerControlledWrite.Admission admission,
+                                io.izzel.arclight.common.prts.kernel.commit.CommitTicket ticket,
+                                io.izzel.arclight.common.prts.kernel.generic.GenericCancel effectToken,
+                                java.util.concurrent.atomic.AtomicReference<Throwable> failure) {
+        io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations.Entry entry = admission.entry();
+        if (!ticket.batch().worldId().equals(entry.seat().worldId())
+            || !ticket.batch().domainId().equals(entry.seat().domainId())
+            || !ticket.batch().nodeKey().equals(entry.nodeKey())
+            || ticket.identity().effectRef() != admission.published().effectRef()) {
+            throw new IllegalStateException("a worker ticket does not match its declaration");
+        }
+        OwnerUnitPermit.enter(row.level().dimension().location().toString());
+        OwnerBodyLease lease = OwnerBodyLease.acquire(row.level(), row.entity(),
+            row.phase().tick, row.hostStep());
+        long scope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
+            .EntityTickOwnership.beginOwnerBodyScope(row.entity());
+        try {
+            effectToken.markEffectPossible();
+            boolean executed = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
+            return executed
+                ? new io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Outcome(
+                    io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Terminal.PUBLISHED,
+                    "entity-tick", io.izzel.arclight.common.prts.kernel.commit.EffectStore
+                        .normalizedRows(admission.published().rows()), 1, "")
+                : new io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Outcome(
+                    io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Terminal.FAILED,
+                    "entity-tick", io.izzel.arclight.common.prts.kernel.commit.EffectStore
+                        .normalizedRows(admission.failed().rows()), 0, "");
+        } catch (RuntimeException | Error thrown) {
+            failure.set(thrown);
+            return new io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Outcome(
+                io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Terminal.PARTIAL,
+                "entity-tick", io.izzel.arclight.common.prts.kernel.commit.EffectStore
+                    .normalizedRows(admission.partial().rows()), 0, "worker-threw");
+        } finally {
+            if (lease != null) {
+                lease.release();
+            }
+            io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
+                .endOwnerBodyScope(scope);
+            OwnerUnitPermit.exit();
+        }
+    }
+
     private static void replayDeferredRow(DeferredRow row) {
         row.phase().executed++;
         row.phase().walkExecuted++;
@@ -527,17 +667,7 @@ public final class ServerThreadOwnerPhase {
             for (DeferredRow row : controlled) {
                 OwnerControlledWrite.Admission admission = admissions.get(row);
                 StageCounters.note("ownerBatchBody");
-                io.izzel.arclight.common.prts.kernel.commit.CommitController.SubmitResult result =
-                    OwnerControlledWrite.run(row.level(), row.villager(), admission, binding);
-                if (!result.admitted()
-                    || result.terminal()
-                        != io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Terminal
-                            .PUBLISHED) {
-                    row.phase().terminal++;
-                    throw new IllegalStateException("controlled entity write refused: "
-                        + result.code() + " " + result.diagnostic());
-                }
-                replayDeferredRow(row);
+                runControlledWorkerRow(runtime, row, admission);
             }
         } catch (RuntimeException | Error failure) {
             account.close(batchUnit, WorkAccount.Outcome.PARTIAL_FAULT, "batch-terminal");

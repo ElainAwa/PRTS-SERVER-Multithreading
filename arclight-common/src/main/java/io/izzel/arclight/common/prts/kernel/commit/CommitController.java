@@ -155,7 +155,17 @@ public final class CommitController {
         return new BeginResult(true, ticket, null, "publishing");
     }
 
-    /** Writes the terminal line of a begun controlled write after its real body answered. */
+    /** Gives back a begun ticket whose dispatch was refused before the body entered: the caller
+     * proves no effect ran and no shared access was taken. An uncertain start keeps its obligation. */
+    public boolean abandonControl(CommitTicket ticket, String diagnostic) {
+        if (!reservations.ownsThread()) {
+            refusals++;
+            return false;
+        }
+        return reservations.abandonUnstarted(ticket, diagnostic).released();
+    }
+
+    /** Writes the terminal line of a begun controlled write after its real body answered. */    /** Writes the terminal line of a begun controlled write after its real body answered. */
     public SubmitResult finishControl(CommitTicket ticket, CommitTicket.Outcome outcome) {
         if (!reservations.ownsThread()) {
             refusals++;
