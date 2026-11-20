@@ -123,7 +123,8 @@ public final class ServerThreadOwnerPhase {
         // that never starts would hold the pair's order and block every later controlled row.
         java.util.List<Villager> declared = new java.util.ArrayList<>(selected.size());
         for (Villager candidate : selected) {
-            if (batchEnabled() && phase.slice.get(candidate.getId()) == Slice.WALK) {
+            if ((batchEnabled() || OwnerNativeProgram.enabled())
+                && phase.slice.get(candidate.getId()) == Slice.WALK) {
                 declared.add(candidate);
             }
         }
