@@ -27,12 +27,6 @@ public class ServerLevelMixin_ActivationRange {
 
     @Inject(method = "tickNonPassenger", cancellable = true, at = @At(value = "HEAD"))
     private void activationRange$inactiveTick(Entity entityIn, CallbackInfo ci) {
-        if (Boolean.getBoolean("arclight.prts.parityTrace")) {
-            System.out.println("[PRTS-PARITY] activation id=" + entityIn.getId()
-                + " active=" + org.spigotmc.ActivationRange.checkIfActive(entityIn)
-                + " canUpdate=" + ((EntityBridge) entityIn).bridge$forge$canUpdate()
-                + " tick=" + entityIn.tickCount);
-        }
         if (arclight$applyInactive && !ActivationRange.checkIfActive(entityIn)) {
             io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
                 .noteInactive(entityIn);
