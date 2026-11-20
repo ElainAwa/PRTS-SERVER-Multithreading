@@ -98,7 +98,7 @@ public final class OwnerControlledWrite {
             return null;
         }
         long version = module.versionSlots().grantedFor(plan.planSequence(), worldId,
-            WriteLevel.REGION, domain);
+            WriteLevel.REGION, "entity");
         if (version <= 0L) {
             refuse("version");
             return null;

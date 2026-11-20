@@ -66,7 +66,7 @@ public final class EntityDeclarationIntake {
             declarations.add(new JobDeclaration(domain, 0L, worldId, "entity", 0, List.of(), 0,
                 "world:" + worldId, "world:" + worldId,
                 List.of(new JobDeclaration.DomainRef(worldId, "entity", 0)),
-                List.of(new JobDeclaration.DomainRef(worldId, domain, 0)),
+                List.of(new JobDeclaration.DomainRef(worldId, "entity", 0)),
                 ShareClass.ENTITY, JobDeclaration.SiteClass.PARALLEL, 0, 1,
                 List.of(new JobDeclaration.OwnerDemand(worldId, WriteLevel.OBJECT, domain,
                     HolderKind.REGISTERED, siteId, 2)),
