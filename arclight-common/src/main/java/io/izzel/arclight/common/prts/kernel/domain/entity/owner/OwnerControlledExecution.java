@@ -66,6 +66,7 @@ final class OwnerControlledExecution {
     final AtomicBoolean lateScheduled = new AtomicBoolean();
 
     volatile Stage stage = Stage.BEGUN;
+    volatile boolean ownerWaiting;
     volatile CommitTicket.Outcome outcome;
     volatile Throwable bodyFailure;
     volatile Throwable cleanupFailure;
@@ -96,11 +97,16 @@ final class OwnerControlledExecution {
     }
 
     static void waiting(OwnerControlledExecution record) {
+        record.ownerWaiting = true;
         WAITING.set(record);
     }
 
     static void doneWaiting() {
         WAITING.remove();
+    }
+
+    void endOwnerWait() {
+        ownerWaiting = false;
     }
 
     static boolean waitingOnThisThread() {

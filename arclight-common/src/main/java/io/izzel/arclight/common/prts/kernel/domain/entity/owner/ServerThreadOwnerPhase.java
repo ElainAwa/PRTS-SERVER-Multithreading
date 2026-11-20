@@ -368,11 +368,14 @@ public final class ServerThreadOwnerPhase {
                 List.of(bodyId), List.of(bodyId), List.of(), 1, 0);
         Map<String, Runnable> bodies = new java.util.LinkedHashMap<>();
         bodies.put(bodyKey, () -> runControlledWorkerBody(record));
+        OwnerControlledExecution.waiting(record);
         io.izzel.arclight.common.prts.kernel.generic.GenericJobExecutor.Execution execution;
         try {
             execution = new io.izzel.arclight.common.prts.kernel.generic.GenericJobExecutor(pool)
                 .executeCohort(graph, bodies);
         } catch (RuntimeException | Error rejected) {
+            OwnerControlledExecution.doneWaiting();
+            record.endOwnerWait();
             controller.abandonControl(ticket, "cohort-refused");
             row.phase().terminal++;
             throw rejected;
@@ -380,13 +383,14 @@ public final class ServerThreadOwnerPhase {
         record.cohort = execution.cohort();
         record.handle = execution.cohort().handle(bodyKey);
         if (record.handle == null) {
+            OwnerControlledExecution.doneWaiting();
+            record.endOwnerWait();
             record.stage = OwnerControlledExecution.Stage.ABANDONED;
             controller.abandonControl(ticket, "dispatch-refused");
             row.phase().terminal++;
             throw new IllegalStateException("controlled entity write was not accepted by the cohort");
         }
         OwnerControlledExecution.register(record);
-        OwnerControlledExecution.waiting(record);
         long deadline = System.nanoTime()
             + java.util.concurrent.TimeUnit.SECONDS.toNanos(5L);
         MinecraftServer server = row.level().getServer();
@@ -401,6 +405,7 @@ public final class ServerThreadOwnerPhase {
             }
         } finally {
             OwnerControlledExecution.doneWaiting();
+            record.endOwnerWait();
         }
         if (!record.handle.future().isDone()) {
             record.witness.cancel();
@@ -588,6 +593,9 @@ public final class ServerThreadOwnerPhase {
     /** A body that ended after its batch left can no longer replay host Post; it still writes the
      * terminal or transfers the fault on the owner thread, so the ticket is never left orphaned. */
     static void completeLateControlled(OwnerControlledExecution record) {
+        if (record.ownerWaiting) {
+            return;
+        }
         try {
             completeControlledExecution(record, false);
         } catch (Throwable ignored) {
