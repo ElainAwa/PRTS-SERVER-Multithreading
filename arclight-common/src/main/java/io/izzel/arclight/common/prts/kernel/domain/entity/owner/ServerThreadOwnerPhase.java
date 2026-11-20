@@ -103,6 +103,8 @@ public final class ServerThreadOwnerPhase {
         int terminal;
         final java.util.Map<Integer, String> nativeSkips = new java.util.HashMap<>();
         final java.util.Map<Integer, RowIdentity> identities = new java.util.HashMap<>();
+        final java.util.Map<Integer, OwnerControlledWrite.Admission> programAdmissions =
+            new java.util.HashMap<>();
         int truncated;
         long skipsAtStart;
         long tick;
@@ -119,15 +121,6 @@ public final class ServerThreadOwnerPhase {
         phase.tick = level.getServer().getTickCount();
         phase.skipsAtStart = RestOwnerWiring.skips();
         List<Villager> selected = select(level, window, dimension, phase);
-        if (OwnerNativeProgram.enabled()) {
-            // The program path begins one declared span per tick in seat order; a row whose span
-            // does not occur leaves an earlier seat pending, so the first slice keeps one row.
-            selected.removeIf(villager -> phase.slice.get(villager.getId()) != Slice.WALK);
-            if (selected.size() > 1) {
-                selected.subList(1, selected.size()).clear();
-            }
-            phase.walkSelected = selected.size();
-        }
         // Only rows that will be deferred into the controlled batch are declared: a declared seat
         // that never starts would hold the pair's order and block every later controlled row.
         java.util.List<Villager> declared = new java.util.ArrayList<>(selected.size());
@@ -156,6 +149,15 @@ public final class ServerThreadOwnerPhase {
                     .generationOf(dimension, villager.getUUID().getMostSignificantBits(),
                         villager.getUUID().getLeastSignificantBits()),
                 villager.tickCount));
+        }
+        if (OwnerNativeProgram.enabled()) {
+            for (Villager candidate : declared) {
+                OwnerControlledWrite.Admission admission =
+                    OwnerControlledWrite.prepare(level, candidate);
+                if (admission != null) {
+                    phase.programAdmissions.put(candidate.getId(), admission);
+                }
+            }
         }
         for (EntityDueWindow.World world : window.worlds()) {
             for (EntityDueWindow.Row row : world.rows()) {
@@ -228,12 +230,6 @@ public final class ServerThreadOwnerPhase {
             }
             DeferredRow row = new DeferredRow(phase, (ServerLevel) entity.level(), villager, entity,
                 phase.hostSteps.getOrDefault(entity.getId(), 0L));
-            if (Boolean.getBoolean("arclight.prts.ownerBatchInline")) {
-                if (Boolean.getBoolean("arclight.prts.ownerHostSerial")) {
-                    return runHostSerialControlledRow(row, admission);
-                }
-                return runInlineControlledRow(row, admission);
-            }
             DEFERRED.add(row);
             DEFERRED_IDS.add(entity.getId());
             StageCounters.note("ownerBatchRowDeferred");
@@ -352,85 +348,6 @@ public final class ServerThreadOwnerPhase {
         return "entity-state:" + row.entity().getUUID().getMostSignificantBits() + ":"
             + row.entity().getUUID().getLeastSignificantBits() + ":" + row.phase().tick
             + ":" + index;
-    }
-
-    /** Runs one admitted row on the host owner thread inside the batch's seat order: the begun
-     * ticket and the publisher contract are the worker path's, but the body runs here. The batch
-     * already holds its reservation, so this must not submit a second one. */
-    private static void runHostSerialBatchRow(DeferredRow row,
-                                              OwnerControlledWrite.Admission admission) {
-        io.izzel.arclight.common.prts.kernel.commit.CommitController controller =
-            admission.controller();
-        io.izzel.arclight.common.prts.kernel.commit.CommitController.BeginResult begin =
-            controller.beginControl(admission.request());
-        if (!begin.admitted()) {
-            row.phase().terminal++;
-            throw new IllegalStateException("controlled entity write refused: "
-                + begin.code() + " " + begin.diagnostic());
-        }
-        io.izzel.arclight.common.prts.kernel.commit.CommitTicket ticket = begin.ticket();
-        io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Outcome answered;
-        try {
-            answered = OwnerControlledWrite.runBodyOnOwner(row.level(), row.villager(), admission);
-        } catch (RuntimeException | Error thrown) {
-            controller.finishControl(ticket, OwnerControlledWrite.partialOutcome(admission));
-            row.phase().terminal++;
-            throw thrown;
-        }
-        io.izzel.arclight.common.prts.kernel.commit.CommitController.SubmitResult result =
-            controller.finishControl(ticket, answered);
-        if (!result.admitted()) {
-            row.phase().terminal++;
-            throw new IllegalStateException("controlled entity write terminal refused: "
-                + result.code() + " " + result.diagnostic());
-        }
-        replayDeferredRow(row);
-        controller.consumePublished(ticket);
-    }
-
-    /** Runs one admitted row on the host owner thread at the original call site through the same
-     * controller and publisher contract: the first version of the controlled chain that does not
-     * hand the body to a worker. It is the serial baseline, not a worker/G1 claim. */
-    private static boolean runHostSerialControlledRow(DeferredRow row,
-                                                      OwnerControlledWrite.Admission admission) {
-        StageCounters.note("ownerBatchBody");
-        io.izzel.arclight.common.prts.kernel.commit.CommitController.SubmitResult result =
-            OwnerControlledWrite.run(row.level(), row.villager(), admission,
-                io.izzel.arclight.common.prts.kernel.wiring.OwnerNativeCommitBinding.instance());
-        if (!result.admitted()
-            || result.terminal()
-                != io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Terminal.PUBLISHED) {
-            row.phase().terminal++;
-            throw new IllegalStateException("controlled entity write refused: "
-                + result.code() + " " + result.diagnostic());
-        }
-        row.phase().executed++;
-        row.phase().walkExecuted++;
-        RestOwnerWiring.noteSkip();
-        io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
-            .noteOwnerBodyExecuted();
-        noteExpectedPost(row.entity());
-        return true;
-    }
-
-    /** Runs one admitted row at its original host call site instead of deferring it: the begun
-     * ticket, worker body and owner terminal happen inside the same tick position the host would
-     * have ticked, and the wrapper still fires the one normal Post/portal afterwards. */
-    private static boolean runInlineControlledRow(DeferredRow row,
-                                                  OwnerControlledWrite.Admission admission) {
-        StageCounters.note("ownerBatchBody");
-        SharedRuntime runtime = SharedRuntime.shared();
-        if (runtime.pool() == null && !runtime.open()) {
-            throw new IllegalStateException("owner batch pool is unavailable");
-        }
-        runControlledWorkerRow(runtime, row, admission, false);
-        row.phase().executed++;
-        row.phase().walkExecuted++;
-        RestOwnerWiring.noteSkip();
-        io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
-            .noteOwnerBodyExecuted();
-        noteExpectedPost(row.entity());
-        return true;
     }
 
     /** Runs one begun row's real body on a worker through the existing cohort, then writes its
@@ -909,11 +826,7 @@ public final class ServerThreadOwnerPhase {
             for (DeferredRow row : controlled) {
                 OwnerControlledWrite.Admission admission = admissions.get(row);
                 StageCounters.note("ownerBatchBody");
-                if (Boolean.getBoolean("arclight.prts.ownerHostSerial")) {
-                    runHostSerialBatchRow(row, admission);
-                } else {
-                    runControlledWorkerRow(runtime, row, admission, true);
-                }
+                runControlledWorkerRow(runtime, row, admission, true);
             }
         } catch (RuntimeException | Error failure) {
             account.close(batchUnit, WorkAccount.Outcome.PARTIAL_FAULT, "batch-terminal");
@@ -938,10 +851,11 @@ public final class ServerThreadOwnerPhase {
             || !sameLogicalRow(level, selected, villager)) {
             return false;
         }
-        OwnerControlledWrite.Admission admission = OwnerControlledWrite.prepare(level, villager);
+        OwnerControlledWrite.Admission admission = phase.programAdmissions.get(mob.getId());
         if (admission == null) {
             return false;
         }
+        disposeEarlierProgramRows(phase, admission);
         io.izzel.arclight.common.prts.kernel.commit.CommitController.BeginResult begin =
             admission.controller().beginControl(admission.request());
         if (!begin.admitted()) {
@@ -951,6 +865,7 @@ public final class ServerThreadOwnerPhase {
         }
         phase.rows.remove(mob.getId());
         phase.slice.remove(mob.getId());
+        phase.programAdmissions.remove(mob.getId());
         io.izzel.arclight.common.prts.kernel.commit.CommitTicket ticket = begin.ticket();
         try {
             OwnerNavigationWorker.runProgramSpan(navigation);
@@ -972,6 +887,64 @@ public final class ServerThreadOwnerPhase {
         noteExpectedPost(mob);
         admission.controller().consumePublished(ticket);
         return true;
+    }
+
+    /** Retires every earlier declared program row that cannot be begun before this one: the host
+     * keeps its original stage, and the seat is closed natively before any effect so the current
+     * seat can start in the frozen order. */
+    private static void disposeEarlierProgramRows(LevelPhase phase,
+                                                  OwnerControlledWrite.Admission current) {
+        int currentPosition = current.entry().seat().position();
+        java.util.List<java.util.Map.Entry<Integer, OwnerControlledWrite.Admission>> earlier =
+            new java.util.ArrayList<>();
+        for (java.util.Map.Entry<Integer, OwnerControlledWrite.Admission> entry
+            : phase.programAdmissions.entrySet()) {
+            if (entry.getValue() == current || !phase.rows.containsKey(entry.getKey())) {
+                continue;
+            }
+            if (entry.getValue().entry().seat().position() < currentPosition) {
+                earlier.add(entry);
+            }
+        }
+        for (java.util.Map.Entry<Integer, OwnerControlledWrite.Admission> entry : earlier) {
+            OwnerControlledWrite.Admission admission = entry.getValue();
+            io.izzel.arclight.common.prts.kernel.commit.CommitReservation.DispositionResult result =
+                admission.controller().reservations().disposeNoEffect(
+                    io.izzel.arclight.common.prts.kernel.KernelModule.instance().declarations(),
+                    admission.entry(), "program-span-order");
+            if (!result.disposed()) {
+                phase.terminal++;
+                throw new IllegalStateException("earlier program seat could not close: "
+                    + result.diagnostic());
+            }
+            phase.rows.remove(entry.getKey());
+            phase.slice.remove(entry.getKey());
+            phase.programAdmissions.remove(entry.getKey());
+            phase.fallback++;
+        }
+    }
+
+    /** Closes program seats that never reached their span this tick; the host never ran an owner
+     * body for them, so they count as the original host path, not as a replay. */
+    private static void disposeLeftProgramRows(LevelPhase phase) {
+        java.util.List<java.util.Map.Entry<Integer, OwnerControlledWrite.Admission>> left =
+            new java.util.ArrayList<>(phase.programAdmissions.entrySet());
+        for (java.util.Map.Entry<Integer, OwnerControlledWrite.Admission> entry : left) {
+            if (!phase.rows.containsKey(entry.getKey())) {
+                continue;
+            }
+            OwnerControlledWrite.Admission admission = entry.getValue();
+            io.izzel.arclight.common.prts.kernel.commit.CommitReservation.DispositionResult result =
+                admission.controller().reservations().disposeNoEffect(
+                    io.izzel.arclight.common.prts.kernel.KernelModule.instance().declarations(),
+                    admission.entry(), "program-span-not-reached");
+            if (result.disposed()) {
+                phase.rows.remove(entry.getKey());
+                phase.slice.remove(entry.getKey());
+                phase.fallback++;
+            }
+            phase.programAdmissions.remove(entry.getKey());
+        }
     }
 
     /** Records that a pending row reached the normal Pre observer. */
@@ -1202,6 +1175,9 @@ public final class ServerThreadOwnerPhase {
         if (phase == null) {
             return;
         }
+        if (OwnerNativeProgram.enabled()) {
+            disposeLeftProgramRows(phase);
+        }
         long hostSkips = RestOwnerWiring.skips();
         long delta = hostSkips - phase.skipsAtStart;
         int leftGone = 0;
@@ -1313,21 +1289,6 @@ public final class ServerThreadOwnerPhase {
         return rows;
     }
 
-    /** Evidence-only filter: when a tag is declared, the owner phase selects only rows carrying it,
-     * so one server run can tick a host reference group and an owner group on the same scene. */
-    static boolean ownerTagAdmits(net.minecraft.world.entity.Entity entity) {
-        String wanted = System.getProperty("arclight.prts.ownerOnlyTags");
-        if (wanted == null || wanted.isEmpty()) {
-            return true;
-        }
-        for (String tag : entity.getTags()) {
-            if (wanted.equals(tag)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     /** Whether the host tick loop would run the full body of this entity in this pass: a row the
      * host would only inactive-tick must not be taken by the owner, or the two paths diverge. */
     private static boolean hostWouldRunFullBody(net.minecraft.world.entity.Entity entity) {
@@ -1345,7 +1306,7 @@ public final class ServerThreadOwnerPhase {
             net.minecraft.world.entity.Entity entity = level.getEntity(row.entityId());
             if (!(entity instanceof Villager villager) || !villager.isAlive()
                 || villager.isRemoved() || villager.isNoAi()
-                || !hostWouldRunFullBody(entity) || !ownerTagAdmits(entity)
+                || !hostWouldRunFullBody(entity)
                 || villager.getPose() != Pose.SLEEPING
                 || !villager.getBrain().isActive(Activity.REST)) {
                 continue;
@@ -1362,7 +1323,7 @@ public final class ServerThreadOwnerPhase {
                 net.minecraft.world.entity.Entity entity = level.getEntity(row.entityId());
                 if (!(entity instanceof Villager villager) || !villager.isAlive()
                     || villager.isRemoved() || villager.isNoAi() || villager.isPassenger()
-                    || !hostWouldRunFullBody(entity) || !ownerTagAdmits(entity)) {
+                    || !hostWouldRunFullBody(entity)) {
                     continue;
                 }
                 if (villager.getPose() == Pose.SLEEPING
