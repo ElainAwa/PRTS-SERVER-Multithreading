@@ -151,7 +151,8 @@ public final class ServerThreadOwnerPhase {
             return false;
         }
         LevelPhase phase = PENDING.get(entity.level().dimension().location().toString());
-        return phase != null && phase.rows.get(entity.getId()) == entity;
+        return phase != null && phase.rows.get(entity.getId()) instanceof Villager
+            && entity instanceof Villager;
     }
 
     /** Runs a pending owner body at the original host tick call site; false means host may tick. */
