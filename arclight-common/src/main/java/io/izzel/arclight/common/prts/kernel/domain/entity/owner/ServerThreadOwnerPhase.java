@@ -215,6 +215,9 @@ public final class ServerThreadOwnerPhase {
             DeferredRow row = new DeferredRow(phase, (ServerLevel) entity.level(), villager, entity,
                 phase.hostSteps.getOrDefault(entity.getId(), 0L));
             if (Boolean.getBoolean("arclight.prts.ownerBatchInline")) {
+                if (Boolean.getBoolean("arclight.prts.ownerHostSerial")) {
+                    return runHostSerialControlledRow(row, admission);
+                }
                 return runInlineControlledRow(row, admission);
             }
             DEFERRED.add(row);
@@ -335,6 +338,31 @@ public final class ServerThreadOwnerPhase {
         return "entity-state:" + row.entity().getUUID().getMostSignificantBits() + ":"
             + row.entity().getUUID().getLeastSignificantBits() + ":" + row.phase().tick
             + ":" + index;
+    }
+
+    /** Runs one admitted row on the host owner thread at the original call site through the same
+     * controller and publisher contract: the first version of the controlled chain that does not
+     * hand the body to a worker. It is the serial baseline, not a worker/G1 claim. */
+    private static boolean runHostSerialControlledRow(DeferredRow row,
+                                                      OwnerControlledWrite.Admission admission) {
+        StageCounters.note("ownerBatchBody");
+        io.izzel.arclight.common.prts.kernel.commit.CommitController.SubmitResult result =
+            OwnerControlledWrite.run(row.level(), row.villager(), admission,
+                io.izzel.arclight.common.prts.kernel.wiring.OwnerNativeCommitBinding.instance());
+        if (!result.admitted()
+            || result.terminal()
+                != io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Terminal.PUBLISHED) {
+            row.phase().terminal++;
+            throw new IllegalStateException("controlled entity write refused: "
+                + result.code() + " " + result.diagnostic());
+        }
+        row.phase().executed++;
+        row.phase().walkExecuted++;
+        RestOwnerWiring.noteSkip();
+        io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
+            .noteOwnerBodyExecuted();
+        noteExpectedPost(row.entity());
+        return true;
     }
 
     /** Runs one admitted row at its original host call site instead of deferring it: the begun
