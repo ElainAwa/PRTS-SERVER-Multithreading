@@ -18,6 +18,7 @@ import io.izzel.arclight.common.prts.kernel.generic.ExecutionCohort;
 import io.izzel.arclight.common.prts.kernel.generic.GenericJobExecutor;
 import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
 import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
+import io.izzel.arclight.common.prts.kernel.jobs.WorkAccount;
 import io.izzel.arclight.common.prts.kernel.shares.ShareClass;
 import net.minecraft.server.MinecraftServer;
 
@@ -428,7 +429,29 @@ public final class ServerThreadOwnerPhase {
             throw new IllegalStateException(
                 "owner batch refuses to start while a previous body is still running");
         }
-        submitCohort(runtime, rows, handles, executed, serial);
+        OwnerCommitGate.Readiness readiness = OwnerCommitGate.read();
+        if (!readiness.ready()) {
+            throw new IllegalStateException(
+                "owner batch needs a ready commit chain: " + readiness.reason());
+        }
+        WorkAccount account = SharedRuntime.shared().account();
+        String batchKey = "owner-batch:"
+            + rows.get(0).level().dimension().location() + ":" + rows.get(0).phase().tick
+            + ":" + count;
+        String batchUnit = WorkAccount.unitId(batchKey, 0L);
+        if (!account.offer(new WorkAccount.Unit(batchUnit, batchKey,
+            rows.get(0).level().dimension().location().toString(), batchKey))) {
+            throw new IllegalStateException("owner batch unit was refused");
+        }
+        account.markReady(batchUnit);
+        account.markRunning(batchUnit);
+        try {
+            submitCohort(runtime, rows, handles, executed, serial);
+        } catch (RuntimeException | Error submissionFailure) {
+            account.close(batchUnit, WorkAccount.Outcome.REJECTED_BEFORE_EFFECT,
+                "batch-submit-refused");
+            throw submissionFailure;
+        }
         long deadline = System.nanoTime()
             + java.util.concurrent.TimeUnit.SECONDS.toNanos(20L);
         System.out.println("[PRTS] owner-batch start rows=" + count);
@@ -454,6 +477,7 @@ public final class ServerThreadOwnerPhase {
                     IN_FLIGHT.add(pending);
                 }
             }
+            account.close(batchUnit, WorkAccount.Outcome.PARTIAL_FAULT, "batch-deadline");
             throw new IllegalStateException("owner batch did not settle before the deadline");
         }
         Throwable firstFailure = null;
@@ -475,6 +499,7 @@ public final class ServerThreadOwnerPhase {
             }
         }
         if (firstFailure != null) {
+            account.close(batchUnit, WorkAccount.Outcome.PARTIAL_FAULT, "batch-terminal");
             if (firstFailure instanceof RuntimeException runtimeFailure) {
                 throw runtimeFailure;
             }
@@ -483,6 +508,7 @@ public final class ServerThreadOwnerPhase {
             }
             throw new IllegalStateException("deferred owner body failed", firstFailure);
         }
+        account.close(batchUnit, WorkAccount.Outcome.DONE, "batch-published");
     }
 
     /** Records that a pending row reached the normal Pre observer. */
