@@ -96,6 +96,11 @@ public final class PrtsEntityOwnershipEvents {
         ENTITY_PRE.increment();
         if (io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
             .hasPending(event.getEntity())) {
+            if (io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
+                .isPendingId(event.getEntity())) {
+                System.out.println("[PRTS] pre-pending id=" + event.getEntity().getId()
+                    + " canceled=" + event.isCanceled());
+            }
             return;
         }
         int verdict = EntityTickOwnership.onEntityTickPre(event.getEntity());
@@ -109,6 +114,11 @@ public final class PrtsEntityOwnershipEvents {
      * real terminal in this pass and its seat must not block later controlled rows. */
     @SubscribeEvent(priority = EventPriority.LOWEST)
     public void onEntityTickPreVerdict(EntityTickEvent.Pre event) {
+        if (io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
+            .isPendingId(event.getEntity())) {
+            System.out.println("[PRTS] pre-final id=" + event.getEntity().getId()
+                + " canceled=" + event.isCanceled());
+        }
         if (!event.isCanceled()) {
             return;
         }
