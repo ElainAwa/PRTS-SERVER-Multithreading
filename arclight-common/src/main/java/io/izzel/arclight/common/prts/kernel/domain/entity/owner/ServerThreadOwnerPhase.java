@@ -119,6 +119,15 @@ public final class ServerThreadOwnerPhase {
         phase.tick = level.getServer().getTickCount();
         phase.skipsAtStart = RestOwnerWiring.skips();
         List<Villager> selected = select(level, window, dimension, phase);
+        if (OwnerNativeProgram.enabled()) {
+            // The program path begins one declared span per tick in seat order; a row whose span
+            // does not occur leaves an earlier seat pending, so the first slice keeps one row.
+            selected.removeIf(villager -> phase.slice.get(villager.getId()) != Slice.WALK);
+            if (selected.size() > 1) {
+                selected.subList(1, selected.size()).clear();
+            }
+            phase.walkSelected = selected.size();
+        }
         // Only rows that will be deferred into the controlled batch are declared: a declared seat
         // that never starts would hold the pair's order and block every later controlled row.
         java.util.List<Villager> declared = new java.util.ArrayList<>(selected.size());
