@@ -107,9 +107,17 @@ public final class ServerThreadOwnerPhase {
         phase.tick = level.getServer().getTickCount();
         phase.skipsAtStart = RestOwnerWiring.skips();
         List<Villager> selected = select(level, window, dimension, phase);
+        // Only rows that will be deferred into the controlled batch are declared: a declared seat
+        // that never starts would hold the pair's order and block every later controlled row.
+        java.util.List<Villager> declared = new java.util.ArrayList<>(selected.size());
+        for (Villager candidate : selected) {
+            if (batchEnabled() && phase.slice.get(candidate.getId()) == Slice.WALK) {
+                declared.add(candidate);
+            }
+        }
         // Safe point: the host's due window is frozen and every check above read live state; the one
         // plan service now freezes the current tick with these rows declared, before any body runs.
-        io.izzel.arclight.common.prts.kernel.EntityDeclarationIntake.arm(level, window, selected);
+        io.izzel.arclight.common.prts.kernel.EntityDeclarationIntake.arm(level, window, declared);
         io.izzel.arclight.common.prts.kernel.KernelModule.instance()
             .freezeAtEntityPhase(phase.tick);
         phase.selected = selected.size();
@@ -176,6 +184,14 @@ public final class ServerThreadOwnerPhase {
             DEFERRED_IDS.add(entity.getId());
             StageCounters.note("ownerBatchRowDeferred");
             return true;
+        }
+        if (io.izzel.arclight.common.prts.kernel.domain.entity.owner.OwnerCommitGate.read()
+            .ready()) {
+            // The chain is ready, so an owner body that has no reservation would be a native effect
+            // the chain never judged. This row was not admitted into the controlled batch: keep the
+            // original host call at this site instead of running a second kind of owner body.
+            phase.compat++;
+            return false;
         }
         long ownerScope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
             .EntityTickOwnership.beginOwnerBodyScope(entity);
