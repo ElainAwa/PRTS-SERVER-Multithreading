@@ -151,6 +151,15 @@ public final class ServerThreadOwnerPhase {
         phaseActive = true;
     }
 
+    /** Whether this short id still has a selected row in the current level phase; diagnostic only. */
+    public static boolean isPendingId(net.minecraft.world.entity.Entity entity) {
+        if (!phaseActive || entity == null) {
+            return false;
+        }
+        LevelPhase phase = PENDING.get(entity.level().dimension().location().toString());
+        return phase != null && phase.rows.containsKey(entity.getId());
+    }
+
     /** Whether this entity is selected and still pending in the current level tick. */
     public static boolean hasPending(net.minecraft.world.entity.Entity entity) {
         if (!phaseActive || !EntityRowOwnershipWindow.enabled() || entity == null) {
