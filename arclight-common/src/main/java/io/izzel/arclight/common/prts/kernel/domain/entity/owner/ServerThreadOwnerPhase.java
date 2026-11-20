@@ -719,7 +719,11 @@ public final class ServerThreadOwnerPhase {
                 if (trace()) {
                     System.out.println("[PRTS] native-left id=" + entry.getKey() + " alive="
                         + villager.isAlive() + " removed=" + villager.isRemoved() + " skip="
-                        + phase.nativeSkips.get(entry.getKey()) + " cause=" + cause);
+                        + phase.nativeSkips.get(entry.getKey()) + " cause=" + cause + " tick="
+                        + villager.tickCount + " selectedTick="
+                        + phase.rowTicks.getOrDefault(entry.getKey(), -1) + " sameEntity="
+                        + (current == villager) + " preSeen="
+                        + phase.preSeenRows.contains(entry.getKey()));
                 }
                 if (cause != null) {
                     noteNativeSkip(level, villager, cause);
