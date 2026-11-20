@@ -9,8 +9,9 @@ import java.util.Set;
 
 /** Runs the {@code Mob.serverAiStep} prefix through the one program entry the transformed host
  * calls: with a bound owner context the prefix is declared as one segment, without one the host
- * stage runs exactly as before. */
-final class ServerAiStepPrefixProgram {
+ * stage runs exactly as before. The type and its host entry are public because the transformed
+ * {@code net.minecraft.world.entity.Mob} lives in another module and package. */
+public final class ServerAiStepPrefixProgram {
 
     private static final EntityUpdateSegmentPolicy.Segment SEGMENT =
         EntityUpdateSegmentPolicy.Segment.SERVER_AI_STEP_PREFIX;
@@ -20,7 +21,7 @@ final class ServerAiStepPrefixProgram {
     }
 
     /** The single entry the transformed host calls; a missing or mismatched context delegates. */
-    static ProfilerFiller run(Mob mob) {
+    public static ProfilerFiller run(Mob mob) {
         EntityUpdateProgramContext context = EntityUpdateProgramContext.current();
         boolean matches = context != null && context.matches(mob);
         return run(context, matches, (NavigationSectionStages) mob);
