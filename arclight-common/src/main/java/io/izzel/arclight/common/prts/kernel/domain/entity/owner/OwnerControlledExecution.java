@@ -91,6 +91,10 @@ final class OwnerControlledExecution {
         return !PENDING.isEmpty();
     }
 
+    static int pendingCount() {
+        return PENDING.size();
+    }
+
     static void waiting(OwnerControlledExecution record) {
         WAITING.set(record);
     }
