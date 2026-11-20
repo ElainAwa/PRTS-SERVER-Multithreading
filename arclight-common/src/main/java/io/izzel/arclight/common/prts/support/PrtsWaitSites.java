@@ -41,7 +41,9 @@ public final class PrtsWaitSites {
         "player_respawn_logic_get_overworld_respawn_pos",
         "server_level_set_chunk_forced",
         "chunk_map_resend_biomes_for_chunks",
-        "entity_adjust_spawn_location"
+        "entity_adjust_spawn_location",
+        "owner_read_demand",
+        "poi_section_load"
     };
 
     public static final int ENTITY_SET_POS_RAW = 0;
@@ -64,6 +66,8 @@ public final class PrtsWaitSites {
     public static final int SERVER_LEVEL_SET_CHUNK_FORCED = 17;
     public static final int CHUNK_MAP_RESEND_BIOMES_FOR_CHUNKS = 18;
     public static final int ENTITY_ADJUST_SPAWN_LOCATION = 19;
+    public static final int OWNER_READ_DEMAND = 20;
+    public static final int POI_SECTION_LOAD = 21;
 
     /** One start stamp per site and per thread; a slot of zero means nothing is open there. */
     private static final ThreadLocal<long[]> OPEN =

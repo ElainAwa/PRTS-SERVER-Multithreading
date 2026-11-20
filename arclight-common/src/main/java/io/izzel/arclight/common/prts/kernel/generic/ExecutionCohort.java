@@ -384,6 +384,30 @@ public final class ExecutionCohort {
         workerHandles.put(key, handle);
     }
 
+    /** Claims the one resume of a node that is waiting for an external result. A second claim or a
+     * claim on a node in any other state is refused; no body is run. */
+    public synchronized boolean claimResume(String key) {
+        State state = key == null ? null : states.get(key);
+        if (state != State.WAITING) {
+            return false;
+        }
+        states.put(key, State.RUNNING);
+        return true;
+    }
+
+    /** Settles a node already claimed by {@link #claimResume(String)}. The caller has run the
+     * continuation on its owner thread; this only records the terminal state and witness. */
+    public synchronized void settleResumed(String key, boolean success, Throwable failure, String code) {
+        State state = key == null ? null : states.get(key);
+        if (state != State.RUNNING) {
+            return;
+        }
+        boolean afterEffect = effectPossible(key);
+        State next = success ? State.DONE
+            : (afterEffect ? State.FAILED_AFTER_EFFECT : State.FAILED);
+        settle(key, next, code, success ? null : failure);
+    }
+
     private void settle(String key, State state, String code, Throwable failure) {
         states.put(key, state);
         WitnessState witness = witnessStates.get(key);

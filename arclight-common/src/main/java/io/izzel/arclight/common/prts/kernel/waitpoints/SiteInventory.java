@@ -107,7 +107,14 @@ public final class SiteInventory {
         new Row("entity_adjust_spawn_location", "chunk", "net.minecraft.world.entity.Entity",
             "adjustSpawnLocation", "entity_join", "entity", CHUNK_SOURCE, CHUNK_PROGRESS,
             CHUNK_TIMEOUT, "keep the current position",
-            "site census, blocking bucket, spawn position adjust")
+            "site census, blocking bucket, spawn position adjust"),
+        new Row("owner_read_demand", "chunk", "net.minecraft.server.level.ServerChunkCache",
+            "getChunk", "entity_tick", "entity", CHUNK_SOURCE, CHUNK_PROGRESS, CHUNK_TIMEOUT,
+            SNAPSHOT, "site census, blocking bucket, owner demand bridge"),
+        new Row("poi_section_load", "chunk",
+            "net.minecraft.world.level.chunk.storage.SectionStorage", "readColumn", "poi_update",
+            "ai", "point of interest storage", CHUNK_PROGRESS, CHUNK_TIMEOUT, SNAPSHOT,
+            "site census, blocking bucket, poi disk read")
     };
 
 

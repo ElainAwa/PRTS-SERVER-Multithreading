@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.domain.entity.owner;
 
+import io.izzel.arclight.common.prts.support.PrtsWaitSites;
 import net.minecraft.server.level.ServerChunkCache;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
@@ -30,7 +31,12 @@ public final class OwnerReadDemand {
      * do not run it before the registration and continuation are separately authorized. */
     public static ChunkAccess await(ServerChunkCache cache, int x, int z, ChunkStatus status,
                                     boolean blocking) {
-        return await(cache, x, z, status, blocking, "", -1L, "", -1L, -1);
+        PrtsWaitSites.begin(PrtsWaitSites.OWNER_READ_DEMAND);
+        try {
+            return await(cache, x, z, status, blocking, "", -1L, "", -1L, -1);
+        } finally {
+            PrtsWaitSites.end(PrtsWaitSites.OWNER_READ_DEMAND);
+        }
     }
 
     /** The identity-carrying entry used by the owner side; the old short form delegates here. */
