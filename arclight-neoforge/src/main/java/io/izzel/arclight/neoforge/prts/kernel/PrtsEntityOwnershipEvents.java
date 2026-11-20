@@ -13,7 +13,6 @@ import io.izzel.arclight.common.prts.support.EntityTickBindingPolicy;
 import io.izzel.arclight.common.prts.support.PrtsHostTickCalls;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.common.NeoForge;
-import net.neoforged.neoforge.event.level.LevelEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.EventHooks;
 import net.neoforged.neoforge.event.tick.EntityTickEvent;
@@ -117,17 +116,6 @@ public final class PrtsEntityOwnershipEvents {
     @SubscribeEvent
     public void onServerTickPost(ServerTickEvent.Post event) {
         EntityTickOwnership.onServerTickPost();
-    }
-
-    /** A save must not pass a body a stopped batch left in flight: the same bounded wait the stop
-     * path uses runs before the level is written, and the level is written only after it. */
-    @SubscribeEvent
-    public void onLevelSave(LevelEvent.Save event) {
-        if (!io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
-            .awaitInFlightOnStop(2_000L)) {
-            org.apache.logging.log4j.LogManager.getLogger("PRTS").warn(
-                "owner batch bodies are still running while a level saves");
-        }
     }
 
     @SubscribeEvent

@@ -437,6 +437,13 @@ public final class KernelModule {
     /** The generation holder of a chain this module adopts: the module is its lifecycle owner. */
     private final CommitNamespaces.ResetEpochs commitChainEpochs = new CommitNamespaces.ResetEpochs();
     private volatile long tickIndex;
+    /** The owner phase moves the tick prologue before the levels tick and freezes its plan at the
+     * entity safe point; every other process keeps the post-tick order. */
+    private boolean tickEarly;
+    private boolean earlyFrozen;
+    private long earlyStartedAt;
+    private long earlyFrozenTick = Long.MIN_VALUE;
+    private List<String> earlyWorlds = List.of();
     private final ArrayDeque<PendingB3> pendingB3Tokens = new ArrayDeque<>();
     private long pendingB1Token = -1L;
     private String pendingB1World;
@@ -470,6 +477,9 @@ public final class KernelModule {
     private TickPlanStore.Control previousControl = TickPlanStore.Control.missing();
     private CommitLog.Replay lastCommitReplay;
     private CommitController commitController;
+    /** The production publisher the entity wiring binds before the one chain is adopted; null keeps
+     * the adopted chain bound but non-executable, as every build without that binding reports. */
+    private volatile CommitController.Publisher commitPublisher;
     private String commitBindingRefusal = "";
     private long commitBindingLogLifetime;
     private long commitBindingStoreId;
@@ -598,16 +608,14 @@ public final class KernelModule {
 
     /** Advances the kernel by one tick. */
     public void serverTick(List<String> worldIds) {
-        // Fallback safe point only: a level drains its own deferred block-entity ticks at that
-        // level's tickBlockEntities RETURN, inside the same tick. This drain catches a plan a level
-        // RETURN could not finish (for example a tick that ended without reaching it) and never
-        // carries deferred work into the next tick on purpose.
-        DeviceTickDeferral.drain(guard.worldEpochs()::epochOf);
-        // Fallback only: a level replays its own deferred MACHINE neighbour updates at that level
-        // tick's RETURN, inside the same tick. This drain catches a call issued after its level
-        // returned (for example in the tick's closing phase) and never carries work into the next
-        // tick on purpose.
-        MachineTickDeferral.drain(guard.worldEpochs()::epochOf, PrtsMachineReplay.INSTANCE);
+        if (tickEarly) {
+            tickEarly = false;
+            if (!earlyFrozen) {
+                freezeTickPlan(worldIds);
+            }
+            finishTick(worldIds, earlyStartedAt);
+            return;
+        }
         if (!KernelSettings.enabled()) {
             LiveLevels.clear();
             guard.refresh(false, false, false, tickIndex);
@@ -621,6 +629,38 @@ public final class KernelModule {
             shutdownDomains();
             return;
         }
+        long startedAt = beginTick(worldIds);
+        freezeTickPlan(worldIds);
+        finishTick(worldIds, startedAt);
+    }
+
+    /** Starts one server tick before its levels tick; the owner phase freezes the plan at the entity
+     * safe point and the post-tick entry only settles what that tick produced. */
+    public boolean beginTickEarly(List<String> worldIds) {
+        if (tickEarly || !KernelSettings.enabled()) {
+            return false;
+        }
+        if (!io.izzel.arclight.common.prts.kernel.domain.entity.EntityDueCapture.armed()) {
+            return false;
+        }
+        tickEarly = true;
+        earlyFrozen = false;
+        earlyWorlds = List.copyOf(worldIds);
+        earlyStartedAt = beginTick(worldIds);
+        return true;
+    }
+
+    /** Freezes this tick's plan at the entity safe point, before any owner body of the tick runs. */
+    public void freezeAtEntityPhase(long serverTick) {
+        if (!tickEarly || earlyFrozen || earlyFrozenTick == serverTick) {
+            return;
+        }
+        earlyFrozen = true;
+        earlyFrozenTick = serverTick;
+        freezeTickPlan(earlyWorlds);
+    }
+
+    private long beginTick(List<String> worldIds) {
         long startedAt = System.nanoTime();
         tickIndex++;
         LiveLevels.refresh(liveServer);
@@ -679,6 +719,10 @@ public final class KernelModule {
         if (KernelSettings.safetyNet()) {
             reviewSafety();
         }
+        return startedAt;
+    }
+
+    private void freezeTickPlan(List<String> worldIds) {
         if (KernelSettings.tickPlan()) {
             // The boundary runs before the sequence moves, so a plan whose reports were held over
             // a tick lands before the next plan can report a line.
@@ -687,6 +731,9 @@ public final class KernelModule {
         } else {
             AiDiagnostics.freezeSkipped("tick_plan_off");
         }
+    }
+
+    private void finishTick(List<String> worldIds, long startedAt) {
         if (KernelSettings.dualExits()) {
             exits.noteTick(exitSample(), List.of());
         }
@@ -729,7 +776,6 @@ public final class KernelModule {
                 System.nanoTime() - startedAt);
         }
     }
-
     /** Feeds the opt-in world-set readout from the world list of this tick and the plan/commit
      * world ids; it is a read-only observation and changes no scheduling. */
     private void noteWorldSetReadout(List<String> worldIds) {
@@ -3888,8 +3934,13 @@ public final class KernelModule {
             commitIdentitySource);
         CommitReservation reservations = new CommitReservation(log, store, commitOrderSource,
             CHAIN_OWNER_ID, commitChainEpochs);
-        // The publish action is absent by construction: an adopted chain is bound, not executable.
-        return installCommitChain(log, new CommitController(reservations, null));
+        CommitController.Publisher publisher = commitPublisher;
+        CommitController controller = new CommitController(reservations, publisher);
+        if (publisher != null) {
+            // The owner batch submits on the host thread; the one chain records that owner here.
+            reservations.bindOwnerThread(Thread.currentThread());
+        }
+        return installCommitChain(log, controller);
     }
 
     /** Adopts one whole chain — the log, the store that log carries and the holder that mints its
@@ -4276,4 +4327,12 @@ public final class KernelModule {
         zeroEffect.reset();
         exits.reset();
     }
+    /** Binds the production publisher the entity wiring owns; called once before the one chain is
+     * adopted. Without it the adopted chain stays bound and non-executable. */
+    public void bindCommitPublisher(CommitController.Publisher publisher) {
+        if (commitPublisher == null) {
+            commitPublisher = publisher;
+        }
+    }
+
 }

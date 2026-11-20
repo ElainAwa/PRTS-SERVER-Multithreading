@@ -79,6 +79,7 @@
     "neoforge.PacketDistributorMixin",
     "neoforge.PermissionAPIMixin",
     "prts.modsupport.PrtsUnlockableRecipesLoginSyncMixin",
+    "prts.owner.MinecraftServerPrtsOwnerPhaseMixin",
     "prts.owner.ServerLevelPrtsOwnerPhaseMixin",
     "neoforge.items.CombinedInvWrapperAccessor",
     "neoforge.items.RangedWrapperAccessor",

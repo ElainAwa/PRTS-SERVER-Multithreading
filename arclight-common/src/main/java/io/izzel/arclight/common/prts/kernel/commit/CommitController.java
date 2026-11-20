@@ -18,6 +18,14 @@ public final class CommitController {
         CommitTicket.Outcome publish(CommitTicket ticket);
     }
 
+    /** The name a publisher reports for the wiring diagnostics, so a real native binding is not
+     * reported as the synthetic action it replaces. A publisher that does not name itself keeps the
+     * legacy label. */
+    public interface PublisherName {
+
+        String wiring();
+    }
+
     /** What one controlled write did. */
     public record SubmitResult(boolean admitted, CommitTicket.Terminal terminal, RejectCode code,
                                String diagnostic, int successBatch, long unitCount,
@@ -61,9 +69,15 @@ public final class CommitController {
         return reservations;
     }
 
-    /** The publish action this controller runs: a synthetic action in this build. */
+    /** The publish action this controller runs: absent, synthetic, or a named production binding. */
     public String publisherWiring() {
-        return publisher == null ? "NONE" : "SYNTHETIC";
+        if (publisher == null) {
+            return "NONE";
+        }
+        if (publisher instanceof PublisherName named) {
+            return named.wiring();
+        }
+        return "SYNTHETIC";
     }
 
     /** Whether this build has an action to run: bound and able to run are two columns. */

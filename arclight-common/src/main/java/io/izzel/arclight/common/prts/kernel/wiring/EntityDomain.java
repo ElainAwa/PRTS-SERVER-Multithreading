@@ -143,6 +143,7 @@ public final class EntityDomain implements KernelDomain {
                             .OwnerSite ownerSite) {
         this.module = module;
         this.ownerSite = java.util.Objects.requireNonNull(ownerSite, "ownerSite");
+        module.bindCommitPublisher(OwnerNativeCommitBinding.instance().publisher());
         LiveEntityAccess.bindOwnerContext(module.ownerContext());
         this.arena = module.ownerContext().arena();
         this.pendingArena = arena;

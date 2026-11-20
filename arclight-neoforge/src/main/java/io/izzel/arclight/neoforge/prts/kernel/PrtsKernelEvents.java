@@ -88,6 +88,11 @@ public final class PrtsKernelEvents {
         KernelModule module = KernelModule.instance();
         module.noteTickSource(event.getServer());
         module.noteTickThread(event.getServer().getRunningThread());
+        java.util.List<String> worlds = new java.util.ArrayList<>();
+        for (ServerLevel level : event.getServer().getAllLevels()) {
+            worlds.add(level.dimension().location().toString());
+        }
+        module.beginTickEarly(worlds);
     }
 
     /** Advances the kernel by one tick and then answers the requests queued for the owner while it ran;

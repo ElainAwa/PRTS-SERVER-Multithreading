@@ -3,12 +3,15 @@ package io.izzel.arclight.neoforge.mixin.prts.owner;
 
 import io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.util.ProgressListener;
 import net.minecraft.world.entity.Entity;
 import net.neoforged.neoforge.event.EventHooks;
 import net.neoforged.neoforge.event.tick.EntityTickEvent;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase;
 
@@ -17,6 +20,19 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwne
  * pending row. Failure: nothing is re-fired or cancelled here. */
 @Mixin(ServerLevel.class)
 public abstract class ServerLevelPrtsOwnerPhaseMixin {
+
+    /** Behaviour: a level write must not start while a stopped batch's body may still touch that
+     * level. Why here: the save event fires after the write, so only this entry precedes it.
+     * Invariant: the wait is bounded and a body still running aborts the write instead of letting it
+     * continue; failure: the save fails rather than reporting a write it did not fence. */
+    @Inject(method = "save", at = @At("HEAD"))
+    private void prts$saveFence(ProgressListener listener, boolean checkError, boolean force,
+                                CallbackInfo ci) {
+        if (!ServerThreadOwnerPhase.awaitInFlightOnStop(5_000L)) {
+            throw new IllegalStateException(
+                "owner batch bodies are still running; refusing to save the level");
+        }
+    }
 
     @Redirect(method = "tickNonPassenger", at = @At(value = "INVOKE",
         target = "Lnet/neoforged/neoforge/event/EventHooks;"

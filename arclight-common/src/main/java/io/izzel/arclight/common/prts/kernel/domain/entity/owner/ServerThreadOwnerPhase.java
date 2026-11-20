@@ -97,6 +97,11 @@ public final class ServerThreadOwnerPhase {
 
     /** Marks due rows of this level; only this level's outstanding set is cleared. */
     public static void enter(ServerLevel level, EntityDueCapture.Window window) {
+        // Safe point: the host's own due window is frozen and no owner body has run yet. The one plan
+        // service freezes the current tick here, so the declarations and seats a row needs exist
+        // before the row is deferred and never after its effect.
+        io.izzel.arclight.common.prts.kernel.KernelModule.instance()
+            .freezeAtEntityPhase(level.getServer().getTickCount());
         if (!EntityRowOwnershipWindow.enabled() || level == null || window == null) {
             return;
         }
