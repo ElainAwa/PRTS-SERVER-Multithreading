@@ -698,6 +698,11 @@ public final class ServerThreadOwnerPhase {
                 } else if (phase.nativeSkips.containsKey(entry.getKey())) {
                     cause = phase.nativeSkips.get(entry.getKey());
                 }
+                if (trace()) {
+                    System.out.println("[PRTS] native-left id=" + entry.getKey() + " alive="
+                        + villager.isAlive() + " removed=" + villager.isRemoved() + " skip="
+                        + phase.nativeSkips.get(entry.getKey()) + " cause=" + cause);
+                }
                 if (cause != null) {
                     noteNativeSkip(level, villager, cause);
                 }
