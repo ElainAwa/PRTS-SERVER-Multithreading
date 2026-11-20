@@ -467,13 +467,24 @@ public final class ServerThreadOwnerPhase {
         }
         io.izzel.arclight.common.prts.kernel.wiring.OwnerNativeCommitBinding binding =
             io.izzel.arclight.common.prts.kernel.wiring.OwnerNativeCommitBinding.instance();
+        java.util.List<DeferredRow> controlled = new java.util.ArrayList<>(rows);
+        java.util.Map<DeferredRow, OwnerControlledWrite.Admission> admissions =
+            new java.util.IdentityHashMap<>();
+        for (DeferredRow row : controlled) {
+            OwnerControlledWrite.Admission admission =
+                OwnerControlledWrite.prepare(row.level(), row.entity());
+            if (admission == null) {
+                throw new IllegalStateException("owner row lost its frozen admission");
+            }
+            admissions.put(row, admission);
+        }
+        // The controller starts a place only after every earlier place of the same pair ended: the
+        // frozen plan's own seat order is the order the side effects have to take.
+        controlled.sort(java.util.Comparator.comparingInt(
+            row -> admissions.get(row).entry().seat().position()));
         try {
-            for (DeferredRow row : rows) {
-                OwnerControlledWrite.Admission admission =
-                    OwnerControlledWrite.prepare(row.level(), row.entity());
-                if (admission == null) {
-                    throw new IllegalStateException("owner row lost its frozen admission");
-                }
+            for (DeferredRow row : controlled) {
+                OwnerControlledWrite.Admission admission = admissions.get(row);
                 StageCounters.note("ownerBatchBody");
                 io.izzel.arclight.common.prts.kernel.commit.CommitController.SubmitResult result =
                     OwnerControlledWrite.run(row.level(), row.villager(), admission, binding);
