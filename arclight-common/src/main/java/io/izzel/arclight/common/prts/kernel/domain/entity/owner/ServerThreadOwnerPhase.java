@@ -1180,6 +1180,21 @@ public final class ServerThreadOwnerPhase {
         return rows;
     }
 
+    /** Evidence-only filter: when a tag is declared, the owner phase selects only rows carrying it,
+     * so one server run can tick a host reference group and an owner group on the same scene. */
+    static boolean ownerTagAdmits(net.minecraft.world.entity.Entity entity) {
+        String wanted = System.getProperty("arclight.prts.ownerOnlyTags");
+        if (wanted == null || wanted.isEmpty()) {
+            return true;
+        }
+        for (String tag : entity.getTags()) {
+            if (wanted.equals(tag)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Whether the host tick loop would run the full body of this entity in this pass: a row the
      * host would only inactive-tick must not be taken by the owner, or the two paths diverge. */
     private static boolean hostWouldRunFullBody(net.minecraft.world.entity.Entity entity) {
@@ -1197,7 +1212,7 @@ public final class ServerThreadOwnerPhase {
             net.minecraft.world.entity.Entity entity = level.getEntity(row.entityId());
             if (!(entity instanceof Villager villager) || !villager.isAlive()
                 || villager.isRemoved() || villager.isNoAi()
-                || !hostWouldRunFullBody(entity)
+                || !hostWouldRunFullBody(entity) || !ownerTagAdmits(entity)
                 || villager.getPose() != Pose.SLEEPING
                 || !villager.getBrain().isActive(Activity.REST)) {
                 continue;
@@ -1214,7 +1229,7 @@ public final class ServerThreadOwnerPhase {
                 net.minecraft.world.entity.Entity entity = level.getEntity(row.entityId());
                 if (!(entity instanceof Villager villager) || !villager.isAlive()
                     || villager.isRemoved() || villager.isNoAi() || villager.isPassenger()
-                    || !hostWouldRunFullBody(entity)) {
+                    || !hostWouldRunFullBody(entity) || !ownerTagAdmits(entity)) {
                     continue;
                 }
                 if (villager.getPose() == Pose.SLEEPING
