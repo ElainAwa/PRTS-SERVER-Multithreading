@@ -91,6 +91,10 @@ shadowJar {
 
     configurations = [project.configurations.shadowBundle]
     archiveClassifier = 'dev-shadow'
+    dependsOn project(':arclight-common').tasks.named('verifyThirdPartyPaper')
+    from(rootProject.file('THIRD-PARTY.md')) {
+        into 'META-INF'
+    }
 }
 
 remapJar {

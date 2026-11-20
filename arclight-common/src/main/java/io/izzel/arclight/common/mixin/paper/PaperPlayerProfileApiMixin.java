@@ -14,6 +14,7 @@ public interface PaperPlayerProfileApiMixin {
     // Player is the type plugins hold, so the method is injected there.
     // A player that is not a CraftPlayer throws. The profile reads and refuses writes.
 
+    /** Returns a read-only view of this player's profile. */
     default PlayerProfile getPlayerProfile() {
         if (!(this instanceof CraftPlayer player)) {
             throw new UnsupportedOperationException("UNSUPPORTED");
