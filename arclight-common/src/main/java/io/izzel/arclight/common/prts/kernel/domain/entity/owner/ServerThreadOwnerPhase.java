@@ -183,6 +183,11 @@ public final class ServerThreadOwnerPhase {
                 }
                 return false;
             }
+            if (trace()) {
+                System.out.println("[PRTS] owner-defer id=" + entity.getId() + " pos="
+                    + OwnerControlledWrite.prepare((ServerLevel) entity.level(), entity).entry()
+                        .seat().position());
+            }
             DEFERRED.add(new DeferredRow(phase, (ServerLevel) entity.level(), villager, entity,
                 phase.hostSteps.getOrDefault(entity.getId(), 0L)));
             DEFERRED_IDS.add(entity.getId());

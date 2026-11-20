@@ -63,6 +63,10 @@ public final class EntityDeclarationIntake {
             int chunkX = ((int) Math.floor(villager.getX())) >> 4;
             int chunkZ = ((int) Math.floor(villager.getZ())) >> 4;
             long packedChunk = net.minecraft.world.level.ChunkPos.asLong(chunkX, chunkZ);
+            if (Boolean.getBoolean("arclight.prts.ownerPhaseTrace")) {
+                System.out.println("[PRTS] owner-declare id=" + villager.getId() + " node="
+                    + domain);
+            }
             declarations.add(new JobDeclaration(domain, 0L, worldId, "entity", 0, List.of(), 0,
                 "world:" + worldId, "world:" + worldId,
                 List.of(new JobDeclaration.DomainRef(worldId, "entity", 0)),
