@@ -32,6 +32,13 @@ public final class CommitController {
                                CommitTicket ticket) {
     }
 
+    /** The two halves of a controlled write whose body runs somewhere other than the caller: the
+     * reservation and the start are taken here, the terminal is written when the real body answered.
+     * Between the halves the ticket stays PUBLISHING and its seat stays held. */
+    public record BeginResult(boolean admitted, CommitTicket ticket, RejectCode code,
+                              String diagnostic) {
+    }
+
     /** What one reset of the lifecycle did, or why it did not happen. */
     public record ResetDecision(boolean granted, String reason, int voided, int publishing, long epoch) {
     }
@@ -106,22 +113,60 @@ public final class CommitController {
             dispositionGateRefusals++;
             return new SubmitResult(false, null, RejectCode.QUEUE_CAP_EXCEEDED, gate, 0, 0L, null);
         }
+        BeginResult begin = beginControl(request);
+        if (!begin.admitted()) {
+            return new SubmitResult(false, begin.ticket() == null ? null : null, begin.code(),
+                begin.diagnostic(), 0, 0L, begin.ticket());
+        }
+        CommitTicket.Outcome outcome = publish(begin.ticket(), request);
+        return finishControl(begin.ticket(), outcome);
+    }
+
+    /** Takes the reservation and the start of one controlled write. The caller must run the real body
+     * and hand its outcome to {@link #finishControl}; nothing is reported as written here. */
+    public BeginResult beginControl(CommitTicket.ReserveRequest request) {
+        if (!reservations.ownsThread()) {
+            refusals++;
+            return new BeginResult(false, null, RejectCode.COUNTER_MISSING, "off-owner-thread");
+        }
+        if (publisher == null) {
+            notWiredRefusals++;
+            return new BeginResult(false, null, RejectCode.NATIVE_UNDECLARED, "not-wired");
+        }
+        String gate = dispositionGateReason();
+        if (!gate.isEmpty()) {
+            dispositionGateRefusals++;
+            return new BeginResult(false, null, RejectCode.QUEUE_CAP_EXCEEDED, gate);
+        }
         submits++;
         CommitReservation.ReserveResult reserved = reservations.reserve(request);
         if (!reserved.admitted()) {
             refusals++;
-            return new SubmitResult(false, null, reserved.code(), reserved.diagnostic(), 0, 0L, null);
+            return new BeginResult(false, null, reserved.code(), reserved.diagnostic());
         }
         CommitTicket ticket = reserved.ticket();
         if (!reservations.beginPublish(ticket)) {
-            // A line the holder will not start gives its reservation back instead of holding it.
             reservations.release(ticket, CommitTicket.ReleaseReason.CANCELLED);
             refusals++;
             refusedStarts++;
-            return new SubmitResult(false, null, RejectCode.COMMIT_ORDER_VIOLATION,
-                "publish-not-started", 0, 0L, ticket);
+            return new BeginResult(false, ticket, RejectCode.COMMIT_ORDER_VIOLATION,
+                "publish-not-started");
         }
-        CommitTicket.Outcome outcome = publish(ticket, request);
+        return new BeginResult(true, ticket, null, "publishing");
+    }
+
+    /** Writes the terminal line of a begun controlled write after its real body answered. */
+    public SubmitResult finishControl(CommitTicket ticket, CommitTicket.Outcome outcome) {
+        if (!reservations.ownsThread()) {
+            refusals++;
+            return new SubmitResult(false, null, RejectCode.COUNTER_MISSING, "off-owner-thread", 0,
+                0L, ticket);
+        }
+        if (ticket == null || outcome == null) {
+            refusals++;
+            return new SubmitResult(false, null, RejectCode.COUNTER_MISSING, "finish-incomplete", 0,
+                0L, ticket);
+        }
         CommitReservation.FinalizeResult done = reservations.finalize(ticket, outcome);
         if (done.finalized() && done.terminal() == CommitTicket.Terminal.PUBLISHED) {
             acceptedPublished++;
