@@ -7,6 +7,7 @@ import io.izzel.arclight.common.prts.kernel.jobs.JobGraph;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -109,7 +110,9 @@ public final class ExecutionCohort {
     }
 
     private final JobGraph graph;
-    private final Map<String, JobGraph.Node> nodes = new LinkedHashMap<>();
+    // The node indexes are populated in the constructor before workers can see the cohort.
+    private final Map<String, JobGraph.Node> nodesByKey = new LinkedHashMap<>();
+    private final Map<Long, JobGraph.Node> nodesById;
     private final Map<String, State> states = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<Void>> futures = new LinkedHashMap<>();
     private final Map<String, AtomicBoolean> terminals = new ConcurrentHashMap<>();
@@ -132,9 +135,11 @@ public final class ExecutionCohort {
     ExecutionCohort(JobGraph graph) {
         this.graph = graph;
         this.done = new CountDownLatch(1);
+        this.nodesById = HashMap.newHashMap(graph.nodeCount());
         for (JobGraph.Node node : graph.nodes()) {
             String key = node.key();
-            nodes.put(key, node);
+            nodesByKey.putIfAbsent(key, node);
+            nodesById.putIfAbsent(node.nodeId(), node);
             states.put(key, State.PENDING);
             futures.put(key, new CompletableFuture<>());
             terminals.put(key, new AtomicBoolean());
@@ -142,7 +147,7 @@ public final class ExecutionCohort {
             witnessStates.put(key, new WitnessState(key, true));
         }
         for (long id : graph.order()) {
-            JobGraph.Node node = graph.node(id);
+            JobGraph.Node node = node(id);
             if (node == null) continue;
             NodeCancel cancel = new NodeCancel(node.key());
             cancels.put(node.key(), cancel);
@@ -155,6 +160,14 @@ public final class ExecutionCohort {
 
     /** The graph this cohort was built from. */
     public JobGraph graph() { return graph; }
+
+    JobGraph.Node node(long id) {
+        return nodesById.get(id);
+    }
+
+    JobGraph.Node nodeByKey(String key) {
+        return nodesByKey.get(key);
+    }
 
     /** All node handles in graph order, including nodes not submitted yet. */
     public List<WorkerPool.GenericHandle> handles() { return List.copyOf(handles); }
@@ -336,7 +349,7 @@ public final class ExecutionCohort {
      * already running is left for its own body to settle. */
     public synchronized int rejectAllBeforeEffect() {
         int count = 0;
-        for (String key : nodes.keySet()) {
+        for (String key : nodesByKey.keySet()) {
             State state = states.get(key);
             if (state != State.PENDING && state != State.READY) continue;
             if (!terminal(key)) continue;
@@ -414,7 +427,7 @@ public final class ExecutionCohort {
     }
 
     private void finish() {
-        if (terminalCount.incrementAndGet() != nodes.size()) return;
+        if (terminalCount.incrementAndGet() != nodesByKey.size()) return;
         for (Runnable hook : List.copyOf(completionHooks)) {
             runSafely(hook);
         }

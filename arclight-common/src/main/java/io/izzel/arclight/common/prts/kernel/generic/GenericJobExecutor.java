@@ -159,7 +159,7 @@ public final class GenericJobExecutor {
         installSettlement(cohort);
         seedAccount(cohort);
         for (long nodeId : graph.order()) {
-            JobGraph.Node node = graph.node(nodeId);
+            JobGraph.Node node = cohort.node(nodeId);
             if (node == null) continue;
             String key = node.key();
             if (expired(deadlineNanos)) {
@@ -194,7 +194,7 @@ public final class GenericJobExecutor {
             cohort.markAccepted(key);
             cohort.registerWorkerHandle(key, handle);
             if (awaitNode(handle, deadlineNanos)) {
-                expireUnfinished(cohort, graph);
+                expireUnfinished(cohort);
                 return new Execution(cohort, cohort.handles());
             }
         }
@@ -234,7 +234,7 @@ public final class GenericJobExecutor {
             });
         }
         for (long nodeId : graph.ready()) {
-            JobGraph.Node node = graph.node(nodeId);
+            JobGraph.Node node = cohort.node(nodeId);
             if (node != null) {
                 submit(cohort, remaining, node.key(), bodyView, deadlineNanos);
             }
@@ -270,14 +270,14 @@ public final class GenericJobExecutor {
 
     private void completed(ExecutionCohort cohort, Map<String, AtomicInteger> remaining, String key,
                            Map<String, Runnable> bodies, long deadlineNanos) {
-        JobGraph.Node node = cohort.graph().nodeByKey(key);
+        JobGraph.Node node = cohort.nodeByKey(key);
         if (node == null) return;
         if (cohort.state(key) != ExecutionCohort.State.DONE) {
             cascade(cohort, node, key);
             return;
         }
         for (Long successor : node.successors()) {
-            JobGraph.Node next = cohort.graph().node(successor);
+            JobGraph.Node next = cohort.node(successor);
             if (next == null) continue;
             AtomicInteger count = remaining.get(next.key());
             if (count != null && count.decrementAndGet() == 0) {
@@ -289,7 +289,7 @@ public final class GenericJobExecutor {
     private void cascade(ExecutionCohort cohort, JobGraph.Node node, String key) {
         boolean expired = RejectCode.TICK_BUDGET_EXHAUSTED.text().equals(cohort.terminalCode(key));
         for (Long successor : node.successors()) {
-            JobGraph.Node next = cohort.graph().node(successor);
+            JobGraph.Node next = cohort.node(successor);
             if (next == null) continue;
             if (expired) {
                 cohort.expire(next.key());
@@ -301,7 +301,7 @@ public final class GenericJobExecutor {
 
     private void submit(ExecutionCohort cohort, Map<String, AtomicInteger> remaining, String key,
                         Map<String, Runnable> bodies, long deadlineNanos) {
-        JobGraph.Node node = cohort.graph().nodeByKey(key);
+        JobGraph.Node node = cohort.nodeByKey(key);
         if (node == null) return;
         ExecutionCohort.State state = cohort.state(key);
         if (state != ExecutionCohort.State.PENDING && state != ExecutionCohort.State.READY) return;
@@ -383,9 +383,9 @@ public final class GenericJobExecutor {
         }
     }
 
-    private static void expireUnfinished(ExecutionCohort cohort, JobGraph graph) {
-        for (long nodeId : graph.order()) {
-            JobGraph.Node node = graph.node(nodeId);
+    private static void expireUnfinished(ExecutionCohort cohort) {
+        for (long nodeId : cohort.graph().order()) {
+            JobGraph.Node node = cohort.node(nodeId);
             if (node != null) {
                 cohort.expire(node.key());
             }
@@ -404,7 +404,7 @@ public final class GenericJobExecutor {
 
     /** The one unit identity of a node: its key joined with the declared logical update ordinal. */
     private static String accountUnitId(ExecutionCohort cohort, String key) {
-        JobGraph.Node node = cohort.graph().nodeByKey(key);
+        JobGraph.Node node = cohort.nodeByKey(key);
         return WorkAccount.unitId(key, node == null ? 0L : node.logicalUpdateOrdinal());
     }
 

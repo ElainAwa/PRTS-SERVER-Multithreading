@@ -256,6 +256,7 @@ public final class JobGraphBuilder {
             && node.siteClass() == declaration.siteClass()
             && node.batchKind() == declaration.batchKind()
             && node.batchBound() == declaration.batchBound()
+            && node.logicalUpdateOrdinal() == declaration.logicalUpdateOrdinal()
             && node.splitIntent() == declaration.crossesDomains()
             && Objects.equals(node.range(), declaration.range())
             && node.predecessors().equals(declaration.predecessors());
