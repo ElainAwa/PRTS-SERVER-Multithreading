@@ -475,11 +475,12 @@ public final class CommitReservation {
             lastBeginRefusal = "place-not-runnable";
             return false;
         }
-        if (earlierSeatPending(ticket)) {
+        String earlierPending = earlierSeatPendingDetail(ticket);
+        if (earlierPending != null) {
             // The frozen plan declares a place before this one that neither carries a stored line nor
             // a reservation: the side effect of this place would pass that prefix, so it waits.
             publishRefusals++;
-            lastBeginRefusal = "earlier-seat-pending";
+            lastBeginRefusal = "earlier-seat-pending " + earlierPending;
             return false;
         }
         phases.put(ticket.ticketId(), Phase.PUBLISHING);
@@ -489,6 +490,36 @@ public final class CommitReservation {
     /** Whether the frozen plan declares a place before this ticket's place that neither a stored line
      * nor a held reservation accounts for. The prefix is read from the sealed declarations, so a plan
      * that does not number its places consecutively is still judged on the places it declared. */
+    private String earlierSeatPendingDetail(CommitTicket ticket) {
+        if (!earlierSeatPending(ticket)) {
+            return null;
+        }
+        String worldId = ticket.batch().worldId();
+        String domainId = ticket.batch().domainId();
+        FrozenDeclarations declarations = log.identitySource().declarations(worldId, domainId,
+            ticket.planSequence());
+        StringBuilder detail = new StringBuilder("ticket=").append(ticket.position());
+        if (declarations != null) {
+            for (FrozenDeclarations.Entry entry : declarations.entries()) {
+                FrozenDeclarations.Seat seat = entry.seat();
+                if (seat == null || seat.planSequence() != ticket.planSequence()
+                    || seat.position() >= ticket.position()
+                    || !seat.worldId().equals(worldId) || !seat.domainId().equals(domainId)) {
+                    continue;
+                }
+                if (!log.seatStored(seat.worldId(), seat.domainId(), seat.planSequence(),
+                        seat.position())
+                    && !log.placeHeld(seat.worldId(), seat.domainId(), seat.planSequence(),
+                        seat.position())) {
+                    detail.append(" earlier=").append(seat.position()).append(" node=")
+                        .append(entry.nodeKey());
+                    break;
+                }
+            }
+        }
+        return detail.toString();
+    }
+
     private boolean earlierSeatPending(CommitTicket ticket) {
         CommitLog.Identity identity = ticket.identity();
         if (identity == null || identity.schemaVersion() != CommitLog.SCHEMA_TYPED) {

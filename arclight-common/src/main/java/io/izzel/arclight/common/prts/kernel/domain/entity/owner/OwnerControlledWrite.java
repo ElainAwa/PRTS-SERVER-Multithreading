@@ -31,8 +31,16 @@ public final class OwnerControlledWrite {
     private static final java.util.Map<String, Long> REFUSALS =
         new java.util.concurrent.ConcurrentHashMap<>();
 
+    private static volatile String lastRefusal = "";
+
     private static void refuse(String reason) {
         REFUSALS.merge(reason, 1L, Long::sum);
+        lastRefusal = reason;
+    }
+
+    /** The first check that refused the latest admission attempt; diagnostic only. */
+    public static String lastRefusal() {
+        return lastRefusal;
     }
 
     /** The admission refusals since boot, by the first check that refused; diagnostic only. */

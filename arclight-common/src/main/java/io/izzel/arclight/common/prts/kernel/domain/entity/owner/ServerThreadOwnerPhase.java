@@ -177,6 +177,10 @@ public final class ServerThreadOwnerPhase {
                 // Not admitted: the host keeps the original call at this very site, before any owner
                 // effect. This is a compat row of this tick, not a re-run after a deferred body.
                 phase.compat++;
+                if (trace()) {
+                    System.out.println("[PRTS] owner-compat id=" + entity.getId() + " reason="
+                        + OwnerControlledWrite.lastRefusal());
+                }
                 return false;
             }
             DEFERRED.add(new DeferredRow(phase, (ServerLevel) entity.level(), villager, entity,
