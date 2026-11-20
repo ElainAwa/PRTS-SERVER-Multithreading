@@ -157,8 +157,25 @@ public final class ServerThreadOwnerPhase {
             return false;
         }
         LevelPhase phase = PENDING.get(entity.level().dimension().location().toString());
-        return phase != null && phase.rows.get(entity.getId()) instanceof Villager selected
-            && entity.level() instanceof ServerLevel level && sameLogicalRow(level, selected, entity);
+        if (phase == null) {
+            return false;
+        }
+        Object row = phase.rows.get(entity.getId());
+        if (!(row instanceof Villager selected) || !(entity.level() instanceof ServerLevel level)) {
+            return false;
+        }
+        boolean same = sameLogicalRow(level, selected, entity);
+        if (!same && trace()) {
+            System.out.println("[PRTS] owner-miss id=" + entity.getId() + " object="
+                + (selected == entity) + " uuid=" + selected.getUUID().equals(entity.getUUID())
+                + " tick=" + entity.tickCount + " selectedTick=" + selected.tickCount
+                + " gen=" + io.izzel.arclight.common.prts.kernel.domain.entity
+                    .EntityObjectGenerations.shared().generationOf(
+                        level.dimension().location().toString(),
+                        entity.getUUID().getMostSignificantBits(),
+                        entity.getUUID().getLeastSignificantBits()));
+        }
+        return same;
     }
 
     /** Runs a pending owner body at the original host tick call site; false means host may tick. */
