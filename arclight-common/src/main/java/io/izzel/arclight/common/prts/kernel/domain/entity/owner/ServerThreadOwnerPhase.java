@@ -204,14 +204,20 @@ public final class ServerThreadOwnerPhase {
             return false;
         }
         if (batchEnabled() && slice == Slice.WALK) {
-            if (OwnerControlledWrite.prepare((ServerLevel) entity.level(), entity) == null) {
+            OwnerControlledWrite.Admission admission =
+                OwnerControlledWrite.prepare((ServerLevel) entity.level(), entity);
+            if (admission == null) {
                 // Not admitted: the host keeps the original call at this very site, before any owner
                 // effect. This is a compat row of this tick, not a re-run after a deferred body.
                 phase.compat++;
                 return false;
             }
-            DEFERRED.add(new DeferredRow(phase, (ServerLevel) entity.level(), villager, entity,
-                phase.hostSteps.getOrDefault(entity.getId(), 0L)));
+            DeferredRow row = new DeferredRow(phase, (ServerLevel) entity.level(), villager, entity,
+                phase.hostSteps.getOrDefault(entity.getId(), 0L));
+            if (Boolean.getBoolean("arclight.prts.ownerBatchInline")) {
+                return runInlineControlledRow(row, admission);
+            }
+            DEFERRED.add(row);
             DEFERRED_IDS.add(entity.getId());
             StageCounters.note("ownerBatchRowDeferred");
             return true;
@@ -331,12 +337,29 @@ public final class ServerThreadOwnerPhase {
             + ":" + index;
     }
 
+    /** Runs one admitted row at its original host call site instead of deferring it: the begun
+     * ticket, worker body and owner terminal happen inside the same tick position the host would
+     * have ticked, and the wrapper still fires the one normal Post/portal afterwards. */
+    private static boolean runInlineControlledRow(DeferredRow row,
+                                                  OwnerControlledWrite.Admission admission) {
+        StageCounters.note("ownerBatchBody");
+        runControlledWorkerRow(SharedRuntime.shared(), row, admission, false);
+        row.phase().executed++;
+        row.phase().walkExecuted++;
+        RestOwnerWiring.noteSkip();
+        io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
+            .noteOwnerBodyExecuted();
+        noteExpectedPost(row.entity());
+        return true;
+    }
+
     /** Runs one begun row's real body on a worker through the existing cohort, then writes its
      * terminal on the owner thread after the body answered. The begun ticket and the worker answer
      * live in one persistent record until the owner finish or fault ends it; a worker future being
      * done only ends the body node. */
     private static void runControlledWorkerRow(SharedRuntime runtime, DeferredRow row,
-                                               OwnerControlledWrite.Admission admission) {
+                                               OwnerControlledWrite.Admission admission,
+                                               boolean replay) {
         io.izzel.arclight.common.prts.kernel.commit.CommitController controller =
             admission.controller();
         io.izzel.arclight.common.prts.kernel.commit.CommitController.BeginResult begin =
@@ -413,7 +436,7 @@ public final class ServerThreadOwnerPhase {
             throw new IllegalStateException(
                 "controlled entity write did not answer before its deadline");
         }
-        completeControlledExecution(record, true);
+        completeControlledExecution(record, replay);
         OwnerControlledExecution.retire(record);
     }
 
@@ -805,7 +828,7 @@ public final class ServerThreadOwnerPhase {
             for (DeferredRow row : controlled) {
                 OwnerControlledWrite.Admission admission = admissions.get(row);
                 StageCounters.note("ownerBatchBody");
-                runControlledWorkerRow(runtime, row, admission);
+                runControlledWorkerRow(runtime, row, admission, true);
             }
         } catch (RuntimeException | Error failure) {
             account.close(batchUnit, WorkAccount.Outcome.PARTIAL_FAULT, "batch-terminal");
