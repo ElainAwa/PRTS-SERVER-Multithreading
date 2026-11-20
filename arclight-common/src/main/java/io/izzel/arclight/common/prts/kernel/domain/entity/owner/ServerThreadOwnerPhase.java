@@ -165,6 +165,10 @@ public final class ServerThreadOwnerPhase {
         }
         Villager villager = phase.rows.remove(entity.getId());
         Slice slice = phase.slice.remove(entity.getId());
+        if (trace()) {
+            System.out.println("[PRTS] owner-body id=" + entity.getId() + " slice=" + slice
+                + " batch=" + batchEnabled());
+        }
         if (slice == null) {
             phase.fallback++;
             io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
