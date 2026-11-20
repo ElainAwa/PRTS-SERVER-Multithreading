@@ -340,19 +340,34 @@ public final class ServerThreadOwnerPhase {
             + ":" + index;
     }
 
-    /** Runs one admitted row on the host owner thread inside the batch's seat order: the same begun
-     * ticket and publisher contract as the inline path, but the deferred order keeps the declared
-     * prefix. This is the serial baseline, not a worker/G1 claim. */
+    /** Runs one admitted row on the host owner thread inside the batch's seat order: the begun
+     * ticket and the publisher contract are the worker path's, but the body runs here. The batch
+     * already holds its reservation, so this must not submit a second one. */
     private static void runHostSerialBatchRow(DeferredRow row,
                                               OwnerControlledWrite.Admission admission) {
-        io.izzel.arclight.common.prts.kernel.commit.CommitController.SubmitResult result =
-            OwnerControlledWrite.run(row.level(), row.villager(), admission,
-                io.izzel.arclight.common.prts.kernel.wiring.OwnerNativeCommitBinding.instance());
-        if (!result.admitted()
-            || result.terminal()
-                != io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Terminal.PUBLISHED) {
+        io.izzel.arclight.common.prts.kernel.commit.CommitController controller =
+            admission.controller();
+        io.izzel.arclight.common.prts.kernel.commit.CommitController.BeginResult begin =
+            controller.beginControl(admission.request());
+        if (!begin.admitted()) {
             row.phase().terminal++;
             throw new IllegalStateException("controlled entity write refused: "
+                + begin.code() + " " + begin.diagnostic());
+        }
+        io.izzel.arclight.common.prts.kernel.commit.CommitTicket ticket = begin.ticket();
+        io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Outcome answered;
+        try {
+            answered = OwnerControlledWrite.runBodyOnOwner(row.level(), row.villager(), admission);
+        } catch (RuntimeException | Error thrown) {
+            controller.finishControl(ticket, OwnerControlledWrite.partialOutcome(admission));
+            row.phase().terminal++;
+            throw thrown;
+        }
+        io.izzel.arclight.common.prts.kernel.commit.CommitController.SubmitResult result =
+            controller.finishControl(ticket, answered);
+        if (!result.admitted()) {
+            row.phase().terminal++;
+            throw new IllegalStateException("controlled entity write terminal refused: "
                 + result.code() + " " + result.diagnostic());
         }
         replayDeferredRow(row);

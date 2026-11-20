@@ -150,6 +150,20 @@ public final class OwnerControlledWrite {
         return result;
     }
 
+    /** Runs the real walk body for an already begun controlled ticket and maps it to an outcome;
+     * the caller writes that outcome through finishControl and must not submit another reservation. */
+    static CommitTicket.Outcome runBodyOnOwner(ServerLevel level, Villager villager,
+                                               Admission admission) {
+        boolean executed = RealEntityOwnerBody.runWalkOnServer(level, villager);
+        return executed ? outcome(CommitTicket.Terminal.PUBLISHED, admission.published())
+            : outcome(CommitTicket.Terminal.FAILED, admission.failed());
+    }
+
+    /** The outcome shape for a begun ticket whose body failed after it started. */
+    static CommitTicket.Outcome partialOutcome(Admission admission) {
+        return outcome(CommitTicket.Terminal.PARTIAL, admission.partial());
+    }
+
     private static CommitTicket.Outcome outcome(CommitTicket.Terminal terminal,
                                                 EffectStore.Effect effect) {
         return new CommitTicket.Outcome(terminal, OPERATION_KIND,
