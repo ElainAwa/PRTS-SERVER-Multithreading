@@ -10,6 +10,7 @@ import io.izzel.arclight.common.prts.kernel.commit.CommitTicket;
 import io.izzel.arclight.common.prts.kernel.commit.EffectRequestFactory;
 import io.izzel.arclight.common.prts.kernel.commit.EffectStore;
 import io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations;
+import io.izzel.arclight.common.prts.kernel.commit.IdentityWitness;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityObjectGenerations;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
 import io.izzel.arclight.common.prts.kernel.wiring.OwnerNativeCommitBinding;
@@ -101,6 +102,28 @@ public final class OwnerControlledWrite {
             WriteLevel.REGION, "entity");
         if (version <= 0L) {
             refuse("version");
+            return null;
+        }
+        IdentityWitness.Source source = module.commits().identitySource();
+        long liveEpoch = source.liveWorldEpoch(worldId);
+        if (liveEpoch != entry.worldEpoch()) {
+            refuse("epoch:" + entry.worldEpoch() + "->" + liveEpoch);
+            return null;
+        }
+        CommitNamespaces.Namespace carrier = controller.reservations().controller();
+        IdentityWitness.Authorization authorization = source.liveAuthorization(plan.planSequence(),
+            carrier, worldId, "entity", domain);
+        if (!authorization.admitted()) {
+            refuse("live-auth:" + authorization.refusal());
+            return null;
+        }
+        if (authorization.source().generation() != version) {
+            refuse("auth-source:" + authorization.source().generation() + "->" + version);
+            return null;
+        }
+        long peek = module.versionSlots().peek(worldId, WriteLevel.REGION, "entity");
+        if (peek != version) {
+            refuse("slot:" + version + "->" + peek);
             return null;
         }
         long effectRef = EFFECT_REFS.getAndIncrement();
