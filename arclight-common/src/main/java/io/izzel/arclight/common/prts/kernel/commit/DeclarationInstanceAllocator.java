@@ -67,7 +67,7 @@ public final class DeclarationInstanceAllocator {
                                                              long number) {
         return new FrozenDeclarations.Candidate(candidate.worldId(), candidate.domainId(),
             candidate.nodeKey(), candidate.chunk(), candidate.targetStatus(), number,
-            candidate.worldEpoch());
+            candidate.worldEpoch(), candidate.kind());
     }
 
     private static FrozenDeclarations.NodeKey nodeOf(FrozenDeclarations.Candidate candidate) {
