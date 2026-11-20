@@ -8,10 +8,11 @@ import net.minecraft.world.level.chunk.status.ChunkStatus;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
-/** The one hand-off for chunk reads an owner worker may not serve itself: the worker queues the
- * request and parks on the future, and the host runs the cache read on its own thread while it
- * waits for the batch. No read is cancelled or reordered, and a read the host cannot serve fails the
- * future with the original throwable. */
+/** Dormant host-served bridge for chunk reads an owner worker cannot serve itself: the worker queues
+ * the request and parks on the future while the host runs the read. It is not a registered wait
+ * point and must not run before one exists; until then the segment admission keeps demand-bearing
+ * segments on the host, so no production path reaches this bridge. No read is cancelled or reordered,
+ * and a read the host cannot serve fails the future with the original throwable. */
 public final class OwnerReadDemand {
 
     private record Request(ServerChunkCache cache, int x, int z, ChunkStatus status,
@@ -23,7 +24,8 @@ public final class OwnerReadDemand {
     private OwnerReadDemand() {
     }
 
-    /** Queues one read for the parked host and waits for its answer. */
+    /** Queues one read for a parked host and waits for its answer. Not registered as a wait point:
+     * do not run it before the registration and continuation are separately authorized. */
     public static ChunkAccess await(ServerChunkCache cache, int x, int z, ChunkStatus status,
                                     boolean blocking) {
         Request request = new Request(cache, x, z, status, blocking, new CompletableFuture<>());
@@ -42,7 +44,7 @@ public final class OwnerReadDemand {
         }
     }
 
-    /** Runs every queued read on the calling (host) thread; answers whether one was served. */
+    /** Serves queued reads on the calling host thread; the host has to be parked for this to run. */
     public static boolean service() {
         boolean served = false;
         Request request;

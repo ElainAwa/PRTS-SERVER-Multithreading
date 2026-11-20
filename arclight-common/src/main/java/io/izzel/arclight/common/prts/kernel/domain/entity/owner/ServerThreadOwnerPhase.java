@@ -254,10 +254,6 @@ public final class ServerThreadOwnerPhase {
         long ownerScope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
             .EntityTickOwnership.beginOwnerBodyScope(entity);
         boolean fallbackHost = false;
-        boolean walkBody = slice == Slice.WALK && OwnerNavigationWorker.enabled();
-        if (walkBody) {
-            OwnerNavigationWorker.enterOwnerBody();
-        }
         try {
             boolean executed = slice == Slice.WALK
                 ? RealEntityOwnerBody.runWalkOnServer((ServerLevel) entity.level(), villager)
@@ -284,9 +280,6 @@ public final class ServerThreadOwnerPhase {
                 .noteOwnerBodyExecuted();
             throw failure;
         } finally {
-            if (walkBody) {
-                OwnerNavigationWorker.leaveOwnerBody();
-            }
             io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
                 .endOwnerBodyScope(ownerScope);
             if (fallbackHost) {
@@ -843,93 +836,13 @@ public final class ServerThreadOwnerPhase {
         account.close(batchUnit, WorkAccount.Outcome.DONE, "batch-published");
     }
 
-    /** Claims one declared navigation span for the opted-in native program path: the row is begun
-     * before the worker runs, the worker runs only that span, and the host writes the one terminal
-     * before the successor. The whole entity tick stays on the host, so there is no whole-body
-     * replay and no second inline span. */
+    /** Retired native program span gate: the serial navigation continuation has no production
+     * caller any more, so the host always runs the extracted navigation stage. The gate stays
+     * closed until a demand-free segment program is separately authorized; it never hands a span
+     * to a parked host and never starts a worker. */
     public static boolean runNativeProgramSpan(net.minecraft.world.entity.Mob mob,
                                                net.minecraft.world.entity.ai.navigation.PathNavigation navigation) {
-        if (!OwnerNativeProgram.enabled() || !OwnerNavigationWorker.enabled()
-            || !EntityRowOwnershipWindow.enabled() || !(mob instanceof Villager villager)
-            || !(mob.level() instanceof ServerLevel level)) {
-            return false;
-        }
-        LevelPhase phase = PENDING.get(level.dimension().location().toString());
-        if (phase == null || !(phase.rows.get(mob.getId()) instanceof Villager selected)
-            || !sameLogicalRow(level, selected, villager)) {
-            return false;
-        }
-        OwnerControlledWrite.Admission admission = phase.programAdmissions.get(mob.getId());
-        if (admission == null) {
-            return false;
-        }
-        disposeEarlierProgramRows(phase, admission);
-        io.izzel.arclight.common.prts.kernel.commit.CommitController.BeginResult begin =
-            admission.controller().beginControl(admission.request());
-        if (!begin.admitted()) {
-            phase.terminal++;
-            throw new IllegalStateException("native program span refused: "
-                + begin.code() + " " + begin.diagnostic());
-        }
-        phase.rows.remove(mob.getId());
-        phase.slice.remove(mob.getId());
-        phase.programAdmissions.remove(mob.getId());
-        io.izzel.arclight.common.prts.kernel.commit.CommitTicket ticket = begin.ticket();
-        try {
-            OwnerNavigationWorker.runProgramSpan(navigation);
-        } catch (RuntimeException | Error thrown) {
-            admission.controller().finishControl(ticket,
-                OwnerControlledWrite.partialOutcome(admission));
-            phase.terminal++;
-            throw thrown;
-        }
-        io.izzel.arclight.common.prts.kernel.commit.CommitController.SubmitResult result =
-            admission.controller().finishControl(ticket,
-                OwnerControlledWrite.publishedOutcome(admission));
-        if (!result.admitted()) {
-            phase.terminal++;
-            throw new IllegalStateException("native program span terminal refused: "
-                + result.code() + " " + result.diagnostic());
-        }
-        phase.executed++;
-        noteExpectedPost(mob);
-        admission.controller().consumePublished(ticket);
-        return true;
-    }
-
-    /** Retires every earlier declared program row that cannot be begun before this one: the host
-     * keeps its original stage, and the seat is closed natively before any effect so the current
-     * seat can start in the frozen order. */
-    private static void disposeEarlierProgramRows(LevelPhase phase,
-                                                  OwnerControlledWrite.Admission current) {
-        int currentPosition = current.entry().seat().position();
-        java.util.List<java.util.Map.Entry<Integer, OwnerControlledWrite.Admission>> earlier =
-            new java.util.ArrayList<>();
-        for (java.util.Map.Entry<Integer, OwnerControlledWrite.Admission> entry
-            : phase.programAdmissions.entrySet()) {
-            if (entry.getValue() == current || !phase.rows.containsKey(entry.getKey())) {
-                continue;
-            }
-            if (entry.getValue().entry().seat().position() < currentPosition) {
-                earlier.add(entry);
-            }
-        }
-        for (java.util.Map.Entry<Integer, OwnerControlledWrite.Admission> entry : earlier) {
-            OwnerControlledWrite.Admission admission = entry.getValue();
-            io.izzel.arclight.common.prts.kernel.commit.CommitReservation.DispositionResult result =
-                admission.controller().reservations().disposeNoEffect(
-                    io.izzel.arclight.common.prts.kernel.KernelModule.instance().declarations(),
-                    admission.entry(), "program-span-order");
-            if (!result.disposed()) {
-                phase.terminal++;
-                throw new IllegalStateException("earlier program seat could not close: "
-                    + result.diagnostic());
-            }
-            phase.rows.remove(entry.getKey());
-            phase.slice.remove(entry.getKey());
-            phase.programAdmissions.remove(entry.getKey());
-            phase.fallback++;
-        }
+        return false;
     }
 
     /** Closes program seats that never reached their span this tick; the host never ran an owner

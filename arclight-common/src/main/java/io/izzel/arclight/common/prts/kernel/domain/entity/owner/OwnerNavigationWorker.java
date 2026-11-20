@@ -11,9 +11,10 @@ import net.neoforged.neoforge.server.ServerLifecycleHooks;
 
 import java.util.concurrent.TimeUnit;
 
-/** The serial continuation of one navigation span: the host runs the owner body, hands only the
- * navigation span to one shared-runtime worker, parks until that span settles, and then lets the
- * host run the successor. It is opt-in and never returns to an inline span after admission. */
+/** Legacy serial continuation of one navigation span: the host hands the span to one shared-runtime
+ * worker, parks until that span settles, and lets the successor follow. It has no production caller
+ * any more and must not be wired back into a production path: a span that can demand a chunk needs
+ * the registered wait-result continuation, not a parked host. */
 public final class OwnerNavigationWorker {
 
     /** The diagnostic switch of the serial continuation; off in every shipped build. */
@@ -38,7 +39,8 @@ public final class OwnerNavigationWorker {
         OWNER_BODY.remove();
     }
 
-    /** Runs one span on a shared worker and waits for it; false keeps the caller on the serial path. */
+    /** Legacy entry with no production caller; false keeps a caller on the serial path. Do not wire
+     * this into a production path without the separately authorized wait-result continuation. */
     public static boolean run(PathNavigation navigation) {
         if (!enabled() || navigation == null || !OWNER_BODY.get()) {
             return false;
@@ -46,8 +48,8 @@ public final class OwnerNavigationWorker {
         return runSpan(navigation);
     }
 
-    /** Runs one declared program span: no whole-body owner marker is required, because the caller
-     * already admitted the span through the controlled chain. */
+    /** Legacy entry with no production caller; kept only so the retired span path stays readable.
+     * Do not wire this into a production path without the separately authorized continuation. */
     public static boolean runProgramSpan(PathNavigation navigation) {
         if (!enabled() || navigation == null) {
             return false;
@@ -85,8 +87,9 @@ public final class OwnerNavigationWorker {
             if (server == null) {
                 handle.await(WAIT_MS, TimeUnit.MILLISECONDS);
             } else {
-                // The span may demand a chunk from the server thread; the host services those demands
-                // while it is parked here instead of deadlocking on the joined future.
+                // Not for production: this park is exactly the serial-continuation shape the segment
+                // program replaces. A production span must be demand-free or use the registered
+                // wait-result continuation; a parked host is never a production answer.
                 long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(WAIT_MS);
                 server.managedBlock(() -> handle.future().isDone() || System.nanoTime() > deadline);
                 if (!handle.future().isDone()) {
