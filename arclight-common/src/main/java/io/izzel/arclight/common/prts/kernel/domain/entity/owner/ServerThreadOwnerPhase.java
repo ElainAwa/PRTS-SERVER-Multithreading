@@ -1153,6 +1153,16 @@ public final class ServerThreadOwnerPhase {
         return rows;
     }
 
+    /** Whether the host tick loop would run the full body of this entity in this pass: a row the
+     * host would only inactive-tick must not be taken by the owner, or the two paths diverge. */
+    private static boolean hostWouldRunFullBody(net.minecraft.world.entity.Entity entity) {
+        if (!io.izzel.arclight.i18n.ArclightConfig.spec().getOptimization()
+            .useActivationAndTrackingRange()) {
+            return true;
+        }
+        return org.spigotmc.ActivationRange.checkIfActive(entity);
+    }
+
     private static List<Villager> select(ServerLevel level, EntityDueCapture.Window window,
                                          String levelId, LevelPhase phase) {
         List<Villager> selected = new ArrayList<>();
@@ -1160,6 +1170,7 @@ public final class ServerThreadOwnerPhase {
             net.minecraft.world.entity.Entity entity = level.getEntity(row.entityId());
             if (!(entity instanceof Villager villager) || !villager.isAlive()
                 || villager.isRemoved() || villager.isNoAi()
+                || !hostWouldRunFullBody(entity)
                 || villager.getPose() != Pose.SLEEPING
                 || !villager.getBrain().isActive(Activity.REST)) {
                 continue;
@@ -1175,7 +1186,8 @@ public final class ServerThreadOwnerPhase {
             for (EntityDueWindow.Row row : selectRowsWalk(window, levelId)) {
                 net.minecraft.world.entity.Entity entity = level.getEntity(row.entityId());
                 if (!(entity instanceof Villager villager) || !villager.isAlive()
-                    || villager.isRemoved() || villager.isNoAi() || villager.isPassenger()) {
+                    || villager.isRemoved() || villager.isNoAi() || villager.isPassenger()
+                    || !hostWouldRunFullBody(entity)) {
                     continue;
                 }
                 if (villager.getPose() == Pose.SLEEPING
