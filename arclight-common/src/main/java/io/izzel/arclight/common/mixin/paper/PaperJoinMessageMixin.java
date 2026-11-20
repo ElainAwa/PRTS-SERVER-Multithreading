@@ -19,10 +19,12 @@ public abstract class PaperJoinMessageMixin {
     @Shadow
     public abstract void setJoinMessage(String message);
 
+    /** Returns the join message as an Adventure component. */
     public Component joinMessage() {
         return PaperJoinMessages.read(this.getJoinMessage());
     }
 
+    /** Replaces the join message from an Adventure component. */
     public void joinMessage(Component message) {
         this.setJoinMessage(PaperJoinMessages.write(message));
     }

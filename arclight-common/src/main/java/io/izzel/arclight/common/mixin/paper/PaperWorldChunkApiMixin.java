@@ -19,10 +19,12 @@ public interface PaperWorldChunkApiMixin {
     // World is the type plugins hold, so the methods are injected there.
     // The two-argument form starts generation. A world that is not a CraftWorld completes with null.
 
+    /** Returns the chunk at these coordinates, generating it when it is not loaded. */
     default CompletableFuture<Chunk> getChunkAtAsync(int x, int z) {
         return this.getChunkAtAsync(x, z, true);
     }
 
+    /** Returns the chunk at these coordinates, generating it only when asked. */
     default CompletableFuture<Chunk> getChunkAtAsync(int x, int z, boolean generate) {
         if (!(this instanceof CraftWorld world)) {
             return CompletableFuture.completedFuture(null);

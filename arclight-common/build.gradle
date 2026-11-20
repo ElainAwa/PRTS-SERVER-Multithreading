@@ -55,7 +55,46 @@ dependencies {
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
+tasks.register('verifyThirdPartyPaper') {
+    def sumsFile = rootProject.file('third-party/paper/SHA256SUMS')
+    def paperDir = rootProject.file('third-party/paper')
+    inputs.file(sumsFile)
+    inputs.dir(paperDir)
+    doLast {
+        sumsFile.eachLine { raw ->
+            def line = raw.trim()
+            if (line.isEmpty() || line.startsWith('#')) {
+                return
+            }
+            def parts = line.split(/\s+/, 2)
+            if (parts.length != 2) {
+                throw new GradleException("Malformed checksum line: ${line}")
+            }
+            def expected = parts[0].toLowerCase(java.util.Locale.ROOT)
+            def jar = new File(paperDir, parts[1])
+            if (!jar.isFile()) {
+                throw new GradleException("Missing third-party jar ${jar.name}")
+            }
+            def digest = java.security.MessageDigest.getInstance('SHA-256')
+            jar.withInputStream { input ->
+                byte[] buffer = new byte[8192]
+                int read
+                while ((read = input.read(buffer)) >= 0) {
+                    if (read > 0) {
+                        digest.update(buffer, 0, read)
+                    }
+                }
+            }
+            def actual = new java.math.BigInteger(1, digest.digest()).toString(16).padLeft(64, '0')
+            if (actual != expected) {
+                throw new GradleException("Checksum mismatch for ${jar.name}")
+            }
+        }
+    }
+}
+
 compileJava {
+    dependsOn tasks.named('verifyThirdPartyPaper')
     options.compilerArgs << '-XDignore.symbol.file' << '-XDenableSunApiLintControl'
     // Optional compatibility mixins target mod classes that are not a compile dependency; runtime
     // Mixin still resolves and validates their targets, this only keeps javac's AP from requiring

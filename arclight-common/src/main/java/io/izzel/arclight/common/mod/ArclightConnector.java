@@ -20,6 +20,7 @@ public class ArclightConnector implements IMixinConnector {
         Mixins.addConfiguration("mixins.arclight.creeperlate.json");
         Mixins.addConfiguration("mixins.arclight.core.json");
         Mixins.addConfiguration("mixins.arclight.bukkit.json");
+        // Registers the paper mixin config next to Bukkit. Plugins call those methods on Bukkit types.
         Mixins.addConfiguration("mixins.arclight.paper.json");
         switch (ArclightPlatform.current()) {
             case VANILLA -> Mixins.addConfiguration("mixins.arclight.vanilla.json");
