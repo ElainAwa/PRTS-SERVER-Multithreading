@@ -12,6 +12,7 @@ import net.minecraft.world.entity.schedule.Activity;
 import io.izzel.arclight.common.bridge.core.entity.EntityBridge;
 import io.izzel.arclight.common.prts.kernel.SharedRuntime;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerUnitPermit;
+import io.izzel.arclight.common.prts.kernel.decision.EventChainAdmission;
 import io.izzel.arclight.common.prts.kernel.domain.entity.CancelToken;
 import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
 import io.izzel.arclight.common.prts.kernel.generic.ExecutionCohort;
@@ -217,6 +218,13 @@ public final class ServerThreadOwnerPhase {
             io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
                 .beginLegacyPoiFallback(entity);
             noteExpectedPost(entity);
+            return false;
+        }
+        if (!EventChainAdmission.rowAdmissible()) {
+            // A row whose update can raise a plugin event with listeners stays on the host: that
+            // decision has to be taken before any owner effect, and an owner thread cannot dispatch
+            // a listener chain. This is the existing compat bucket, not a new refusal code.
+            phase.compat++;
             return false;
         }
         if (batchEnabled() && slice == Slice.WALK) {
