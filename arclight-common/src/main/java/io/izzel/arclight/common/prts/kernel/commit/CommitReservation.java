@@ -416,19 +416,30 @@ public final class CommitReservation {
      * minted under, and only where the pair may run it: a reservation whose place an earlier one of
      * the pair still holds does not start its side effect at all. Every refusal here leaves the
      * phases, the reservations and the places exactly where they were. */
+    /** The branch that refused the last beginPublish; diagnostic only while the controlled path is
+     * being brought up, never read by a decision. */
+    private String lastBeginRefusal = "";
+
+    public String lastBeginRefusal() {
+        return lastBeginRefusal;
+    }
+
     public boolean beginPublish(CommitTicket ticket) {
         if (Thread.currentThread() != ownerThread) {
             offThreadRefusals++;
+            lastBeginRefusal = "off-thread";
             return false;
         }
         if (ticket == null || tickets.get(ticket.ticketId()) != ticket) {
             unknownTicket++;
+            lastBeginRefusal = "unknown-ticket";
             return false;
         }
         if (ticket.logLifetime() != log.logLifetime() || ticket.effectSlot().storeId() != store.storeId()
             || ticket.controller().lifetime() != controller.lifetime()
             || ticket.controller().resetEpoch() != epochs.current()) {
             crossLogRefusals++;
+            lastBeginRefusal = "cross-log";
             return false;
         }
         if (frozenValuesMoved(ticket)) {
@@ -436,6 +447,7 @@ public final class CommitReservation {
             // a world that moved on or a grant that was retired refuses the start instead of the
             // frozen columns being replaced by today's values.
             driftRefusals++;
+            lastBeginRefusal = "frozen-values-moved";
             return false;
         }
         if (versionSource != null) {
@@ -447,10 +459,12 @@ public final class CommitReservation {
             if (revision == io.izzel.arclight.common.prts.kernel.auth.WriteVersionSlots.NOT_CARRIED
                 || revision != ticket.batch().expectedVersion()) {
                 publishRefusals++;
+                lastBeginRefusal = "state-revision";
                 return false;
             }
         }
         if (phases.get(ticket.ticketId()) != Phase.RESERVED) {
+            lastBeginRefusal = "not-reserved";
             return false;
         }
         if (!log.placeRunnable(ticket.batch().worldId(), ticket.batch().domainId(),
@@ -458,12 +472,14 @@ public final class CommitReservation {
             // An earlier place of this pair has not ended: the side effect of a later one waits for it
             // instead of running ahead of the line the ring is about to take.
             publishRefusals++;
+            lastBeginRefusal = "place-not-runnable";
             return false;
         }
         if (earlierSeatPending(ticket)) {
             // The frozen plan declares a place before this one that neither carries a stored line nor
             // a reservation: the side effect of this place would pass that prefix, so it waits.
             publishRefusals++;
+            lastBeginRefusal = "earlier-seat-pending";
             return false;
         }
         phases.put(ticket.ticketId(), Phase.PUBLISHING);

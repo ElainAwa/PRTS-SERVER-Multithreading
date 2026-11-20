@@ -510,7 +510,8 @@ public final class ServerThreadOwnerPhase {
                             .PUBLISHED) {
                     row.phase().terminal++;
                     throw new IllegalStateException("controlled entity write refused: "
-                        + result.code() + " " + result.diagnostic());
+                        + result.code() + " " + result.diagnostic() + " begin="
+                        + admission.controller().reservations().lastBeginRefusal());
                 }
                 replayDeferredRow(row);
             }
