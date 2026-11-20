@@ -66,6 +66,21 @@ public final class SharedStreamTable {
     }
 
     /**
+     * Replaces this table's streams with the given snapshots; the next draws continue from the
+     * recorded positions instead of reseeding, and the given order becomes the declaration order.
+     *
+     * @param states one state per stream, in declaration order
+     */
+    public void restoreState(List<StreamState> states) {
+        Objects.requireNonNull(states, "states");
+        streams.clear();
+        for (StreamState state : states) {
+            Objects.requireNonNull(state, "state");
+            streams.put(state.key(), SharedStream.restore(state));
+        }
+    }
+
+    /**
      * Rebuilds a table from snapshots; streams are restored exactly, including their gaussian cache
      * and fork count, and the given order becomes the declaration order of the restored table.
      *

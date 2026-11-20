@@ -1,88 +1,111 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.domain.entity.owner;
 
+import io.izzel.arclight.common.prts.kernel.random.SharedStream;
+import io.izzel.arclight.common.prts.kernel.random.SharedStreamTable;
+import io.izzel.arclight.common.prts.kernel.random.StreamKey;
+import io.izzel.arclight.common.prts.kernel.random.StreamState;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 
-/** The one shared world random stream, serialized: every draw takes the same lock the level would
- * take on its own thread, so two owner bodies can never enter the legacy source together while the
- * stream itself, its fork and its positional factories stay the level's upstream ones. */
+import java.util.List;
+
+/** The level's one random field routed to keyed shared streams: a draw of an owner body goes to the
+ * stream its business/object identity names, while a draw outside an owner body keeps the upstream
+ * host source. A stream is created once per key and persists in this table; it is never re-derived or
+ * reseeded, and its snapshot is the stream position the world can save. */
 public final class OwnerSharedRandomSource implements RandomSource {
 
     private final RandomSource base;
-    private final Object lock = new Object();
+    private final SharedStreamTable table = new SharedStreamTable();
 
     public OwnerSharedRandomSource(RandomSource base) {
         this.base = base;
     }
 
+    private RandomSource routed() {
+        OwnerRandomContext.Row row = OwnerRandomContext.current();
+        if (row == null) {
+            return base;
+        }
+        SharedStream stream = table.stream(StreamKey.of(row.worldSeed(), row.worldIdentity(),
+            row.dimension(), row.business(), row.objectIdentity()));
+        return stream;
+    }
+
+    /** The persistent table of streams this level random has addressed, in first-use order. */
+    public SharedStreamTable table() {
+        return table;
+    }
+
+    /** The versioned stream positions a world save can store. */
+    public List<StreamState> snapshot() {
+        return table.snapshot();
+    }
+
+    /** Restores the stream positions of this level random; the next draws continue instead of
+     * reseeding. */
+    public void restore(List<StreamState> states) {
+        table.restoreState(states);
+    }
+
     @Override
     public RandomSource fork() {
-        synchronized (lock) {
-            return base.fork();
-        }
+        return routed().fork();
     }
 
     @Override
     public PositionalRandomFactory forkPositional() {
-        synchronized (lock) {
-            return base.forkPositional();
-        }
+        return routed().forkPositional();
     }
 
     @Override
     public void setSeed(long seed) {
-        synchronized (lock) {
-            base.setSeed(seed);
+        if (OwnerRandomContext.current() != null) {
+            // A keyed stream is addressed by its key, never reseeded by a caller inside an owner body.
+            routed().setSeed(seed);
+            return;
         }
+        base.setSeed(seed);
     }
 
     @Override
     public int nextInt() {
-        synchronized (lock) {
-            return base.nextInt();
-        }
+        return routed().nextInt();
     }
 
     @Override
     public int nextInt(int bound) {
-        synchronized (lock) {
-            return base.nextInt(bound);
-        }
+        return routed().nextInt(bound);
     }
 
     @Override
     public long nextLong() {
-        synchronized (lock) {
-            return base.nextLong();
-        }
+        return routed().nextLong();
     }
 
     @Override
     public boolean nextBoolean() {
-        synchronized (lock) {
-            return base.nextBoolean();
-        }
+        return routed().nextBoolean();
     }
 
     @Override
     public float nextFloat() {
-        synchronized (lock) {
-            return base.nextFloat();
-        }
+        return routed().nextFloat();
     }
 
     @Override
     public double nextDouble() {
-        synchronized (lock) {
-            return base.nextDouble();
-        }
+        return routed().nextDouble();
     }
 
     @Override
     public double nextGaussian() {
-        synchronized (lock) {
-            return base.nextGaussian();
-        }
+        return routed().nextGaussian();
+    }
+
+    @Override
+    public void consumeCount(int count) {
+        routed().consumeCount(count);
     }
 }

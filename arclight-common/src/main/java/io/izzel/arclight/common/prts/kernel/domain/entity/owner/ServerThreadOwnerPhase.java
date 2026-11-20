@@ -537,7 +537,13 @@ public final class ServerThreadOwnerPhase {
                 scopeStarted = true;
                 record.stage = OwnerControlledExecution.Stage.EFFECT_ENTERED;
                 record.witness.markEffectPossible();
-                boolean executed = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
+                OwnerRandomContext.enter(row.level(), row.villager(), "entity");
+                boolean executed;
+                try {
+                    executed = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
+                } finally {
+                    OwnerRandomContext.exit();
+                }
                 record.outcome = executed
                     ? new io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Outcome(
                         io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Terminal.PUBLISHED,
