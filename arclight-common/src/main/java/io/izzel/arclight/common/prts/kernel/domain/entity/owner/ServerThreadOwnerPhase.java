@@ -550,26 +550,14 @@ public final class ServerThreadOwnerPhase {
             } catch (Throwable failure) {
                 record.bodyFailure = failure;
             } finally {
-                if (scopeStarted) {
-                    try {
-                        io.izzel.arclight.common.prts.kernel.domain.entity.ownership
-                            .EntityTickOwnership.endOwnerBodyScope(scope);
-                    } catch (Throwable failure) {
-                        cleanup = failure;
-                    }
-                }
-                if (lease != null) {
-                    try {
-                        lease.release();
-                    } catch (Throwable failure) {
-                        cleanup = cleanup == null ? failure : append(cleanup, failure);
-                    }
-                }
-                try {
-                    OwnerUnitPermit.exit();
-                } catch (Throwable failure) {
-                    cleanup = cleanup == null ? failure : append(cleanup, failure);
-                }
+                OwnerBodyLease heldLease = lease;
+                long heldScope = scope;
+                boolean heldScopeStarted = scopeStarted;
+                cleanup = OwnerControlledWorkerScope.closeSteps(null,
+                    heldScopeStarted ? () -> io.izzel.arclight.common.prts.kernel.domain.entity
+                        .ownership.EntityTickOwnership.endOwnerBodyScope(heldScope) : null,
+                    heldLease == null ? null : heldLease::release,
+                    OwnerUnitPermit::exit);
                 if (cleanup != null) {
                     record.cleanupFailure = cleanup;
                 }
