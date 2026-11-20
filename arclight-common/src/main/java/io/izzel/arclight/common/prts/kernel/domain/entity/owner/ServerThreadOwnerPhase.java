@@ -343,7 +343,11 @@ public final class ServerThreadOwnerPhase {
     private static boolean runInlineControlledRow(DeferredRow row,
                                                   OwnerControlledWrite.Admission admission) {
         StageCounters.note("ownerBatchBody");
-        runControlledWorkerRow(SharedRuntime.shared(), row, admission, false);
+        SharedRuntime runtime = SharedRuntime.shared();
+        if (runtime.pool() == null && !runtime.open()) {
+            throw new IllegalStateException("owner batch pool is unavailable");
+        }
+        runControlledWorkerRow(runtime, row, admission, false);
         row.phase().executed++;
         row.phase().walkExecuted++;
         RestOwnerWiring.noteSkip();
