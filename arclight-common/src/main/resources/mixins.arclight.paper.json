@@ -1,0 +1,18 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "io.izzel.arclight.common.mixin.paper",
+  "target": "@env(DEFAULT)",
+  "compatibilityLevel": "JAVA_21",
+  "plugin": "io.izzel.arclight.common.mod.ArclightMixinPlugin",
+  "setSourceFile": true,
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "mixins": [
+    "PaperJoinMessageMixin",
+    "PaperPlayerProfileApiMixin",
+    "PaperPluginLoadMixin",
+    "PaperWorldChunkApiMixin"
+  ]
+}

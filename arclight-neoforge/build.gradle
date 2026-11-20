@@ -44,6 +44,14 @@ dependencies {
 
     common(project(path: ':arclight-common', configuration: 'namedElements')) { transitive = false }
     shadowBundle(project(path: ':arclight-common', configuration: 'transformProductionNeoForge')) { transitive = false }
+    // File copies have no transitive dependencies.
+    shadowBundle files(
+        rootProject.file('third-party/paper/adventure-api-4.17.0.jar'),
+        rootProject.file('third-party/paper/adventure-key-4.17.0.jar'),
+        rootProject.file('third-party/paper/adventure-text-serializer-legacy-4.17.0.jar'),
+        rootProject.file('third-party/paper/examination-api-1.3.0.jar'),
+        rootProject.file('third-party/paper/examination-string-1.3.0.jar')
+    )
 
     testImplementation project(':arclight-common')
     testImplementation platform('org.junit:junit-bom:5.10.2')
@@ -83,6 +91,10 @@ shadowJar {
 
     configurations = [project.configurations.shadowBundle]
     archiveClassifier = 'dev-shadow'
+    dependsOn project(':arclight-common').tasks.named('verifyThirdPartyPaper')
+    from(rootProject.file('THIRD-PARTY.md')) {
+        into 'META-INF'
+    }
 }
 
 remapJar {

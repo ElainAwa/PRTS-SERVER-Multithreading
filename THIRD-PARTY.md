@@ -28,6 +28,8 @@
 | **Fabric Loader / Fabric API** | Fabric 平台支持（保留，未参与本次构建验证） | Apache-2.0 |
 | **Bukkit / Spigot API** (SpigotMC) | 插件 API | GPL-3.0 |
 | **Paper API** (PaperMC) | Paper 插件 API 兼容面：`org.bukkit.event.player.PlayerAttemptPickupItemEvent` 事件类，以及 `Server`/`Bukkit#getMinecraftVersion`、`HumanEntity#open*` 方法声明（本仓库在 `prts/modsupport` 中重新实现；上游：<https://github.com/PaperMC/Paper> 的 `paper-api`） | MIT（Paper 仓库整体为 GPL-3.0；这部分作者已按 Paper 的 `LICENSE.md` 选择 MIT） |
+| **Adventure** (Kyori) | 聊天与加入消息的文本类型。jar 在 `third-party/paper/`，打进 NeoForge 模组 jar。`adventure-api`、`adventure-key`、`adventure-text-serializer-legacy` 均为 4.17.0，来源 Maven Central。校验见同目录 `SHA256SUMS` | MIT |
+| **Examination** (Kyori) | Adventure 的检查 API。`examination-api`、`examination-string` 均为 1.3.0，同样在 `third-party/paper/`，来源 Maven Central | MIT |
 | **TerminalConsoleAppender** (Mojang) | 控制台 ANSI 支持 | LGPL-2.1 |
 | **JLine** | 终端处理 | BSD-3-Clause |
 | **Jansi** (fusesource) | Windows 终端 ANSI | Apache-2.0 |
@@ -48,3 +50,60 @@
 1. 以二进制或源码形式再分发本仓库或其衍生作品时，**必须一并保留** `LICENSE`、`NOTICE` 与本文档；
 2. 修改过的源文件须保留原作者版权声明，并注明修改事实（GPL-3.0 第 5 条 a 项）；
 3. 不得移除或替换本仓库中第三方代码的作者署名。
+
+## 四、随制品分发的 MIT 声明
+
+下列全文分别取自 Adventure `v4.17.0` 与 Examination `v1.3.0` 发布标签中的 `license.txt`。
+构建把本文档放进 NeoForge 模组 jar 的 `META-INF/THIRD-PARTY.md`。
+
+Adventure 4.17.0（`adventure-api`、`adventure-key`、`adventure-text-serializer-legacy`）：
+
+```
+MIT License
+
+Copyright (c) 2017-2023 KyoriPowered
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+Examination 1.3.0（`examination-api`、`examination-string`）：
+
+```
+MIT License
+
+Copyright (c) 2018-2019 KyoriPowered
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
