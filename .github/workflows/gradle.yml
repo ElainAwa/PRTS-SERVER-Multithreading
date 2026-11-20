@@ -3,10 +3,15 @@
 
 name: Build
 
+permissions:
+  contents: write
+
 on:
   workflow_dispatch: 
   push:
     branches:
+      - '**'
+    tags:
       - '**'
 
 jobs:
@@ -56,3 +61,10 @@ jobs:
       with:
         name: PRTS-server-jar
         path: bootstrap/build/libs/PRTS-neoforge-*.jar
+    - name: Publish release jar (tag builds)
+      if: startsWith(github.ref, 'refs/tags/')
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        JAR=$(ls bootstrap/build/libs/PRTS-neoforge-*.jar | head -1)
+        gh release create "${GITHUB_REF_NAME}" "$JAR" --generate-notes --title "${GITHUB_REF_NAME}" || gh release upload "${GITHUB_REF_NAME}" "$JAR" --clobber

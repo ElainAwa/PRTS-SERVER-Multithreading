@@ -1,5 +1,6 @@
 package io.izzel.arclight.server;
 
+import java.io.Console;
 import java.io.FileDescriptor;
 import java.io.FileOutputStream;
 import java.io.InputStream;
@@ -12,7 +13,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.List;
 import java.util.Properties;
 
 public class Launcher {
@@ -24,7 +24,10 @@ public class Launcher {
     private static final int MAX_JAVA_VERSION = 22;
 
     private static final String EULA_URL = "https://aka.ms/MinecraftEULA";
+    private static final String EULA_PROMPT_URL = "https://account.mojang.com/documents/minecraft_eula";
     private static final String EULA_FILE = "eula.txt";
+    private static final String EULA_TEXT = "#By changing the setting below to TRUE you are indicating your agreement"
+        + " to our EULA (" + EULA_PROMPT_URL + ").\n#Automatically generated after the interactive prompt.\neula=true\n";
 
     /** Text used to ask the console encoding whether it can carry non-ASCII characters at all. */
     private static final String NON_ASCII_SAMPLE = "\u4e2d\u6587";
@@ -48,7 +51,7 @@ public class Launcher {
 
         // The launcher starts the server itself, so the agreement has to be checked here as well:
         // otherwise a server directory without an accepted licence reaches the game and fails there.
-        if (!checkEula(Paths.get(EULA_FILE))) {
+        if (!checkEula(Paths.get(EULA_FILE)) && !promptForEula()) {
             System.err.println("You need to agree to the Minecraft EULA to run this server. Read " + EULA_URL
                 + " and set eula=true in " + EULA_FILE + ".");
             System.exit(1);
@@ -65,17 +68,7 @@ public class Launcher {
         }
     }
 
-    /**
-     * Keeps the localized startup text readable.
-     *
-     * <p>The banner and the i18n messages are written straight to the standard streams, before any
-     * logger exists. A JVM started under a locale whose console encoding cannot carry non-ASCII
-     * characters at all - the POSIX "C" locale, for example - silently replaces every one of them
-     * with a question mark. When this sample cannot be encoded by the console,
-     * the streams are replaced with UTF-8 writers; that is also the encoding the log files and any
-     * process reading a pipe expect. An encoding that can already carry the text, a Windows code
-     * page for instance, is left exactly as it is.</p>
-     */
+    /** Keeps the startup text readable by forcing UTF-8 only when the console encoding cannot carry it. */
     private static void preserveLocalizedOutput() {
         Charset console = consoleCharset();
         if (console != null && console.newEncoder().canEncode(NON_ASCII_SAMPLE)) {
@@ -85,11 +78,7 @@ public class Launcher {
         System.setErr(new PrintStream(new FileOutputStream(FileDescriptor.err), true, StandardCharsets.UTF_8));
     }
 
-    /**
-     * Reports the encoding the JVM uses for its standard streams.
-     *
-     * @return the console encoding, or the platform default when the JVM does not name one
-     */
+    /** Reports the encoding the JVM uses for its standard streams. */
     private static Charset consoleCharset() {
         for (String key : new String[]{"stdout.encoding", "native.encoding"}) {
             String name = System.getProperty(key);
@@ -104,18 +93,45 @@ public class Launcher {
         return Charset.defaultCharset();
     }
 
-    /**
-     * Reads the licence agreement out of the server directory.
-     *
-     * @param eulaFile path of the file that holds the agreement
-     * @return {@code true} when the file exists and holds the accepted setting
-     * @throws java.io.IOException when the file exists but cannot be read
-     */
+    /** Asks the console for the agreement and writes it after a yes; no console, a declined answer
+     * or a failed write keeps the non-interactive error path and never blocks. */
+    private static boolean promptForEula() {
+        Console console = System.console();
+        if (console == null) {
+            return false;
+        }
+        console.writer().println("By running this server, you agree to the Minecraft EULA.");
+        console.writer().println("Read the EULA at: " + EULA_PROMPT_URL);
+        console.writer().print("Do you agree to the EULA? (y/N): ");
+        console.writer().flush();
+        String answer = console.readLine();
+        if (answer == null) {
+            return false;
+        }
+        String normalized = answer.trim();
+        if (!normalized.equalsIgnoreCase("y") && !normalized.equalsIgnoreCase("yes")) {
+            return false;
+        }
+        try {
+            Files.writeString(Paths.get(EULA_FILE), EULA_TEXT, StandardCharsets.UTF_8);
+            return true;
+        } catch (java.io.IOException failure) {
+            System.err.println("Could not write " + EULA_FILE + ": " + failure.getMessage());
+            return false;
+        }
+    }
+
+    /** Reads the agreement with the properties rules, so the exact line and the spaced forms both
+     * count; a missing file is not accepted. */
     static boolean checkEula(Path eulaFile) throws java.io.IOException {
         if (!Files.isRegularFile(eulaFile)) {
             return false;
         }
-        List<String> lines = Files.readAllLines(eulaFile, StandardCharsets.UTF_8);
-        return lines.stream().anyMatch("eula=true"::equals);
+        Properties properties = new Properties();
+        try (InputStream input = Files.newInputStream(eulaFile)) {
+            properties.load(input);
+        }
+        String accepted = properties.getProperty("eula");
+        return accepted != null && "true".equalsIgnoreCase(accepted.trim());
     }
 }
