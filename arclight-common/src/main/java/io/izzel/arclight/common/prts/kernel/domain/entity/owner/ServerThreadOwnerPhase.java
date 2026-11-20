@@ -340,6 +340,24 @@ public final class ServerThreadOwnerPhase {
             + ":" + index;
     }
 
+    /** Runs one admitted row on the host owner thread inside the batch's seat order: the same begun
+     * ticket and publisher contract as the inline path, but the deferred order keeps the declared
+     * prefix. This is the serial baseline, not a worker/G1 claim. */
+    private static void runHostSerialBatchRow(DeferredRow row,
+                                              OwnerControlledWrite.Admission admission) {
+        io.izzel.arclight.common.prts.kernel.commit.CommitController.SubmitResult result =
+            OwnerControlledWrite.run(row.level(), row.villager(), admission,
+                io.izzel.arclight.common.prts.kernel.wiring.OwnerNativeCommitBinding.instance());
+        if (!result.admitted()
+            || result.terminal()
+                != io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Terminal.PUBLISHED) {
+            row.phase().terminal++;
+            throw new IllegalStateException("controlled entity write refused: "
+                + result.code() + " " + result.diagnostic());
+        }
+        replayDeferredRow(row);
+    }
+
     /** Runs one admitted row on the host owner thread at the original call site through the same
      * controller and publisher contract: the first version of the controlled chain that does not
      * hand the body to a worker. It is the serial baseline, not a worker/G1 claim. */
@@ -860,7 +878,11 @@ public final class ServerThreadOwnerPhase {
             for (DeferredRow row : controlled) {
                 OwnerControlledWrite.Admission admission = admissions.get(row);
                 StageCounters.note("ownerBatchBody");
-                runControlledWorkerRow(runtime, row, admission, true);
+                if (Boolean.getBoolean("arclight.prts.ownerHostSerial")) {
+                    runHostSerialBatchRow(row, admission);
+                } else {
+                    runControlledWorkerRow(runtime, row, admission, true);
+                }
             }
         } catch (RuntimeException | Error failure) {
             account.close(batchUnit, WorkAccount.Outcome.PARTIAL_FAULT, "batch-terminal");
