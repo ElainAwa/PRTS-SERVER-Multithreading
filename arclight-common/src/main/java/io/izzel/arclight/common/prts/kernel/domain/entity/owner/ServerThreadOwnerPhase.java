@@ -610,7 +610,12 @@ public final class ServerThreadOwnerPhase {
             .EntityObjectGenerations.shared().generationOf(worldId,
                 selected.getUUID().getMostSignificantBits(),
                 selected.getUUID().getLeastSignificantBits());
-        return generation == selectedGeneration && selected.tickCount == entity.tickCount;
+        // The body call site increments the entity tick count before Entity#tick, so the same
+        // logical row is seen either before that increment or once after it; a reused id with
+        // another UUID or object generation is never the same row.
+        return generation == selectedGeneration
+            && (entity.tickCount == selected.tickCount
+                || entity.tickCount == selected.tickCount + 1);
     }
 
     /** Records the host's own terminal for one pending row that will not run its owner body: the
