@@ -186,6 +186,11 @@ public final class CommitController {
             done.successBatch(), done.unitCount(), ticket);
     }
 
+    /** Hands one published effect record to the published archive and frees its live room. */
+    public boolean consumePublished(CommitTicket ticket) {
+        return reservations.consumePublished(ticket);
+    }
+
     private CommitTicket.Outcome publish(CommitTicket ticket, CommitTicket.ReserveRequest request) {
         if (publisher == null) {
             // Unreachable: submit refuses such a request before it reserves anything. Stood where a

@@ -169,6 +169,8 @@ public final class CommitReservation {
         }
     }
 
+    private long consumedPublished;
+
     private final java.util.Map<DispositionSlot, SeatDisposition> seatDispositions =
         new java.util.LinkedHashMap<>();
     private long seatsDisposed;
@@ -313,6 +315,28 @@ public final class CommitReservation {
     public CommitNamespaces.Namespace controller() {
         return new CommitNamespaces.Namespace(controller.ownerId(), controller.lifetime(),
             epochs.current(), CommitNamespaces.NO_THREAD);
+    }
+
+    /** Moves one published effect record into the published archive and frees its live room: the
+     * line keeps the reference readable while the capacity is available for later rows. Only a
+     * published terminal may be consumed; the caller runs on the owner thread. */
+    public boolean consumePublished(CommitTicket ticket) {
+        if (!ownsThread()) {
+            offThreadRefusals++;
+            return false;
+        }
+        if (ticket == null || ticket.identity() == null) {
+            return false;
+        }
+        if (!store.consume(ticket.identity().effectRef())) {
+            return false;
+        }
+        consumedPublished++;
+        return true;
+    }
+
+    public long consumedPublished() {
+        return consumedPublished;
     }
 
     public CommitLog log() {

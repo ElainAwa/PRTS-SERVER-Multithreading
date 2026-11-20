@@ -371,6 +371,7 @@ public final class ServerThreadOwnerPhase {
                 + result.code() + " " + result.diagnostic());
         }
         replayDeferredRow(row);
+        controller.consumePublished(ticket);
     }
 
     /** Runs one admitted row on the host owner thread at the original call site through the same
@@ -566,6 +567,7 @@ public final class ServerThreadOwnerPhase {
         if (replay) {
             replayDeferredRow(record.row);
         }
+        controller.consumePublished(record.ticket);
     }
 
     private static Throwable firstFailure(Throwable body, Throwable cleanup) {

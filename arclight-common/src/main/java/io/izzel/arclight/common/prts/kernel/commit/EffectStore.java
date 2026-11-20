@@ -99,6 +99,7 @@ public final class EffectStore {
     private final int capacityBytes;
     private final int capacityRecords;
     private final Map<Long, Recorded> records = new LinkedHashMap<>();
+    private final Map<Long, Recorded> consumed = new LinkedHashMap<>();
     private final Map<Long, Slot> slots = new LinkedHashMap<>();
     private final Map<Long, CapacitySlot> capacitySlots = new LinkedHashMap<>();
     private final Map<Long, Integer> pins = new LinkedHashMap<>();
@@ -111,6 +112,7 @@ public final class EffectStore {
     private long stored;
     private long refused;
     private long released;
+    private long consumedRecords;
     private long committed;
     private long evicted;
     private long missing;
@@ -296,9 +298,28 @@ public final class EffectStore {
         return true;
     }
 
+    /** Moves one published record out of the live room into the published archive: the record stays
+     * readable for the line that points at it, while the bytes and record slot are free again. Only
+     * a record the publication path consumed goes here; it is not an eviction of an audited line. */
+    public synchronized boolean consume(long effectRef) {
+        Recorded record = records.remove(effectRef);
+        if (record == null) {
+            missing++;
+            return false;
+        }
+        pins.remove(effectRef);
+        usedBytes -= record.bytes();
+        consumed.put(effectRef, record);
+        consumedRecords++;
+        return true;
+    }
+
     /** The stored record one reference names, or null and a missing count when there is none. */
     public synchronized Recorded record(long effectRef) {
         Recorded record = records.get(effectRef);
+        if (record == null) {
+            record = consumed.get(effectRef);
+        }
         if (record == null) {
             missing++;
         }
@@ -512,6 +533,10 @@ public final class EffectStore {
 
     public synchronized long released() {
         return released;
+    }
+
+    public synchronized long consumedRecords() {
+        return consumedRecords;
     }
 
     public synchronized long evicted() {
