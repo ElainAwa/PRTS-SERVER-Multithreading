@@ -15,8 +15,10 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * and a read the host cannot serve fails the future with the original throwable. */
 public final class OwnerReadDemand {
 
-    private record Request(ServerChunkCache cache, int x, int z, ChunkStatus status,
-                           boolean blocking, CompletableFuture<ChunkAccess> future) {
+    /** One demand with the identity a later continuation checks; no generation rejection here yet. */
+    record Request(String worldId, long holderGeneration, String consumerSegment, long logicalTick,
+                   int position, ServerChunkCache cache, int x, int z, ChunkStatus status,
+                   boolean blocking, CompletableFuture<ChunkAccess> future) {
     }
 
     private static final ConcurrentLinkedQueue<Request> REQUESTS = new ConcurrentLinkedQueue<>();
@@ -28,8 +30,15 @@ public final class OwnerReadDemand {
      * do not run it before the registration and continuation are separately authorized. */
     public static ChunkAccess await(ServerChunkCache cache, int x, int z, ChunkStatus status,
                                     boolean blocking) {
-        Request request = new Request(cache, x, z, status, blocking, new CompletableFuture<>());
-        REQUESTS.add(request);
+        return await(cache, x, z, status, blocking, "", -1L, "", -1L, -1);
+    }
+
+    /** The identity-carrying entry used by the owner side; the old short form delegates here. */
+    static ChunkAccess await(ServerChunkCache cache, int x, int z, ChunkStatus status,
+                             boolean blocking, String worldId, long holderGeneration,
+                             String consumerSegment, long logicalTick, int position) {
+        Request request = enqueue(cache, x, z, status, blocking, worldId, holderGeneration,
+            consumerSegment, logicalTick, position);
         try {
             return request.future().join();
         } catch (java.util.concurrent.CompletionException failure) {
@@ -42,6 +51,17 @@ public final class OwnerReadDemand {
             }
             throw new IllegalStateException("owner chunk demand failed", cause);
         }
+    }
+
+    /** Enqueues one request without waiting; the identity fields travel with it. */
+    static Request enqueue(ServerChunkCache cache, int x, int z, ChunkStatus status,
+                           boolean blocking, String worldId, long holderGeneration,
+                           String consumerSegment, long logicalTick, int position) {
+        Request request = new Request(worldId == null ? "" : worldId, holderGeneration,
+            consumerSegment == null ? "" : consumerSegment, logicalTick, position, cache, x, z,
+            status, blocking, new CompletableFuture<>());
+        REQUESTS.add(request);
+        return request;
     }
 
     /** Serves queued reads on the calling host thread; the host has to be parked for this to run. */

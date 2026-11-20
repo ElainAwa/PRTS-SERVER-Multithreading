@@ -354,7 +354,7 @@ public final class ServerThreadOwnerPhase {
      * done only ends the body node. */
     private static void runControlledWorkerRow(SharedRuntime runtime, DeferredRow row,
                                                OwnerControlledWrite.Admission admission,
-                                               boolean replay) {
+                                               WorkAccount account, boolean replay) {
         io.izzel.arclight.common.prts.kernel.commit.CommitController controller =
             admission.controller();
         io.izzel.arclight.common.prts.kernel.commit.CommitController.BeginResult begin =
@@ -389,8 +389,8 @@ public final class ServerThreadOwnerPhase {
         OwnerControlledExecution.waiting(record);
         io.izzel.arclight.common.prts.kernel.generic.GenericJobExecutor.Execution execution;
         try {
-            execution = new io.izzel.arclight.common.prts.kernel.generic.GenericJobExecutor(pool)
-                .executeCohort(graph, bodies);
+            execution = new io.izzel.arclight.common.prts.kernel.generic.GenericJobExecutor(
+                pool, null, null, account).executeCohort(graph, bodies);
         } catch (RuntimeException | Error rejected) {
             OwnerControlledExecution.doneWaiting();
             record.endOwnerWait();
@@ -636,7 +636,8 @@ public final class ServerThreadOwnerPhase {
      * servicing its demand channels instead of blocking in a per-node future. */
     private static ExecutionCohort submitCohort(SharedRuntime runtime, List<DeferredRow> rows,
                                                 WorkerPool.GenericHandle[] handles,
-                                                boolean[] executed, boolean serial) {
+                                                boolean[] executed, boolean serial,
+                                                WorkAccount account) {
         int count = rows.size();
         List<JobGraph.Node> nodes = new ArrayList<>(count * 2);
         List<Long> order = new ArrayList<>(count * 2);
@@ -675,7 +676,7 @@ public final class ServerThreadOwnerPhase {
         }
         JobGraph graph = new JobGraph(1L, 0L, 0L, nodes, order, ready,
             List.of(), count * 2, 0);
-        GenericJobExecutor executor = new GenericJobExecutor(runtime.pool());
+        GenericJobExecutor executor = new GenericJobExecutor(runtime.pool(), null, null, account);
         GenericJobExecutor.Execution execution = executor.executeCohort(graph, bodies);
         ExecutionCohort cohort = execution.cohort();
         for (int index = 0; index < count; index++) {
@@ -826,7 +827,7 @@ public final class ServerThreadOwnerPhase {
             for (DeferredRow row : controlled) {
                 OwnerControlledWrite.Admission admission = admissions.get(row);
                 StageCounters.note("ownerBatchBody");
-                runControlledWorkerRow(runtime, row, admission, true);
+                runControlledWorkerRow(runtime, row, admission, account, true);
             }
         } catch (RuntimeException | Error failure) {
             account.close(batchUnit, WorkAccount.Outcome.PARTIAL_FAULT, "batch-terminal");
