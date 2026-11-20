@@ -67,6 +67,13 @@ public final class ServerThreadOwnerPhase {
 
     private enum Slice { REST, WALK }
 
+    /** The exact logical row of one selected entity: the incarnation and object a due row was read
+     * from, its uuid and object generation, and the update tick it is being handed for. A short id
+     * never stands for this identity. */
+    record RowIdentity(String worldId, long worldEpoch, long uuidHigh, long uuidLow,
+                       long generation, int updateTick) {
+    }
+
     private static final class LevelPhase {
 
         ServerLevel level;
@@ -96,6 +103,7 @@ public final class ServerThreadOwnerPhase {
         int terminal;
         final java.util.Map<Integer, String> nativeSkips = new java.util.HashMap<>();
         final java.util.Map<Integer, Integer> rowTicks = new java.util.HashMap<>();
+        final java.util.Map<Integer, RowIdentity> identities = new java.util.HashMap<>();
         int truncated;
         long skipsAtStart;
         long tick;
@@ -127,9 +135,19 @@ public final class ServerThreadOwnerPhase {
             .freezeAtEntityPhase(phase.tick);
         phase.selected = selected.size();
         lastSelected = selected.size();
+        io.izzel.arclight.common.prts.kernel.KernelModule module =
+            io.izzel.arclight.common.prts.kernel.KernelModule.instance();
+        long worldEpoch = module.guard().worldEpochs().epochOf(dimension);
         for (Villager villager : selected) {
             phase.rows.put(villager.getId(), villager);
             phase.rowTicks.put(villager.getId(), villager.tickCount);
+            phase.identities.put(villager.getId(), new RowIdentity(dimension, worldEpoch,
+                villager.getUUID().getMostSignificantBits(),
+                villager.getUUID().getLeastSignificantBits(),
+                io.izzel.arclight.common.prts.kernel.domain.entity.EntityObjectGenerations.shared()
+                    .generationOf(dimension, villager.getUUID().getMostSignificantBits(),
+                        villager.getUUID().getLeastSignificantBits()),
+                villager.tickCount));
         }
         for (EntityDueWindow.World world : window.worlds()) {
             for (EntityDueWindow.Row row : world.rows()) {
@@ -585,7 +603,8 @@ public final class ServerThreadOwnerPhase {
     /** Records an activation-range inactive skip of a pending row. */
     public static void noteInactive(net.minecraft.world.entity.Entity entity) {
         LevelPhase phase = phaseOf(entity);
-        if (phase != null && phase.rows.get(entity.getId()) == entity) {
+        if (phase != null && phase.rows.get(entity.getId()) instanceof Villager selected
+            && sameLogicalRow(phase, selected, entity)) {
             phase.inactiveRows.add(entity.getId());
         }
     }
@@ -621,27 +640,48 @@ public final class ServerThreadOwnerPhase {
     /** Whether the passed entity is the same logical update this phase selected: world incarnation,
      * UUID, object generation and the tick count read when the due window froze. A reused short id
      * never inherits the row. */
-    static boolean sameLogicalRow(ServerLevel level, Villager selected,
+    static boolean sameLogicalRow(LevelPhase phase, Villager selected,
                                   net.minecraft.world.entity.Entity entity) {
-        if (selected == null || entity == null || level == null
-            || !(entity instanceof Villager) || selected != entity
-                && !selected.getUUID().equals(entity.getUUID())) {
+        if (phase == null || selected == null || entity == null
+            || !(entity instanceof Villager)) {
             return false;
         }
-        String worldId = level.dimension().location().toString();
-        long generation = io.izzel.arclight.common.prts.kernel.domain.entity.EntityObjectGenerations
-            .shared().generationOf(worldId, entity.getUUID().getMostSignificantBits(),
-                entity.getUUID().getLeastSignificantBits());
-        long selectedGeneration = io.izzel.arclight.common.prts.kernel.domain.entity
+        RowIdentity identity = phase.identities.get(entity.getId());
+        if (identity == null) {
+            return false;
+        }
+        String worldId = phase.level.dimension().location().toString();
+        if (!identity.worldId().equals(worldId)
+            || !identity.worldId().equals(entity.level().dimension().location().toString())) {
+            return false;
+        }
+        io.izzel.arclight.common.prts.kernel.KernelModule module =
+            io.izzel.arclight.common.prts.kernel.KernelModule.instance();
+        if (module.guard().worldEpochs().epochOf(worldId) != identity.worldEpoch()) {
+            return false;
+        }
+        if (entity.getUUID().getMostSignificantBits() != identity.uuidHigh()
+            || entity.getUUID().getLeastSignificantBits() != identity.uuidLow()) {
+            return false;
+        }
+        long generation = io.izzel.arclight.common.prts.kernel.domain.entity
             .EntityObjectGenerations.shared().generationOf(worldId,
-                selected.getUUID().getMostSignificantBits(),
-                selected.getUUID().getLeastSignificantBits());
+                entity.getUUID().getMostSignificantBits(),
+                entity.getUUID().getLeastSignificantBits());
+        if (generation != identity.generation()) {
+            return false;
+        }
         // The body call site increments the entity tick count before Entity#tick, so the same
-        // logical row is seen either before that increment or once after it; a reused id with
-        // another UUID or object generation is never the same row.
-        return generation == selectedGeneration
-            && (entity.tickCount == selected.tickCount
-                || entity.tickCount == selected.tickCount + 1);
+        // logical row is seen either before that increment or once after it.
+        return entity.tickCount == identity.updateTick()
+            || entity.tickCount == identity.updateTick() + 1;
+    }
+
+    static boolean sameLogicalRow(ServerLevel level, Villager selected,
+                                  net.minecraft.world.entity.Entity entity) {
+        LevelPhase phase = level == null ? null
+            : PENDING.get(level.dimension().location().toString());
+        return sameLogicalRow(phase, selected, entity);
     }
 
     /** Records the host's own terminal for one pending row that will not run its owner body: the
@@ -726,30 +766,17 @@ public final class ServerThreadOwnerPhase {
                     continue;
                 }
                 String cause = null;
-                net.minecraft.world.entity.Entity current = level.getEntity(entry.getKey());
-                int selectedTick = phase.rowTicks.getOrDefault(entry.getKey(), villager.tickCount);
-                if (villager.isRemoved() || !villager.isAlive()) {
-                    cause = "removed";
-                } else if (phase.nativeSkips.containsKey(entry.getKey())) {
+                if (phase.nativeSkips.containsKey(entry.getKey())) {
                     cause = phase.nativeSkips.get(entry.getKey());
-                } else if (current != villager) {
-                    // The level no longer holds this exact object under the id: the old row left the
-                    // entity list, so its frozen seat ends with it and the new object is admitted by
-                    // its own identity.
-                    cause = "replaced";
-                } else if (villager.tickCount == selectedTick) {
-                    // The pass did not tick this object at all: an inactive or discarded row. The
-                    // seat is closed without claiming the whole update had no effect elsewhere.
+                } else if (phase.inactiveRows.contains(entry.getKey())) {
+                    // The activation branch at the original tick entry ended this pass before the
+                    // body: only the controlled full body is known to be skipped, not the whole
+                    // update or its other native obligations.
                     cause = "inactive-tick";
-                }
-                if (trace()) {
-                    System.out.println("[PRTS] native-left id=" + entry.getKey() + " alive="
-                        + villager.isAlive() + " removed=" + villager.isRemoved() + " skip="
-                        + phase.nativeSkips.get(entry.getKey()) + " cause=" + cause + " tick="
-                        + villager.tickCount + " selectedTick="
-                        + phase.rowTicks.getOrDefault(entry.getKey(), -1) + " sameEntity="
-                        + (current == villager) + " preSeen="
-                        + phase.preSeenRows.contains(entry.getKey()));
+                } else if (phase.preCanceledRows.contains(entry.getKey())) {
+                    cause = "pre-cancelled";
+                } else if (villager.isRemoved() || !villager.isAlive()) {
+                    cause = "removed";
                 }
                 if (cause != null) {
                     noteNativeSkip(level, villager, cause);
