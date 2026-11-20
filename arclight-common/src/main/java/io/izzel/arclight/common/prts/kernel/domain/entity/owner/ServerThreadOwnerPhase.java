@@ -160,10 +160,14 @@ public final class ServerThreadOwnerPhase {
             return false;
         }
         LevelPhase phase = PENDING.get(entity.level().dimension().location().toString());
-        if (phase == null || phase.rows.get(entity.getId()) != entity) {
+        if (phase == null || !(phase.rows.get(entity.getId()) instanceof Villager villager)) {
             return false;
         }
-        Villager villager = phase.rows.remove(entity.getId());
+        phase.rows.remove(entity.getId());
+        if (!(entity instanceof Villager current)) {
+            return false;
+        }
+        villager = current;
         Slice slice = phase.slice.remove(entity.getId());
         if (trace()) {
             System.out.println("[PRTS] owner-body id=" + entity.getId() + " slice=" + slice
