@@ -46,6 +46,7 @@ public final class ServerThreadOwnerPhase {
     private static long totalSelected;
     private static long totalExecuted;
     private static long totalFallback;
+    private static long totalCompat;
     private static long totalLeft;
     private static volatile int lastSelected;
     public static final String BATCH_PROPERTY = "arclight.prts.ownerBatch";
@@ -89,6 +90,7 @@ public final class ServerThreadOwnerPhase {
         int selected;
         int executed;
         int fallback;
+        int compat;
         int terminal;
         int truncated;
         long skipsAtStart;
@@ -97,11 +99,6 @@ public final class ServerThreadOwnerPhase {
 
     /** Marks due rows of this level; only this level's outstanding set is cleared. */
     public static void enter(ServerLevel level, EntityDueCapture.Window window) {
-        // Safe point: the host's own due window is frozen and no owner body has run yet. The one plan
-        // service freezes the current tick here, so the declarations and seats a row needs exist
-        // before the row is deferred and never after its effect.
-        io.izzel.arclight.common.prts.kernel.KernelModule.instance()
-            .freezeAtEntityPhase(level.getServer().getTickCount());
         if (!EntityRowOwnershipWindow.enabled() || level == null || window == null) {
             return;
         }
@@ -110,6 +107,11 @@ public final class ServerThreadOwnerPhase {
         phase.tick = level.getServer().getTickCount();
         phase.skipsAtStart = RestOwnerWiring.skips();
         List<Villager> selected = select(level, window, dimension, phase);
+        // Safe point: the host's due window is frozen and every check above read live state; the one
+        // plan service now freezes the current tick with these rows declared, before any body runs.
+        io.izzel.arclight.common.prts.kernel.EntityDeclarationIntake.arm(level, window, selected);
+        io.izzel.arclight.common.prts.kernel.KernelModule.instance()
+            .freezeAtEntityPhase(phase.tick);
         phase.selected = selected.size();
         lastSelected = selected.size();
         for (Villager villager : selected) {
@@ -163,6 +165,12 @@ public final class ServerThreadOwnerPhase {
             return false;
         }
         if (batchEnabled() && slice == Slice.WALK) {
+            if (OwnerControlledWrite.prepare((ServerLevel) entity.level(), entity) == null) {
+                // Not admitted: the host keeps the original call at this very site, before any owner
+                // effect. This is a compat row of this tick, not a re-run after a deferred body.
+                phase.compat++;
+                return false;
+            }
             DEFERRED.add(new DeferredRow(phase, (ServerLevel) entity.level(), villager, entity,
                 phase.hostSteps.getOrDefault(entity.getId(), 0L)));
             DEFERRED_IDS.add(entity.getId());
@@ -457,61 +465,31 @@ public final class ServerThreadOwnerPhase {
                 "batch-submit-refused");
             throw submissionFailure;
         }
-        long deadline = System.nanoTime()
-            + java.util.concurrent.TimeUnit.SECONDS.toNanos(20L);
-        System.out.println("[PRTS] owner-batch start rows=" + count);
-        awaitOwner(handles, count, server, deadline);
-        for (WorkerPool.GenericHandle handle : handles) {
-            if (handle == null || !handle.future().isDone()) {
-                dumpOwnerStacks();
-                break;
-            }
-        }
-        System.out.println("[PRTS] owner-batch settled");
-        boolean unsettled = false;
-        for (WorkerPool.GenericHandle handle : handles) {
-            if (handle == null || !handle.future().isDone()) {
-                unsettled = true;
-                break;
-            }
-        }
-        if (unsettled) {
-            for (WorkerPool.GenericHandle pending : handles) {
-                if (pending != null && !pending.future().isDone()) {
-                    pending.cancel();
-                    IN_FLIGHT.add(pending);
+        io.izzel.arclight.common.prts.kernel.wiring.OwnerNativeCommitBinding binding =
+            io.izzel.arclight.common.prts.kernel.wiring.OwnerNativeCommitBinding.instance();
+        try {
+            for (DeferredRow row : rows) {
+                OwnerControlledWrite.Admission admission =
+                    OwnerControlledWrite.prepare(row.level(), row.entity());
+                if (admission == null) {
+                    throw new IllegalStateException("owner row lost its frozen admission");
                 }
-            }
-            account.close(batchUnit, WorkAccount.Outcome.PARTIAL_FAULT, "batch-deadline");
-            throw new IllegalStateException("owner batch did not settle before the deadline");
-        }
-        Throwable firstFailure = null;
-        for (int index = 0; index < count; index++) {
-            DeferredRow row = rows.get(index);
-            try {
-                handles[index].future().get();
-            } catch (Throwable failure) {
-                if (firstFailure == null) {
-                    firstFailure = failure;
+                StageCounters.note("ownerBatchBody");
+                io.izzel.arclight.common.prts.kernel.commit.CommitController.SubmitResult result =
+                    OwnerControlledWrite.run(row.level(), row.villager(), admission, binding);
+                if (!result.admitted()
+                    || result.terminal()
+                        != io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Terminal
+                            .PUBLISHED) {
+                    row.phase().terminal++;
+                    throw new IllegalStateException("controlled entity write refused: "
+                        + result.code() + " " + result.diagnostic());
                 }
+                replayDeferredRow(row);
             }
-            boolean ok = !handles[index].future().isCompletedExceptionally() && executed[index];
-            if (!ok) {
-                row.phase().terminal++;
-                if (firstFailure == null) {
-                    firstFailure = new IllegalStateException("deferred owner body or post did not complete");
-                }
-            }
-        }
-        if (firstFailure != null) {
+        } catch (RuntimeException | Error failure) {
             account.close(batchUnit, WorkAccount.Outcome.PARTIAL_FAULT, "batch-terminal");
-            if (firstFailure instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (firstFailure instanceof Error error) {
-                throw error;
-            }
-            throw new IllegalStateException("deferred owner body failed", firstFailure);
+            throw failure;
         }
         account.close(batchUnit, WorkAccount.Outcome.DONE, "batch-published");
     }
@@ -622,6 +600,7 @@ public final class ServerThreadOwnerPhase {
         totalSelected += phase.selected;
         totalExecuted += phase.executed;
         totalFallback += phase.fallback;
+        totalCompat += phase.compat;
         totalLeft += left;
         String line = "tick=" + phase.tick + " selected=" + phase.selected + " executed="
             + phase.executed + " fallback=" + phase.fallback + " terminal=" + phase.terminal
@@ -801,7 +780,8 @@ public final class ServerThreadOwnerPhase {
     public static void stopSummary() {
         if (totalSelected > 0L || totalExecuted > 0L || totalLeft > 0L) {
             System.out.println("[PRTS] phaseSummary selected=" + totalSelected + " executed="
-                + totalExecuted + " fallback=" + totalFallback + " leftPending=" + totalLeft);
+                + totalExecuted + " fallback=" + totalFallback + " compat=" + totalCompat
+                + " leftPending=" + totalLeft);
         }
     }
 

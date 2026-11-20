@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel;
 
+import io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations;
 import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
 import io.izzel.arclight.common.prts.kernel.jobs.JobIntake;
 
@@ -10,9 +11,19 @@ import java.util.List;
  * unchanged. The producer is set only by internal wiring/tests; no formal key is read. */
 final class AiPlanFreezeHook {
 
+    /** One freeze's entity hand-in: the declarations its rows ask for and the artefacts that make
+     * those declarations identifiable, both taken from the same due window. */
+    record Capture(List<JobDeclaration> declarations,
+                   List<FrozenDeclarations.Candidate> candidates) {
+
+        static Capture empty() {
+            return new Capture(List.of(), List.of());
+        }
+    }
+
     @FunctionalInterface
     interface Producer {
-        List<JobDeclaration> declarations(List<String> worlds, long planSequence);
+        Capture capture(List<String> worlds, long planSequence);
     }
 
     private static volatile Producer producer;
@@ -24,17 +35,21 @@ final class AiPlanFreezeHook {
         producer = value;
     }
 
-    static void freeze(JobIntake intake, List<String> worlds, long planSequence) {
+    static Capture freeze(JobIntake intake, List<String> worlds, long planSequence) {
         Producer current = producer;
         if (current == null || intake == null) {
             AiDiagnostics.freezeSkipped("producer_null");
-            return;
+            return Capture.empty();
         }
         AiDiagnostics.freezeHookCall();
-        var declarations = current.declarations(worlds, planSequence);
-        AiDiagnostics.aiNodes(declarations.size());
-        for (JobDeclaration declaration : declarations) {
+        Capture capture = current.capture(worlds, planSequence);
+        if (capture == null) {
+            return Capture.empty();
+        }
+        AiDiagnostics.aiNodes(capture.declarations().size());
+        for (JobDeclaration declaration : capture.declarations()) {
             intake.submit(declaration);
         }
+        return capture;
     }
 }

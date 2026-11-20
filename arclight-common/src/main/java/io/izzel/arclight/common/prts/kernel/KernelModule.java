@@ -551,6 +551,8 @@ public final class KernelModule {
     private WorldSetPlanInput plannedWorldSet = WorldSetPlanInput.capture(List.of(), 0L);
 
     private KernelModule() {
+        AiPlanFreezeHook.setProducer(
+            io.izzel.arclight.common.prts.kernel.EntityDeclarationIntake::capture);
         intents.bindPayload(guard);
         guard.versionSlots(versionSlots);
         guard.controlledSlots(controlledSlots);
@@ -1233,7 +1235,8 @@ public final class KernelModule {
         // The demands of this freeze are read once, before the plan is built, and the declarations of
         // that one window are handed to the same intake the plan takes from below: a capture the
         // window handed over declares the node its candidate is matched at, and no other key is made.
-        AiPlanFreezeHook.freeze(jobIntake, worlds, planSequence);
+        AiPlanFreezeHook.Capture aiCapture = AiPlanFreezeHook.freeze(jobIntake, worlds,
+            planSequence);
         List<DemandShadowCandidates.Shadow> window = demandShadows.readFor(
             new DemandShadowCandidates.Freeze(planSequence, worldGeneration,
                 new FrozenDeclarations.FreezeKey(declarationLifecycleKey(), declarationGeneration)
@@ -1295,7 +1298,7 @@ public final class KernelModule {
             }
             // Sealed against this plan's own commit order and bound before the plan is published:
             // the interval authorizes nothing because the pair is told apart by the plan sequence.
-            sealDeclarations(result.plan());
+            sealDeclarations(result.plan(), aiCapture.candidates());
             plans.publish(result.plan());
             AiLiveCommitHook.afterFreeze(plans, commits, intents, plans.lifecycle());
             grantVersionSlots(result.plan());
@@ -1349,7 +1352,8 @@ public final class KernelModule {
 
     /** Seals the declarations this freeze accepted against the places the plan's own commit order
      * gave them; the boundary is read against the freeze and not the plan counter. */
-    private void sealDeclarations(TickPlan plan) {
+    private void sealDeclarations(TickPlan plan,
+                                  List<FrozenDeclarations.Candidate> aiCandidates) {
         FrozenDeclarations.FreezeKey live =
             new FrozenDeclarations.FreezeKey(declarationLifecycleKey(), declarationGeneration);
         FrozenDeclarations held = declarationHistory.current();
@@ -1366,6 +1370,9 @@ public final class KernelModule {
         List<FrozenDeclarations.Candidate> handed =
             new ArrayList<>(pipelineJobs.candidateDeclarations());
         handed.addAll(demandShadows.candidatesOf(demandShadows.lastCandidates()));
+        if (aiCandidates != null) {
+            handed.addAll(aiCandidates);
+        }
         String epochRefusal = declarationEpochRefusal(handed);
         if (!epochRefusal.isEmpty()) {
             declarationRefusals++;

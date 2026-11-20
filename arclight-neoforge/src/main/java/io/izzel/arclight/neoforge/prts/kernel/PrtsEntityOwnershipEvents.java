@@ -128,6 +128,18 @@ public final class PrtsEntityOwnershipEvents {
         io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
             .stopSummary();
         if (Boolean.getBoolean("arclight.prts.perTickDiag")) {
+            io.izzel.arclight.common.prts.kernel.KernelModule module =
+                io.izzel.arclight.common.prts.kernel.KernelModule.instance();
+            io.izzel.arclight.common.prts.kernel.commit.CommitController controller =
+                module.commitController();
+            io.izzel.arclight.common.prts.kernel.commit.CommitLog commits = module.commits();
+            System.out.println("[PRTS] commit controller_publisher="
+                + (controller == null ? "NONE" : controller.publisherWiring())
+                + " controller_executable=" + (controller != null && controller.executable() ? 1 : 0)
+                + " adoption_calls=" + module.commitAdoptionCalls()
+                + " reservation_refusals=" + commits.reservationRefusals()
+                + " typed_stored=" + commits.typedStored()
+                + " binding_refusal=" + module.commitBindingRefusal());
             System.out.println("[PRTS] per-tick final server_pre=" + SERVER_PRE.sum()
                 + " entity_pre=" + ENTITY_PRE.sum() + " entity_post=" + ENTITY_POST.sum()
                 + " ownershipRecords="

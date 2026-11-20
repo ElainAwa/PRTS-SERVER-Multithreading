@@ -19,6 +19,16 @@ import java.util.Objects;
  * the declaration order; a table that sealed nothing reads {@link #NOT_WIRED}. */
 public final class FrozenDeclarations {
 
+    /** What a frozen declaration target is: a chunk artefact of the chunk pipeline, or one entity
+     * object of the entity domain. The variant keeps the chunk path validation unchanged. */
+    public enum TargetKind {
+        CHUNK,
+        ENTITY
+    }
+
+    /** The prefix every ENTITY target status carries. */
+    public static final String ENTITY_STATE_PREFIX = "entity-state:";
+
     /** A table that sealed at least one declaration carrying its artefact. */
     public static final String SEALED = "SEALED";
 
@@ -79,7 +89,13 @@ public final class FrozenDeclarations {
      * that node would publish and the mapping its own handle mints this run's identity from. It
      * carries no position, which is the frozen plan's to give. */
     public record Candidate(String worldId, String domainId, String nodeKey, DeclaredChunk chunk,
-                            String targetStatus, long instanceId, long worldEpoch) {
+                            String targetStatus, long instanceId, long worldEpoch, TargetKind kind) {
+
+        public Candidate(String worldId, String domainId, String nodeKey, DeclaredChunk chunk,
+                         String targetStatus, long instanceId, long worldEpoch) {
+            this(worldId, domainId, nodeKey, chunk, targetStatus, instanceId, worldEpoch,
+                TargetKind.CHUNK);
+        }
 
         public Candidate(String worldId, String domainId, String nodeKey, DeclaredChunk chunk,
                          String targetStatus) {
@@ -91,6 +107,7 @@ public final class FrozenDeclarations {
             domainId = domainId == null ? "" : domainId;
             nodeKey = nodeKey == null ? "" : nodeKey;
             targetStatus = targetStatus == null ? "" : targetStatus;
+            kind = kind == null ? TargetKind.CHUNK : kind;
         }
 
         /** Whether the artefact half of the declaration is there. */
@@ -128,7 +145,14 @@ public final class FrozenDeclarations {
     /** One accepted declaration: the seat, the node it belongs to, the role the plan's declared
      * nodes give it, the artefact it publishes and the frozen mapping its identity is read from. */
     public record Entry(Seat seat, String nodeKey, int role, long packedChunkPos, String targetStatus,
-                        long instanceId, long worldEpoch) {
+                        long instanceId, long worldEpoch, TargetKind kind) {
+
+        /** The chunk variant entry every reader built before the entity variant existed. */
+        public Entry(Seat seat, String nodeKey, int role, long packedChunkPos, String targetStatus,
+                     long instanceId, long worldEpoch) {
+            this(seat, nodeKey, role, packedChunkPos, targetStatus, instanceId, worldEpoch,
+                TargetKind.CHUNK);
+        }
 
         /** Whether this entry carries the mapping a line has to wear: the positive domain of a seal. */
         public boolean bindingDeclared() {
@@ -297,10 +321,14 @@ public final class FrozenDeclarations {
             if (candidate == null || !candidate.artefactDeclared() || !candidate.bindingDeclared()) {
                 continue;
             }
+            if (candidate.kind() == TargetKind.ENTITY
+                && !candidate.targetStatus().startsWith(ENTITY_STATE_PREFIX)) {
+                return new Sealed(null, "entity-target-missing");
+            }
             Seat seat = new Seat(place.worldId(), place.domainId(), planSequence, place.position());
             Entry entry = new Entry(seat, place.nodeKey(), roles.getOrDefault(node, 0),
                 candidate.chunk().packedPos(), candidate.targetStatus(), candidate.instanceId(),
-                candidate.worldEpoch());
+                candidate.worldEpoch(), candidate.kind());
             if (sealed.putIfAbsent(seat, entry) != null) {
                 return new Sealed(null, "declaration-place-duplicate");
             }
