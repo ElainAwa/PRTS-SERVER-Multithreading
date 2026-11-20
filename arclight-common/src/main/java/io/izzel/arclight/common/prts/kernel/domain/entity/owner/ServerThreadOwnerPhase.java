@@ -499,6 +499,10 @@ public final class ServerThreadOwnerPhase {
      * scope is released in reverse order with cleanup failures attached instead of hiding the
      * native cause. It never reports a terminal; the owner record does that. */
     private static void runControlledWorkerBody(OwnerControlledExecution record) {
+        if (Boolean.getBoolean("arclight.prts.ownerPhaseTrace")) {
+            System.out.println("[PRTS] controlled-worker thread="
+                + Thread.currentThread().getName() + " id=" + record.row.entity().getId());
+        }
         record.stage = OwnerControlledExecution.Stage.BODY_RUNNING;
         DeferredRow row = record.row;
         try {
