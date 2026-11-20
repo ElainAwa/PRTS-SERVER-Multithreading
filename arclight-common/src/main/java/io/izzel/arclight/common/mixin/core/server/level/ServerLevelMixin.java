@@ -323,13 +323,6 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
         return this.convertable;
     }
 
-    @Inject(method = "tickNonPassenger", at = @At("HEAD"))
-    private void prts$tracePendingBody(Entity entity, CallbackInfo ci) {
-        if (ServerThreadOwnerPhase.isPendingId(entity)) {
-            System.out.println("[PRTS] owner-tickNonPassenger id=" + entity.getId());
-        }
-    }
-
     /** Runs a pending owner body exactly at the original host call, then lets the wrapper fire its
      * normal Post, profiler, passenger and post-tick steps; non-owner rows keep the original call.
      * The redirect targets only this call site; the existing postTick injection at the same call

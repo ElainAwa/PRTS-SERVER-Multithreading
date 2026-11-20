@@ -11,7 +11,6 @@ import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership;
 import io.izzel.arclight.common.prts.support.EntityTickBindingPolicy;
 import io.izzel.arclight.common.prts.support.PrtsHostTickCalls;
-import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
@@ -96,11 +95,6 @@ public final class PrtsEntityOwnershipEvents {
         ENTITY_PRE.increment();
         if (io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
             .hasPending(event.getEntity())) {
-            if (io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
-                .isPendingId(event.getEntity())) {
-                System.out.println("[PRTS] pre-pending id=" + event.getEntity().getId()
-                    + " canceled=" + event.isCanceled());
-            }
             return;
         }
         int verdict = EntityTickOwnership.onEntityTickPre(event.getEntity());
@@ -110,24 +104,6 @@ public final class PrtsEntityOwnershipEvents {
     }
 
     /** The host path ran the tick of this row; the independent counter records it. */
-    /** Reads the final Pre verdict for a pending owner row: a cancelled native tick is the row's
-     * real terminal in this pass and its seat must not block later controlled rows. */
-    @SubscribeEvent(priority = EventPriority.LOWEST)
-    public void onEntityTickPreVerdict(EntityTickEvent.Pre event) {
-        if (io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
-            .isPendingId(event.getEntity())) {
-            System.out.println("[PRTS] pre-final id=" + event.getEntity().getId()
-                + " canceled=" + event.isCanceled());
-        }
-        if (!event.isCanceled()) {
-            return;
-        }
-        if (event.getEntity().level() instanceof net.minecraft.server.level.ServerLevel level) {
-            io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
-                .noteNativeSkip(level, event.getEntity(), "pre-cancelled");
-        }
-    }
-
     @SubscribeEvent
     public void onEntityTickPost(EntityTickEvent.Post event) {
         ENTITY_POST.increment();
@@ -162,6 +138,7 @@ public final class PrtsEntityOwnershipEvents {
                 + " controller_executable=" + (controller != null && controller.executable() ? 1 : 0)
                 + " adoption_calls=" + module.commitAdoptionCalls()
                 + " reservation_refusals=" + commits.reservationRefusals()
+                + " ticket_stored=" + commits.ticketStored()
                 + " typed_stored=" + commits.typedStored()
                 + " binding_refusal=" + module.commitBindingRefusal()
                 + " declarations_state=" + module.declarations().state() + "/"

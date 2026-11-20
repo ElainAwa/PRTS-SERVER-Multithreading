@@ -102,7 +102,6 @@ public final class ServerThreadOwnerPhase {
         int compat;
         int terminal;
         final java.util.Map<Integer, String> nativeSkips = new java.util.HashMap<>();
-        final java.util.Map<Integer, Integer> rowTicks = new java.util.HashMap<>();
         final java.util.Map<Integer, RowIdentity> identities = new java.util.HashMap<>();
         int truncated;
         long skipsAtStart;
@@ -140,7 +139,6 @@ public final class ServerThreadOwnerPhase {
         long worldEpoch = module.guard().worldEpochs().epochOf(dimension);
         for (Villager villager : selected) {
             phase.rows.put(villager.getId(), villager);
-            phase.rowTicks.put(villager.getId(), villager.tickCount);
             phase.identities.put(villager.getId(), new RowIdentity(dimension, worldEpoch,
                 villager.getUUID().getMostSignificantBits(),
                 villager.getUUID().getLeastSignificantBits(),
@@ -169,15 +167,6 @@ public final class ServerThreadOwnerPhase {
         phaseActive = true;
     }
 
-    /** Whether this short id still has a selected row in the current level phase; diagnostic only. */
-    public static boolean isPendingId(net.minecraft.world.entity.Entity entity) {
-        if (!phaseActive || entity == null) {
-            return false;
-        }
-        LevelPhase phase = PENDING.get(entity.level().dimension().location().toString());
-        return phase != null && phase.rows.containsKey(entity.getId());
-    }
-
     /** Whether this entity is selected and still pending in the current level tick. */
     public static boolean hasPending(net.minecraft.world.entity.Entity entity) {
         if (!phaseActive || !EntityRowOwnershipWindow.enabled() || entity == null) {
@@ -191,18 +180,8 @@ public final class ServerThreadOwnerPhase {
         if (!(row instanceof Villager selected) || !(entity.level() instanceof ServerLevel level)) {
             return false;
         }
-        boolean same = sameLogicalRow(level, selected, entity);
-        if (!same && trace()) {
-            System.out.println("[PRTS] owner-miss id=" + entity.getId() + " object="
-                + (selected == entity) + " uuid=" + selected.getUUID().equals(entity.getUUID())
-                + " tick=" + entity.tickCount + " selectedTick=" + selected.tickCount
-                + " gen=" + io.izzel.arclight.common.prts.kernel.domain.entity
-                    .EntityObjectGenerations.shared().generationOf(
-                        level.dimension().location().toString(),
-                        entity.getUUID().getMostSignificantBits(),
-                        entity.getUUID().getLeastSignificantBits()));
-        }
-        return same;
+        return sameLogicalRow(level, selected, entity);
+
     }
 
     /** Runs a pending owner body at the original host tick call site; false means host may tick. */
