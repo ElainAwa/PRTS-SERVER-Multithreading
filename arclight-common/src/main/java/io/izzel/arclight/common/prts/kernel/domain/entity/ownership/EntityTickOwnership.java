@@ -176,6 +176,33 @@ public final class EntityTickOwnership {
         noteOwnerSkip();
     }
 
+    /** The same owner skip with its row, so the class census can price the carried row for C_move. */
+    public static void noteOwnerBodyExecuted(net.minecraft.world.entity.Entity entity) {
+        noteOwnerSkip();
+        TakeoverWhitelist.noteOwnerSkipped(entity);
+    }
+
+    /** Owner plan/freeze cost; the existing plan_nanos sink stays the same key. */
+    public static void noteOwnerPlanNanos(long nanos) {
+        if (nanos > 0L) {
+            PLAN_NANOS.add(nanos);
+        }
+    }
+
+    /** Owner host-entry cost; the existing entry_nanos sink stays the same key. */
+    public static void noteOwnerEntryNanos(long nanos) {
+        if (nanos > 0L) {
+            ENTRY_NANOS.add(nanos);
+        }
+    }
+
+    /** Owner commit/finish cost; the existing commit_nanos sink stays the same key. */
+    public static void noteOwnerCommitNanos(long nanos) {
+        if (nanos > 0L) {
+            COMMIT_NANOS.add(nanos);
+        }
+    }
+
     static void noteOwnerSkip() {
         CANDIDATES.increment();
         CLAIMED.increment();

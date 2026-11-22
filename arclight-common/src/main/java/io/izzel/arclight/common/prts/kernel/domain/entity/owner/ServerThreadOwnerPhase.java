@@ -122,6 +122,7 @@ public final class ServerThreadOwnerPhase {
         if (!EntityRowOwnershipWindow.enabled() || level == null || window == null) {
             return;
         }
+        long planStartedAt = System.nanoTime();
         String dimension = level.dimension().location().toString();
         LevelPhase phase = new LevelPhase();
         phase.level = level;
@@ -141,6 +142,8 @@ public final class ServerThreadOwnerPhase {
         io.izzel.arclight.common.prts.kernel.EntityDeclarationIntake.arm(level, window, declared);
         io.izzel.arclight.common.prts.kernel.KernelModule.instance()
             .freezeAtEntityPhase(phase.tick);
+        io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
+            .noteOwnerPlanNanos(System.nanoTime() - planStartedAt);
         phase.selected = selected.size();
         lastSelected = selected.size();
         io.izzel.arclight.common.prts.kernel.KernelModule module =
@@ -198,6 +201,16 @@ public final class ServerThreadOwnerPhase {
         if (!EntityRowOwnershipWindow.enabled() || entity == null) {
             return false;
         }
+        long entryStartedAt = System.nanoTime();
+        try {
+            return runPendingAtBody0(entity);
+        } finally {
+            io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
+                .noteOwnerEntryNanos(System.nanoTime() - entryStartedAt);
+        }
+    }
+
+    private static boolean runPendingAtBody0(net.minecraft.world.entity.Entity entity) {
         LevelPhase phase = PENDING.get(entity.level().dimension().location().toString());
         if (phase == null || !(phase.rows.get(entity.getId()) instanceof Villager selected)
             || !sameLogicalRow((ServerLevel) entity.level(), selected, entity)) {
@@ -266,7 +279,7 @@ public final class ServerThreadOwnerPhase {
                 }
                 RestOwnerWiring.noteSkip();
                 io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
-                    .noteOwnerBodyExecuted();
+                    .noteOwnerBodyExecuted(entity);
                 noteExpectedPost(entity);
             } else {
                 phase.fallback++;
@@ -278,7 +291,7 @@ public final class ServerThreadOwnerPhase {
             phase.terminal++;
             RestOwnerWiring.noteSkip();
             io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
-                .noteOwnerBodyExecuted();
+                .noteOwnerBodyExecuted(entity);
             throw failure;
         } finally {
             EntityUpdateProgramContext.end();
@@ -443,6 +456,20 @@ public final class ServerThreadOwnerPhase {
     /** Writes the owner terminal or transfers the unresolved obligation for one ended body. Called
      * once on the owner thread; late calls after the batch ended only finish/fault, never replay. */
     static void completeControlledExecution(OwnerControlledExecution record, boolean replay) {
+        if (record == null) {
+            completeControlledExecution0(record, replay);
+            return;
+        }
+        long commitStartedAt = System.nanoTime();
+        try {
+            completeControlledExecution0(record, replay);
+        } finally {
+            io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
+                .noteOwnerCommitNanos(System.nanoTime() - commitStartedAt);
+        }
+    }
+
+    private static void completeControlledExecution0(OwnerControlledExecution record, boolean replay) {
         if (record == null || record.stage == OwnerControlledExecution.Stage.OWNER_DONE
             || record.stage == OwnerControlledExecution.Stage.ABANDONED) {
             return;
@@ -624,7 +651,7 @@ public final class ServerThreadOwnerPhase {
         row.phase().walkExecuted++;
         RestOwnerWiring.noteSkip();
         io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
-            .noteOwnerBodyExecuted();
+            .noteOwnerBodyExecuted(row.entity());
         noteExpectedPost(row.entity());
         StageCounters.note("ownerBatchPortal");
         ((EntityBridge) row.entity()).bridge$postTick();

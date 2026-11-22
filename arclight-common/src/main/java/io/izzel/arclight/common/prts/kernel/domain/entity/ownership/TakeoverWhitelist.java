@@ -92,6 +92,26 @@ public final class TakeoverWhitelist {
         }
     }
 
+    /** Counts one owner-skipped row against its class slot, without changing any control decision. */
+    public static void noteOwnerSkipped(net.minecraft.world.entity.Entity entity) {
+        if (entity != null) {
+            noteOwnerSkipped(entity.getClass());
+        }
+    }
+
+    /** The class form used by a caller that already has the row's type. */
+    public static void noteOwnerSkipped(Class<?> type) {
+        if (type == null) {
+            return;
+        }
+        for (int slot = 0; slot < SLOTS; slot++) {
+            if (TickModels.classOf(slot) == type) {
+                noteEntry(slot, true);
+                return;
+            }
+        }
+    }
+
     /** Counts one row the predicate refused because it rides, is ridden or is leashed. */
     static void notePassenger(int slot) {
         if (slot >= 0 && slot < SLOTS) {
