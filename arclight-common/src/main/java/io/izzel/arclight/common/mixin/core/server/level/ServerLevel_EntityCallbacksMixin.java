@@ -37,7 +37,14 @@ public class ServerLevel_EntityCallbacksMixin {
                 for (Object o : worldData.cache.values()) {
                     if (o instanceof MapItemSavedData map) {
                         map.carriedByPlayers.remove(player);
-                        ((MapItemSavedDataBridge) map).bridge$getCarriedBy().removeIf(holdingPlayer -> holdingPlayer.player == entity);
+                        // Avoid a lambda in this handler: its bootstrap entry must not be merged with
+                        // the target method's own invokedynamic entries on the owner execution path.
+                        var carriedBy = ((MapItemSavedDataBridge) map).bridge$getCarriedBy();
+                        for (var iterator = carriedBy.iterator(); iterator.hasNext(); ) {
+                            if (iterator.next().player == entity) {
+                                iterator.remove();
+                            }
+                        }
                     }
                 }
             }
