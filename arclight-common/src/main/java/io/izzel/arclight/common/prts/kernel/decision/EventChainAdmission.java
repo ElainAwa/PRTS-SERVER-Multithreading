@@ -3,6 +3,7 @@ package io.izzel.arclight.common.prts.kernel.decision;
 
 import org.bukkit.event.Event;
 import org.bukkit.event.HandlerList;
+import org.bukkit.plugin.RegisteredListener;
 import org.bukkit.event.entity.EntityAirChangeEvent;
 import org.bukkit.event.entity.EntityCombustEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
@@ -13,6 +14,7 @@ import org.bukkit.event.entity.EntityTargetEvent;
 import org.bukkit.event.entity.EntityToggleSwimEvent;
 import org.bukkit.event.world.GenericGameEvent;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
 
@@ -51,6 +53,31 @@ public final class EventChainAdmission {
         }
         return new EventAdmission.Verdict(EventAdmission.Mode.LEGACY, "non-empty-chain",
             listeners, 0);
+    }
+
+    /** The admission verdict of a non-empty chain against a listener declaration table. An empty
+     * chain remains OWNER_SYNC because it has no listener to dispatch; a non-empty chain is admitted
+     * only when every listener is declared owner-sync. This overload does not change any dispatch. */
+    public static EventAdmission.Verdict verdictFor(Event event, EventAdmission admission) {
+        int listeners = event == null ? 0 : listenerCount(event.getHandlers());
+        if (listeners == 0) {
+            return new EventAdmission.Verdict(EventAdmission.Mode.OWNER_SYNC, "empty-chain", 0, 0);
+        }
+        if (admission == null) {
+            return new EventAdmission.Verdict(EventAdmission.Mode.LEGACY, "no-admission", listeners, listeners);
+        }
+        return admission.admitInherited(listenerTypes(event.getHandlers()));
+    }
+
+    private static List<Class<?>> listenerTypes(HandlerList handlers) {
+        List<Class<?>> types = new ArrayList<>();
+        if (handlers == null) {
+            return types;
+        }
+        for (RegisteredListener registration : handlers.getRegisteredListeners()) {
+            types.add(registration.getListener() == null ? null : registration.getListener().getClass());
+        }
+        return types;
     }
 
     /** Whether every chain one entity update can reach is empty; false keeps the row on the host. */

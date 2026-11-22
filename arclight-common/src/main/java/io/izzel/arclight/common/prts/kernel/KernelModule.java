@@ -81,6 +81,7 @@ import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitProgress;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSite;
 import io.izzel.arclight.common.prts.kernel.decision.B1DecisionGate;
+import io.izzel.arclight.common.prts.kernel.decision.RegistrationEpoch;
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityQueryReadings;
 import io.izzel.arclight.common.prts.kernel.observe.BukkitEventOrderObserver;
@@ -477,6 +478,7 @@ public final class KernelModule {
     private TickPlanStore.Control previousControl = TickPlanStore.Control.missing();
     private CommitLog.Replay lastCommitReplay;
     private CommitController commitController;
+    private final RegistrationEpoch registrationEpoch = new RegistrationEpoch();
     /** The production publisher the entity wiring binds before the one chain is adopted; null keeps
      * the adopted chain bound but non-executable, as every build without that binding reports. */
     private volatile CommitController.Publisher commitPublisher;
@@ -4073,6 +4075,11 @@ public final class KernelModule {
 
     public CommitController commitController() {
         return commitController;
+    }
+
+    /** The registration generation published at plugin registration and disable boundaries. */
+    public RegistrationEpoch registrationEpoch() {
+        return registrationEpoch;
     }
 
     /** The one plan authority of this module: a caller that builds a chain to be adopted binds this

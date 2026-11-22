@@ -3,6 +3,7 @@ package io.izzel.arclight.common.mixin.core.server;
 
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.observe.BukkitEventOrderObserver;
 import org.bukkit.event.Event;
 import org.bukkit.event.HandlerList;
@@ -20,6 +21,25 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * is altered. The reading class is an observer, not a probe: its name only says what it reads. */
 @Mixin(value = SimplePluginManager.class, remap = false)
 public abstract class SimplePluginManagerMixin {
+
+
+    /** Behaviour: publishes the registration generation after one plugin listener registration. Why
+     * here: every listener registration passes this boundary. Invariant: fireEvent/callEvent and every
+     * registration decision are untouched; only the existing epoch counter advances. */
+    @Inject(method = "registerEvents", at = @At("RETURN"), require = 1, remap = false)
+    private void prts$publishRegistrationEpoch(CallbackInfo ci) {
+        KernelModule.instance().registrationEpoch().publish();
+    }
+
+    @Inject(method = "registerEvent", at = @At("RETURN"), require = 1, remap = false)
+    private void prts$publishEventRegistrationEpoch(CallbackInfo ci) {
+        KernelModule.instance().registrationEpoch().publish();
+    }
+
+    @Inject(method = "disablePlugin", at = @At("RETURN"), require = 1, remap = false)
+    private void prts$publishDisableEpoch(CallbackInfo ci) {
+        KernelModule.instance().registrationEpoch().publish();
+    }
 
     @Inject(method = "fireEvent", at = @At("HEAD"), require = 1, remap = false)
     private void prts$beginFire(Event event, CallbackInfo ci) {

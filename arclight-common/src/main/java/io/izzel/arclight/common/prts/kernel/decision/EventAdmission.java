@@ -67,12 +67,37 @@ public final class EventAdmission {
         return this;
     }
 
+    /** The mode declared for this listener, matching an exact class first and then by interface or
+     * superclass. */
+    private Mode declaredMode(Class<?> listenerType) {
+        Mode exact = declared.get(listenerType);
+        if (exact != null) {
+            return exact;
+        }
+        for (Map.Entry<Class<?>, Mode> entry : declared.entrySet()) {
+            if (entry.getKey().isAssignableFrom(listenerType)) {
+                return entry.getValue();
+            }
+        }
+        return null;
+    }
+
     /**
      * Admits one whole event chain before any listener runs. A chain with no listener, one unknown
      * listener, or one mix of modes is LEGACY as one unit; only a chain whose every listener is
      * declared OWNER_SYNC is admitted owner-synced.
      */
     public Verdict admit(List<Class<?>> listenerTypes) {
+        return admit(listenerTypes, false);
+    }
+
+    /** The inherited form used only by the owner-sync declaration path: an interface or superclass
+     * declaration matches its concrete listener. The legacy {@link #admit(List)} stays exact. */
+    Verdict admitInherited(List<Class<?>> listenerTypes) {
+        return admit(listenerTypes, true);
+    }
+
+    private Verdict admit(List<Class<?>> listenerTypes, boolean inherited) {
         if (listenerTypes == null || listenerTypes.isEmpty()) {
             return new Verdict(defaultMode, "empty-chain", 0, 0);
         }
@@ -80,7 +105,8 @@ public final class EventAdmission {
         int ownerSync = 0;
         int legacy = 0;
         for (Class<?> listenerType : listenerTypes) {
-            Mode declaredMode = listenerType == null ? null : declared.get(listenerType);
+            Mode declaredMode = listenerType == null ? null
+                : inherited ? declaredMode(listenerType) : declared.get(listenerType);
             // A listener the table does not name is unknown when the table claims owner-sync: an
             // unnamed listener is never assumed safe. A legacy table keeps it on the host path.
             Mode mode = declaredMode != null ? declaredMode
