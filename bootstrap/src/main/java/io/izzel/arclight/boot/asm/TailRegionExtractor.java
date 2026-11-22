@@ -19,6 +19,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.HashSet;
 
 /**
  * Moves the straight-line-or-branching region that follows one anchored call in a host method into
@@ -30,6 +32,12 @@ public final class TailRegionExtractor {
 
     /** The anchored call the extracted region starts after. */
     public interface Anchor {
+        boolean matches(MethodInsnNode call);
+    }
+
+    /** The call whose instruction ends the extracted prefix; the suffix stays in the host. */
+    public interface SplitAfter {
+        /** Whether this call is the last instruction of the moved prefix. */
         boolean matches(MethodInsnNode call);
     }
 
@@ -75,6 +83,189 @@ public final class TailRegionExtractor {
                                           String programOwner) {
         return extractInternal(node, hostName, hostDesc, anchor, stageName, Opcodes.ACC_PUBLIC,
             interfaceName, programOwner);
+    }
+
+
+    /**
+     * Splits the region after the anchor: the instructions through {@code splitAfter} move into a
+     * public stage behind a public interface, the host calls the program entry there, and every
+     * instruction after the split call stays inline in the host. The split is refused when a jump,
+     * local or handler crosses the cut; an unproven shape is not approximated.
+     *
+     * @return whether the host was rewritten; false keeps the class untouched
+     */
+    public static boolean extractProgramSplit(ClassNode node, String hostName, String hostDesc,
+                                              Anchor anchor, SplitAfter splitAfter, String stageName,
+                                              String interfaceName, String programOwner) {
+        MethodNode host = null;
+        for (MethodNode method : node.methods) {
+            if (stageName.equals(method.name)) {
+                return false;
+            }
+            if (hostName.equals(method.name) && hostDesc.equals(method.desc)) {
+                host = method;
+            }
+        }
+        if (host == null || interfaceName == null || programOwner == null) {
+            return false;
+        }
+        AbstractInsnNode[] instructions = host.instructions.toArray();
+        int anchorIndex = -1;
+        for (int index = 0; index < instructions.length; index++) {
+            if (instructions[index] instanceof MethodInsnNode call && anchor.matches(call)) {
+                anchorIndex = index;
+                break;
+            }
+        }
+        if (anchorIndex < 0) {
+            return false;
+        }
+        int splitIndex = -1;
+        for (int index = anchorIndex + 1; index < instructions.length; index++) {
+            if (instructions[index] instanceof MethodInsnNode call && splitAfter.matches(call)) {
+                splitIndex = index;
+                break;
+            }
+        }
+        if (splitIndex < 0 || splitIndex == anchorIndex) {
+            return false;
+        }
+        int suffixEnd = -1;
+        for (int index = splitIndex + 1; index < instructions.length; index++) {
+            if (instructions[index].getOpcode() == Opcodes.RETURN) {
+                suffixEnd = index;
+                break;
+            }
+        }
+        if (suffixEnd < 0) {
+            return false;
+        }
+        List<AbstractInsnNode> prefix = new ArrayList<>();
+        for (int index = anchorIndex + 1; index <= splitIndex; index++) {
+            AbstractInsnNode node1 = instructions[index];
+            if (node1 instanceof LineNumberNode) {
+                continue;
+            }
+            if (node1 instanceof TableSwitchInsnNode || node1 instanceof LookupSwitchInsnNode) {
+                return false;
+            }
+            prefix.add(node1);
+        }
+        if (prefix.isEmpty()) {
+            return false;
+        }
+        Map<LabelNode, LabelNode> labels = new HashMap<>();
+        for (AbstractInsnNode node1 : prefix) {
+            if (node1 instanceof LabelNode label) {
+                labels.put(label, new LabelNode());
+            }
+        }
+        LabelNode regionStart = null;
+        for (AbstractInsnNode node1 : prefix) {
+            if (node1 instanceof LabelNode label) {
+                regionStart = label;
+                break;
+            }
+        }
+        List<JumpInsnNode> externalEntries = new ArrayList<>();
+        for (int index = 0; index < anchorIndex; index++) {
+            if (instructions[index] instanceof JumpInsnNode jump && labels.containsKey(jump.label)) {
+                if (jump.label != regionStart) {
+                    return false;
+                }
+                externalEntries.add(jump);
+            }
+        }
+        for (AbstractInsnNode node1 : prefix) {
+            if (node1 instanceof JumpInsnNode jump && !labels.containsKey(jump.label)) {
+                return false;
+            }
+        }
+        for (int index = splitIndex + 1; index < instructions.length; index++) {
+            if (instructions[index] instanceof JumpInsnNode jump && labels.containsKey(jump.label)) {
+                return false;
+            }
+        }
+        // Locals written before the cut are not readable from the stage; locals written by the
+        // prefix are not readable by the inline suffix. Only this (slot 0) may cross.
+        Set<Integer> writtenInPrefix = new HashSet<>();
+        for (AbstractInsnNode node1 : prefix) {
+            if (node1 instanceof VarInsnNode store && isStore(store.getOpcode())) {
+                if (store.var != 0) {
+                    writtenInPrefix.add(store.var);
+                }
+            } else if (node1 instanceof org.objectweb.asm.tree.IincInsnNode increment) {
+                if (increment.var != 0) {
+                    writtenInPrefix.add(increment.var);
+                }
+            } else if (node1 instanceof VarInsnNode load && isLoad(load.getOpcode())) {
+                if (load.var != 0 && !writtenInPrefix.contains(load.var)) {
+                    return false;
+                }
+            }
+        }
+        Set<Integer> writtenInSuffix = new HashSet<>();
+        for (int index = splitIndex + 1; index < instructions.length; index++) {
+            AbstractInsnNode node1 = instructions[index];
+            if (node1 instanceof VarInsnNode load && isLoad(load.getOpcode())) {
+                if (load.var != 0 && writtenInPrefix.contains(load.var)
+                    && !writtenInSuffix.contains(load.var)) {
+                    return false;
+                }
+            } else if (node1 instanceof VarInsnNode store && isStore(store.getOpcode())) {
+                if (store.var != 0) {
+                    writtenInSuffix.add(store.var);
+                }
+            } else if (node1 instanceof org.objectweb.asm.tree.IincInsnNode increment) {
+                if (increment.var != 0) {
+                    writtenInSuffix.add(increment.var);
+                }
+            }
+        }
+        if (!host.tryCatchBlocks.isEmpty()) {
+            return false;
+        }
+
+        MethodNode stage = new MethodNode(Opcodes.ACC_PUBLIC, stageName, "()V", null, null);
+        stage.instructions.add(stagePrologue(node.name + "#" + stageName + "()V"));
+        for (AbstractInsnNode node1 : prefix) {
+            stage.instructions.add(node1.clone(labels));
+        }
+        stage.instructions.add(new InsnNode(Opcodes.RETURN));
+        stage.maxStack = Math.max(6, host.maxStack);
+        stage.maxLocals = Math.max(1, host.maxLocals);
+        node.methods.add(stage);
+        if (!node.interfaces.contains(interfaceName)) {
+            node.interfaces.add(interfaceName);
+        }
+
+        for (int index = anchorIndex + 1; index <= splitIndex; index++) {
+            host.instructions.remove(instructions[index]);
+        }
+        InsnList call = new InsnList();
+        LabelNode programEntry = new LabelNode();
+        call.add(programEntry);
+        call.add(new VarInsnNode(Opcodes.ALOAD, 0));
+        call.add(new MethodInsnNode(Opcodes.INVOKESTATIC, programOwner, "run",
+            "(L" + node.name + ";)V", false));
+        host.instructions.insert(instructions[anchorIndex], call);
+        for (JumpInsnNode jump : externalEntries) {
+            jump.label = programEntry;
+        }
+        host.localVariables = null;
+        host.visibleLocalVariableAnnotations = null;
+        host.invisibleLocalVariableAnnotations = null;
+        return true;
+    }
+
+    private static boolean isStore(int opcode) {
+        return opcode == Opcodes.ISTORE || opcode == Opcodes.LSTORE || opcode == Opcodes.FSTORE
+            || opcode == Opcodes.DSTORE || opcode == Opcodes.ASTORE;
+    }
+
+    private static boolean isLoad(int opcode) {
+        return opcode == Opcodes.ILOAD || opcode == Opcodes.LLOAD || opcode == Opcodes.FLOAD
+            || opcode == Opcodes.DLOAD || opcode == Opcodes.ALOAD;
     }
 
     private static boolean extractInternal(ClassNode node, String hostName, String hostDesc,

@@ -54,7 +54,8 @@ public final class ServerThreadOwnerPhase {
     public static final String BATCH_PARALLEL_PROPERTY = "arclight.prts.ownerBatchParallel";
     private static final java.util.Set<EntityUpdateSegmentPolicy.Segment> DECLARED_SEGMENTS =
         java.util.Set.of(EntityUpdateSegmentPolicy.Segment.MOB_TICK_TAIL,
-            EntityUpdateSegmentPolicy.Segment.SERVER_AI_STEP_PREFIX);
+            EntityUpdateSegmentPolicy.Segment.SERVER_AI_STEP_PREFIX,
+            EntityUpdateSegmentPolicy.Segment.LIVING_ENTITY_TICK_TAIL);
     record DeferredRow(LevelPhase phase, ServerLevel level, Villager villager,
                                net.minecraft.world.entity.Entity entity, long hostStep) {
     }
@@ -227,7 +228,10 @@ public final class ServerThreadOwnerPhase {
             phase.compat++;
             return false;
         }
-        if (batchEnabled() && slice == Slice.WALK) {
+        if (batchEnabled() && slice == Slice.WALK
+            && !EntityUpdateSegmentPolicy.hostOnly(DECLARED_SEGMENTS)) {
+            // The living tick prefix leaves its scale branch inline in the host method, so the row
+            // must stay on the server thread; batching it would run the suffix on a worker.
             OwnerControlledWrite.Admission admission =
                 OwnerControlledWrite.prepare((ServerLevel) entity.level(), entity);
             if (admission == null) {
@@ -245,6 +249,13 @@ public final class ServerThreadOwnerPhase {
         }
         if (io.izzel.arclight.common.prts.kernel.domain.entity.owner.OwnerCommitGate.read()
             .ready()) {
+            if (slice == Slice.WALK && EntityUpdateSegmentPolicy.hostOnly(DECLARED_SEGMENTS)) {
+                // A host-only segment keeps its suffix inline on the server thread, so it cannot be
+                // deferred to the batch. It still needs the same reservation and publish action the
+                // batch uses; otherwise the ready chain would see an unjudged native effect and the
+                // row would fall back to compat with no owner execution.
+                return runHostControlled(phase, (ServerLevel) entity.level(), villager, entity);
+            }
             // The chain is ready, so an owner body that has no reservation would be a native effect
             // the chain never judged. This row was not admitted into the controlled batch: keep the
             // original host call at this site instead of running a second kind of owner body.
@@ -290,6 +301,51 @@ public final class ServerThreadOwnerPhase {
                 io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
                     .beginLegacyPoiFallback(entity);
             }
+        }
+    }
+
+    private static boolean runHostControlled(LevelPhase phase, ServerLevel level, Villager villager,
+                                             net.minecraft.world.entity.Entity entity) {
+        long ownerScope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
+            .EntityTickOwnership.beginOwnerBodyScope(entity);
+        EntityUpdateProgramContext.begin(programIdentity(phase, entity));
+        try {
+            HostLegOwnerWrite.Outcome outcome = HostLegOwnerWrite.run(
+                () -> OwnerControlledWrite.prepare(level, entity),
+                admission -> OwnerControlledWrite.run(level, villager, admission,
+                    io.izzel.arclight.common.prts.kernel.wiring.OwnerNativeCommitBinding.instance()),
+                new HostLegOwnerWrite.Accounting() {
+                    @Override
+                    public void hostTick() {
+                        phase.compat++;
+                    }
+
+                    @Override
+                    public void executed() {
+                        phase.executed++;
+                        phase.walkExecuted++;
+                        RestOwnerWiring.noteSkip();
+                        io.izzel.arclight.common.prts.kernel.domain.entity.ownership
+                            .EntityTickOwnership.noteOwnerBodyExecuted();
+                        noteExpectedPost(entity);
+                    }
+
+                    @Override
+                    public void terminal() {
+                        phase.terminal++;
+                    }
+                });
+            if (outcome.state() == HostLegOwnerWrite.State.HOST_TICK) {
+                return false;
+            }
+            // A terminal owner write has already entered the effect path; the host must not run the
+            // original body after it. The terminal counter records the refusal/failure in the same
+            // phase bucket the batch uses, and the server tick continues without a second effect.
+            return true;
+        } finally {
+            EntityUpdateProgramContext.end();
+            io.izzel.arclight.common.prts.kernel.domain.entity.ownership
+                .EntityTickOwnership.endOwnerBodyScope(ownerScope);
         }
     }
 
