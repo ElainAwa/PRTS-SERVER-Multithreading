@@ -24,7 +24,7 @@ public final class OwnerSyncListenerTable {
         INVALID
     }
 
-    private record Snapshot(List<Class<?>> declared, EventAdmission admission, String problem,
+    private record Snapshot(List<String> declared, EventAdmission admission, String problem,
                             Kind kind) {
     }
 
@@ -61,8 +61,8 @@ public final class OwnerSyncListenerTable {
         if (listenerType == null) {
             return false;
         }
-        for (Class<?> type : snapshot.declared()) {
-            if (type.isAssignableFrom(listenerType)) {
+        for (String name : snapshot.declared()) {
+            if (matches(name, listenerType)) {
                 return true;
             }
         }
@@ -100,20 +100,36 @@ public final class OwnerSyncListenerTable {
             return new Snapshot(List.of(), EventAdmission.ownerSync(), "empty-list",
                 Kind.EXPLICIT_EMPTY);
         }
-        List<Class<?>> types = new ArrayList<>();
+        // A name is the operator contract; unmatched names stay UNKNOWN -> LEGACY and do not
+        // invalidate the table; a reload still replaces the whole table.
+        EventAdmission admission = EventAdmission.ownerSync();
         for (String name : names) {
-            try {
-                types.add(Class.forName(name, false, classLoader()));
-            } catch (ClassNotFoundException | LinkageError | SecurityException failure) {
-                return new Snapshot(List.of(), EventAdmission.ownerSync(),
-                    "unknown-class:" + name, Kind.INVALID);
+            admission.declareName(name, EventAdmission.Mode.OWNER_SYNC);
+        }
+        return new Snapshot(List.copyOf(names), admission, "", Kind.DECLARATION);
+    }
+
+    private static boolean matches(String declaredName, Class<?> listenerType) {
+        if (declaredName.equals(listenerType.getName())) {
+            return true;
+        }
+        for (Class<?> type = listenerType.getSuperclass(); type != null; type = type.getSuperclass()) {
+            if (declaredName.equals(type.getName())) {
+                return true;
             }
         }
-        EventAdmission admission = EventAdmission.ownerSync();
-        for (Class<?> type : types) {
-            admission.declare(type, EventAdmission.Mode.OWNER_SYNC);
+        return matchesInterface(declaredName, listenerType);
+    }
+
+    private static boolean matchesInterface(String declaredName, Class<?> listenerType) {
+        for (Class<?> type = listenerType; type != null; type = type.getSuperclass()) {
+            for (Class<?> iface : type.getInterfaces()) {
+                if (declaredName.equals(iface.getName()) || matchesInterface(declaredName, iface)) {
+                    return true;
+                }
+            }
         }
-        return new Snapshot(List.copyOf(types), admission, "", Kind.DECLARATION);
+        return false;
     }
 
     private static List<String> names(Path path) {
@@ -136,8 +152,4 @@ public final class OwnerSyncListenerTable {
         }
     }
 
-    private static ClassLoader classLoader() {
-        ClassLoader loader = Thread.currentThread().getContextClassLoader();
-        return loader == null ? OwnerSyncListenerTable.class.getClassLoader() : loader;
-    }
 }

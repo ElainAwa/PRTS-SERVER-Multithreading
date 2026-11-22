@@ -10,8 +10,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
-/** The admission table of plugin event chains, decided for the whole event before any listener
- * runs: an unnamed listener or a mixed chain keeps the one legacy path, never a worker half. */
+/** Whole-event admission: an unnamed or mixed chain keeps one legacy path, never a worker half. */
 public final class EventAdmission {
 
     /** The execution mode of one event chain. */
@@ -41,7 +40,7 @@ public final class EventAdmission {
         }
     }
 
-    private final Map<Class<?>, Mode> declared = new HashMap<>();
+    private final Map<String, Mode> declared = new HashMap<>();
     private final Mode defaultMode;
 
     private EventAdmission(Mode defaultMode) {
@@ -53,8 +52,7 @@ public final class EventAdmission {
         return new EventAdmission(Mode.LEGACY);
     }
 
-    /** The owning table: an entry that declares no listener keeps this mode, except that a listener
-     * the table cannot name at all still refuses the whole chain to LEGACY. */
+    /** The owning table: an unnamed listener still refuses the whole chain to LEGACY. */
     public static EventAdmission ownerSync() {
         return new EventAdmission(Mode.OWNER_SYNC);
     }
@@ -62,37 +60,57 @@ public final class EventAdmission {
     /** Declares the contract one listener class (or interface) is admitted under. */
     public EventAdmission declare(Class<?> listenerType, Mode mode) {
         Objects.requireNonNull(listenerType, "listenerType");
+        return declareName(listenerType.getName(), mode);
+    }
+
+    /** Declares one listener by binary name; an unmatched name simply never matches a listener. */
+    public EventAdmission declareName(String listenerName, Mode mode) {
+        Objects.requireNonNull(listenerName, "listenerName");
         Objects.requireNonNull(mode, "mode");
-        declared.put(listenerType, mode);
+        if (listenerName.isBlank()) {
+            throw new IllegalArgumentException("a listener name must not be blank");
+        }
+        declared.put(listenerName, mode);
         return this;
     }
 
-    /** The mode declared for this listener, matching an exact class first and then by interface or
-     * superclass. */
+    /** The declared mode, matching the exact class first, then superclasses and interfaces. */
     private Mode declaredMode(Class<?> listenerType) {
-        Mode exact = declared.get(listenerType);
+        Mode exact = declared.get(listenerType.getName());
         if (exact != null) {
             return exact;
         }
-        for (Map.Entry<Class<?>, Mode> entry : declared.entrySet()) {
-            if (entry.getKey().isAssignableFrom(listenerType)) {
-                return entry.getValue();
+        for (Class<?> type = listenerType.getSuperclass(); type != null; type = type.getSuperclass()) {
+            Mode inherited = declared.get(type.getName());
+            if (inherited != null) {
+                return inherited;
+            }
+        }
+        return declaredInterfaceMode(listenerType);
+    }
+
+    private Mode declaredInterfaceMode(Class<?> listenerType) {
+        for (Class<?> type = listenerType; type != null; type = type.getSuperclass()) {
+            for (Class<?> iface : type.getInterfaces()) {
+                Mode inherited = declared.get(iface.getName());
+                if (inherited != null) {
+                    return inherited;
+                }
+                Mode nested = declaredInterfaceMode(iface);
+                if (nested != null) {
+                    return nested;
+                }
             }
         }
         return null;
     }
 
-    /**
-     * Admits one whole event chain before any listener runs. A chain with no listener, one unknown
-     * listener, or one mix of modes is LEGACY as one unit; only a chain whose every listener is
-     * declared OWNER_SYNC is admitted owner-synced.
-     */
+    /** Admits one whole chain before listeners run; only an all-OWNER_SYNC chain is owner-synced. */
     public Verdict admit(List<Class<?>> listenerTypes) {
         return admit(listenerTypes, false);
     }
 
-    /** The inherited form used only by the owner-sync declaration path: an interface or superclass
-     * declaration matches its concrete listener. The legacy {@link #admit(List)} stays exact. */
+    /** Inherited form: an interface/superclass declaration matches its concrete listener. */
     Verdict admitInherited(List<Class<?>> listenerTypes) {
         return admit(listenerTypes, true);
     }
@@ -106,7 +124,7 @@ public final class EventAdmission {
         int legacy = 0;
         for (Class<?> listenerType : listenerTypes) {
             Mode declaredMode = listenerType == null ? null
-                : inherited ? declaredMode(listenerType) : declared.get(listenerType);
+                : inherited ? declaredMode(listenerType) : declared.get(listenerType.getName());
             // A listener the table does not name is unknown when the table claims owner-sync: an
             // unnamed listener is never assumed safe. A legacy table keeps it on the host path.
             Mode mode = declaredMode != null ? declaredMode
