@@ -138,14 +138,15 @@ public class AsyncCatcher implements Implementer {
     }
 
     private void instantiateCallback(ClassNode node, MethodNode methodNode, InsnList insnList) {
+        Type methodType = Type.getMethodType(methodNode.desc);
+        boolean returnsVoid = methodType.getReturnType().equals(Type.VOID_TYPE);
         MethodNode bridge;
-        if (Modifier.isPrivate(methodNode.access)) {
-            bridge = createBridge(node, methodNode);
+        if (Modifier.isPrivate(methodNode.access) || returnsVoid) {
+            bridge = createBridge(node, methodNode, returnsVoid);
         } else {
             bridge = methodNode;
         }
 
-        Type methodType = Type.getMethodType(methodNode.desc);
         Implementer.loadArgs(insnList, methodNode, methodType.getArgumentTypes(), 0);
 
         var argTypes = Type.getArgumentTypes(methodNode.desc);
@@ -171,19 +172,27 @@ public class AsyncCatcher implements Implementer {
         ));
     }
 
-    private MethodNode createBridge(ClassNode node, MethodNode methodNode) {
+    private MethodNode createBridge(ClassNode node, MethodNode methodNode, boolean objectReturn) {
         MethodNode ret = new MethodNode();
         ret.name = methodNode.name + "$asyncCatcher$" + COUNTER.getAndIncrement();
-        ret.desc = methodNode.desc;
+        ret.desc = objectReturn
+            ? Type.getMethodDescriptor(Type.getType(Object.class), Type.getArgumentTypes(methodNode.desc))
+            : methodNode.desc;
         ret.access = Opcodes.ACC_PUBLIC | Opcodes.ACC_BRIDGE | Opcodes.ACC_SYNTHETIC;
         if (Modifier.isStatic(methodNode.access)) {
             ret.access = ret.access | Opcodes.ACC_STATIC;
         }
         Type methodType = Type.getMethodType(methodNode.desc);
         Implementer.loadArgs(ret.instructions, methodNode, methodType.getArgumentTypes(), 0);
-        int invokeCode = Modifier.isStatic(methodNode.access) ? Opcodes.INVOKESTATIC : Opcodes.INVOKESPECIAL;
+        int invokeCode = Modifier.isStatic(methodNode.access) ? Opcodes.INVOKESTATIC
+            : (Modifier.isPrivate(methodNode.access) ? Opcodes.INVOKESPECIAL : Opcodes.INVOKEVIRTUAL);
         ret.instructions.add(new MethodInsnNode(invokeCode, node.name, methodNode.name, methodNode.desc));
-        ret.instructions.add(new InsnNode(methodType.getReturnType().getOpcode(Opcodes.IRETURN)));
+        if (objectReturn) {
+            ret.instructions.add(new InsnNode(Opcodes.ACONST_NULL));
+            ret.instructions.add(new InsnNode(Opcodes.ARETURN));
+        } else {
+            ret.instructions.add(new InsnNode(methodType.getReturnType().getOpcode(Opcodes.IRETURN)));
+        }
         node.methods.add(ret);
         Implementer.LOGGER.debug(MARKER, "Bridge method {}/{}{} created", node.name, ret.name, ret.desc);
         return ret;
