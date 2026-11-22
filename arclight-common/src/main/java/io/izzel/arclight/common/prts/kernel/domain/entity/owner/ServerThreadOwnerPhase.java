@@ -40,7 +40,9 @@ import java.util.HashSet;
  * Villagers and executes the original server-thread tick without REST intent contracts. */
 public final class ServerThreadOwnerPhase {
 
-    public static final int MAX_ROWS = 8;
+    /** A selection memory guard rather than a production ceiling: the wider due-row pass must not
+     * be capped by the old eight-row evidence fixture. */
+    public static final int MAX_ROWS = 4096;
     public static final String TRACE_PROPERTY = "arclight.prts.ownerPhaseTrace";
     private static final Map<String, LevelPhase> PENDING = new LinkedHashMap<>();
     private static volatile boolean phaseActive;
