@@ -178,6 +178,6 @@ public final class OwnerControlledWrite {
 
     private static EffectStore.Effect effect(long effectRef, String outcome) {
         return new EffectStore.Effect(effectRef, OPERATION_KIND, outcome,
-            List.of("entity-state"));
+            List.of(EntityEffectPayload.placeholder()));
     }
 }

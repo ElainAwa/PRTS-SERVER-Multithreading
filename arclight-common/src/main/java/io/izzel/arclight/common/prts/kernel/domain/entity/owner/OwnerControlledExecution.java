@@ -68,6 +68,7 @@ final class OwnerControlledExecution {
     volatile Stage stage = Stage.BEGUN;
     volatile boolean ownerWaiting;
     volatile CommitTicket.Outcome outcome;
+    volatile String effectRow;
     volatile Throwable bodyFailure;
     volatile Throwable cleanupFailure;
     volatile ExecutionCohort cohort;

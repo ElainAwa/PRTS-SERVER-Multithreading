@@ -545,11 +545,13 @@ public final class ServerThreadOwnerPhase {
 
     private static io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Outcome partialOutcome(
         OwnerControlledExecution record, String cause) {
+        var rows = record.effectRow == null
+            ? io.izzel.arclight.common.prts.kernel.commit.EffectStore
+                .normalizedRows(record.admission.partial().rows())
+            : List.of(record.effectRow);
         return new io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Outcome(
             io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Terminal.PARTIAL,
-            "entity-tick",
-            io.izzel.arclight.common.prts.kernel.commit.EffectStore
-                .normalizedRows(record.admission.partial().rows()), 0, cause);
+            "entity-tick", rows, 0, cause);
     }
 
     /** The permitted worker segment: ticket identity is checked before the first write, the real
@@ -592,23 +594,30 @@ public final class ServerThreadOwnerPhase {
                 record.stage = OwnerControlledExecution.Stage.EFFECT_ENTERED;
                 record.witness.markEffectPossible();
                 OwnerRandomContext.enter(row.level(), row.villager(), "entity");
+                EntityEffectPayload.Snapshot before = EntityEffectPayload.capture(row.villager());
                 boolean executed;
                 try {
                     executed = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
                 } finally {
                     OwnerRandomContext.exit();
                 }
+                String result = executed ? "PUBLISHED" : "FAILED";
+                String changed = EntityEffectPayload.changedFields(before,
+                    EntityEffectPayload.capture(row.villager()));
+                record.effectRow = EntityEffectPayload.row(row.entity().getUUID(), result, changed);
                 record.outcome = executed
                     ? new io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Outcome(
                         io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Terminal.PUBLISHED,
-                        "entity-tick", io.izzel.arclight.common.prts.kernel.commit.EffectStore
-                            .normalizedRows(record.admission.published().rows()), 1, "")
+                        "entity-tick", List.of(record.effectRow), 1, "")
                     : new io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Outcome(
                         io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Terminal.FAILED,
-                        "entity-tick", io.izzel.arclight.common.prts.kernel.commit.EffectStore
-                            .normalizedRows(record.admission.failed().rows()), 0, "");
+                        "entity-tick", List.of(record.effectRow), 0, "");
             } catch (Throwable failure) {
                 record.bodyFailure = failure;
+                if (record.effectRow == null) {
+                    record.effectRow = EntityEffectPayload.row(row.entity().getUUID(), "PARTIAL",
+                        "unverified");
+                }
             } finally {
                 OwnerBodyLease heldLease = lease;
                 long heldScope = scope;
