@@ -2,7 +2,6 @@
 package io.izzel.arclight.common.prts.kernel.domain.entity.owner;
 
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Set;
 
 /** Which entity update segments may run on an owner worker once a segment program exists: only the
@@ -23,12 +22,7 @@ final class EntityUpdateSegmentPolicy {
 
     private static final Set<Segment> WORKER_SEGMENTS = Set.of(
         Segment.MOB_TICK_TAIL,
-        Segment.SERVER_AI_STEP_PREFIX,
-        Segment.LIVING_ENTITY_TICK_TAIL);
-
-    /** Segments whose suffix must stay on the server thread, so the phase never batches the row. */
-    private static final Set<Segment> HOST_ONLY_SEGMENTS = Set.of(
-        Segment.LIVING_ENTITY_TICK_TAIL);
+        Segment.SERVER_AI_STEP_PREFIX);
 
     private EntityUpdateSegmentPolicy() {
     }
@@ -43,10 +37,5 @@ final class EntityUpdateSegmentPolicy {
 
     static Set<Segment> workerSegments() {
         return WORKER_SEGMENTS;
-    }
-
-    /** Whether the declaration contains a segment that must keep its host suffix off a worker. */
-    static boolean hostOnly(Collection<Segment> segments) {
-        return segments != null && !Collections.disjoint(segments, HOST_ONLY_SEGMENTS);
     }
 }
