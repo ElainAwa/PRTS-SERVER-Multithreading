@@ -54,21 +54,12 @@ public final class ServerThreadOwnerPhase {
     public static final String BATCH_PARALLEL_PROPERTY = "arclight.prts.ownerBatchParallel";
     private static final java.util.Set<EntityUpdateSegmentPolicy.Segment> DECLARED_SEGMENTS =
         java.util.Set.of(EntityUpdateSegmentPolicy.Segment.MOB_TICK_TAIL,
-            EntityUpdateSegmentPolicy.Segment.SERVER_AI_STEP_PREFIX,
-            EntityUpdateSegmentPolicy.Segment.LIVING_ENTITY_TICK_TAIL);
+            EntityUpdateSegmentPolicy.Segment.SERVER_AI_STEP_PREFIX);
     record DeferredRow(LevelPhase phase, ServerLevel level, Villager villager,
                                net.minecraft.world.entity.Entity entity, long hostStep) {
     }
-    /** One host-only row whose admission was frozen before any host-serial publication of this
-     * level pass; it is executed sequentially on the server thread by {@link #finishHostSerial()}. */
-    record HostSerialRow(LevelPhase phase, ServerLevel level, Villager villager,
-                         net.minecraft.world.entity.Entity entity, long hostStep,
-                         OwnerControlledWrite.Admission admission) {
-    }
     private static final List<DeferredRow> DEFERRED = new ArrayList<>();
     private static final Set<Integer> DEFERRED_IDS = new HashSet<>();
-    private static final List<HostSerialRow> HOST_SERIAL = new ArrayList<>();
-    private static final Set<Integer> HOST_SERIAL_IDS = new HashSet<>();
     /** Bodies whose batch returned before the body stopped: the next batch must not start while one
      * of them may still touch shared state. The references are kept until the future settles. */
     private static final List<WorkerPool.GenericHandle> IN_FLIGHT =
@@ -236,10 +227,7 @@ public final class ServerThreadOwnerPhase {
             phase.compat++;
             return false;
         }
-        if (batchEnabled() && slice == Slice.WALK
-            && !EntityUpdateSegmentPolicy.hostOnly(DECLARED_SEGMENTS)) {
-            // The living tick prefix leaves its scale branch inline in the host method, so the row
-            // must stay on the server thread; batching it would run the suffix on a worker.
+        if (batchEnabled() && slice == Slice.WALK) {
             OwnerControlledWrite.Admission admission =
                 OwnerControlledWrite.prepare((ServerLevel) entity.level(), entity);
             if (admission == null) {
@@ -257,21 +245,6 @@ public final class ServerThreadOwnerPhase {
         }
         if (io.izzel.arclight.common.prts.kernel.domain.entity.owner.OwnerCommitGate.read()
             .ready()) {
-            if (slice == Slice.WALK && EntityUpdateSegmentPolicy.hostOnly(DECLARED_SEGMENTS)) {
-                // A host-only row keeps its suffix on the server thread, so it cannot be scheduled
-                // as a worker batch. Freeze its admission now and execute the whole per-tick cohort
-                // after the host entity loop; no row of this cohort publishes before all are ready.
-                OwnerControlledWrite.Admission admission =
-                    OwnerControlledWrite.prepare((ServerLevel) entity.level(), entity);
-                if (admission == null) {
-                    phase.compat++;
-                    return false;
-                }
-                HOST_SERIAL.add(new HostSerialRow(phase, (ServerLevel) entity.level(), villager,
-                    entity, phase.hostSteps.getOrDefault(entity.getId(), 0L), admission));
-                HOST_SERIAL_IDS.add(entity.getId());
-                return true;
-            }
             // The chain is ready, so an owner body that has no reservation would be a native effect
             // the chain never judged. This row was not admitted into the controlled batch: keep the
             // original host call at this site instead of running a second kind of owner body.
@@ -320,110 +293,6 @@ public final class ServerThreadOwnerPhase {
         }
     }
 
-    /** Executes the host-only cohort after the host entity pass: every admission was frozen before
-     * this method runs, so no publication can advance the plan/version window another row already
-     * read. It stays on the server thread and replays the host Post/portal exactly once per row. */
-    public static void finishHostSerial() {
-        if (HOST_SERIAL.isEmpty()) {
-            return;
-        }
-        List<HostSerialRow> rows = new ArrayList<>(HOST_SERIAL);
-        HOST_SERIAL.clear();
-        HOST_SERIAL_IDS.clear();
-        rows = orderHostSerial(rows);
-        for (HostSerialRow row : rows) {
-            OwnerUnitPermit.enter(row.level().dimension().location().toString());
-            OwnerBodyLease lease = null;
-            long ownerScope = 0L;
-            boolean scopeStarted = false;
-            boolean contextStarted = false;
-            boolean terminalCounted = false;
-            try {
-                lease = OwnerBodyLease.acquire(row.level(), row.entity(), row.phase().tick,
-                    row.hostStep());
-                ownerScope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
-                    .EntityTickOwnership.beginOwnerBodyScope(row.entity());
-                scopeStarted = true;
-                EntityUpdateProgramContext.begin(programIdentity(row.phase(), row.entity()));
-                contextStarted = true;
-                io.izzel.arclight.common.prts.kernel.commit.CommitController.SubmitResult result =
-                    OwnerControlledWrite.run(row.level(), row.villager(), row.admission(),
-                        io.izzel.arclight.common.prts.kernel.wiring.OwnerNativeCommitBinding
-                            .instance());
-                if (!publishedResult(result)) {
-                    row.phase().terminal++;
-                    terminalCounted = true;
-                    throw new IllegalStateException("host-serial controlled write refused: "
-                        + (result == null ? "null-result" : result.code() + " " + result.diagnostic()));
-                }
-                if (!consumePublished(result, row.admission().controller()::consumePublished)) {
-                    row.phase().terminal++;
-                    terminalCounted = true;
-                    throw new IllegalStateException(
-                        "host-serial published result has no ticket to consume");
-                }
-                replayHostSerialRow(row);
-            } catch (RuntimeException | Error failure) {
-                if (!terminalCounted) {
-                    row.phase().terminal++;
-                }
-                throw failure;
-            } finally {
-                if (lease != null) {
-                    lease.release();
-                }
-                OwnerUnitPermit.exit();
-                if (contextStarted) {
-                    EntityUpdateProgramContext.end();
-                }
-                if (scopeStarted) {
-                    io.izzel.arclight.common.prts.kernel.domain.entity.ownership
-                        .EntityTickOwnership.endOwnerBodyScope(ownerScope);
-                }
-            }
-        }
-    }
-
-    static List<HostSerialRow> orderHostSerial(List<HostSerialRow> rows) {
-        List<HostSerialRow> ordered = new ArrayList<>(rows);
-        ordered.sort(java.util.Comparator.comparingInt(
-            row -> row.admission().entry().seat().position()));
-        return ordered;
-    }
-
-    static boolean publishedResult(
-        io.izzel.arclight.common.prts.kernel.commit.CommitController.SubmitResult result) {
-        return result != null && result.admitted() && result.terminal()
-            == io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Terminal.PUBLISHED;
-    }
-
-    /** Hands exactly the published ticket to the controller's consume call; a missing ticket or a
-     * non-published result never consumes the effect room. */
-    static boolean consumePublished(
-        io.izzel.arclight.common.prts.kernel.commit.CommitController.SubmitResult result,
-        java.util.function.Consumer<io.izzel.arclight.common.prts.kernel.commit.CommitTicket>
-            consume) {
-        if (!publishedResult(result) || result.ticket() == null || consume == null) {
-            return false;
-        }
-        consume.accept(result.ticket());
-        return true;
-    }
-
-    private static void replayHostSerialRow(HostSerialRow row) {
-        row.phase().executed++;
-        row.phase().walkExecuted++;
-        RestOwnerWiring.noteSkip();
-        io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
-            .noteOwnerBodyExecuted();
-        noteExpectedPost(row.entity());
-        ((EntityBridge) row.entity()).bridge$postTick();
-        java.util.function.Consumer<net.minecraft.world.entity.Entity> replay = postReplay;
-        if (replay != null) {
-            replay.accept(row.entity());
-        }
-    }
-
     private static void dumpOwnerStacks() {
         Thread.getAllStackTraces().forEach((thread, stack) -> {
             boolean owner = thread.getName().startsWith(SharedRuntime.THREAD_PREFIX)
@@ -451,8 +320,7 @@ public final class ServerThreadOwnerPhase {
 
     /** Whether this row's body was deferred to the end of the level pass. */
     public static boolean isDeferred(net.minecraft.world.entity.Entity entity) {
-        return entity != null && (DEFERRED_IDS.contains(entity.getId())
-            || HOST_SERIAL_IDS.contains(entity.getId()));
+        return entity != null && DEFERRED_IDS.contains(entity.getId());
     }
 
     /** Binds the platform Post replay the deferred rows need; a process that binds nothing keeps the host path. */

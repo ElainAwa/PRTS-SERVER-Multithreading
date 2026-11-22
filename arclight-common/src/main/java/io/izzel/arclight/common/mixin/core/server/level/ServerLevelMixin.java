@@ -406,10 +406,6 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
     @Inject(method = "tick", at = @At(value = "INVOKE", shift = At.Shift.AFTER,
         target = "Lnet/minecraft/world/level/entity/EntityTickList;forEach(Ljava/util/function/Consumer;)V"))
     private void prts$closeOwnerPhase(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
-        // Host-only rows were prepared before this safe point and must run before the optional
-        // worker batch; the two cohorts never publish in the same level pass.
-        io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
-            .finishHostSerial();
         io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
             .finishDeferred();
         io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
