@@ -1320,9 +1320,9 @@ public final class ServerThreadOwnerPhase {
                 continue;
             }
             for (EntityDueWindow.Row row : world.rows()) {
-                if (row.classTag() != null && row.classTag().endsWith("Villager")) {
-                    rows.add(row);
-                }
+                // The live entity type is the authority: callback rows can arrive without a class
+                // tag, and the old tag filter would silently skip them before the body guard.
+                rows.add(row);
             }
         }
         return rows;
