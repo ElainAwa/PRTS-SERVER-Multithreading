@@ -119,8 +119,12 @@ public final class WorkerPool {
     private void start() {
         // The tick thread's priority is the ceiling: a worker must never preempt it.
         int priority = Math.min(Thread.NORM_PRIORITY, currentPriority());
+        ClassLoader contextClassLoader = Thread.currentThread().getContextClassLoader();
         for (int index = 0; index < spec.count(); index++) {
             Thread thread = new Thread(this::work, spec.namePrefix() + index);
+            if (contextClassLoader != null) {
+                thread.setContextClassLoader(contextClassLoader);
+            }
             thread.setDaemon(true);
             thread.setPriority(Math.max(Thread.MIN_PRIORITY, Math.min(priority, spec.priority())));
             threads.add(thread);
