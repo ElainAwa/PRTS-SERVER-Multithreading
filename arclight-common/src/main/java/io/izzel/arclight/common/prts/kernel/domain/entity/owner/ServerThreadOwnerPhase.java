@@ -1219,6 +1219,24 @@ public final class ServerThreadOwnerPhase {
         return rows;
     }
 
+    /** The host/body guard shared by the walking slice and the wider due-row selection. The pure
+     * form is package-visible so the selection rules stay testable without a live level. */
+    static boolean admitsFullBody(boolean alive, boolean removed, boolean noAi, boolean passenger,
+                                  boolean hostWouldRun, boolean sleeping, boolean rest,
+                                  boolean panic, boolean hurt) {
+        return alive && !removed && !noAi && !passenger && hostWouldRun
+            && !sleeping && !rest && !panic && !hurt;
+    }
+
+    private static boolean admitsFullBody(Villager villager) {
+        return admitsFullBody(villager.isAlive(), villager.isRemoved(), villager.isNoAi(),
+            villager.isPassenger(), hostWouldRunFullBody(villager),
+            villager.getPose() == Pose.SLEEPING,
+            villager.getBrain().isActive(Activity.REST),
+            villager.getBrain().isActive(Activity.PANIC),
+            villager.hurtTime != 0);
+    }
+
     /** Whether the host tick loop would run the full body of this entity in this pass: a row the
      * host would only inactive-tick must not be taken by the owner, or the two paths diverge. */
     private static boolean hostWouldRunFullBody(net.minecraft.world.entity.Entity entity) {
@@ -1251,15 +1269,29 @@ public final class ServerThreadOwnerPhase {
         if (OwnerZoneAdmission.walkSlice()) {
             for (EntityDueWindow.Row row : selectRowsWalk(window, levelId)) {
                 net.minecraft.world.entity.Entity entity = level.getEntity(row.entityId());
-                if (!(entity instanceof Villager villager) || !villager.isAlive()
-                    || villager.isRemoved() || villager.isNoAi() || villager.isPassenger()
-                    || !hostWouldRunFullBody(entity)) {
+                if (!(entity instanceof Villager villager) || !admitsFullBody(villager)) {
                     continue;
                 }
-                if (villager.getPose() == Pose.SLEEPING
-                    || villager.getBrain().isActive(Activity.REST)
-                    || villager.getBrain().isActive(Activity.PANIC)
-                    || villager.hurtTime != 0) {
+                if (selected.size() < MAX_ROWS) {
+                    selected.add(villager);
+                    phase.slice.put(villager.getId(), Slice.WALK);
+                    phase.walkSelected++;
+                } else {
+                    phase.truncated++;
+                }
+            }
+        }
+        if (OwnerZoneAdmission.walkSlice()) {
+            // The walking slice above only names the rows the due predicate classed as AI. A row
+            // the host would still tick in full (for example an idle/callback row) can use the same
+            // body and commit path; keep it on the WALK batch and let the existing segment/event
+            // gates turn an ineligible row into a compat row rather than a second host tick.
+            for (EntityDueWindow.Row row : selectRowsAll(window, levelId)) {
+                if (phase.slice.containsKey(row.entityId())) {
+                    continue;
+                }
+                net.minecraft.world.entity.Entity entity = level.getEntity(row.entityId());
+                if (!(entity instanceof Villager villager) || !admitsFullBody(villager)) {
                     continue;
                 }
                 if (selected.size() < MAX_ROWS) {
@@ -1275,6 +1307,25 @@ public final class ServerThreadOwnerPhase {
             System.out.println("[PRTS] owner-phase truncated=" + phase.truncated);
         }
         return selected;
+    }
+
+    /** Every due Villager row of one level, including rows the AI predicate did not admit. */
+    static List<EntityDueWindow.Row> selectRowsAll(EntityDueCapture.Window window, String levelId) {
+        List<EntityDueWindow.Row> rows = new ArrayList<>();
+        if (window == null || levelId == null) {
+            return rows;
+        }
+        for (EntityDueWindow.World world : window.worlds()) {
+            if (!levelId.equals(world.worldId())) {
+                continue;
+            }
+            for (EntityDueWindow.Row row : world.rows()) {
+                if (row.classTag() != null && row.classTag().endsWith("Villager")) {
+                    rows.add(row);
+                }
+            }
+        }
+        return rows;
     }
 
     /** Pure walking-row selector; live pose/passenger checks happen in select. */
