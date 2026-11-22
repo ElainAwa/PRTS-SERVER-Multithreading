@@ -291,15 +291,6 @@ public final class WorldWriteGuard implements PrtsWorldWriteTaps.BlockWriteTap, 
                 }
                 return JUDGE;
             }
-            if (rightsActive()) {
-                // With rights active the host thread is not a special writer: an uncovered write is
-                // judged like any other write instead of being granted by the short path.
-                pendingClaim.remove();
-                pendingPosition.remove();
-                pendingClaimRefusal.remove();
-                closePendingUse();
-                return JUDGE;
-            }
             counters.noteAttempt(WritePath.BLOCK_WRITE, ThreadOrigin.MAIN, serverHolder.kind());
             counters.noteVerdict(WritePath.BLOCK_WRITE, ThreadOrigin.MAIN, serverHolder.kind(),
                 WriteDisposition.GRANT);
