@@ -187,6 +187,15 @@ public final class EntityTickOwnership {
     static long hostSkipped() {
         return HOST_SKIPPED.sum();
     }
+
+    /** Counts one host-executed row for the G1 coverage denominator. Only the host branch of the
+     * owner hand-off calls this, only while the owner window is enabled, and only for a Villager;
+     * an owner-skipped row never reaches the host branch. */
+    public static void noteHostEntityExecuted(boolean ownerWindow, boolean villager) {
+        if (ownerWindow && villager) {
+            HOST_EXECUTED.increment();
+        }
+    }
     static final LongAdder PLAN_RUN_FALLBACK = new LongAdder();
     static final LongAdder PLAN_SKIP_UNPLANNED = new LongAdder();
     static final LongAdder TYPED_UPDATES = new LongAdder();

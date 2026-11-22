@@ -28,7 +28,7 @@ import io.izzel.arclight.common.mod.util.ArclightCaptures;
 import io.izzel.arclight.common.mod.util.DelegateWorldInfo;
 import io.izzel.arclight.common.mod.util.DistValidate;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityDueCapture;
-import io.izzel.arclight.common.prts.kernel.domain.entity.owner.EntityRowOwnershipWindow;
+import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership;
 import io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase;
 import io.izzel.arclight.i18n.ArclightConfig;
 import io.izzel.arclight.mixin.Decorate;
@@ -52,6 +52,7 @@ import net.minecraft.util.RandomSource;
 import net.minecraft.world.Container;
 import net.minecraft.world.RandomSequences;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.entity.LightningBolt;
 import net.minecraft.world.entity.ai.navigation.PathNavigation;
 import net.minecraft.world.level.CustomSpawner;
@@ -334,6 +335,9 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
         if (ServerThreadOwnerPhase.hasPending(entityIn)
             && ServerThreadOwnerPhase.runPendingAtBody(entityIn)) {
             return;
+        }
+        if (ServerThreadOwnerPhase.ownerPhaseActive()) {
+            EntityTickOwnership.noteHostEntityExecuted(true, entityIn instanceof Villager);
         }
         entityIn.tick();
     }

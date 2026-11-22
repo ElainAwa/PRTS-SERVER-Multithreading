@@ -69,6 +69,11 @@ public final class ServerThreadOwnerPhase {
     private ServerThreadOwnerPhase() {
     }
 
+    /** Whether the owner phase is active right now; a cheap static read for host-side accounting. */
+    public static boolean ownerPhaseActive() {
+        return phaseActive;
+    }
+
     private enum Slice { REST, WALK }
 
     /** The exact logical row of one selected entity: the incarnation and object a due row was read
