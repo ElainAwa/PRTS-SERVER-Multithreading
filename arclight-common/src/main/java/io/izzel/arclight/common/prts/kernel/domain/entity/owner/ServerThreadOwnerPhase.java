@@ -62,7 +62,7 @@ public final class ServerThreadOwnerPhase {
     /** One host-only row whose admission was frozen before any host-serial publication of this
      * level pass; it is executed sequentially on the server thread by {@link #finishHostSerial()}. */
     record HostSerialRow(LevelPhase phase, ServerLevel level, Villager villager,
-                         net.minecraft.world.entity.Entity entity,
+                         net.minecraft.world.entity.Entity entity, long hostStep,
                          OwnerControlledWrite.Admission admission) {
     }
     private static final List<DeferredRow> DEFERRED = new ArrayList<>();
@@ -268,7 +268,7 @@ public final class ServerThreadOwnerPhase {
                     return false;
                 }
                 HOST_SERIAL.add(new HostSerialRow(phase, (ServerLevel) entity.level(), villager,
-                    entity, admission));
+                    entity, phase.hostSteps.getOrDefault(entity.getId(), 0L), admission));
                 HOST_SERIAL_IDS.add(entity.getId());
                 return true;
             }
@@ -332,26 +332,35 @@ public final class ServerThreadOwnerPhase {
         HOST_SERIAL_IDS.clear();
         rows = orderHostSerial(rows);
         for (HostSerialRow row : rows) {
-            long ownerScope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
-                .EntityTickOwnership.beginOwnerBodyScope(row.entity());
-            EntityUpdateProgramContext.begin(programIdentity(row.phase(), row.entity()));
+            OwnerUnitPermit.enter(row.level().dimension().location().toString());
+            OwnerBodyLease lease = null;
+            long ownerScope = 0L;
+            boolean scopeStarted = false;
+            boolean contextStarted = false;
             boolean terminalCounted = false;
             try {
-                io.izzel.arclight.common.prts.kernel.commit.CommitController.SubmitResult result;
-                try {
-                    result = OwnerControlledWrite.run(row.level(), row.villager(), row.admission(),
+                lease = OwnerBodyLease.acquire(row.level(), row.entity(), row.phase().tick,
+                    row.hostStep());
+                ownerScope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
+                    .EntityTickOwnership.beginOwnerBodyScope(row.entity());
+                scopeStarted = true;
+                EntityUpdateProgramContext.begin(programIdentity(row.phase(), row.entity()));
+                contextStarted = true;
+                io.izzel.arclight.common.prts.kernel.commit.CommitController.SubmitResult result =
+                    OwnerControlledWrite.run(row.level(), row.villager(), row.admission(),
                         io.izzel.arclight.common.prts.kernel.wiring.OwnerNativeCommitBinding
                             .instance());
-                } finally {
-                    EntityUpdateProgramContext.end();
-                    io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
-                        .endOwnerBodyScope(ownerScope);
-                }
                 if (!publishedResult(result)) {
                     row.phase().terminal++;
                     terminalCounted = true;
                     throw new IllegalStateException("host-serial controlled write refused: "
                         + (result == null ? "null-result" : result.code() + " " + result.diagnostic()));
+                }
+                if (!consumePublished(result, row.admission().controller()::consumePublished)) {
+                    row.phase().terminal++;
+                    terminalCounted = true;
+                    throw new IllegalStateException(
+                        "host-serial published result has no ticket to consume");
                 }
                 replayHostSerialRow(row);
             } catch (RuntimeException | Error failure) {
@@ -359,6 +368,18 @@ public final class ServerThreadOwnerPhase {
                     row.phase().terminal++;
                 }
                 throw failure;
+            } finally {
+                if (lease != null) {
+                    lease.release();
+                }
+                OwnerUnitPermit.exit();
+                if (contextStarted) {
+                    EntityUpdateProgramContext.end();
+                }
+                if (scopeStarted) {
+                    io.izzel.arclight.common.prts.kernel.domain.entity.ownership
+                        .EntityTickOwnership.endOwnerBodyScope(ownerScope);
+                }
             }
         }
     }
@@ -374,6 +395,19 @@ public final class ServerThreadOwnerPhase {
         io.izzel.arclight.common.prts.kernel.commit.CommitController.SubmitResult result) {
         return result != null && result.admitted() && result.terminal()
             == io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Terminal.PUBLISHED;
+    }
+
+    /** Hands exactly the published ticket to the controller's consume call; a missing ticket or a
+     * non-published result never consumes the effect room. */
+    static boolean consumePublished(
+        io.izzel.arclight.common.prts.kernel.commit.CommitController.SubmitResult result,
+        java.util.function.Consumer<io.izzel.arclight.common.prts.kernel.commit.CommitTicket>
+            consume) {
+        if (!publishedResult(result) || result.ticket() == null || consume == null) {
+            return false;
+        }
+        consume.accept(result.ticket());
+        return true;
     }
 
     private static void replayHostSerialRow(HostSerialRow row) {
