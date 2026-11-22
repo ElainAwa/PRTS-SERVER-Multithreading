@@ -841,6 +841,9 @@ public final class CommitLog {
             case RETRIED -> retried++;
             case DROPPED -> dropped++;
         }
+        if (ticket.identity().schemaVersion() == SCHEMA_TYPED) {
+            typedStored++;
+        }
         ticketStored++;
         watermarks = Math.max(watermarks, ring.depth());
         return new Verdict(true, disposition, null, sequence, ticket.position());
