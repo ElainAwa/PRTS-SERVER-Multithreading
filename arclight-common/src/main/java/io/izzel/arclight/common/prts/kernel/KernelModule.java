@@ -81,6 +81,7 @@ import io.izzel.arclight.common.prts.kernel.waitpoints.WaitPointRegistry;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitProgress;
 import io.izzel.arclight.common.prts.kernel.waitpoints.WaitSite;
 import io.izzel.arclight.common.prts.kernel.decision.B1DecisionGate;
+import io.izzel.arclight.common.prts.kernel.decision.OwnerSyncListenerTable;
 import io.izzel.arclight.common.prts.kernel.decision.RegistrationEpoch;
 import io.izzel.arclight.common.prts.kernel.dispatch.FaultInjection;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityQueryReadings;
@@ -479,6 +480,8 @@ public final class KernelModule {
     private CommitLog.Replay lastCommitReplay;
     private CommitController commitController;
     private final RegistrationEpoch registrationEpoch = new RegistrationEpoch();
+    private volatile OwnerSyncListenerTable ownerSyncListeners =
+        OwnerSyncListenerTable.load(OwnerSyncListenerTable.defaultPath());
     /** The production publisher the entity wiring binds before the one chain is adopted; null keeps
      * the adopted chain bound but non-executable, as every build without that binding reports. */
     private volatile CommitController.Publisher commitPublisher;
@@ -4080,6 +4083,17 @@ public final class KernelModule {
     /** The registration generation published at plugin registration and disable boundaries. */
     public RegistrationEpoch registrationEpoch() {
         return registrationEpoch;
+    }
+
+    /** The listener declaration table loaded at startup and refreshed at registration boundaries. */
+    public OwnerSyncListenerTable ownerSyncListeners() {
+        return ownerSyncListeners;
+    }
+
+    /** Re-reads the declaration file after a registration/disable boundary; a failed read keeps the
+     * empty/previous whole-file result and never leaves a half declaration. */
+    public void refreshOwnerSyncListeners() {
+        ownerSyncListeners.reload(OwnerSyncListenerTable.defaultPath());
     }
 
     /** The one plan authority of this module: a caller that builds a chain to be adopted binds this

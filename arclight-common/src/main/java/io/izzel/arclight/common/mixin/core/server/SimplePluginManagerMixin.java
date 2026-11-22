@@ -5,6 +5,8 @@ import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import io.izzel.arclight.common.prts.kernel.KernelModule;
 import io.izzel.arclight.common.prts.kernel.observe.BukkitEventOrderObserver;
+import io.izzel.arclight.common.prts.kernel.domain.entity.owner.OwnerEventDispatch;
+import io.izzel.arclight.common.prts.kernel.decision.OwnerSyncListenerTable;
 import org.bukkit.event.Event;
 import org.bukkit.event.HandlerList;
 import org.bukkit.event.server.RemoteServerCommandEvent;
@@ -29,16 +31,19 @@ public abstract class SimplePluginManagerMixin {
     @Inject(method = "registerEvents", at = @At("RETURN"), require = 1, remap = false)
     private void prts$publishRegistrationEpoch(CallbackInfo ci) {
         KernelModule.instance().registrationEpoch().publish();
+        KernelModule.instance().refreshOwnerSyncListeners();
     }
 
     @Inject(method = "registerEvent", at = @At("RETURN"), require = 1, remap = false)
     private void prts$publishEventRegistrationEpoch(CallbackInfo ci) {
         KernelModule.instance().registrationEpoch().publish();
+        KernelModule.instance().refreshOwnerSyncListeners();
     }
 
     @Inject(method = "disablePlugin", at = @At("RETURN"), require = 1, remap = false)
     private void prts$publishDisableEpoch(CallbackInfo ci) {
         KernelModule.instance().registrationEpoch().publish();
+        KernelModule.instance().refreshOwnerSyncListeners();
     }
 
     @Inject(method = "fireEvent", at = @At("HEAD"), require = 1, remap = false)
@@ -70,6 +75,17 @@ public abstract class SimplePluginManagerMixin {
                                      org.spongepowered.asm.mixin.injection.callback.CallbackInfo ci) {
         if (io.izzel.arclight.common.prts.kernel.auth.OwnerUnitPermit.eventShape()) {
             if (io.izzel.arclight.common.prts.kernel.decision.EventChainAdmission.emptyChain(event)) {
+                ci.cancel();
+                return;
+            }
+            OwnerSyncListenerTable table = KernelModule.instance().ownerSyncListeners();
+            io.izzel.arclight.common.prts.kernel.decision.EventAdmission.Verdict verdict =
+                io.izzel.arclight.common.prts.kernel.decision.EventChainAdmission
+                    .verdictFor(event, table.admission());
+            if (verdict.ownerSync()) {
+                // A declared chain runs the same listener loop on this owner thread; an undeclared
+                // table keeps the A-1 roundtrip, and listener failures follow fireEvent's logging.
+                OwnerEventDispatch.dispatch(event);
                 ci.cancel();
                 return;
             }
