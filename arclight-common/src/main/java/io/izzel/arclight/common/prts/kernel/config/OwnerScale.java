@@ -113,11 +113,13 @@ public final class OwnerScale {
     /** The one evidence line of a finished body window; a log line, not a kernel reading. */
     public static String evidence(int planned, int selected, int executed, int compat, int window,
                                    int begun, int parallelBodies, int parallelWaits, long pumpNanos,
+                                   long beginNanos, long waitNanos, long finishNanos,
                                    long wallNanos) {
         return "[PRTS] owner-scale planned=" + planned + " selected=" + selected + " executed="
             + executed + " compat=" + compat + " window=" + window + " begun=" + begun
             + " parallelBodies=" + parallelBodies + " parallelWaits=" + parallelWaits
             + " refusedCapacity=" + refusedCapacity() + " truncatedRows=" + truncatedRows()
-            + " pumpNanos=" + pumpNanos + " wallNanos=" + wallNanos;
+            + " pumpNanos=" + pumpNanos + " beginNanos=" + beginNanos + " waitNanos=" + waitNanos
+            + " finishNanos=" + finishNanos + " wallNanos=" + wallNanos;
     }
 }

@@ -516,6 +516,9 @@ public final class ServerThreadOwnerPhase {
         MinecraftServer server = rows.get(0).level().getServer();
         java.util.ArrayDeque<WindowSlot> inFlight = new java.util.ArrayDeque<>(window);
         long pumpNanos = 0L;
+        long beginNanos = 0L;
+        long waitNanos = 0L;
+        long finishNanos = 0L;
         int begun = 0;
         int finished = 0;
         int parallelBodies = 0;
@@ -525,7 +528,9 @@ public final class ServerThreadOwnerPhase {
             while (begun < count && inFlight.size() < window) {
                 DeferredRow row = rows.get(begun);
                 StageCounters.note("ownerBatchBody");
+                long beginStartedAt = System.nanoTime();
                 WindowSlot slot = beginControlledRow(runtime, row, admissions.get(row), account);
+                beginNanos += System.nanoTime() - beginStartedAt;
                 begun++;
                 if (slot == null) {
                     faulted = true;
@@ -548,6 +553,7 @@ public final class ServerThreadOwnerPhase {
                 continue;
             }
             OwnerControlledExecution record = head.record();
+            long waitStartedAt = System.nanoTime();
             while (!record.handle.future().isDone()) {
                 long pumpStartedAt = System.nanoTime();
                 OwnerReadDemand.service();
@@ -563,15 +569,19 @@ public final class ServerThreadOwnerPhase {
                 }
                 Thread.yield();
             }
+            waitNanos += System.nanoTime() - waitStartedAt;
             inFlight.removeFirst();
+            long finishStartedAt = System.nanoTime();
             if (!completeControlledExecution(record, true)) {
                 faulted = true;
             }
+            finishNanos += System.nanoTime() - finishStartedAt;
             finished++;
         }
         System.out.println(OwnerScale.evidence(count, phase.selected,
             phase.executed - executedBefore, phase.compat, window, begun, parallelBodies,
-            parallelWaits, pumpNanos, System.nanoTime() - startedAt));
+            parallelWaits, pumpNanos, beginNanos, waitNanos, finishNanos,
+            System.nanoTime() - startedAt));
         return faulted;
     }
 
