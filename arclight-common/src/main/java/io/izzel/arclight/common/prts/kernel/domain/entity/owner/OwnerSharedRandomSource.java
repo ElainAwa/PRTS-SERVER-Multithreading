@@ -26,6 +26,11 @@ public final class OwnerSharedRandomSource implements RandomSource {
     private RandomSource routed() {
         OwnerRandomContext.Row row = OwnerRandomContext.current();
         if (row == null) {
+            // A draw outside an owner body inside a read node would move the host's shared stream
+            // without the row program that must order it: the fence refuses it before the draw.
+            io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeReadGuard.fence(
+                io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeReadGuard.Refusal
+                    .DRAW);
             return base;
         }
         SharedStream stream = table.stream(StreamKey.of(row.worldSeed(), row.worldIdentity(),

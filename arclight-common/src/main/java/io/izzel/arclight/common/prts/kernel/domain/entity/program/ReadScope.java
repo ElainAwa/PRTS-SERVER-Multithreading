@@ -72,6 +72,16 @@ public final class ReadScope {
         this.declaredGroups = Set.copyOf(declaredGroups);
     }
 
+    /** Opens one read phase that is not a declared compute-only program: a driver issues its own
+     * permits under the same exclusion and closes it for the same witness. */
+    public static ReadScope open(long waveId, Set<ReadPermit.FieldGroup> declaredGroups) {
+        Objects.requireNonNull(declaredGroups, "declaredGroups");
+        if (declaredGroups.isEmpty()) {
+            throw new IllegalArgumentException("a read phase declares at least one field group");
+        }
+        return new ReadScope(waveId, declaredGroups);
+    }
+
     public long waveId() {
         return waveId;
     }

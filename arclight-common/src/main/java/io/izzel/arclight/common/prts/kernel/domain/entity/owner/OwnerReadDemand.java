@@ -43,6 +43,11 @@ public final class OwnerReadDemand {
     static ChunkAccess await(ServerChunkCache cache, int x, int z, ChunkStatus status,
                              boolean blocking, String worldId, long holderGeneration,
                              String consumerSegment, long logicalTick, int position) {
+        // A read node declared itself demand-free: the host is not pumping inside the wave, so a
+        // demand would wait forever. The fence records the demand and refuses the node instead.
+        io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeReadGuard.fence(
+            io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeReadGuard.Refusal
+                .CHUNK_DEMAND);
         Request request = enqueue(cache, x, z, status, blocking, worldId, holderGeneration,
             consumerSegment, logicalTick, position);
         try {

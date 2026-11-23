@@ -35,6 +35,10 @@ public final class OwnerHostEventDispatch {
 
     /** Queues one event for the parked host and waits for its dispatch. */
     public static void dispatch(Event event) {
+        // A read node has no host frame to dispatch on and the wave does not pump: refusing here is
+        // the difference between a refused row and a server thread waiting for itself.
+        io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeReadGuard.fence(
+            io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeReadGuard.Refusal.EVENT);
         Request request = new Request(event, new CompletableFuture<>());
         REQUESTS.add(request);
         StageCounters.note("ownerHostEvent");
@@ -56,6 +60,9 @@ public final class OwnerHostEventDispatch {
      * body: outside the host thread the step is queued on the same channel and the worker parks; on
      * the host it runs inline. */
     public static void postOnHost(Runnable action) {
+        io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeReadGuard.fence(
+            io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeReadGuard.Refusal
+                .HOST_CALLBACK);
         if (ON_HOST.get() || io.izzel.arclight.common.mod.server.ArclightServer
             .isPrimaryThread()) {
             action.run();
@@ -87,6 +94,9 @@ public final class OwnerHostEventDispatch {
      * action runs inline, so the default path is unchanged. */
     @SuppressWarnings("unchecked")
     public static <T> T callOnHost(Supplier<T> action) {
+        io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeReadGuard.fence(
+            io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeReadGuard.Refusal
+                .HOST_CALLBACK);
         if (!OwnerUnitPermit.eventShape() || ON_HOST.get()) {
             return action.get();
         }

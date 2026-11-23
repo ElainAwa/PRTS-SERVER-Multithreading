@@ -31,6 +31,10 @@ final class EntityUpdateProgramContext {
     }
 
     static void begin(Identity identity) {
+        // A row body starting inside a read node is a write the wave never ordered: the fence
+        // records it and throws before any segment of the body can run.
+        io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeReadGuard.fence(
+            io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeReadGuard.Refusal.WRITE);
         if (identity == null) {
             throw new IllegalArgumentException("owner program identity is required");
         }

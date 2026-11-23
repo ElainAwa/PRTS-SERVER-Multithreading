@@ -910,11 +910,19 @@ public final class ServerThreadOwnerPhase {
             row -> admissions.get(row).entry().seat().position()));
         boolean faulted = false;
         try {
-            for (DeferredRow row : controlled) {
-                OwnerControlledWrite.Admission admission = admissions.get(row);
-                StageCounters.note("ownerBatchBody");
-                if (!runControlledWorkerRow(runtime, row, admission, account, true)) {
-                    faulted = true;
+            if (io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeEntityPhase
+                .enabled()) {
+                // The native slice keeps the same seats and the same tickets: each row's read node
+                // ran in the wave and its whole body is applied on this thread in seat order. A row
+                // without a staged search, or with a refused one, still runs its body here.
+                faulted = NativeEntityPump.run(runtime, controlled, admissions);
+            } else {
+                for (DeferredRow row : controlled) {
+                    OwnerControlledWrite.Admission admission = admissions.get(row);
+                    StageCounters.note("ownerBatchBody");
+                    if (!runControlledWorkerRow(runtime, row, admission, account, true)) {
+                        faulted = true;
+                    }
                 }
             }
         } catch (RuntimeException | Error failure) {
@@ -927,8 +935,8 @@ public final class ServerThreadOwnerPhase {
 
 
     /** The identity one owner body binds for its program segments. */
-    private static EntityUpdateProgramContext.Identity programIdentity(LevelPhase phase,
-                                                                      net.minecraft.world.entity.Entity entity) {
+    static EntityUpdateProgramContext.Identity programIdentity(LevelPhase phase,
+                                                               net.minecraft.world.entity.Entity entity) {
         RowIdentity row = phase.identities.get(entity.getId());
         String worldId = row == null
             ? entity.level().dimension().location().toString() : row.worldId();
