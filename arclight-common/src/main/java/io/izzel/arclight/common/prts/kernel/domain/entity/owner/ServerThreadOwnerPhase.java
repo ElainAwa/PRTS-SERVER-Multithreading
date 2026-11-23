@@ -707,6 +707,15 @@ public final class ServerThreadOwnerPhase {
      * scope is released in reverse order with cleanup failures attached instead of hiding the
      * native cause. It never reports a terminal; the owner record does that. */
     private static void runControlledWorkerBody(OwnerControlledExecution record) {
+        OwnerBodyMarker.enter();
+        try {
+            runControlledWorkerBody0(record);
+        } finally {
+            OwnerBodyMarker.exit();
+        }
+    }
+
+    private static void runControlledWorkerBody0(OwnerControlledExecution record) {
         record.stage = OwnerControlledExecution.Stage.BODY_RUNNING;
         DeferredRow row = record.row;
         try {
