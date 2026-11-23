@@ -4,7 +4,9 @@ package io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec;
 import java.util.Locale;
 
 /** Which native entity program the process runs: empty or unrecognised keeps the host path, serial
- * runs read nodes on the calling thread and parallel on the pooled workers; read at initialization. */
+ * runs read nodes on the calling thread, parallel on the pooled workers, and shadow keeps the serial
+ * read wave but recomputes every staged search inline and publishes no staged result; read at
+ * initialization. */
 public final class NativeEntityPhase {
 
     /** The dormant internal switch; the shipped value is empty and every build stays on the host. */
@@ -13,7 +15,8 @@ public final class NativeEntityPhase {
     public enum Mode {
         OFF,
         SERIAL,
-        PARALLEL
+        PARALLEL,
+        SHADOW
     }
 
     private static final Mode MODE = parse(System.getProperty(PROPERTY, ""));
@@ -36,6 +39,7 @@ public final class NativeEntityPhase {
         return switch (value.trim().toLowerCase(Locale.ROOT)) {
             case "serial" -> Mode.SERIAL;
             case "parallel", "true" -> Mode.PARALLEL;
+            case "shadow" -> Mode.SHADOW;
             default -> Mode.OFF;
         };
     }

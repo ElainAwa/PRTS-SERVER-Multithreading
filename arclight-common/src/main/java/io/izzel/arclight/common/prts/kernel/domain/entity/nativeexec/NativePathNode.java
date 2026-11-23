@@ -5,7 +5,11 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.ai.Brain;
 import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.ai.behavior.BlockPosTracker;
+import net.minecraft.world.entity.ai.memory.MemoryModuleType;
+import net.minecraft.world.entity.ai.memory.WalkTarget;
 import net.minecraft.world.entity.ai.navigation.GroundPathNavigation;
 import net.minecraft.world.entity.ai.navigation.PathNavigation;
 import net.minecraft.world.level.PathNavigationRegion;
@@ -17,11 +21,11 @@ import net.minecraft.world.level.pathfinder.WalkNodeEvaluator;
 
 import java.util.Set;
 
-/** The one read node of the first native slice: the path search the navigation would run at its next
- * delayed recomputation. The host freezes the request, the region and a task-local finder before the
- * wave; the node only searches, and the original method keeps its early return, its profiler scope
- * and every write-back. A plan that cannot be frozen exactly is absent, and the row stays the whole
- * body. */
+/** The read nodes of the first native slice: the path search the navigation would run at its next
+ * delayed recomputation and the ordinary start search of the move-to-target behavior. The host
+ * freezes the request, the region and a task-local finder before the wave; the node only searches,
+ * and the original method keeps its early return, its profiler scope and every write-back. A plan
+ * that cannot be frozen exactly is absent, and the row stays the whole body. */
 public final class NativePathNode {
 
     /** The region offset the delayed recomputation uses when it builds its navigation region. */
@@ -30,9 +34,10 @@ public final class NativePathNode {
     private static final long RECOMPUTE_WINDOW = 20L;
 
     /** One frozen search: the request the host calls with, the mob it was planned for, the region it
-     * reads and its own finder. */
+     * reads, its own finder, and whether it predicts the ordinary start search instead of a delayed
+     * recomputation. */
     public record Plan(NativePathRequest request, PathNavigationRegion region, PathFinder finder,
-                       Mob mob) {
+                       Mob mob, boolean ordinary) {
     }
 
     private NativePathNode() {
@@ -81,6 +86,78 @@ public final class NativePathNode {
             return null;
         }
         float followRange = (float) mob.getAttributeValue(Attributes.FOLLOW_RANGE);
+        return freeze(level, navigation, mob, evaluator, targets, followRange,
+            state.prts$reachRange(), state, false);
+    }
+
+    /** The plan of the ordinary start search of the move-to-target behavior, or null when this row's
+     * first search is not that one: a delayed recomputation is pending, a position memory is already
+     * present, the walk target is reached or tracked by an entity, the ground navigation cannot
+     * update, or the target chunk is not loaded. The body searches this exact request later. */
+    public static Plan planStartSearch(ServerLevel level, Mob mob) {
+        if (level == null || mob == null) {
+            return null;
+        }
+        PathNavigation navigation = mob.getNavigation();
+        if (!(navigation instanceof GroundPathNavigation)) {
+            return null;
+        }
+        if (!(navigation instanceof NativePathState state)) {
+            return null;
+        }
+        NodeEvaluator evaluator = navigation.getNodeEvaluator();
+        if (evaluator == null || evaluator.getClass() != WalkNodeEvaluator.class) {
+            return null;
+        }
+        Brain<?> brain = mob.getBrain();
+        BlockPos target = startTarget(state.prts$hasDelayedRecomputation(),
+            mob.onGround() || mob.isInLiquid() || mob.isPassenger(), mob.getY(),
+            level.getMinBuildHeight(), brain.hasMemoryValue(MemoryModuleType.PATH),
+            brain.getMemory(MemoryModuleType.WALK_TARGET).orElse(null), mob.blockPosition());
+        if (target == null) {
+            return null;
+        }
+        Set<BlockPos> targets = groundTargets(level, target);
+        if (targets == null || targets.size() != 1) {
+            return null;
+        }
+        Path path = navigation.getPath();
+        if (path != null && !path.isDone() && targets.contains(state.prts$targetPos())) {
+            return null;
+        }
+        float followRange = (float) mob.getAttributeValue(Attributes.FOLLOW_RANGE);
+        return freeze(level, navigation, mob, evaluator, targets, followRange, 0, state, true);
+    }
+
+    /** The target an ordinary start search would use, or null when the first search of the body is
+     * not the frozen single-position start. Pure over the inputs the adapter reads, so the refusal
+     * conditions are testable without a live level. */
+    static BlockPos startTarget(boolean delayedRecomputation, boolean canUpdatePath, double mobY,
+                                int minBuildHeight, boolean pathMemory, WalkTarget walkTarget,
+                                BlockPos mobPos) {
+        if (delayedRecomputation) {
+            return null;
+        }
+        if (!canUpdatePath || mobY < (double) minBuildHeight) {
+            return null;
+        }
+        if (pathMemory || walkTarget == null
+            || !(walkTarget.getTarget() instanceof BlockPosTracker tracker)) {
+            return null;
+        }
+        BlockPos target = tracker.currentBlockPosition();
+        if (target.distManhattan(mobPos) <= walkTarget.getCloseEnoughDist()) {
+            return null;
+        }
+        return target;
+    }
+
+    /** Freezes one search exactly as the navigation would: the region radius follows the follow
+     * range, the task evaluator copies the live flags and the finder copies the visited-node cap.
+     * Null means the region or finder does not carry the state a staged search has to compare. */
+    private static Plan freeze(ServerLevel level, PathNavigation navigation, Mob mob,
+                               NodeEvaluator evaluator, Set<BlockPos> targets, float followRange,
+                               int accuracy, NativePathState state, boolean ordinary) {
         BlockPos center = mob.blockPosition();
         int radius = (int) (followRange + (float) REGION_OFFSET);
         PathNavigationRegion region = new PathNavigationRegion(level,
@@ -100,10 +177,11 @@ public final class NativePathNode {
         taskEvaluator.setCanWalkOverFences(evaluator.canWalkOverFences());
         PathFinder finder = new PathFinder(taskEvaluator, maxVisitedNodes);
         NativePathRequest request = new NativePathRequest(navigation, mob, evaluator.getClass(),
-            targets, followRange, state.prts$reachRange(), state.prts$maxVisitedNodesMultiplier(),
+            targets, followRange, accuracy, state.prts$maxVisitedNodesMultiplier(),
             maxVisitedNodes, evaluator.canPassDoors(), evaluator.canOpenDoors(), evaluator.canFloat(),
-            evaluator.canWalkOverFences(), regionState);
-        return new Plan(request, region, finder, mob);
+            evaluator.canWalkOverFences(), regionState, PathFinder.class,
+            NativePathRequest.MobKey.of(mob));
+        return new Plan(request, region, finder, mob, ordinary);
     }
 
     /** Runs the frozen search; null is the original "no path" answer and is staged as one. */

@@ -6,6 +6,7 @@ import io.izzel.arclight.common.prts.kernel.commit.CommitTicket;
 import io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathRequest;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathStage;
+import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathState;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeWritePump;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership;
 import net.minecraft.world.level.pathfinder.Path;
@@ -26,15 +27,29 @@ final class NativePumpRow implements NativeWritePump.Row {
     private final NativePathRequest request;
     private final Path stagedPath;
     private final boolean staged;
+    private final boolean ordinary;
     private OwnerControlledExecution record;
 
     NativePumpRow(ServerThreadOwnerPhase.DeferredRow row, OwnerControlledWrite.Admission admission,
-                  NativePathRequest request, Path stagedPath, boolean staged) {
+                  NativePathRequest request, Path stagedPath, boolean staged, boolean ordinary) {
         this.row = row;
         this.admission = admission;
         this.request = request;
         this.stagedPath = stagedPath;
         this.staged = staged && request != null;
+        this.ordinary = ordinary;
+    }
+
+    /** Whether this row binds its staged search. An ordinary start prediction is dropped when the
+     * navigation already has a delayed recomputation pending: the body searches that first, so the
+     * ordinary stage is a stale answer. A delayed stage is that pending search and is kept. */
+    static boolean stages(boolean staged, boolean ordinary, boolean delayedRecomputation) {
+        return staged && (!ordinary || !delayedRecomputation);
+    }
+
+    private boolean delayedRecomputation() {
+        return row.villager().getNavigation() instanceof NativePathState state
+            && state.prts$hasDelayedRecomputation();
     }
 
     @Override
@@ -83,13 +98,15 @@ final class NativePumpRow implements NativeWritePump.Row {
         try {
             held.witness.markEffectPossible();
             EntityEffectPayload.Snapshot before = EntityEffectPayload.capture(row.villager());
-            if (staged) {
-                NativePathStage.bind(request, stagedPath);
+            boolean bindStage = stages(staged, ordinary,
+                staged && ordinary && delayedRecomputation());
+            if (bindStage) {
+                NativePathStage.bind(request, stagedPath, ordinary);
             }
             try {
                 executed = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
             } finally {
-                if (staged) {
+                if (bindStage) {
                     NativePathStage.unbind();
                 }
             }

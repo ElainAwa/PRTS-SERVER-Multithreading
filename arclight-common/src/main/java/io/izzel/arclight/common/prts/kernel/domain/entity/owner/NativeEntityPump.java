@@ -16,6 +16,7 @@ import io.izzel.arclight.common.prts.kernel.generic.GenericCancel;
 import net.minecraft.world.level.pathfinder.Path;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,9 +26,10 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /** The first native slice on one batch of deferred walk rows: the host freezes one path search per
  * row, the wave searches them, and the seat pump applies every row on the server thread in seat
- * order with the staged search bound. Rows without a frozen search, and rows whose read slot was
- * refused, pump as their whole-body C form on the same seat; the counters only feed the evidence
- * line of this diagnostic mode. */
+ * order with the staged search bound. The shadow mode also plans the ordinary start search of the
+ * move-to-target behavior and recomputes each hit inline; it publishes no staged result. Rows without
+ * a frozen search, and rows whose read slot was refused, pump as their whole-body C form on the same
+ * seat; the counters only feed the evidence line of this diagnostic mode. */
 final class NativeEntityPump {
 
     private static final Set<ReadPermit.FieldGroup> READ_GROUPS = Set.of(
@@ -49,6 +51,7 @@ final class NativeEntityPump {
             return false;
         }
         NativeEntityPhase.Mode mode = NativeEntityPhase.mode();
+        boolean shadow = mode == NativeEntityPhase.Mode.SHADOW;
         long tick = rows.get(0).phase().tick;
         long readStarted = System.nanoTime();
         NativeReadWave<Path> wave = NativeReadWave.open(mode, WAVE_IDS.incrementAndGet(), tick,
@@ -56,7 +59,10 @@ final class NativeEntityPump {
             WAVE_DEADLINE_NANOS);
         Map<ServerThreadOwnerPhase.DeferredRow, NativePathNode.Plan> plans =
             new IdentityHashMap<>();
+        Set<ServerThreadOwnerPhase.DeferredRow> ordinaryRows =
+            Collections.newSetFromMap(new IdentityHashMap<>());
         int planned = 0;
+        int plannedOrdinary = 0;
         for (ServerThreadOwnerPhase.DeferredRow row : rows) {
             NativePathNode.Plan attempt;
             try {
@@ -65,12 +71,25 @@ final class NativeEntityPump {
                 // A row whose plan cannot be frozen keeps its whole body and counts as plan-refused.
                 attempt = null;
             }
+            boolean ordinary = false;
+            if (attempt == null && shadow) {
+                try {
+                    attempt = NativePathNode.planStartSearch(row.level(), row.villager());
+                } catch (RuntimeException absent) {
+                    attempt = null;
+                }
+                ordinary = attempt != null;
+            }
             NativePathNode.Plan plan = attempt;
             if (plan == null) {
                 continue;
             }
             OwnerControlledWrite.Admission admission = admissions.get(row);
             plans.put(row, plan);
+            if (ordinary) {
+                ordinaryRows.add(row);
+                plannedOrdinary++;
+            }
             planned++;
             wave.issue(rowKey(row, admission), admission.entry().seat().position(),
                 identity(row), generation(row), snapshot(row, identity(row), generation(row)),
@@ -86,11 +105,21 @@ final class NativeEntityPump {
             NativeRowProgram<Path> program = wave.program(rowKey(row, admission));
             boolean ready = program != null && program.state() == NativeRowProgram.State.READY;
             NativePathNode.Plan plan = ready ? plans.get(row) : null;
+            boolean ordinary = plan != null && ordinaryRows.contains(row);
             pumpRows.add(new NativePumpRow(row, admission,
-                plan == null ? null : plan.request(), ready ? program.result() : null, ready));
+                plan == null ? null : plan.request(), ready ? program.result() : null, ready,
+                ordinary));
         }
+        long comparedBefore = shadow ? NativePathStage.comparedOrdinary() : 0L;
+        long mismatchedBefore = shadow ? NativePathStage.mismatchedOrdinary() : 0L;
         NativeWritePump.Result result = NativeWritePump.run(pumpRows);
-        record(TOTALS, witness, result, rows.size(), planned, readNanos, planNanos, tick);
+        int comparedOrdinary = shadow
+            ? (int) (NativePathStage.comparedOrdinary() - comparedBefore) : 0;
+        int mismatchOrdinary = shadow
+            ? (int) (NativePathStage.mismatchedOrdinary() - mismatchedBefore) : 0;
+        int unusedOrdinary = unusedOrdinary(plannedOrdinary, comparedOrdinary);
+        record(TOTALS, witness, result, rows.size(), planned, plannedOrdinary, comparedOrdinary,
+            mismatchOrdinary, unusedOrdinary, readNanos, planNanos, tick);
         return result.faulted();
     }
 
@@ -137,16 +166,23 @@ final class NativeEntityPump {
     }
 
     static void record(NativeEntityEvidence totals, NativeReadWave.Witness witness,
-                       NativeWritePump.Result result, int rows, int planned, long readNanos,
+                       NativeWritePump.Result result, int rows, int planned, int plannedOrdinary,
+                       int comparedOrdinary, int mismatchOrdinary, int unusedOrdinary, long readNanos,
                        long planNanos, long tick) {
         int[] refusals = classify(witness);
         NativeEntityEvidence.Batch batch = new NativeEntityEvidence.Batch(tick, rows, planned,
             witness.ready(), rows - planned, refusals[0], refusals[1], refusals[2], refusals[3],
             witness.foreignWrites(), readNanos, result.pumped(), result.nanos(), planNanos,
-            result.faulted());
+            result.faulted(), plannedOrdinary, comparedOrdinary, mismatchOrdinary, unusedOrdinary);
         totals.add(batch);
         System.out.println(totals.sample(NativePathStage.hits())
             .line(result.faulted(), refusalSummary(witness)));
+    }
+
+    /** The planned ordinary searches the body never took: no search, a different request, or the
+     * delayed guard. It is the part of the prediction that bought nothing. */
+    static int unusedOrdinary(int plannedOrdinary, int comparedOrdinary) {
+        return Math.max(0, plannedOrdinary - comparedOrdinary);
     }
 
     /** Splits the wave's per-row refusals into the evidence categories; no refusal code is added. */

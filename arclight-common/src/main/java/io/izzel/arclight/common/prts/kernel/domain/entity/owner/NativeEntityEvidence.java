@@ -12,14 +12,17 @@ final class NativeEntityEvidence {
      * plan refusal, and every wave refusal falls into fence, dispatch, not-run or failed. */
     record Batch(long tick, int rows, int planned, int ready, int refusedPlan, int refusedFence,
                  int refusedDispatch, int refusedNotRun, int refusedFailed, int foreign,
-                 long readNanos, int pumped, long pumpNanos, long planNanos, boolean faulted) {
+                 long readNanos, int pumped, long pumpNanos, long planNanos, boolean faulted,
+                 int plannedOrdinary, int comparedOrdinary, int mismatchOrdinary,
+                 int unusedOrdinary) {
     }
 
     /** One immutable sample of the running totals; the hit count comes from the staged path stage. */
     record Sample(long tick, long waves, long rows, long planned, long ready, long refusedPlan,
                   long refusedFence, long refusedDispatch, long refusedNotRun, long refusedFailed,
                   long hit, long readNanos, long pumped, long pumpNanos, long planNanos,
-                  long foreign, long faultedBatches) {
+                  long foreign, long faultedBatches, long plannedOrdinary, long comparedOrdinary,
+                  long mismatchOrdinary, long unusedOrdinary) {
 
         long refused() {
             return refusedPlan + refusedFence + refusedDispatch + refusedNotRun + refusedFailed;
@@ -34,6 +37,8 @@ final class NativeEntityEvidence {
                 + " refusedFence=" + refusedFence + " refusedDispatch=" + refusedDispatch
                 + " refusedNotRun=" + refusedNotRun + " refusedFailed=" + refusedFailed
                 + " foreign=" + foreign + " planNanos=" + planNanos
+                + " plannedOrdinary=" + plannedOrdinary + " comparedOrdinary=" + comparedOrdinary
+                + " mismatchOrdinary=" + mismatchOrdinary + " unusedOrdinary=" + unusedOrdinary
                 + " faulted=" + faulted + " faultedBatches=" + faultedBatches
                 + " waveRefusals=" + waveRefusals;
         }
@@ -47,6 +52,8 @@ final class NativeEntityEvidence {
                 + " refusedFence=" + refusedFence + " refusedDispatch=" + refusedDispatch
                 + " refusedNotRun=" + refusedNotRun + " refusedFailed=" + refusedFailed
                 + " foreign=" + foreign + " planNanos=" + planNanos
+                + " plannedOrdinary=" + plannedOrdinary + " comparedOrdinary=" + comparedOrdinary
+                + " mismatchOrdinary=" + mismatchOrdinary + " unusedOrdinary=" + unusedOrdinary
                 + " faultedBatches=" + faultedBatches;
         }
     }
@@ -66,6 +73,10 @@ final class NativeEntityEvidence {
     private final LongAdder planNanos = new LongAdder();
     private final LongAdder foreign = new LongAdder();
     private final LongAdder faultedBatches = new LongAdder();
+    private final LongAdder plannedOrdinary = new LongAdder();
+    private final LongAdder comparedOrdinary = new LongAdder();
+    private final LongAdder mismatchOrdinary = new LongAdder();
+    private final LongAdder unusedOrdinary = new LongAdder();
     /** The tick of the last added batch; written by the server thread, read by the stop summary. */
     private volatile long lastTick;
 
@@ -85,6 +96,10 @@ final class NativeEntityEvidence {
         pumpNanos.add(batch.pumpNanos());
         planNanos.add(batch.planNanos());
         foreign.add(batch.foreign());
+        plannedOrdinary.add(batch.plannedOrdinary());
+        comparedOrdinary.add(batch.comparedOrdinary());
+        mismatchOrdinary.add(batch.mismatchOrdinary());
+        unusedOrdinary.add(batch.unusedOrdinary());
         if (batch.faulted()) {
             faultedBatches.increment();
         }
@@ -94,6 +109,7 @@ final class NativeEntityEvidence {
         return new Sample(lastTick, waves.sum(), rows.sum(), planned.sum(), ready.sum(),
             refusedPlan.sum(), refusedFence.sum(), refusedDispatch.sum(), refusedNotRun.sum(),
             refusedFailed.sum(), hit, readNanos.sum(), pumped.sum(), pumpNanos.sum(),
-            planNanos.sum(), foreign.sum(), faultedBatches.sum());
+            planNanos.sum(), foreign.sum(), faultedBatches.sum(), plannedOrdinary.sum(),
+            comparedOrdinary.sum(), mismatchOrdinary.sum(), unusedOrdinary.sum());
     }
 }

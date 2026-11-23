@@ -109,14 +109,14 @@ public final class NativeReadWave<R> {
         return program;
     }
 
-    /** Runs every issued node in issue order; a serial wave runs them on this thread, a parallel one
-     * hands each to the pool and waits without pumping any host queue. */
+    /** Runs every issued node in issue order; a serial or shadow wave runs them on this thread, a
+     * parallel one hands each to the pool and waits without pumping any host queue. */
     public void run() {
         if (ran) {
             throw new IllegalStateException("the read wave ran twice");
         }
         ran = true;
-        if (mode == NativeEntityPhase.Mode.SERIAL) {
+        if (mode != NativeEntityPhase.Mode.PARALLEL) {
             for (NativeRowProgram<R> program : programs.values()) {
                 execute(program);
             }

@@ -1,15 +1,13 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.fixes.nativepath;
 
-import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathFinderState;
-import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathRegionState;
+import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeEntityPhase;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathRequest;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathStage;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.navigation.PathNavigation;
 import net.minecraft.world.level.PathNavigationRegion;
-import net.minecraft.world.level.pathfinder.NodeEvaluator;
 import net.minecraft.world.level.pathfinder.Path;
 import net.minecraft.world.level.pathfinder.PathFinder;
 import org.spongepowered.asm.mixin.Mixin;
@@ -19,10 +17,12 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 import java.util.Set;
 
 /**
- * Behaviour: assigns the staged path when a wave computed this exact search, else searches normally.
- * Why: the search is the wave's cost; the early return, region build and write-back keep their place.
- * Point: the one find call of the frozen request. Invariant: identical navigation, mob, targets,
- * range, accuracy, multiplier, cap, flags and chunk objects; failure: any mismatch searches. */
+ * Behaviour: assigns the staged path, or in shadow recomputes it inline and returns the inline answer;
+ * the one find call of the frozen request is the injection point. Why: the search is the wave's cost,
+ * shadow must prove the key before publishing, and the early return, region build and write-back stay.
+ * Invariant: same navigation, mob, targets, range, accuracy, multiplier, cap, flags, finder, chunks and
+ * pose; an ordinary prediction is one-shot, a delayed recomputation drops it, and a mismatch searches.
+ */
 @Mixin(PathNavigation.class)
 public abstract class PrtsNativePathReuseMixin {
 
@@ -35,21 +35,21 @@ public abstract class PrtsNativePathReuseMixin {
     private Path prts$reuseStagedPath(PathFinder finder, PathNavigationRegion region, Mob mob,
                                       Set<BlockPos> targets, float maxRange, int accuracy,
                                       float searchDepthMultiplier) {
-        PathNavigation navigation = (PathNavigation) (Object) this;
-        NodeEvaluator evaluator = navigation.getNodeEvaluator();
-        int maxVisitedNodes = finder instanceof NativePathFinderState state
-            ? state.prts$maxVisitedNodes() : Integer.MIN_VALUE;
-        NativePathStage.Hit hit = NativePathStage.take(new NativePathRequest.Live(navigation, mob,
-            evaluator == null ? Object.class : evaluator.getClass(),
-            region instanceof NativePathRegionState state ? state : null,
-            targets, maxRange, accuracy, searchDepthMultiplier, maxVisitedNodes,
-            evaluator != null && evaluator.canPassDoors(),
-            evaluator != null && evaluator.canOpenDoors(),
-            evaluator != null && evaluator.canFloat(),
-            evaluator != null && evaluator.canWalkOverFences()));
-        if (hit.matched()) {
-            return hit.path();
+        if (!NativePathStage.bound()) {
+            return finder.findPath(region, mob, targets, maxRange, accuracy, searchDepthMultiplier);
         }
-        return finder.findPath(region, mob, targets, maxRange, accuracy, searchDepthMultiplier);
+        PathNavigation navigation = (PathNavigation) (Object) this;
+        NativePathStage.Hit hit = NativePathStage.take(NativePathRequest.Live.of(navigation, mob,
+            region, finder, targets, maxRange, accuracy, searchDepthMultiplier));
+        if (!hit.matched()) {
+            return finder.findPath(region, mob, targets, maxRange, accuracy, searchDepthMultiplier);
+        }
+        if (NativeEntityPhase.mode() == NativeEntityPhase.Mode.SHADOW) {
+            Path inline = finder.findPath(region, mob, targets, maxRange, accuracy,
+                searchDepthMultiplier);
+            NativePathStage.recordComparison(hit, inline);
+            return inline;
+        }
+        return hit.path();
     }
 }
