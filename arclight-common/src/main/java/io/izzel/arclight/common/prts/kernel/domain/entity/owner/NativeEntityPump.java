@@ -6,6 +6,7 @@ import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityRowIdentity;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeEntityPhase;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathNode;
+import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathStage;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeReadWave;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeRowProgram;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeWritePump;
@@ -21,7 +22,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.LongAdder;
 
 /** The first native slice on one batch of deferred walk rows: the host freezes one path search per
  * row, the wave searches them, and the seat pump applies every row on the server thread in seat
@@ -35,19 +35,9 @@ final class NativeEntityPump {
         ReadPermit.FieldGroup.ROTATION, ReadPermit.FieldGroup.MOTION,
         ReadPermit.FieldGroup.NAVIGATION);
     private static final long WAVE_DEADLINE_NANOS = TimeUnit.SECONDS.toNanos(5L);
-    private static final long SUMMARY_TICK = 400L;
-    private static final long ANOMALY_TICK = 20L;
     /** Wave identity: only the server thread runs a batch, so the counter has one writer. */
     private static final AtomicLong WAVE_IDS = new AtomicLong();
-    private static final LongAdder WAVES = new LongAdder();
-    private static final LongAdder ROWS = new LongAdder();
-    private static final LongAdder PLANNED = new LongAdder();
-    private static final LongAdder READY = new LongAdder();
-    private static final LongAdder REFUSED = new LongAdder();
-    private static final LongAdder FOREIGN = new LongAdder();
-    private static final LongAdder PUMPED = new LongAdder();
-    private static final LongAdder PUMP_NANOS = new LongAdder();
-    private static final LongAdder PLAN_NANOS = new LongAdder();
+    private static final NativeEntityEvidence TOTALS = new NativeEntityEvidence();
 
     private NativeEntityPump() {
     }
@@ -60,7 +50,7 @@ final class NativeEntityPump {
         }
         NativeEntityPhase.Mode mode = NativeEntityPhase.mode();
         long tick = rows.get(0).phase().tick;
-        long planStarted = System.nanoTime();
+        long readStarted = System.nanoTime();
         NativeReadWave<Path> wave = NativeReadWave.open(mode, WAVE_IDS.incrementAndGet(), tick,
             READ_GROUPS, mode == NativeEntityPhase.Mode.PARALLEL ? dispatch(runtime) : null,
             WAVE_DEADLINE_NANOS);
@@ -72,7 +62,7 @@ final class NativeEntityPump {
             try {
                 attempt = NativePathNode.plan(row.level(), row.villager());
             } catch (RuntimeException absent) {
-                // A row whose plan cannot be frozen keeps its whole body; it is not a new refusal.
+                // A row whose plan cannot be frozen keeps its whole body and counts as plan-refused.
                 attempt = null;
             }
             NativePathNode.Plan plan = attempt;
@@ -86,9 +76,10 @@ final class NativeEntityPump {
                 identity(row), generation(row), snapshot(row, identity(row), generation(row)),
                 () -> NativePathNode.search(plan));
         }
-        PLAN_NANOS.add(System.nanoTime() - planStarted);
+        long planNanos = System.nanoTime() - readStarted;
         wave.run();
         NativeReadWave.Witness witness = wave.close();
+        long readNanos = System.nanoTime() - readStarted;
         List<NativePumpRow> pumpRows = new ArrayList<>(rows.size());
         for (ServerThreadOwnerPhase.DeferredRow row : rows) {
             OwnerControlledWrite.Admission admission = admissions.get(row);
@@ -99,7 +90,7 @@ final class NativeEntityPump {
                 plan == null ? null : plan.request(), ready ? program.result() : null, ready));
         }
         NativeWritePump.Result result = NativeWritePump.run(pumpRows);
-        record(witness, result, rows.size(), planned, tick);
+        record(TOTALS, witness, result, rows.size(), planned, readNanos, planNanos, tick);
         return result.faulted();
     }
 
@@ -145,25 +136,50 @@ final class NativeEntityPump {
             mob.getYRot(), mob.getXRot(), motion.x, motion.y, motion.z, READ_GROUPS);
     }
 
-    private static void record(NativeReadWave.Witness witness, NativeWritePump.Result result,
-                               int rows, int planned, long tick) {
-        WAVES.increment();
-        ROWS.add(rows);
-        PLANNED.add(planned);
-        READY.add(witness.ready());
-        REFUSED.add(witness.refused());
-        FOREIGN.add(witness.foreignWrites());
-        PUMPED.add(result.pumped());
-        PUMP_NANOS.add(result.nanos());
-        boolean anomaly = witness.refused() > 0 || witness.foreignWrites() > 0 || result.faulted();
-        if (!(anomaly ? tick % ANOMALY_TICK == 0L : tick % SUMMARY_TICK == 0L)) {
+    static void record(NativeEntityEvidence totals, NativeReadWave.Witness witness,
+                       NativeWritePump.Result result, int rows, int planned, long readNanos,
+                       long planNanos, long tick) {
+        int[] refusals = classify(witness);
+        NativeEntityEvidence.Batch batch = new NativeEntityEvidence.Batch(tick, rows, planned,
+            witness.ready(), rows - planned, refusals[0], refusals[1], refusals[2], refusals[3],
+            witness.foreignWrites(), readNanos, result.pumped(), result.nanos(), planNanos,
+            result.faulted());
+        totals.add(batch);
+        System.out.println(totals.sample(NativePathStage.hits())
+            .line(result.faulted(), refusalSummary(witness)));
+    }
+
+    /** Splits the wave's per-row refusals into the evidence categories; no refusal code is added. */
+    static int[] classify(NativeReadWave.Witness witness) {
+        int fence = 0;
+        int dispatch = 0;
+        int notRun = 0;
+        int failed = 0;
+        for (String name : witness.refusals().values()) {
+            NativeRowProgram.Refusal refusal;
+            try {
+                refusal = NativeRowProgram.Refusal.valueOf(name);
+            } catch (IllegalArgumentException unknown) {
+                failed++;
+                continue;
+            }
+            switch (refusal) {
+                case GUARD_WRITE, GUARD_EVENT, GUARD_HOST_CALLBACK, GUARD_DRAW, GUARD_CHUNK_DEMAND ->
+                    fence++;
+                case DISPATCH_REFUSED -> dispatch++;
+                case NOT_RUN -> notRun++;
+                default -> failed++;
+            }
+        }
+        return new int[]{fence, dispatch, notRun, failed};
+    }
+
+    /** Writes the one stop summary; a process that never enabled the native path writes nothing. */
+    static void stopSummary() {
+        if (!NativeEntityPhase.enabled()) {
             return;
         }
-        System.out.println("[PRTS] native-entity tick=" + tick + " waves=" + WAVES.sum()
-            + " rows=" + ROWS.sum() + " planned=" + PLANNED.sum() + " ready=" + READY.sum()
-            + " refused=" + REFUSED.sum() + " foreign=" + FOREIGN.sum() + " pumped=" + PUMPED.sum()
-            + " pumpNanos=" + PUMP_NANOS.sum() + " planNanos=" + PLAN_NANOS.sum()
-            + " waveRefusals=" + refusalSummary(witness) + " faulted=" + result.faulted());
+        System.out.println(TOTALS.sample(NativePathStage.hits()).summary());
     }
 
     /** At most a few refusal reasons per line: a whole batch of refused rows must not print a wall. */

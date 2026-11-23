@@ -1461,6 +1461,10 @@ public final class ServerThreadOwnerPhase {
                 + totalExecuted + " fallback=" + totalFallback + " compat=" + totalCompat
                 + " leftPending=" + totalLeft);
         }
+        if (io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeEntityPhase
+            .enabled()) {
+            NativeEntityPump.stopSummary();
+        }
     }
 
     public static boolean trace() {
