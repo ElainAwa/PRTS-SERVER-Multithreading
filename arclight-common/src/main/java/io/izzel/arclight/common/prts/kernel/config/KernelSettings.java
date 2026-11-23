@@ -198,6 +198,8 @@ public final class KernelSettings {
 
     public static final int WORKER_RETRY_BUDGET_MAX = 2;
 
+    /** Upper bound of the declaration bound on the default path. The declared default is unchanged;
+     * only a window that declares the scale path reads the wider bound it owns. */
     public static final int JOB_QUEUE_CAP_MAX = 4096;
 
     public static final int COMMIT_RING_CAP_MAX = 65536;
@@ -388,8 +390,10 @@ public final class KernelSettings {
         return feature(DISPATCH_TAKEOVER);
     }
 
+    /** The declared worker count, clamped to the bound the declared mode owns: the historical one
+     * unless the scale path is on. */
     public static int workerCountDeclared() {
-        return number(WORKER_COUNT);
+        return clamp(number(WORKER_COUNT), 0, OwnerScale.workerCountMax());
     }
 
     public static int workerQueueCap() {
@@ -444,8 +448,10 @@ public final class KernelSettings {
         return feature(COMMIT_LOG);
     }
 
+    /** The declaration bound, clamped to the bound the declared mode owns: the historical one unless
+     * the scale path is on. */
     public static int jobQueueCap() {
-        return clamp(number(JOB_QUEUE_CAP), 1, JOB_QUEUE_CAP_MAX);
+        return clamp(number(JOB_QUEUE_CAP), 1, OwnerScale.seatBound());
     }
 
     public static int commitRingCap() {

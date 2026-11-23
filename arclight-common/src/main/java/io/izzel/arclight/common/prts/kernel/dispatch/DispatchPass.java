@@ -6,6 +6,7 @@ import io.izzel.arclight.common.prts.kernel.arena.ArenaLedger;
 import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool.WorkerHandle;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
+import io.izzel.arclight.common.prts.kernel.config.OwnerScale;
 import io.izzel.arclight.common.prts.kernel.domain.entity.CancelToken;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityCandidateView;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityIntegrator;
@@ -246,7 +247,8 @@ public final class DispatchPass {
         /** Upper bound of the derived worker count. */
         public static final int DERIVED_WORKER_CAP = 4;
 
-        /** Upper bound an operator may declare for the worker count. */
+        /** Upper bound an operator may declare for the worker count on the default path; the scale
+         * path owns its own, wider bound. */
         public static final int DECLARED_WORKER_CAP = 8;
 
         /** Upper bound of the queue depth. */
@@ -279,14 +281,15 @@ public final class DispatchPass {
             if (declared <= 0) {
                 return derivedWorkerCount(cores);
             }
-            return Math.min(DECLARED_WORKER_CAP, Math.max(1, declared));
+            return Math.min(OwnerScale.workerCountMax(), Math.max(1, declared));
         }
 
         /** Resolves the policy of this process. */
         public static Policy resolve() {
             int cores = Math.max(1, Runtime.getRuntime().availableProcessors());
             int workers = workerCount(KernelSettings.workerCountDeclared(), cores);
-            int queueCap = KernelSettings.clamp(KernelSettings.workerQueueCap(), 1, QUEUE_CAP_MAX);
+            int queueCap = OwnerScale.workerQueueCap(
+                KernelSettings.clamp(KernelSettings.workerQueueCap(), 1, QUEUE_CAP_MAX), workers);
             int chunks = KernelSettings.clamp(KernelSettings.workerBatchChunks(), 1, BATCH_CHUNKS_MAX);
             int grace = KernelSettings.clamp(KernelSettings.workerDeadlineGraceMs(), 0,
                 DEADLINE_GRACE_MS_MAX);

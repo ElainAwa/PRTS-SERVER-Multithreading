@@ -32,6 +32,7 @@ import io.izzel.arclight.common.prts.kernel.exits.DualExits;
 import io.izzel.arclight.common.prts.kernel.safety.SafetyNet;
 import io.izzel.arclight.common.prts.kernel.safety.ZeroEffectDetector;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
+import io.izzel.arclight.common.prts.kernel.config.OwnerScale;
 import io.izzel.arclight.common.prts.kernel.degrade.DegradeLadder;
 import io.izzel.arclight.common.prts.kernel.rcon.RconCommandDeferral;
 import io.izzel.arclight.common.prts.kernel.domain.entity.WorkPlan;
@@ -269,7 +270,9 @@ public final class KernelModule {
     private final io.izzel.arclight.common.prts.kernel.domain.entity.twoowner.OwnerTickClaim
         ownerTickClaim = new io.izzel.arclight.common.prts.kernel.domain.entity.twoowner
             .OwnerTickClaim();
-    private final JobIntake jobIntake = new JobIntake(KernelSettings::jobQueueCap,
+    /** The declaration bound of the tick that is being frozen: the configured bound, widened by the
+     * rows the entity phase armed for this freeze while the scale path is declared. */
+    private final JobIntake jobIntake = new JobIntake(OwnerScale::seatCapacity,
         SharedRuntime.shared().account());
     private final JobScheduler scheduler = new JobScheduler();
     private final PipelineBatchLedger pipelineBatches = new PipelineBatchLedger();
@@ -429,6 +432,11 @@ public final class KernelModule {
     /** The log this module built for itself: the path every tick uses while nothing is bound. */
     private final CommitLog ownCommits = new CommitLog(KernelSettings::commitRingCap,
         commitOrderSource, null, commitIdentitySource);
+    {
+        // The body window of the scale path begins a later seat while an earlier body still runs; the
+        // terminal order is untouched by that flag. Off, the log keeps the one-place-at-a-time begin.
+        ownCommits.setOverlappingBegins(OwnerScale.enabled());
+    }
     /** The log in use: the module's own until a whole chain is adopted, and the log of that chain
      * afterwards. Only an install moves it, and an install moves it whole or not at all. */
     private CommitLog commits = ownCommits;
@@ -1266,7 +1274,7 @@ public final class KernelModule {
         long graphStarted = meterGraph ? System.nanoTime() : 0L;
         TickPlanPlanner.Result result = TickPlanPlanner.plan(new TickPlanPlanner.Input(tickIndex,
             planSequence, worldGeneration, worlds, domainIds, previousControl, jobIntake.take(),
-            shares.lastTable(), KernelSettings.jobQueueCap(), feedback,
+            shares.lastTable(), OwnerScale.seatCapacity(), feedback,
             latestPlan == null ? null : latestPlan.graph()), b2Postpone);
         if (meterGraph && !b2Postpone && result.recompute() != null) {
             SelfTimers.note(SelfClass.GRAPH, graphWorld, "job-graph",
@@ -3944,6 +3952,7 @@ public final class KernelModule {
             declared.effectCapacityRecords());
         CommitLog log = new CommitLog(KernelSettings::commitRingCap, commitOrderSource, store,
             commitIdentitySource);
+        log.setOverlappingBegins(OwnerScale.enabled());
         CommitReservation reservations = new CommitReservation(log, store, commitOrderSource,
             CHAIN_OWNER_ID, commitChainEpochs);
         CommitController.Publisher publisher = commitPublisher;

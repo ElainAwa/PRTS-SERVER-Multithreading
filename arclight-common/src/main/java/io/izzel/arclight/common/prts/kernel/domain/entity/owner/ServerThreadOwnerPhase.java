@@ -15,6 +15,7 @@ import io.izzel.arclight.common.prts.kernel.SharedRuntime;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerUnitPermit;
 import io.izzel.arclight.common.prts.kernel.decision.EventChainAdmission;
 import io.izzel.arclight.common.prts.kernel.domain.entity.CancelToken;
+import io.izzel.arclight.common.prts.kernel.config.OwnerScale;
 import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
 import io.izzel.arclight.common.prts.kernel.generic.ExecutionCohort;
 import io.izzel.arclight.common.prts.kernel.generic.GenericJobExecutor;
@@ -42,7 +43,8 @@ import java.util.HashSet;
 public final class ServerThreadOwnerPhase {
 
     /** A selection memory guard rather than a production ceiling: the wider due-row pass must not
-     * be capped by the old eight-row evidence fixture. */
+     * be capped by the old eight-row evidence fixture. The scale path reads its own bound instead,
+     * up to the seats it may declare, and reports every row this guard left to the host. */
     public static final int MAX_ROWS = 4096;
     public static final String TRACE_PROPERTY = "arclight.prts.ownerPhaseTrace";
     private static final Map<String, LevelPhase> PENDING = new LinkedHashMap<>();
@@ -142,6 +144,12 @@ public final class ServerThreadOwnerPhase {
         }
         // Safe point: the host's due window is frozen and every check above read live state; the one
         // plan service now freezes the current tick with these rows declared, before any body runs.
+        // The scale path counts its own tick here and tells the intake how many seats this freeze
+        // needs, so the declaration bound and the plan bound answer the same number.
+        if (OwnerScale.enabled()) {
+            OwnerScale.beginTick(phase.tick);
+            OwnerScale.armSeats(declared.size());
+        }
         io.izzel.arclight.common.prts.kernel.EntityDeclarationIntake.arm(level, window, declared);
         io.izzel.arclight.common.prts.kernel.KernelModule.instance()
             .freezeAtEntityPhase(phase.tick);
@@ -369,6 +377,12 @@ public final class ServerThreadOwnerPhase {
             + ":" + index;
     }
 
+    /** One begun row whose body is on a worker: the persistent record and the deadline its owner
+     * finish waits for. */
+    private record WindowSlot(OwnerControlledExecution record, DeferredRow row,
+                              long deadlineNanos) {
+    }
+
     /** Runs one begun row's real body on a worker through the existing cohort, then writes its
      * terminal on the owner thread after the body answered. The begun ticket and the worker answer
      * live in one persistent record until the owner finish or fault ends it; a worker future being
@@ -376,18 +390,58 @@ public final class ServerThreadOwnerPhase {
     private static boolean runControlledWorkerRow(SharedRuntime runtime, DeferredRow row,
                                                   OwnerControlledWrite.Admission admission,
                                                   WorkAccount account, boolean replay) {
+        WindowSlot slot = beginControlledRow(runtime, row, admission, account);
+        if (slot == null) {
+            return false;
+        }
+        OwnerControlledExecution record = slot.record();
+        MinecraftServer server = row.level().getServer();
+        try {
+            while (!record.handle.future().isDone() && System.nanoTime() < slot.deadlineNanos()) {
+                OwnerReadDemand.service();
+                OwnerHostEventDispatch.service();
+                drainHostQueue(server);
+                Thread.yield();
+            }
+        } finally {
+            OwnerControlledExecution.doneWaiting();
+            record.endOwnerWait();
+        }
+        if (!record.handle.future().isDone()) {
+            record.witness.cancel();
+            row.phase().terminal++;
+            throw new IllegalStateException(
+                "controlled entity write did not answer before its deadline");
+        }
+        return completeControlledExecution(record, replay);
+    }
+
+    /** Takes the reservation, the start and the worker dispatch of one row and returns its record;
+     * null means the row was refused before any effect and already counted. The owner thread owns
+     * every terminal of a returned record until it hands the record to
+     * {@link #completeControlledExecution}: the late-completion path must not write it first, or a
+     * body window could write a later seat's line before an earlier one. */
+    private static WindowSlot beginControlledRow(SharedRuntime runtime, DeferredRow row,
+                                                 OwnerControlledWrite.Admission admission,
+                                                 WorkAccount account) {
         io.izzel.arclight.common.prts.kernel.commit.CommitController controller =
             admission.controller();
         io.izzel.arclight.common.prts.kernel.commit.CommitController.BeginResult begin =
             controller.beginControl(admission.request());
         if (!begin.admitted()) {
-            return notePreEffectRefusal(row);
+            if (begin.code() == io.izzel.arclight.common.prts.kernel.codes.RejectCode
+                .QUEUE_CAP_EXCEEDED) {
+                OwnerScale.noteRefusedCapacity();
+            }
+            notePreEffectRefusal(row);
+            return null;
         }
         io.izzel.arclight.common.prts.kernel.commit.CommitTicket ticket = begin.ticket();
         WorkerPool pool = runtime.pool();
         if (pool == null || !pool.accepting()) {
             abandonPreEffect(ticket, controller, "pool-unavailable");
-            return notePreEffectRefusal(row);
+            notePreEffectRefusal(row);
+            return null;
         }
         OwnerControlledExecution record = new OwnerControlledExecution(row, admission, ticket);
         String worldId = row.level().dimension().location().toString();
@@ -418,7 +472,8 @@ public final class ServerThreadOwnerPhase {
                 invariant.addSuppressed(rejected);
                 throw invariant;
             }
-            return notePreEffectRefusal(row);
+            notePreEffectRefusal(row);
+            return null;
         }
         record.cohort = execution.cohort();
         record.handle = execution.cohort().handle(bodyKey);
@@ -427,30 +482,90 @@ public final class ServerThreadOwnerPhase {
             record.endOwnerWait();
             record.stage = OwnerControlledExecution.Stage.ABANDONED;
             abandonPreEffect(ticket, controller, "dispatch-refused");
-            return notePreEffectRefusal(row);
+            notePreEffectRefusal(row);
+            return null;
         }
         OwnerControlledExecution.register(record);
         long deadline = System.nanoTime()
             + java.util.concurrent.TimeUnit.SECONDS.toNanos(5L);
-        MinecraftServer server = row.level().getServer();
-        try {
-            while (!record.handle.future().isDone() && System.nanoTime() < deadline) {
+        return new WindowSlot(record, row, deadline);
+    }
+
+    /** Runs one batch as a bounded window of worker bodies under one commit order: every row is
+     * begun in seat order on the owner thread, its whole body runs on a worker, and every terminal,
+     * consume and host Post is written in the same seat order. A later begin overlaps an earlier body;
+     * a later terminal never does. Rows that cannot pass the existing gates stay compat rows and are
+     * never re-run here. */
+    private static boolean runWindowedDeferred(SharedRuntime runtime, List<DeferredRow> rows,
+                                               Map<DeferredRow, OwnerControlledWrite.Admission> admissions,
+                                               WorkAccount account) {
+        long startedAt = System.nanoTime();
+        WorkerPool pool = runtime.pool();
+        int window = OwnerScale.window(pool == null ? 0 : pool.count(),
+            pool == null ? 0 : pool.spec().queueCap());
+        int count = rows.size();
+        LevelPhase phase = rows.get(0).phase();
+        int executedBefore = phase.executed;
+        MinecraftServer server = rows.get(0).level().getServer();
+        java.util.ArrayDeque<WindowSlot> inFlight = new java.util.ArrayDeque<>(window);
+        long pumpNanos = 0L;
+        int begun = 0;
+        int finished = 0;
+        int parallelBodies = 0;
+        int parallelWaits = 0;
+        boolean faulted = false;
+        while (finished < count) {
+            while (begun < count && inFlight.size() < window) {
+                DeferredRow row = rows.get(begun);
+                StageCounters.note("ownerBatchBody");
+                WindowSlot slot = beginControlledRow(runtime, row, admissions.get(row), account);
+                begun++;
+                if (slot == null) {
+                    faulted = true;
+                    continue;
+                }
+                // The window owns this terminal from here: a worker that ends after its batch left
+                // must not write it, because only the seat order may write one.
+                OwnerControlledExecution.doneWaiting();
+                if (!inFlight.isEmpty()) {
+                    parallelBodies++;
+                }
+                inFlight.addLast(slot);
+            }
+            WindowSlot head = inFlight.peekFirst();
+            if (head == null) {
+                if (begun >= count) {
+                    // Every row was refused before any effect: there is no terminal left to write.
+                    break;
+                }
+                continue;
+            }
+            OwnerControlledExecution record = head.record();
+            while (!record.handle.future().isDone()) {
+                long pumpStartedAt = System.nanoTime();
                 OwnerReadDemand.service();
                 OwnerHostEventDispatch.service();
                 drainHostQueue(server);
+                pumpNanos += System.nanoTime() - pumpStartedAt;
+                parallelWaits++;
+                if (System.nanoTime() > head.deadlineNanos()) {
+                    record.witness.cancel();
+                    head.row().phase().terminal++;
+                    throw new IllegalStateException(
+                        "controlled entity write did not answer before its deadline");
+                }
                 Thread.yield();
             }
-        } finally {
-            OwnerControlledExecution.doneWaiting();
-            record.endOwnerWait();
+            inFlight.removeFirst();
+            if (!completeControlledExecution(record, true)) {
+                faulted = true;
+            }
+            finished++;
         }
-        if (!record.handle.future().isDone()) {
-            record.witness.cancel();
-            row.phase().terminal++;
-            throw new IllegalStateException(
-                "controlled entity write did not answer before its deadline");
-        }
-        return completeControlledExecution(record, replay);
+        System.out.println(OwnerScale.evidence(count, phase.selected,
+            phase.executed - executedBefore, phase.compat, window, begun, parallelBodies,
+            parallelWaits, pumpNanos, System.nanoTime() - startedAt));
+        return faulted;
     }
 
     static void abandonPreEffect(io.izzel.arclight.common.prts.kernel.commit.CommitTicket ticket,
@@ -916,6 +1031,10 @@ public final class ServerThreadOwnerPhase {
                 // ran in the wave and its whole body is applied on this thread in seat order. A row
                 // without a staged search, or with a refused one, still runs its body here.
                 faulted = NativeEntityPump.run(runtime, controlled, admissions);
+            } else if (OwnerScale.enabled()) {
+                // Opt-in: the same seats and tickets, begun in seat order and finished in seat order,
+                // with a bounded window of bodies on the pool between the two.
+                faulted = runWindowedDeferred(runtime, controlled, admissions, account);
             } else {
                 for (DeferredRow row : controlled) {
                     OwnerControlledWrite.Admission admission = admissions.get(row);
@@ -1327,6 +1446,9 @@ public final class ServerThreadOwnerPhase {
 
     private static List<Villager> select(ServerLevel level, EntityDueCapture.Window window,
                                          String levelId, LevelPhase phase) {
+        // The historical constant guards the selection list; the scale path follows the real due rows
+        // up to its own seat bound so a larger level is not silently cut at the old guard.
+        int rowCap = OwnerScale.rowCap(MAX_ROWS, levelIdRows(window, levelId));
         List<Villager> selected = new ArrayList<>();
         for (EntityDueWindow.Row row : selectRows(window, levelId)) {
             net.minecraft.world.entity.Entity entity = level.getEntity(row.entityId());
@@ -1337,11 +1459,14 @@ public final class ServerThreadOwnerPhase {
                 || !villager.getBrain().isActive(Activity.REST)) {
                 continue;
             }
-            if (selected.size() < MAX_ROWS) {
+            if (selected.size() < rowCap) {
                 selected.add(villager);
                 phase.slice.put(villager.getId(), Slice.REST);
             } else {
                 phase.truncated++;
+                if (OwnerScale.enabled()) {
+                    OwnerScale.noteTruncated();
+                }
             }
         }
         if (OwnerZoneAdmission.walkSlice()) {
@@ -1350,12 +1475,15 @@ public final class ServerThreadOwnerPhase {
                 if (!(entity instanceof Villager villager) || !admitsFullBody(villager)) {
                     continue;
                 }
-                if (selected.size() < MAX_ROWS) {
+                if (selected.size() < rowCap) {
                     selected.add(villager);
                     phase.slice.put(villager.getId(), Slice.WALK);
                     phase.walkSelected++;
                 } else {
                     phase.truncated++;
+                    if (OwnerScale.enabled()) {
+                        OwnerScale.noteTruncated();
+                    }
                 }
             }
         }
@@ -1372,12 +1500,15 @@ public final class ServerThreadOwnerPhase {
                 if (!(entity instanceof Villager villager) || !admitsFullBody(villager)) {
                     continue;
                 }
-                if (selected.size() < MAX_ROWS) {
+                if (selected.size() < rowCap) {
                     selected.add(villager);
                     phase.slice.put(villager.getId(), Slice.WALK);
                     phase.walkSelected++;
                 } else {
                     phase.truncated++;
+                    if (OwnerScale.enabled()) {
+                        OwnerScale.noteTruncated();
+                    }
                 }
             }
         }

@@ -339,12 +339,12 @@ public final class PrtsConfigManager {
         numbers.put("degrade-rollback-ticks", new IntSetting(3, 1, 600));
         numbers.put("wait-rollback-ticks", new IntSetting(3, 1, 600));
         numbers.put("retry-budget", new IntSetting(2, 0, 16));
-        numbers.put("worker-count", new IntSetting(0, 0, 8));
+        numbers.put("worker-count", new IntSetting(0, 0, 16));
         numbers.put("worker-queue-cap", new IntSetting(32, 1, 256));
         numbers.put("worker-batch-chunks", new IntSetting(4, 1, 64));
         numbers.put("worker-deadline-grace-ms", new IntSetting(0, 0, 1000));
         numbers.put("worker-retry-budget", new IntSetting(1, 0, 2));
-        numbers.put("job-queue-cap", new IntSetting(256, 1, 4096));
+        numbers.put("job-queue-cap", new IntSetting(256, 1, 8192));
         numbers.put("commit-ring-cap", new IntSetting(512, 1, 65536));
         numbers.put("plan-history-cap", new IntSetting(8, 1, 64));
         numbers.put("product-schema-version", new IntSetting(-1, -1, 255));

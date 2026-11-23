@@ -375,6 +375,9 @@ public final class CommitLog {
     private final Map<Long, RingSlot> heldSlots = new LinkedHashMap<>();
     private final Map<Long, long[]> heldPlans = new LinkedHashMap<>();
     private final Map<String, long[]> reservedFloors = new LinkedHashMap<>();
+    /** Whether a place may begin while an earlier held place is still running; see
+     * {@link #placeRunnable}. Off is the historical one-place-at-a-time begin. */
+    private boolean overlappingBegins;
     private final Map<String, Integer> slotsByKey = new LinkedHashMap<>();
     private final Map<String, String> instanceNamespaces = new LinkedHashMap<>();
     private SchemaReplay lastSchema;
@@ -1056,12 +1059,30 @@ public final class CommitLog {
         return false;
     }
 
-    /** Whether this place is the next one the pair may hand to a side effect: no reservation of the
-     * pair holds a place before it. Read-only, like the check above: the side effect of a later place
-     * waits until the earlier one ended. */
+    /** Whether this place may start its side effect: no reservation of the pair holds a place before
+     * it. Read-only, like the check above.
+     *
+     * <p>The floor is the earliest place a held reservation carries. The default rule starts only that
+     * earliest place, so the begin order is the seat order one place at a time. {@link #overlappingBegins}
+     * lets a later place start while an earlier one is still running, which is what a body window
+     * needs; it never lets a place start when an earlier held place exists, and it never touches the
+     * terminal order: {@link #holdsAnEarlierPlace} still refuses a terminal whose earlier place is
+     * held. Begin may overlap, finish may not. */
     public boolean placeRunnable(String worldId, String domainId, long planSequence, int position) {
         long[] floor = reservedFloors.get(key(worldId, domainId));
-        return floor == null || (floor[0] == planSequence && floor[1] == position);
+        if (floor == null) {
+            return true;
+        }
+        if (floor[0] != planSequence) {
+            return false;
+        }
+        return floor[1] == position || (overlappingBegins && floor[1] < position);
+    }
+
+    /** Lets the begin of a place overlap a held earlier place; off keeps the one-place-at-a-time rule.
+     * Set once when the log is built for a batch that declares the body window. */
+    public void setOverlappingBegins(boolean value) {
+        this.overlappingBegins = value;
     }
 
     /** The incarnation of one world this log currently holds, or {@link #NO_WORLD_EPOCH} while it

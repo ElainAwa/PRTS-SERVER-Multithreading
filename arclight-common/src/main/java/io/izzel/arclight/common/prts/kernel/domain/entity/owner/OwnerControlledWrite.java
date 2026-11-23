@@ -11,6 +11,7 @@ import io.izzel.arclight.common.prts.kernel.commit.EffectRequestFactory;
 import io.izzel.arclight.common.prts.kernel.commit.EffectStore;
 import io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations;
 import io.izzel.arclight.common.prts.kernel.commit.IdentityWitness;
+import io.izzel.arclight.common.prts.kernel.config.OwnerScale;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityObjectGenerations;
 import io.izzel.arclight.common.prts.kernel.plan.TickPlan;
 import io.izzel.arclight.common.prts.kernel.wiring.OwnerNativeCommitBinding;
@@ -28,6 +29,15 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class OwnerControlledWrite {
 
     private static final AtomicLong EFFECT_REFS = new AtomicLong(1L);
+
+    /** One frozen plan's entity seats by world and node key. The scale path looks a row up in this
+     * index instead of scanning the whole commit order for it; the scan stays for the default path.
+     * The plan is frozen and immutable, the owner thread is the only writer, and an index of another
+     * plan or another length is rebuilt instead of reused. */
+    private static volatile SeatIndex SEATS;
+
+    private record SeatIndex(long planSequence, int steps, java.util.Map<String, Integer> positions) {
+    }
 
     private static final String OPERATION_KIND = "entity-tick";
 
@@ -63,14 +73,8 @@ public final class OwnerControlledWrite {
             .generationOf(worldId, uuidHigh, uuidLow);
         String domain = FrozenDeclarations.ENTITY_STATE_PREFIX + uuidHigh + ":" + uuidLow + ":"
             + generation;
-        int position = -1;
-        for (TickPlan.CommitStep step : plan.commitOrder()) {
-            if (step.worldId().equals(worldId) && step.domainId().equals("entity")
-                && step.nodeKey().equals(domain)) {
-                position = step.position();
-                break;
-            }
-        }
+        int position = OwnerScale.enabled()
+            ? indexedPosition(plan, worldId, domain) : scannedPosition(plan, worldId, domain);
         if (position < 0) {
             return null;
         }
@@ -117,6 +121,40 @@ public final class OwnerControlledWrite {
             (long) domain.hashCode(), CommitLog.Batch.Kind.APPLY, producer, controllerNamespace,
             published, partial, failed);
         return new Admission(controller, entry, request, published, partial, failed, version);
+    }
+
+    /** The seat of this row's node, read from the frozen commit order one step at a time. */
+    private static int scannedPosition(TickPlan plan, String worldId, String domain) {
+        for (TickPlan.CommitStep step : plan.commitOrder()) {
+            if (step.worldId().equals(worldId) && step.domainId().equals("entity")
+                && step.nodeKey().equals(domain)) {
+                return step.position();
+            }
+        }
+        return -1;
+    }
+
+    /** The same seat read from the index of the frozen plan; the first step of a node wins, exactly
+     * like the scan. */
+    private static int indexedPosition(TickPlan plan, String worldId, String domain) {
+        SeatIndex index = SEATS;
+        if (index == null || index.planSequence() != plan.planSequence()
+            || index.steps() != plan.commitOrder().size()) {
+            java.util.Map<String, Integer> positions = new java.util.HashMap<>();
+            for (TickPlan.CommitStep step : plan.commitOrder()) {
+                if (step.domainId().equals("entity")) {
+                    positions.putIfAbsent(seatKey(step.worldId(), step.nodeKey()), step.position());
+                }
+            }
+            index = new SeatIndex(plan.planSequence(), plan.commitOrder().size(), positions);
+            SEATS = index;
+        }
+        Integer found = index.positions().get(seatKey(worldId, domain));
+        return found == null ? -1 : found;
+    }
+
+    private static String seatKey(String worldId, String nodeKey) {
+        return worldId + '\u0000' + nodeKey;
     }
 
     /** Runs the real walk body inside the controller's publish action on this thread. */
