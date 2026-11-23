@@ -539,6 +539,8 @@ public final class ServerThreadOwnerPhase {
                 RestOwnerWiring.noteSkip();
             }
             controller.consumePublished(record.ticket);
+            EntityEffectPayload.dump(record.ticket.effectRef(),
+                record.row == null ? -1L : record.row.phase().tick, record.effectRow);
             return false;
         }
         if (nativeFailure != null) {
@@ -560,6 +562,8 @@ public final class ServerThreadOwnerPhase {
             replayDeferredRow(record.row);
         }
         controller.consumePublished(record.ticket);
+        EntityEffectPayload.dump(record.ticket.effectRef(),
+            record.row == null ? -1L : record.row.phase().tick, record.effectRow);
         return true;
     }
 
@@ -632,7 +636,7 @@ public final class ServerThreadOwnerPhase {
                     OwnerRandomContext.exit();
                 }
                 String result = executed ? "PUBLISHED" : "FAILED";
-                String changed = EntityEffectPayload.changedFields(before,
+                String changed = EntityEffectPayload.changedValues(before,
                     EntityEffectPayload.capture(row.villager()));
                 record.effectRow = EntityEffectPayload.row(row.entity().getUUID(), result, changed);
                 record.outcome = executed
