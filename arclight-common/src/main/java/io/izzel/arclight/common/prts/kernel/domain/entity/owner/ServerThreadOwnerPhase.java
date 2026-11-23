@@ -465,6 +465,7 @@ public final class ServerThreadOwnerPhase {
     static boolean notePreEffectRefusal(DeferredRow row) {
         if (row != null) {
             row.phase().terminal++;
+            RestOwnerWiring.noteSkip();
         }
         return false;
     }
@@ -535,6 +536,7 @@ public final class ServerThreadOwnerPhase {
             // the server tick after the terminal exists.
             if (record.row != null) {
                 record.row.phase().terminal++;
+                RestOwnerWiring.noteSkip();
             }
             controller.consumePublished(record.ticket);
             return false;
