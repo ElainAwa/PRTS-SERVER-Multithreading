@@ -82,15 +82,19 @@ final class EntityEffectPayload {
     static Snapshot capture(Villager villager) {
         var inventory = villager.getInventory();
         StringBuilder items = new StringBuilder();
+        int itemCount = 0;
         for (int slot = 0; slot < inventory.getContainerSize(); slot++) {
             var stack = inventory.getItem(slot);
+            if (!stack.isEmpty()) {
+                itemCount += stack.getCount();
+            }
             items.append(stack.isEmpty() ? "-" : stack.getItem() + "x" + stack.getCount()).append(';');
         }
         GlobalPos job = villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).orElse(null);
         GlobalPos home = villager.getBrain().getMemory(MemoryModuleType.HOME).orElse(null);
         return new Snapshot(villager.getX(), villager.getY(), villager.getZ(),
             villager.getDeltaMovement().x, villager.getDeltaMovement().y,
-            villager.getDeltaMovement().z, villager.getHealth(), inventory.getContainerSize(),
+            villager.getDeltaMovement().z, villager.getHealth(), itemCount,
             items.toString(), villager.getPose().name(),
             villager.getBrain().getActiveNonCoreActivity().map(activity -> activity.getName()).orElse("none"),
             villager.getVillagerData().getProfession().toString(),
@@ -114,9 +118,9 @@ final class EntityEffectPayload {
         if (Double.compare(before.health, after.health) != 0) {
             changed.add("health=" + number(before.health) + "->" + number(after.health));
         }
-        if (before.inventorySize != after.inventorySize
+        if (before.inventoryCount != after.inventoryCount
             || !before.inventory.equals(after.inventory)) {
-            changed.add("inventory=" + before.inventorySize + "->" + after.inventorySize);
+            changed.add("inventory=" + before.inventoryCount + "->" + after.inventoryCount);
         }
         if (!before.pose.equals(after.pose)) {
             changed.add("pose=" + before.pose + "->" + after.pose);
@@ -156,7 +160,7 @@ final class EntityEffectPayload {
     }
 
     record Snapshot(double x, double y, double z, double motionX, double motionY, double motionZ,
-                    double health, int inventorySize, String inventory, String pose, String activity,
+                    double health, int inventoryCount, String inventory, String pose, String activity,
                     String profession, int xp, String jobSite, String home) {
     }
 }
