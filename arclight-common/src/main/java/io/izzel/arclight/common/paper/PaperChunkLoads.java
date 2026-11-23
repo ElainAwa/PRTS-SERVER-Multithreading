@@ -14,15 +14,17 @@ import java.util.concurrent.CompletableFuture;
  */
 public final class PaperChunkLoads {
 
-    public static final boolean START_GENERATION = false;
-
     private PaperChunkLoads() {
     }
 
     public static boolean generationFlag(boolean generate) {
-        return generate ? true : START_GENERATION;
+        return generate;
     }
 
+    /**
+     * Turns one chunk future into a Bukkit chunk.
+     * The completion stays on the chunk future's thread and is not moved to the server thread.
+     */
     public static CompletableFuture<Chunk> bukkitChunk(CompletableFuture<ChunkResult<ChunkAccess>> existing) {
         if (existing == null) {
             return CompletableFuture.completedFuture(null);

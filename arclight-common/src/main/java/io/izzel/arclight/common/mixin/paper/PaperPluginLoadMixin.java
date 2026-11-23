@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.mixin.paper;
 
+import io.izzel.arclight.common.mod.server.ArclightServer;
 import io.izzel.arclight.common.paper.PaperPluginJars;
 import org.bukkit.plugin.InvalidPluginException;
 import org.bukkit.plugin.Plugin;
@@ -17,8 +18,8 @@ import java.io.IOException;
 public class PaperPluginLoadMixin {
     // Skips a jar that contains paper-plugin.yml and no plugin.yml.
     // The loader would otherwise report a missing plugin.yml and hide that refusal.
-    // loadPlugin(File) is the method that opens one plugin jar.
-    // An unsupported jar throws InvalidPluginException. A jar that cannot be read is left to this method.
+    // loadPlugin(File) is about to open this same jar.
+    // An unsupported jar throws InvalidPluginException. A jar that cannot be read is logged and left here.
 
     @Inject(method = "loadPlugin(Ljava/io/File;)Lorg/bukkit/plugin/Plugin;", at = @At("HEAD"))
     private void arclight$refusePaperOnly(File file, CallbackInfoReturnable<Plugin> callback)
@@ -28,7 +29,8 @@ public class PaperPluginLoadMixin {
         }
         try {
             PaperPluginJars.refusePaperOnly(file.toPath());
-        } catch (IOException ignored) {
+        } catch (IOException ex) {
+            ArclightServer.LOGGER.warn("Could not read plugin jar {}, leaving it to the loader", file, ex);
             return;
         }
     }

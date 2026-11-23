@@ -28,7 +28,7 @@ constitutes the prominent notice required by GPL-3.0.
 | **ASM** (OW2) | Bytecode reading/writing | BSD-3-Clause |
 | **Fabric Loader / Fabric API** | Fabric platform support (retained, not part of the verified build) | Apache-2.0 |
 | **Bukkit / Spigot API** (SpigotMC) | Plugin API | GPL-3.0 |
-| **Paper API** (PaperMC) | Paper plugin API surface: the `org.bukkit.event.player.PlayerAttemptPickupItemEvent` event class and the `Server`/`Bukkit#getMinecraftVersion` and `HumanEntity#open*` method declarations (re-implemented under `prts/modsupport`; upstream: `paper-api` in <https://github.com/PaperMC/Paper>) | MIT (Paper as a whole is GPL-3.0; the authors of this part elected MIT in Paper's `LICENSE.md`) |
+| **Paper API** (PaperMC) | Paper plugin API surface: `PlayerAttemptPickupItemEvent`, plus `Server`/`Bukkit#getMinecraftVersion` and `HumanEntity#open*` (re-implemented under `prts/modsupport`). This branch also declares `PlayerProfile`, `ProfileProperty`, `ChatRenderer`, `AsyncChatEvent`, `AbstractChatEvent`, `PaperPlayerEvent`, `PluginBootstrap` and `BootstrapContext`. Upstream: `paper-api` in <https://github.com/PaperMC/Paper> | MIT (Paper as a whole is GPL-3.0; the authors of this part elected MIT in Paper's `LICENSE.md`) |
 | **Adventure** (Kyori) | Text types for chat and join messages. The jars live in `third-party/paper/` and are shaded into the NeoForge mod jar. `adventure-api`, `adventure-key` and `adventure-text-serializer-legacy` are 4.17.0 from Maven Central. Checksums are in `SHA256SUMS` beside them | MIT |
 | **Examination** (Kyori) | Adventure's examination API. `examination-api` and `examination-string` are 1.3.0, also in `third-party/paper/`, from Maven Central | MIT |
 | **TerminalConsoleAppender** (Mojang) | Console ANSI support | LGPL-2.1 |
@@ -59,6 +59,12 @@ constitutes the prominent notice required by GPL-3.0.
 
 The texts below are the `license.txt` files from the Adventure `v4.17.0` and Examination `v1.3.0`
 release tags. The build copies this document to `META-INF/THIRD-PARTY.md` inside the NeoForge mod jar.
+
+To replace a jar under `third-party/paper/`, take the same `net.kyori` artifact from Maven Central:
+`adventure-api`, `adventure-key` and `adventure-text-serializer-legacy` at 4.17.0, and
+`examination-api` and `examination-string` at 1.3.0. Then rewrite `SHA256SUMS` beside them:
+each line is a lowercase SHA-256, two spaces, and the file name. `verifyThirdPartyPaper` checks
+that list and fails the build on a mismatch.
 
 Adventure 4.17.0 (`adventure-api`, `adventure-key`, `adventure-text-serializer-legacy`):
 
