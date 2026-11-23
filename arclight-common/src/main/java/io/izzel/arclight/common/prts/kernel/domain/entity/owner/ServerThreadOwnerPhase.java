@@ -372,24 +372,21 @@ public final class ServerThreadOwnerPhase {
      * terminal on the owner thread after the body answered. The begun ticket and the worker answer
      * live in one persistent record until the owner finish or fault ends it; a worker future being
      * done only ends the body node. */
-    private static void runControlledWorkerRow(SharedRuntime runtime, DeferredRow row,
-                                               OwnerControlledWrite.Admission admission,
-                                               WorkAccount account, boolean replay) {
+    private static boolean runControlledWorkerRow(SharedRuntime runtime, DeferredRow row,
+                                                  OwnerControlledWrite.Admission admission,
+                                                  WorkAccount account, boolean replay) {
         io.izzel.arclight.common.prts.kernel.commit.CommitController controller =
             admission.controller();
         io.izzel.arclight.common.prts.kernel.commit.CommitController.BeginResult begin =
             controller.beginControl(admission.request());
         if (!begin.admitted()) {
-            row.phase().terminal++;
-            throw new IllegalStateException("controlled entity write refused: "
-                + begin.code() + " " + begin.diagnostic());
+            return notePreEffectRefusal(row);
         }
         io.izzel.arclight.common.prts.kernel.commit.CommitTicket ticket = begin.ticket();
         WorkerPool pool = runtime.pool();
         if (pool == null || !pool.accepting()) {
-            controller.abandonControl(ticket, "pool-unavailable");
-            row.phase().terminal++;
-            throw new IllegalStateException("controlled entity write has no worker to start");
+            abandonPreEffect(ticket, controller, "pool-unavailable");
+            return notePreEffectRefusal(row);
         }
         OwnerControlledExecution record = new OwnerControlledExecution(row, admission, ticket);
         String worldId = row.level().dimension().location().toString();
@@ -414,9 +411,13 @@ public final class ServerThreadOwnerPhase {
         } catch (RuntimeException | Error rejected) {
             OwnerControlledExecution.doneWaiting();
             record.endOwnerWait();
-            controller.abandonControl(ticket, "cohort-refused");
-            row.phase().terminal++;
-            throw rejected;
+            try {
+                abandonPreEffect(ticket, controller, "cohort-refused");
+            } catch (IllegalStateException invariant) {
+                invariant.addSuppressed(rejected);
+                throw invariant;
+            }
+            return notePreEffectRefusal(row);
         }
         record.cohort = execution.cohort();
         record.handle = execution.cohort().handle(bodyKey);
@@ -424,9 +425,8 @@ public final class ServerThreadOwnerPhase {
             OwnerControlledExecution.doneWaiting();
             record.endOwnerWait();
             record.stage = OwnerControlledExecution.Stage.ABANDONED;
-            controller.abandonControl(ticket, "dispatch-refused");
-            row.phase().terminal++;
-            throw new IllegalStateException("controlled entity write was not accepted by the cohort");
+            abandonPreEffect(ticket, controller, "dispatch-refused");
+            return notePreEffectRefusal(row);
         }
         OwnerControlledExecution.register(record);
         long deadline = System.nanoTime()
@@ -451,30 +451,43 @@ public final class ServerThreadOwnerPhase {
             throw new IllegalStateException(
                 "controlled entity write did not answer before its deadline");
         }
-        completeControlledExecution(record, replay);
-        OwnerControlledExecution.retire(record);
+        return completeControlledExecution(record, replay);
+    }
+
+    static void abandonPreEffect(io.izzel.arclight.common.prts.kernel.commit.CommitTicket ticket,
+                                 io.izzel.arclight.common.prts.kernel.commit.CommitController controller,
+                                 String reason) {
+        if (!controller.abandonControl(ticket, reason)) {
+            throw new IllegalStateException("pre-effect ticket could not be abandoned");
+        }
+    }
+
+    static boolean notePreEffectRefusal(DeferredRow row) {
+        if (row != null) {
+            row.phase().terminal++;
+        }
+        return false;
     }
 
     /** Writes the owner terminal or transfers the unresolved obligation for one ended body. Called
      * once on the owner thread; late calls after the batch ended only finish/fault, never replay. */
-    static void completeControlledExecution(OwnerControlledExecution record, boolean replay) {
+    static boolean completeControlledExecution(OwnerControlledExecution record, boolean replay) {
         if (record == null) {
-            completeControlledExecution0(record, replay);
-            return;
+            return completeControlledExecution0(record, replay);
         }
         long commitStartedAt = System.nanoTime();
         try {
-            completeControlledExecution0(record, replay);
+            return completeControlledExecution0(record, replay);
         } finally {
             io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership
                 .noteOwnerCommitNanos(System.nanoTime() - commitStartedAt);
         }
     }
 
-    private static void completeControlledExecution0(OwnerControlledExecution record, boolean replay) {
+    private static boolean completeControlledExecution0(OwnerControlledExecution record, boolean replay) {
         if (record == null || record.stage == OwnerControlledExecution.Stage.OWNER_DONE
             || record.stage == OwnerControlledExecution.Stage.ABANDONED) {
-            return;
+            return true;
         }
         io.izzel.arclight.common.prts.kernel.commit.CommitController controller = record.controller();
         io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Outcome answered = record.outcome;
@@ -491,7 +504,7 @@ public final class ServerThreadOwnerPhase {
                     if (nativeFailure instanceof Error errorFailure) {
                         throw errorFailure;
                     }
-                    return;
+                    return true;
                 }
             }
             answered = partialOutcome(record, "effect-unknown");
@@ -512,6 +525,20 @@ public final class ServerThreadOwnerPhase {
             record.stage = OwnerControlledExecution.Stage.OWNER_DONE;
             OwnerControlledExecution.retire(record);
         }
+        if (result.admitted()
+            && (result.terminal() == io.izzel.arclight.common.prts.kernel.commit.CommitTicket
+                .Terminal.FAILED
+                || result.terminal() == io.izzel.arclight.common.prts.kernel.commit.CommitTicket
+                .Terminal.PARTIAL)) {
+            // A recorded failure terminal is the row's real end: it is counted, archived and never
+            // replayed on the host. The native cause stays in the record/log; it is not thrown into
+            // the server tick after the terminal exists.
+            if (record.row != null) {
+                record.row.phase().terminal++;
+            }
+            controller.consumePublished(record.ticket);
+            return false;
+        }
         if (nativeFailure != null) {
             if (nativeFailure instanceof RuntimeException runtimeFailure) {
                 throw runtimeFailure;
@@ -531,6 +558,7 @@ public final class ServerThreadOwnerPhase {
             replayDeferredRow(record.row);
         }
         controller.consumePublished(record.ticket);
+        return true;
     }
 
     private static Throwable firstFailure(Throwable body, Throwable cleanup) {
@@ -866,17 +894,21 @@ public final class ServerThreadOwnerPhase {
         // frozen plan's own seat order is the order the side effects have to take.
         controlled.sort(java.util.Comparator.comparingInt(
             row -> admissions.get(row).entry().seat().position()));
+        boolean faulted = false;
         try {
             for (DeferredRow row : controlled) {
                 OwnerControlledWrite.Admission admission = admissions.get(row);
                 StageCounters.note("ownerBatchBody");
-                runControlledWorkerRow(runtime, row, admission, account, true);
+                if (!runControlledWorkerRow(runtime, row, admission, account, true)) {
+                    faulted = true;
+                }
             }
         } catch (RuntimeException | Error failure) {
             account.close(batchUnit, WorkAccount.Outcome.PARTIAL_FAULT, "batch-terminal");
             throw failure;
         }
-        account.close(batchUnit, WorkAccount.Outcome.DONE, "batch-published");
+        account.close(batchUnit, faulted ? WorkAccount.Outcome.PARTIAL_FAULT
+            : WorkAccount.Outcome.DONE, faulted ? "batch-terminal" : "batch-published");
     }
 
 
