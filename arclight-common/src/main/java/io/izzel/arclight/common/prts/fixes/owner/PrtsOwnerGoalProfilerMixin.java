@@ -24,8 +24,7 @@ public abstract class PrtsOwnerGoalProfilerMixin {
 
     @WrapOperation(method = {"tick", "tickRunningGoals"},
         at = @At(value = "INVOKE", target = "Ljava/util/function/Supplier;get()Ljava/lang/Object;"))
-    private ProfilerFiller prts$ownerGoalProfiler(Supplier<ProfilerFiller> supplier,
-                                                   Operation<ProfilerFiller> original) {
+    private Object prts$ownerGoalProfiler(Supplier<?> supplier, Operation<Object> original) {
         return OwnerBodyMarker.active() ? InactiveProfiler.INSTANCE : original.call(supplier);
     }
 }

@@ -504,6 +504,13 @@ public final class ServerThreadOwnerPhase {
         int window = OwnerScale.window(pool == null ? 0 : pool.count(),
             pool == null ? 0 : pool.spec().queueCap());
         int count = rows.size();
+        // Every body of this window draws from its row's keyed stream; create all of them on this
+        // thread first so the workers only read the table while they run.
+        for (DeferredRow row : rows) {
+            if (row.level().getRandom() instanceof OwnerSharedRandomSource shared) {
+                shared.prepareOwnerRow(row.level(), row.villager(), "entity");
+            }
+        }
         LevelPhase phase = rows.get(0).phase();
         int executedBefore = phase.executed;
         MinecraftServer server = rows.get(0).level().getServer();

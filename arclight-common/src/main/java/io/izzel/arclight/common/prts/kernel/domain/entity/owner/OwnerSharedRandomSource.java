@@ -33,9 +33,25 @@ public final class OwnerSharedRandomSource implements RandomSource {
                     .DRAW);
             return base;
         }
-        SharedStream stream = table.stream(StreamKey.of(row.worldSeed(), row.worldIdentity(),
-            row.dimension(), row.business(), row.objectIdentity()));
-        return stream;
+        StreamKey key = StreamKey.of(row.worldSeed(), row.worldIdentity(),
+            row.dimension(), row.business(), row.objectIdentity());
+        SharedStream stream = table.peek(key);
+        if (stream != null) {
+            return stream;
+        }
+        return table.stream(key);
+    }
+
+    /** Creates the row's stream on the owner thread before any body of the window runs, so the
+     * bodies only read a table that no longer changes while they draw. */
+    public void prepareOwnerRow(net.minecraft.server.level.ServerLevel level,
+                                net.minecraft.world.entity.Entity entity, String business) {
+        if (level == null || entity == null) {
+            return;
+        }
+        String dimension = level.dimension().location().toString();
+        table.stream(StreamKey.of(level.getSeed(), dimension, dimension, business,
+            OwnerRandomContext.objectIdentity(entity.getUUID())));
     }
 
     /** The persistent table of streams this level random has addressed, in first-use order. */

@@ -26,7 +26,7 @@ public final class SharedStreamTable {
      * @param key the key naming the stream
      * @return the stream of that key
      */
-    public SharedStream stream(StreamKey key) {
+    public synchronized SharedStream stream(StreamKey key) {
         SharedStream existing = streams.get(key);
         if (existing != null) {
             return existing;
