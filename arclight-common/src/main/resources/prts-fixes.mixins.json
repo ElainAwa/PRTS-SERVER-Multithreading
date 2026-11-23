@@ -89,6 +89,7 @@
     "net.PrtsOutboundAcceptanceMixin",
     "owner.PrtsPathTypeCacheMixin",
     "owner.PrtsOwnerProfilerMixin",
-    "owner.PrtsOwnerGoalProfilerMixin"
+    "owner.PrtsOwnerGoalProfilerMixin",
+    "owner.PrtsPathfindingContextMixin"
   ]
 }
