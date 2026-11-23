@@ -10,6 +10,7 @@ import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.entity.schedule.Activity;
 
 import io.izzel.arclight.common.bridge.core.entity.EntityBridge;
+import io.izzel.arclight.common.bridge.core.server.MinecraftServerBridge;
 import io.izzel.arclight.common.prts.kernel.SharedRuntime;
 import io.izzel.arclight.common.prts.kernel.auth.OwnerUnitPermit;
 import io.izzel.arclight.common.prts.kernel.decision.EventChainAdmission;
@@ -436,9 +437,7 @@ public final class ServerThreadOwnerPhase {
             while (!record.handle.future().isDone() && System.nanoTime() < deadline) {
                 OwnerReadDemand.service();
                 OwnerHostEventDispatch.service();
-                while (server.pollTask()) {
-                    // The owner thread keeps servicing the host while the worker body runs.
-                }
+                drainHostQueue(server);
                 Thread.yield();
             }
         } finally {
@@ -777,15 +776,26 @@ public final class ServerThreadOwnerPhase {
             }
             OwnerReadDemand.service();
             OwnerHostEventDispatch.service();
-            while (server.pollTask()) {
-                // Drains the host queue while the batch waits; chunk demand itself is served above.
-            }
+            drainHostQueue(server);
             Thread.yield();
         }
     }
 
     /** Waits for bodies a previous batch left in flight, servicing their host demand channels; false
      * while any of them is still running at the deadline. */
+    /** Pumps both queued main-thread tasks and the Arclight main-thread queue while the owner waits.
+     * The queue can hold work scheduled by worker bodies (AsyncCatcher BLOCK callbacks); leaving it
+     * unpumped lets both sides time out. Null-safe because stop paths can call this without a server. */
+    static void drainHostQueue(MinecraftServer server) {
+        if (server == null) {
+            return;
+        }
+        while (server.pollTask()) {
+            // The owner thread keeps servicing the host while the worker body runs.
+        }
+        ((MinecraftServerBridge) server).bridge$drainQueuedTasks();
+    }
+
     private static boolean awaitInFlight(MinecraftServer server, long deadline) {
         if (OwnerControlledExecution.waitingOnThisThread()) {
             return false;
@@ -794,9 +804,7 @@ public final class ServerThreadOwnerPhase {
             && System.nanoTime() < deadline) {
             OwnerReadDemand.service();
             OwnerHostEventDispatch.service();
-            while (server.pollTask()) {
-                // The host keeps serving a stopped batch's demand until its bodies really stopped.
-            }
+            drainHostQueue(server);
             IN_FLIGHT.removeIf(handle -> handle.future().isDone());
             if (!IN_FLIGHT.isEmpty()) {
                 Thread.yield();
