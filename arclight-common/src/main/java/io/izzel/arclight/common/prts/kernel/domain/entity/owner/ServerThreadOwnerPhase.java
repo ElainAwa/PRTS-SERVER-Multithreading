@@ -380,7 +380,7 @@ public final class ServerThreadOwnerPhase {
     /** One begun row whose body is on a worker: the persistent record and the deadline its owner
      * finish waits for. */
     private record WindowSlot(OwnerControlledExecution record, DeferredRow row,
-                              long deadlineNanos) {
+                              long deadlineNanos, long controlNanos, long dispatchNanos) {
     }
 
     /** Runs one begun row's real body on a worker through the existing cohort, then writes its
@@ -426,8 +426,10 @@ public final class ServerThreadOwnerPhase {
                                                  WorkAccount account) {
         io.izzel.arclight.common.prts.kernel.commit.CommitController controller =
             admission.controller();
+        long controlStartedAt = System.nanoTime();
         io.izzel.arclight.common.prts.kernel.commit.CommitController.BeginResult begin =
             controller.beginControl(admission.request());
+        long controlNanos = System.nanoTime() - controlStartedAt;
         if (!begin.admitted()) {
             if (begin.code() == io.izzel.arclight.common.prts.kernel.codes.RejectCode
                 .QUEUE_CAP_EXCEEDED) {
@@ -459,6 +461,7 @@ public final class ServerThreadOwnerPhase {
         Map<String, Runnable> bodies = new java.util.LinkedHashMap<>();
         bodies.put(bodyKey, () -> runControlledWorkerBody(record));
         OwnerControlledExecution.waiting(record);
+        long dispatchStartedAt = System.nanoTime();
         io.izzel.arclight.common.prts.kernel.generic.GenericJobExecutor.Execution execution;
         try {
             execution = new io.izzel.arclight.common.prts.kernel.generic.GenericJobExecutor(
@@ -475,6 +478,7 @@ public final class ServerThreadOwnerPhase {
             notePreEffectRefusal(row);
             return null;
         }
+        long dispatchNanos = System.nanoTime() - dispatchStartedAt;
         record.cohort = execution.cohort();
         record.handle = execution.cohort().handle(bodyKey);
         if (record.handle == null) {
@@ -488,7 +492,7 @@ public final class ServerThreadOwnerPhase {
         OwnerControlledExecution.register(record);
         long deadline = System.nanoTime()
             + java.util.concurrent.TimeUnit.SECONDS.toNanos(5L);
-        return new WindowSlot(record, row, deadline);
+        return new WindowSlot(record, row, deadline, controlNanos, dispatchNanos);
     }
 
     /** Runs one batch as a bounded window of worker bodies under one commit order: every row is
@@ -517,6 +521,8 @@ public final class ServerThreadOwnerPhase {
         java.util.ArrayDeque<WindowSlot> inFlight = new java.util.ArrayDeque<>(window);
         long pumpNanos = 0L;
         long beginNanos = 0L;
+        long controlNanos = 0L;
+        long dispatchNanos = 0L;
         long waitNanos = 0L;
         long finishNanos = 0L;
         int begun = 0;
@@ -531,6 +537,10 @@ public final class ServerThreadOwnerPhase {
                 long beginStartedAt = System.nanoTime();
                 WindowSlot slot = beginControlledRow(runtime, row, admissions.get(row), account);
                 beginNanos += System.nanoTime() - beginStartedAt;
+                if (slot != null) {
+                    controlNanos += slot.controlNanos();
+                    dispatchNanos += slot.dispatchNanos();
+                }
                 begun++;
                 if (slot == null) {
                     faulted = true;
@@ -580,8 +590,8 @@ public final class ServerThreadOwnerPhase {
         }
         System.out.println(OwnerScale.evidence(count, phase.selected,
             phase.executed - executedBefore, phase.compat, window, begun, parallelBodies,
-            parallelWaits, pumpNanos, beginNanos, waitNanos, finishNanos,
-            System.nanoTime() - startedAt));
+            parallelWaits, pumpNanos, beginNanos, controlNanos, dispatchNanos, waitNanos,
+            finishNanos, System.nanoTime() - startedAt));
         return faulted;
     }
 
