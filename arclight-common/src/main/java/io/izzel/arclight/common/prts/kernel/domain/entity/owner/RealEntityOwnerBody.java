@@ -5,6 +5,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.entity.schedule.Activity;
 
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
 
 /** The default-off real-entity owner body: it runs the original Villager tick on the real object
@@ -19,6 +20,10 @@ public final class RealEntityOwnerBody {
         TERMINAL
     }
 
+    private static final String DIAGNOSTIC_PROPERTY = "arclight.prts.diag.ownerBodyFailure";
+    private static final String DIAGNOSTIC_MODE = System.getProperty(DIAGNOSTIC_PROPERTY, "");
+    private static final AtomicBoolean DIAGNOSTIC_USED = new AtomicBoolean();
+    private static String diagnosticTestMode;
     private static final LongAdder RUNS = new LongAdder();
     private static final LongAdder FALLBACKS = new LongAdder();
     private static final LongAdder TERMINALS = new LongAdder();
@@ -49,6 +54,13 @@ public final class RealEntityOwnerBody {
     /** B3-A: runs the original REST tick on the server thread; false means safe rejection before
      * the tick, and a throwable after entering is recorded TERMINAL and rethrown unchanged. */
     public static boolean runRestedOnServer(ServerLevel level, Villager villager) {
+        String diagnostic = takeDiagnostic();
+        if ("FAILED".equals(diagnostic)) {
+            return false;
+        }
+        if ("PARTIAL".equals(diagnostic)) {
+            throw new IllegalStateException("diagnostic owner body failure");
+        }
         if (level == null || villager == null || villager.level() != level
             || villager.isRemoved() || !villager.isAlive()
             || villager.getPose() != net.minecraft.world.entity.Pose.SLEEPING
@@ -70,6 +82,13 @@ public final class RealEntityOwnerBody {
     /** B3-S3: runs the original non-sleeping, non-PANIC/hurt walking AI tick on the server thread;
      * false is a safe rejection before the tick, and a throwable after entering is TERMINAL. */
     public static boolean runWalkOnServer(ServerLevel level, Villager villager) {
+        String diagnostic = takeDiagnostic();
+        if ("FAILED".equals(diagnostic)) {
+            return false;
+        }
+        if ("PARTIAL".equals(diagnostic)) {
+            throw new IllegalStateException("diagnostic owner body failure");
+        }
         if (level == null || villager == null || villager.level() != level
             || villager.isRemoved() || !villager.isAlive() || villager.isNoAi()
             || villager.isPassenger()
@@ -87,6 +106,37 @@ public final class RealEntityOwnerBody {
         RUNS.increment();
         RestOwnerWiring.record(villager, Result.EXECUTED);
         return true;
+    }
+
+    /** A test-only reset for the one-shot diagnostic; the property is the only production switch. */
+    static void resetDiagnosticForTest() {
+        DIAGNOSTIC_USED.set(false);
+        diagnosticTestMode = null;
+    }
+
+    /** Test-only mode mirror; production reads only the class-initialized constant. */
+    static void setDiagnosticForTest(String mode) {
+        diagnosticTestMode = mode;
+    }
+
+    /** The class-initialized production mode, exposed only to assert tests do not change it. */
+    static String diagnosticModeForTest() {
+        return DIAGNOSTIC_MODE;
+    }
+
+    /** Whether the one-shot diagnostic has already been consumed; test-only observation. */
+    static boolean diagnosticUsedForTest() {
+        return DIAGNOSTIC_USED.get();
+    }
+
+    /** Consumes the one-shot diagnostic mode; absent/unknown values are a no-op. The mode is read
+     * once at class initialization so the owner tick hot path never performs a property lookup. */
+    private static String takeDiagnostic() {
+        String mode = diagnosticTestMode != null ? diagnosticTestMode : DIAGNOSTIC_MODE;
+        if (!"FAILED".equals(mode) && !"PARTIAL".equals(mode)) {
+            return "";
+        }
+        return DIAGNOSTIC_USED.compareAndSet(false, true) ? mode : "";
     }
 
     /** Runs the original REST tick on the real Villager inside the owner window. */
