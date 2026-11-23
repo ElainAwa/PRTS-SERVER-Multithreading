@@ -9,13 +9,19 @@ import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.pathfinder.PathType;
 import net.minecraft.world.level.pathfinder.PathTypeCache;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Unique;
 
-/** Guards the per-level path type cache while opt-in parallel owner bodies search paths. The host
- * path never sets the marker, so its cache call is the original one; the lock only spans the cache
- * read/compute, not the whole search. */
+/**
+ * Behaviour: a path type cache call from an opt-in parallel owner body runs under one static lock;
+ * every other caller keeps the original unsynchronised call. Why here: the cache is one plain array
+ * pair per level and several bodies would interleave its two-step read/write. Point: the only two
+ * cache entry points. Invariant: the lock spans one cache read or invalidation, not a whole search;
+ * a thread that never ran an owner body takes the original branch.
+ */
 @Mixin(PathTypeCache.class)
 public abstract class PrtsPathTypeCacheMixin {
 
+    @Unique
     private static final Object PRTS_LOCK = new Object();
 
     @WrapMethod(method = "getOrCompute")

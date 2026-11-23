@@ -88,6 +88,7 @@
     "pipeline.PrtsChunkSendDelayMixin",
     "net.PrtsOutboundAcceptanceMixin",
     "owner.PrtsPathTypeCacheMixin",
-    "owner.PrtsOwnerProfilerMixin"
+    "owner.PrtsOwnerProfilerMixin",
+    "owner.PrtsOwnerGoalProfilerMixin"
   ]
 }
