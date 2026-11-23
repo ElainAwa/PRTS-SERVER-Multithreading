@@ -1155,6 +1155,18 @@ public final class ServerThreadOwnerPhase {
         }
     }
 
+    /** The per-tick accounting identity the trace asserts: every selected row ends as executed,
+     * fallback, terminal or compat, and every due row additionally accounts for the left buckets.
+     * Host skips count executed and terminal rows only because a compat row was ticked by the host
+     * at its original call site, not skipped by it. */
+    static boolean equations(int selected, int executed, int fallback, int terminal, int compat,
+                             int left, int due, int leftPreCanceled, int leftBodySkipped,
+                             long delta) {
+        return selected == executed + fallback + terminal + compat + left
+            && due == executed + fallback + terminal + compat + leftPreCanceled + leftBodySkipped
+            && delta == executed + terminal;
+    }
+
     /** Reconciles and reports one level's owner phase after the host entity pass. */
     public static void endTick(ServerLevel level) {
         if (level == null) {
@@ -1198,6 +1210,7 @@ public final class ServerThreadOwnerPhase {
         totalLeft += left;
         String line = "tick=" + phase.tick + " selected=" + phase.selected + " executed="
             + phase.executed + " fallback=" + phase.fallback + " terminal=" + phase.terminal
+            + " compat=" + phase.compat
             + " leftPending=" + left + " due=" + phase.preSeen + " leftGone=" + leftGone
             + " leftInactive=" + leftInactive + " leftPreCanceled=" + leftPreCanceled
             + " leftNoPre=" + leftNoPre + " leftBodySkipped=" + leftBodySkipped
@@ -1207,10 +1220,9 @@ public final class ServerThreadOwnerPhase {
         if (!trace()) {
             return;
         }
-        boolean equation = phase.selected == phase.executed + phase.fallback + phase.terminal + left
-            && phase.preSeen == phase.executed + phase.fallback + phase.terminal
-                + leftPreCanceled + leftBodySkipped
-            && delta == phase.executed + phase.terminal;
+        boolean equation = equations(phase.selected, phase.executed, phase.fallback,
+            phase.terminal, phase.compat, left, phase.preSeen, leftPreCanceled, leftBodySkipped,
+            delta);
         System.out.println("[PRTS] phaseEnd " + line);
         if (phase.postSeen != phase.expectedPost) {
             System.out.println("[PRTS] boundary mismatch expectedPost=" + phase.expectedPost
@@ -1225,7 +1237,8 @@ public final class ServerThreadOwnerPhase {
         if (!equation) {
             System.out.println("[PRTS] phaseEquation ok=false selected=" + phase.selected
                 + " executed=" + phase.executed + " fallback=" + phase.fallback
-                + " terminal=" + phase.terminal + " left=" + left + " due=" + phase.preSeen
+                + " terminal=" + phase.terminal + " compat=" + phase.compat
+                + " left=" + left + " due=" + phase.preSeen
                 + " preCanceled=" + leftPreCanceled + " bodySkipped=" + leftBodySkipped
                 + " hostSkipsDelta=" + delta);
         }
@@ -1239,7 +1252,7 @@ public final class ServerThreadOwnerPhase {
             Files.createDirectories(path.getParent());
             boolean header = !Files.exists(path);
             String row = line.replace(' ', '\t');
-            String text = (header ? "tick\tselected\texecuted\tfallback\tterminal"
+            String text = (header ? "tick\tselected\texecuted\tfallback\tterminal\tcompat"
                 + "\tleftPending\tdue\tleftGone\tleftInactive\tleftPreCanceled\tleftNoPre"
                 + "\tleftBodySkipped\texpectedPost\tpostSeen\tpostDuplicate\thostSkipsDelta"
                 + "\thostSkipsTotal\n" : "") + row
