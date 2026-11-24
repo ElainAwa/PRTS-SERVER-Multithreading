@@ -97,6 +97,10 @@ public final class CommitReservation {
     private final CommitNamespaces.ResetEpochs epochs;
     private final VersionSource versionSource;
     private final Map<Long, CommitTicket> tickets = new LinkedHashMap<>();
+    /** The held seat of each ticket, indexed so a place-held query does not scan every ticket in
+     * the process-wide holder. A scale tick holds thousands of them at once. */
+    private final Map<Long, String> ticketSeatKeys = new java.util.HashMap<>();
+    private final java.util.Set<String> heldSeats = new java.util.HashSet<>();
     /** One prefix cursor per plan: the earlier seats each begin already accounts for, read once
      * instead of walking the whole declaration table for every row. */
     private final Map<String, SeatPrefix> seatPrefixes = new HashMap<>();
@@ -436,6 +440,7 @@ public final class CommitReservation {
             request.identity(), request.planSequence(), request.position(), ringSlot, room.slot(),
             controller());
         tickets.put(ticket.ticketId(), ticket);
+        indexTicket(ticket);
         accountSeat(judged.declarations(), request.worldId(), request.domainId(),
             request.planSequence(), request.position());
         phases.put(ticket.ticketId(), Phase.RESERVED);
@@ -549,18 +554,48 @@ public final class CommitReservation {
     }
 
     /** Whether a reservation in flight already holds this place of this pair. */
-    public boolean placeHeld(String worldId, String domainId, long planSequence, int position) {
-        for (CommitTicket held : tickets.values()) {
-            if (held.planSequence() == planSequence && held.position() == position
-                && held.batch().worldId().equals(worldId) && held.batch().domainId().equals(domainId)) {
-                return true;
-            }
+    private static String seatKey(String worldId, String domainId, long planSequence, int position) {
+        return worldId + "\u0000" + domainId + "\u0000" + planSequence + "\u0000" + position;
+    }
+
+    private void indexTicket(CommitTicket ticket) {
+        String key = seatKey(ticket.batch().worldId(), ticket.batch().domainId(),
+            ticket.planSequence(), ticket.position());
+        ticketSeatKeys.put(ticket.ticketId(), key);
+        heldSeats.add(key);
+    }
+
+    private void unindexTicket(long ticketId) {
+        String key = ticketSeatKeys.remove(ticketId);
+        if (key != null) {
+            heldSeats.remove(key);
         }
-        return false;
+    }
+
+    public boolean placeHeld(String worldId, String domainId, long planSequence, int position) {
+        return heldSeats.contains(seatKey(worldId, domainId, planSequence, position));
     }
 
     /** The bound the reservation charges: every terminal the line may report with every note its
      * outcome column may carry. */
+    /** The charge of one terminal shape: an effect's room depends on its rows and operation kind,
+     * never on its reference number, so thousands of identical body rows share one computation. */
+    private record ChargeKey(String operationKind, List<String> rows) {
+    }
+    private static final java.util.Map<ChargeKey, Long> CHARGE_CACHE =
+        new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static long chargedBytes(String operationKind, String label, List<String> rows) {
+        ChargeKey key = new ChargeKey(operationKind + "\u0000" + label, rows);
+        Long cached = CHARGE_CACHE.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        long built = EffectStore.chargeOf(operationKind, label, rows);
+        Long raced = CHARGE_CACHE.putIfAbsent(key, built);
+        return raced != null ? raced : built;
+    }
+
     static CommitTicket.Covered covered(CommitTicket.ReserveRequest request) {
         long bytes = 0L;
         int records = 0;
@@ -569,8 +604,7 @@ public final class CommitReservation {
             records = Math.max(records, EffectStore.normalizedRows(variant.rows()).size());
             for (String note : CommitTicket.NOTES) {
                 String label = note.isEmpty() ? terminal.name() : terminal.name() + "|" + note;
-                bytes = Math.max(bytes, EffectStore.chargeOf(variant.operationKind(), label,
-                    variant.rows()));
+                bytes = Math.max(bytes, chargedBytes(variant.operationKind(), label, variant.rows()));
             }
         }
         return new CommitTicket.Covered(records, (int) Math.min(Integer.MAX_VALUE, bytes));
@@ -864,6 +898,7 @@ public final class CommitReservation {
         }
         phases.remove(ticket.ticketId());
         tickets.remove(ticket.ticketId());
+        unindexTicket(ticket.ticketId());
         pendings.remove(ticket.ticketId());
         remember(ticket.ticketId());
         handOver(ticket.ticketId());
@@ -973,6 +1008,7 @@ public final class CommitReservation {
         boolean released = store.releaseCapacity(ticket.effectSlot());
         phases.remove(ticket.ticketId());
         tickets.remove(ticket.ticketId());
+        unindexTicket(ticket.ticketId());
         pendings.remove(ticket.ticketId());
         handOver(ticket.ticketId());
         remember(ticket.ticketId());
@@ -1044,6 +1080,7 @@ public final class CommitReservation {
         log.releaseSlot(ticket.ringSlot());
         phases.remove(ticket.ticketId());
         tickets.remove(ticket.ticketId());
+        unindexTicket(ticket.ticketId());
         pendings.remove(ticket.ticketId());
         // A reservation that wrote no line owes no freeze: the obligation ends with the ticket.
         settle(ticket.ticketId());
