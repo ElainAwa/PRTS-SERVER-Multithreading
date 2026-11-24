@@ -18,6 +18,7 @@ public final class RestOwnerWiring {
     }
 
     private static final Map<String, Map<Integer, Scope>> RESULTS = new LinkedHashMap<>();
+    private static final Map<String, Long> LAST_TICK = new LinkedHashMap<>();
     private static final LongAdder SKIPS = new LongAdder();
 
     private RestOwnerWiring() {
@@ -70,7 +71,13 @@ public final class RestOwnerWiring {
         }
         Map<Integer, Scope> rows = RESULTS.computeIfAbsent(dimension,
             key -> new LinkedHashMap<>());
-        rows.entrySet().removeIf(entry -> entry.getValue().tick() != tick);
+        Long last = LAST_TICK.get(dimension);
+        if (last == null || last != tick) {
+            // One clear at the tick boundary, not one scan per recorded row: the old entries all
+            // belong to an earlier tick, so dropping them all is the same expiry the scan did.
+            rows.clear();
+            LAST_TICK.put(dimension, tick);
+        }
         rows.put(row, new Scope(tick, result));
     }
 
