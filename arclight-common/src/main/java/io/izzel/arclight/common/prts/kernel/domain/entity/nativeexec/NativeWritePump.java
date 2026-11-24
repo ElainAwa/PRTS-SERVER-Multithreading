@@ -64,7 +64,8 @@ public final class NativeWritePump {
     /** A windowed pump: terminals follow seat order while the bodies run on the shared pool. The
      * begin of one row may overlap an earlier body and a later terminal still waits for every
      * earlier one, which is the same contract the entity owner window already proves. */
-    public static Result runWindowed(List<? extends Row> rows, NativeReadWave.Dispatch dispatch, int window) {
+    public static Result runWindowed(List<? extends Row> rows, NativeReadWave.Dispatch dispatch,
+                                     int window, Runnable hostPump) {
         List<Row> ordered = seatOrder(rows);
         long started = System.nanoTime();
         int pumped = 0;
@@ -88,6 +89,13 @@ public final class NativeWritePump {
             WindowSlot head = inFlight.peekFirst();
             if (head == null) continue;
             if (head.future() != null) {
+                // The body may ask the host to dispatch a plugin event and park on its result; a
+                // blocking join here would deadlock that worker against this thread. Pump the host
+                // while waiting, exactly as the entity owner window does.
+                while (!head.future().isDone()) {
+                    if (hostPump != null) hostPump.run();
+                    Thread.yield();
+                }
                 try { head.future().join(); } catch (Exception e) { faulted = true; }
             } else {
                 head.row().apply();

@@ -157,7 +157,17 @@ final class NativeEntityPump {
         long mismatchedBefore = shadow ? NativePathStage.mismatchedOrdinary() : 0L;
         NativeWritePump.Result result;
         if (mode == NativeEntityPhase.Mode.PARALLEL) {
-            result = NativeWritePump.runWindowed(pumpRows, dispatch(runtime), 64);
+            result = NativeWritePump.runWindowed(pumpRows, dispatch(runtime), 64,
+                () -> {
+                    io.izzel.arclight.common.prts.kernel.domain.entity.owner.OwnerReadDemand.service();
+                    io.izzel.arclight.common.prts.kernel.domain.entity.owner.OwnerHostEventDispatch.service();
+                    net.minecraft.server.MinecraftServer server = rows.get(0).level().getServer();
+                    if (server != null) {
+                        while (server.pollTask()) { }
+                        ((io.izzel.arclight.common.bridge.core.server.MinecraftServerBridge) server)
+                            .bridge$drainQueuedTasks();
+                    }
+                });
         } else {
             result = NativeWritePump.run(pumpRows);
         }
