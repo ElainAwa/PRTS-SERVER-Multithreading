@@ -25,6 +25,10 @@ public final class MobTickTailProgram {
 
     static void run(EntityUpdateProgramContext context, boolean identityMatches,
                     MobTickTailStages stages) {
+        // A split owner batch runs this tail in its phase-B pass, after the read wave.
+        if (NativeMovePhaseContext.inPhaseA()) {
+            return;
+        }
         if (context == null || !identityMatches || !EntityUpdateSegmentPolicy.admitsWorker(DECLARED)) {
             stages.prts$mobTickTail();
             return;

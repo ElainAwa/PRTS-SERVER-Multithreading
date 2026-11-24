@@ -4,22 +4,22 @@ package io.izzel.arclight.common.prts.kernel.domain.entity.owner;
 import io.izzel.arclight.common.prts.kernel.commit.CommitController;
 import io.izzel.arclight.common.prts.kernel.commit.CommitTicket;
 import io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations;
-import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathRequest;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeGoalStage;
+import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathRequest;
+import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeWritePump;
+import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeMoveStage;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeNeighborStage;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathStage;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathState;
-import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeWritePump;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.level.pathfinder.Path;
 
 import java.util.List;
 
-/** One deferred row in the native seat pump. The ticket is taken and started on the server thread,
- * the original body then runs as the whole-row C form on that same thread with the staged search
- * bound when the read wave produced one, and the terminal, publish and host Post follow the worker
- * batch's own path. The pump binds no owner unit permit: the server thread is its own host, so an
- * event chain must dispatch inline instead of joining a channel nobody serves. */
+/** One deferred row whose body is split into two seat passes: phase A runs the original tick with
+ * the later stages deferred, the collision-query wave closes, and phase B runs the deferred stages and publishes
+ * the same ticket. The seat order and the original host stage order are unchanged. */
 final class NativePumpRow implements NativeWritePump.Row {
 
     private static final String OPERATION_KIND = "entity-tick";
@@ -31,6 +31,11 @@ final class NativePumpRow implements NativeWritePump.Row {
     private final boolean staged;
     private final boolean ordinary;
     private OwnerControlledExecution record;
+    private EntityEffectPayload.Snapshot before;
+    private boolean boundPath;
+    private boolean boundNeighbours;
+    private boolean boundGoals;
+    private boolean executed;
 
     NativePumpRow(ServerThreadOwnerPhase.DeferredRow row, OwnerControlledWrite.Admission admission,
                   NativePathRequest request, Path stagedPath, boolean staged, boolean ordinary) {
@@ -42,9 +47,6 @@ final class NativePumpRow implements NativeWritePump.Row {
         this.ordinary = ordinary;
     }
 
-    /** Whether this row binds its staged search. An ordinary start prediction is dropped when the
-     * navigation already has a delayed recomputation pending: the body searches that first, so the
-     * ordinary stage is a stale answer. A delayed stage is that pending search and is kept. */
     static boolean stages(boolean staged, boolean ordinary, boolean delayedRecomputation) {
         return staged && (!ordinary || !delayedRecomputation);
     }
@@ -66,7 +68,6 @@ final class NativePumpRow implements NativeWritePump.Row {
 
     @Override
     public boolean begin() {
-        // The batch counts every row it attempted, refused or not, exactly as the worker loop did.
         StageCounters.note("ownerBatchBody");
         CommitController controller = admission.controller();
         CommitController.BeginResult begin = controller.beginControl(admission.request());
@@ -78,8 +79,8 @@ final class NativePumpRow implements NativeWritePump.Row {
         return true;
     }
 
-    @Override
-    public boolean apply() {
+    /** Runs the prefix pass on the Server thread. The ticket stays open for phase B. */
+    boolean applyPhaseA() {
         OwnerControlledExecution held = record;
         if (held == null) {
             throw new IllegalStateException("a pumped row has no begun ticket");
@@ -96,35 +97,74 @@ final class NativePumpRow implements NativeWritePump.Row {
         OwnerRandomContext.enter(row.level(), row.villager(), "entity");
         EntityUpdateProgramContext.begin(
             ServerThreadOwnerPhase.programIdentity(row.phase(), row.entity()));
-        boolean executed = false;
+        NativeMovePhaseContext.beginPhaseA();
         try {
             held.witness.markEffectPossible();
-            EntityEffectPayload.Snapshot before = EntityEffectPayload.capture(row.villager());
-            boolean bindStage = stages(staged, ordinary,
-                staged && ordinary && delayedRecomputation());
-            if (bindStage) {
+            before = EntityEffectPayload.capture(row.villager());
+            boundPath = stages(staged, ordinary, staged && ordinary && delayedRecomputation());
+            if (boundPath) {
                 NativePathStage.bind(request, stagedPath, ordinary);
             }
-            String key = row.level().dimension().location() + "|" + admission.entry().nodeKey()
-                + "|" + admission.entry().seat().position();
-            boolean bindNeighbours = NativeNeighborStage.has(key);
-            if (bindNeighbours) {
+            String key = rowKey();
+            boundNeighbours = NativeNeighborStage.has(key);
+            if (boundNeighbours) {
                 NativeNeighborStage.bind(key);
             }
-            boolean bindGoals = NativeGoalStage.has(key);
-            if (bindGoals) {
+            boundGoals = NativeGoalStage.has(key);
+            if (boundGoals) {
                 NativeGoalStage.bind(key);
             }
             try {
                 executed = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
             } finally {
-                if (bindGoals) {
-                    NativeGoalStage.take();
-                }
-                if (bindStage) {
-                    NativePathStage.unbind();
-                }
+                if (boundGoals) NativeGoalStage.take();
+                if (boundNeighbours) NativeNeighborStage.take();
+                if (boundPath) NativePathStage.unbind();
             }
+            return executed;
+        } finally {
+            NativeMovePhaseContext.end();
+            EntityUpdateProgramContext.end();
+            OwnerRandomContext.exit();
+            EntityTickOwnership.endOwnerBodyScope(scope);
+        }
+    }
+
+    /** Whether this row still owns a ticket after its phase-A pass. */
+    boolean begun() {
+        return record != null;
+    }
+
+    /** Runs the successor pass, consumes the staged collision answer and publishes the ticket. */
+    boolean applyPhaseB() {
+        OwnerControlledExecution held = record;
+        if (held == null || before == null) {
+            throw new IllegalStateException("a pumped row has no phase-A result");
+        }
+        long scope = EntityTickOwnership.beginOwnerBodyScope(row.entity());
+        OwnerRandomContext.enter(row.level(), row.villager(), "entity");
+        EntityUpdateProgramContext.begin(
+            ServerThreadOwnerPhase.programIdentity(row.phase(), row.entity()));
+        NativeMovePhaseContext.beginPhaseB();
+        try {
+            LivingEntity stages = row.villager();
+            String key = rowKey();
+            boolean bindMove = NativeMoveStage.has(key);
+            if (bindMove) {
+                NativeMoveStage.bind(key);
+            }
+            try {
+                if (stages instanceof LivingEntityAiStepStages split) {
+                    split.prts$aiStepPhaseB();
+                    split.prts$tickTail();
+                    if (stages instanceof MobTickTailStages mobTail) {
+                        mobTail.prts$mobTickTail();
+                    }
+                }
+            } finally {
+                NativeMoveStage.unbind();
+            }
+            executed = executed && stages.isAlive();
             String changed = EntityEffectPayload.changedValues(before,
                 EntityEffectPayload.capture(row.villager()));
             held.effectRow = EntityEffectPayload.row(row.entity().getUUID(),
@@ -134,18 +174,30 @@ final class NativePumpRow implements NativeWritePump.Row {
                     List.of(held.effectRow), 1, "")
                 : new CommitTicket.Outcome(CommitTicket.Terminal.FAILED, OPERATION_KIND,
                     List.of(held.effectRow), 0, "");
+            return executed;
         } catch (Throwable failure) {
             held.bodyFailure = failure;
             if (held.effectRow == null) {
                 held.effectRow = EntityEffectPayload.row(row.entity().getUUID(), "PARTIAL",
                     "unverified");
             }
+            return false;
         } finally {
+            NativeMovePhaseContext.end();
             EntityUpdateProgramContext.end();
             OwnerRandomContext.exit();
             EntityTickOwnership.endOwnerBodyScope(scope);
         }
-        return executed;
+    }
+
+    private String rowKey() {
+        return row.level().dimension().location() + "|" + admission.entry().nodeKey()
+            + "|" + admission.entry().seat().position();
+    }
+
+    @Override
+    public boolean apply() {
+        return applyPhaseA() && applyPhaseB();
     }
 
     @Override

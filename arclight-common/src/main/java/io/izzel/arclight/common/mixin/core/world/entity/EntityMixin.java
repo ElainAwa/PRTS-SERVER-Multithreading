@@ -15,6 +15,7 @@ import io.izzel.arclight.common.mod.server.entity.ArclightSpawnReason;
 import io.izzel.arclight.common.mod.util.ArclightCaptures;
 import io.izzel.arclight.common.prts.kernel.config.KernelSettings;
 import io.izzel.arclight.common.prts.kernel.decision.AirHostDecision;
+import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeMoveStage;
 import io.izzel.arclight.common.prts.kernel.domain.region.MultiWorldWiring;
 import io.izzel.arclight.mixin.Decorate;
 import io.izzel.arclight.mixin.DecorationOps;
@@ -114,6 +115,14 @@ public abstract class EntityMixin implements InternalEntityBridge, EntityBridge,
     @Shadow public boolean hurt(DamageSource source, float amount) { return false; }
     @Shadow public boolean horizontalCollision;
     @Shadow protected abstract Vec3 collide(Vec3 vec);
+
+    // Redirect the one collision query inside move so a staged, frozen answer is consumed on the
+    // same seat; a request that no longer matches is refused without consuming and runs vanilla.
+    @Redirect(method = "move", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/Entity;collide(Lnet/minecraft/world/phys/Vec3;)Lnet/minecraft/world/phys/Vec3;"))
+    private Vec3 prts$takeStagedMoveCollision(Entity entity, Vec3 requested) {
+        Vec3 staged = NativeMoveStage.take(entity, requested);
+        return staged != null ? staged : this.collide(requested);
+    }
     @Shadow public int tickCount;
     @Shadow private Entity vehicle;
     @Shadow public abstract boolean isSwimming();

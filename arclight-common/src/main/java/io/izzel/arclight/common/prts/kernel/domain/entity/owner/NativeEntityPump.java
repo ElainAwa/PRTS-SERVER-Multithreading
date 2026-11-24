@@ -7,6 +7,10 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.EntityRowIdentity;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeEntityPhase;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeNeighborStage;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeGoalStage;
+import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.MoveCollisionResult;
+import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeMoveCompute;
+import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeMoveRead;
+import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeMoveStage;
 import io.izzel.arclight.common.prts.fixes.nativepath.PrtsBrainSensorsAccessor;
 import io.izzel.arclight.common.prts.fixes.nativepath.PrtsSensorTickAccessor;
 import net.minecraft.world.entity.ai.sensing.SensorType;
@@ -155,7 +159,27 @@ final class NativeEntityPump {
         }
         long comparedBefore = shadow ? NativePathStage.comparedOrdinary() : 0L;
         long mismatchedBefore = shadow ? NativePathStage.mismatchedOrdinary() : 0L;
-        NativeWritePump.Result result = NativeWritePump.run(pumpRows);
+        // E8a: all phase-A bodies, the frozen collision wave, then all phase-B bodies. The seat
+        // order and every ticket are unchanged; the host tails run after phase B on the same seat.
+        java.util.List<NativePumpRow> ordered = new java.util.ArrayList<>(pumpRows);
+        ordered.sort(java.util.Comparator.comparingInt(NativePumpRow::seat));
+        for (NativePumpRow pumpRow : ordered) {
+            if (!pumpRow.begin()) continue;
+            pumpRow.applyPhaseA();
+        }
+        runMoveWave(runtime, rows, admissions, tick);
+        int moved = 0;
+        boolean moveFaulted = false;
+        long moveStarted = System.nanoTime();
+        for (NativePumpRow pumpRow : ordered) {
+            if (pumpRow.begun()) {
+                if (!pumpRow.applyPhaseB()) moveFaulted = true;
+                pumpRow.complete();
+                moved++;
+            }
+        }
+        NativeWritePump.Result result = new NativeWritePump.Result(
+            moveFaulted, moved, 0, System.nanoTime() - moveStarted);
         int comparedOrdinary = shadow
             ? (int) (NativePathStage.comparedOrdinary() - comparedBefore) : 0;
         int mismatchOrdinary = shadow
@@ -172,6 +196,52 @@ final class NativeEntityPump {
             + " consumed="
             + io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeGoalStage.consumed());
         return result.faulted();
+    }
+
+    /** Opens the collision-query wave: the host freezes one read per row after phase A, a worker runs
+     * the vanilla collision equation on that frozen input, and the result is staged for the seat
+     * pump. A row whose permit is refused keeps the whole-line C form at its move call site. */
+    private static void runMoveWave(SharedRuntime runtime,
+                                    List<ServerThreadOwnerPhase.DeferredRow> rows,
+                                    Map<ServerThreadOwnerPhase.DeferredRow,
+                                        OwnerControlledWrite.Admission> admissions, long tick) {
+        NativeEntityPhase.Mode mode = NativeEntityPhase.mode();
+        if (mode == NativeEntityPhase.Mode.OFF || rows.isEmpty()) {
+            return;
+        }
+        NativeReadWave<MoveCollisionResult> wave = NativeReadWave.open(mode,
+            WAVE_IDS.incrementAndGet(), tick, READ_GROUPS,
+            mode == NativeEntityPhase.Mode.PARALLEL ? dispatch(runtime) : null,
+            WAVE_DEADLINE_NANOS);
+        java.util.Map<String, NativeMoveRead> frozen = new java.util.LinkedHashMap<>();
+        for (ServerThreadOwnerPhase.DeferredRow row : rows) {
+            String key = rowKey(row, admissions.get(row));
+            net.minecraft.world.entity.npc.Villager villager = row.villager();
+            net.minecraft.world.phys.Vec3 requested = villager.getDeltaMovement();
+            net.minecraft.core.BlockPos center = villager.blockPosition();
+            int radius = 8;
+            net.minecraft.world.level.PathNavigationRegion region =
+                new net.minecraft.world.level.PathNavigationRegion(row.level(),
+                    center.offset(-radius, -radius, -radius),
+                    center.offset(radius, radius, radius));
+            java.util.List<net.minecraft.world.phys.shapes.VoxelShape> collisions =
+                row.level().getEntityCollisions(villager,
+                    villager.getBoundingBox().expandTowards(requested));
+            NativeMoveRead read = new NativeMoveRead(key, requested, villager.getBoundingBox(),
+                region, collisions, villager.maxUpStep(), villager.onGround());
+            frozen.put(key, read);
+            wave.issue(key, admissions.get(row).entry().seat().position(),
+                identity(row), generation(row), snapshot(row, identity(row), generation(row)),
+                () -> NativeMoveCompute.compute(villager, read));
+        }
+        wave.run();
+        wave.close();
+        for (java.util.Map.Entry<String, NativeMoveRead> entry : frozen.entrySet()) {
+            NativeRowProgram<MoveCollisionResult> program = wave.program(entry.getKey());
+            if (program != null && program.state() == NativeRowProgram.State.READY) {
+                NativeMoveStage.stage(entry.getKey(), program.result());
+            }
+        }
     }
 
     private static NativeReadWave.Dispatch dispatch(SharedRuntime runtime) {
