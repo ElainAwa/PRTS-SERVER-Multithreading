@@ -99,7 +99,16 @@ public final class EffectStore {
     private final int capacityBytes;
     private final int capacityRecords;
     private final Map<Long, Recorded> records = new LinkedHashMap<>();
-    private final Map<Long, Recorded> consumed = new LinkedHashMap<>();
+    /** The published archive is bounded by a multiple of the live record room: every published row
+     * is consumed here, so an unbounded archive grows by one entry per row per tick. The counters
+     * below keep the lifetime total; only the readable tail is retained. */
+    private final int archiveCap;
+    private final Map<Long, Recorded> consumed = new LinkedHashMap<>() {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<Long, Recorded> eldest) {
+            return size() > archiveCap;
+        }
+    };
     private final Map<Long, Slot> slots = new LinkedHashMap<>();
     private final Map<Long, CapacitySlot> capacitySlots = new LinkedHashMap<>();
     private final Map<Long, Integer> pins = new LinkedHashMap<>();
@@ -134,6 +143,8 @@ public final class EffectStore {
         }
         this.capacityBytes = capacityBytes;
         this.capacityRecords = capacityRecords;
+        this.archiveCap = Math.max(1024L, (long) capacityRecords * 2L) > Integer.MAX_VALUE
+            ? Integer.MAX_VALUE : Math.max(1024, capacityRecords * 2);
     }
 
     /** Charges the room one effect will take and freezes the record it charged for. Nothing is

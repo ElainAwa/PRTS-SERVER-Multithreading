@@ -128,8 +128,18 @@ public final class WorkAccount {
         }
     }
 
-    private final Map<String, Entry> units = new LinkedHashMap<>();
+    /** The running ledger is bounded: the process-wide account offers thousands of units per tick,
+     * so an unbounded map grows for the whole process life. Only the most recent units stay readable;
+     * the counter keeps the lifetime number offered. */
+    private static final int UNIT_LEDGER_CAP = 65536;
+    private final Map<String, Entry> units = new LinkedHashMap<>() {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Entry> eldest) {
+            return size() > UNIT_LEDGER_CAP;
+        }
+    };
     private long sequence;
+    private long unitsOffered;
     /** Open units of this window; the settled answer is this counter, not a scan of the map. */
     private int openUnits;
     private boolean settled;
@@ -140,6 +150,7 @@ public final class WorkAccount {
             return false;
         }
         units.put(unit.unitId(), new Entry(unit, sequence++));
+        unitsOffered++;
         openUnits++;
         settled = false;
         return true;
@@ -158,7 +169,7 @@ public final class WorkAccount {
 
     /** Number of units offered in this window. */
     public synchronized long offered() {
-        return units.size();
+        return unitsOffered;
     }
 
     /** Number of units that received a seat. */
