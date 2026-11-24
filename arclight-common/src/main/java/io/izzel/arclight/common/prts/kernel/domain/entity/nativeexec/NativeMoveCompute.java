@@ -22,7 +22,15 @@ public final class NativeMoveCompute {
 
     /** Computes the clipped vector for one frozen read on the worker side. */
     public static MoveCollisionResult compute(Entity entity, NativeMoveRead read) {
-        Vec3 request = read.request();
+        return computeWith(entity, read, read.request());
+    }
+
+    /** Recomputes the same vanilla equation with a real move argument against a frozen read. The
+     * caller must have checked the read coverage; no live Level is consulted here. */
+    public static MoveCollisionResult computeWith(Entity entity, NativeMoveRead read, Vec3 request) {
+        if (request == null || !read.covers(request)) {
+            throw new IllegalArgumentException("a request outside the frozen coverage");
+        }
         if (request.lengthSqr() == 0.0D) {
             return new MoveCollisionResult(request, request);
         }

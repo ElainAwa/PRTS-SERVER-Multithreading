@@ -227,9 +227,13 @@ final class NativeEntityPump {
             java.util.List<net.minecraft.world.phys.shapes.VoxelShape> collisions =
                 row.level().getEntityCollisions(villager,
                     villager.getBoundingBox().expandTowards(requested));
-            NativeMoveRead read = new NativeMoveRead(key, requested, villager.getBoundingBox(),
+            // The host freezes a conservative expansion: a real move argument may differ from
+            // the predicted motion by up to the declared margin and still be answered from this
+            // frozen read; a request outside it keeps the whole row C and never reads live Level.
+            NativeMoveRead read = NativeMoveRead.of(key, requested, villager.getBoundingBox(),
                 region, collisions, villager.maxUpStep(), villager.onGround());
             frozen.put(key, read);
+            NativeMoveStage.stageRead(key, read);
             wave.issue(key, admissions.get(row).entry().seat().position(),
                 identity(row), generation(row), snapshot(row, identity(row), generation(row)),
                 () -> NativeMoveCompute.compute(villager, read));
