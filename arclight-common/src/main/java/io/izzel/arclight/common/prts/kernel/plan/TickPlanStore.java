@@ -53,6 +53,16 @@ public final class TickPlanStore {
     private long feedbackUnknownSites;
     /** The lifecycle a plan was published in; a reset starts another one and retires the plans before it. */
     private long lifecycle;
+    /** The key to step index of the newest plan, built once and dropped when another plan becomes
+     * newest; a miss falls back to the bounded scan so an older plan is still answerable. */
+    private volatile PlanIndex newestIndex;
+
+    private record PlanIndex(long planSequence, Map<String, StepRef> steps) {
+    }
+
+    private static String stepKey(String worldId, String domainId, String nodeKey) {
+        return worldId + "\u0000" + domainId + "\u0000" + nodeKey;
+    }
 
     public TickPlanStore(int historyCap) {
         this.historyCap = Math.max(1, historyCap);
@@ -144,11 +154,32 @@ public final class TickPlanStore {
         return plan == null ? null : List.copyOf(plan.commitOrder());
     }
 
-    /** Resolves the order of one commit by the key its job declared, newest plan first. */
+    /** Resolves the order of one commit by the key its job declared, newest plan first. The newest
+     * plan is indexed once; older plans are only scanned when the key is not in it. */
     public StepRef resolve(String worldId, String domainId, String nodeKey) {
         List<TickPlan> plans = new ArrayList<>(history.values());
-        for (int index = plans.size() - 1; index >= 0; index--) {
-            TickPlan plan = plans.get(index);
+        if (plans.isEmpty()) {
+            unresolved++;
+            return null;
+        }
+        TickPlan newest = plans.get(plans.size() - 1);
+        PlanIndex index = newestIndex;
+        if (index == null || index.planSequence() != newest.planSequence()) {
+            Map<String, StepRef> steps = new java.util.HashMap<>();
+            for (TickPlan.CommitStep step : newest.commitOrder()) {
+                steps.putIfAbsent(stepKey(step.worldId(), step.domainId(), step.nodeKey()),
+                    new StepRef(newest.planSequence(), step.position(), step.intent(),
+                        step.nodeKey()));
+            }
+            index = new PlanIndex(newest.planSequence(), steps);
+            newestIndex = index;
+        }
+        StepRef hit = index.steps().get(stepKey(worldId, domainId, nodeKey));
+        if (hit != null) {
+            return hit;
+        }
+        for (int at = plans.size() - 2; at >= 0; at--) {
+            TickPlan plan = plans.get(at);
             for (TickPlan.CommitStep step : plan.commitOrder()) {
                 if (step.worldId().equals(worldId) && step.domainId().equals(domainId)
                     && step.nodeKey().equals(nodeKey)) {
