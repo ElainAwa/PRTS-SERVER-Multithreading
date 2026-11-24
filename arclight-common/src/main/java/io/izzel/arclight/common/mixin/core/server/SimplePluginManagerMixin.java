@@ -48,6 +48,21 @@ public abstract class SimplePluginManagerMixin {
 
     @Inject(method = "fireEvent", at = @At("HEAD"), require = 1, remap = false)
     private void prts$beginFire(Event event, CallbackInfo ci) {
+        // Diagnostic-only trace of the movement event kinds; the property is off in every shipped
+        // build, so an ordinary event never reaches this branch.
+        if (event instanceof org.bukkit.event.entity.EntityDamageEvent damage) {
+            String kind = switch (damage.getCause()) {
+                case FALL -> "fall";
+                case CRAMMING -> "cramming";
+                default -> null;
+            };
+            if (kind != null) {
+                io.izzel.arclight.common.prts.kernel.domain.entity.owner.EventDiagnosticDump.note(
+                    org.bukkit.Bukkit.getWorlds().isEmpty() ? -1L
+                        : org.bukkit.Bukkit.getWorlds().get(0).getGameTime(),
+                    damage.getEntity().getUniqueId().toString(), kind);
+            }
+        }
         HandlerList handlers = event.getHandlers();
         RegisteredListener[] expected = handlers == null ? null : handlers.getRegisteredListeners();
         BukkitEventOrderObserver.begin(expected, event instanceof RemoteServerCommandEvent);

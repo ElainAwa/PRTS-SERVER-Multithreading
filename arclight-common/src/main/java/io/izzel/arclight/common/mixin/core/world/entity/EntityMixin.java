@@ -569,6 +569,11 @@ public abstract class EntityMixin implements InternalEntityBridge, EntityBridge,
 
     @ModifyArg(method = "move", index = 1, at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/block/Block;stepOn(Lnet/minecraft/world/level/Level;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/world/entity/Entity;)V"))
     private BlockPos arclight$captureBlockWalk(BlockPos pos) {
+        // Diagnostic-only ordered trace of step callbacks; silent unless the JVM property is set.
+        io.izzel.arclight.common.prts.kernel.domain.entity.owner.EventDiagnosticDump.note(
+            org.bukkit.Bukkit.getWorlds().isEmpty() ? -1L
+                : org.bukkit.Bukkit.getWorlds().get(0).getGameTime(),
+            String.valueOf(this.getId()), "step");
         ArclightCaptures.captureDamageEventBlock(pos);
         return pos;
     }
