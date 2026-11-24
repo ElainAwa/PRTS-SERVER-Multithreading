@@ -258,7 +258,10 @@ final class NativeEntityPump {
                 LiveRowSnapshot snap = snapshot(row, id, gen);
                 AltPhaseSubComputation.AiHead s3 =
                     new AltPhaseSubComputation.AiHead(
-                        villager.isEffectiveAi(), false, 0, requested.x, requested.y, requested.z);
+                        villager.isEffectiveAi(),
+                        ((PrtsLivingEntityTickStateMixin) villager).prts$isImmobile(),
+                        ((PrtsLivingEntityTickStateMixin) villager).prts$lerpSteps(),
+                        requested.x, requested.y, requested.z);
                 AltPhaseSubComputation.Controls s7 =
                     new AltPhaseSubComputation.Controls(
                         villager.getYRot(),
@@ -269,7 +272,8 @@ final class NativeEntityPump {
                     new AltPhaseSubComputation.TickTail(
                         villager.yBodyRot,
                         ((PrtsLivingEntityTickStateMixin) villager).prts$run(),
-                        0.0F, 0.0F);
+                        ((PrtsLivingEntityTickStateMixin) villager).prts$attackAnim(),
+                        (float) ((PrtsLivingEntityTickStateMixin) villager).prts$swingTime());
                 alt3.put(key, s3); alt7.put(key, s7); alt9.put(key, s9);
                 altWave.issue(key + "|aiHead", seat, id, gen, snap, s3::compute);
                 altWave.issue(key + "|controls", seat, id, gen, snap, s7::compute);

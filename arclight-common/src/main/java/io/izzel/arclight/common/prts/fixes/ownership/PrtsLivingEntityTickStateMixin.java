@@ -14,6 +14,7 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
+import org.spongepowered.asm.mixin.gen.Invoker;
 
 @OnlyInPlatform(ArclightPlatform.NEOFORGE)
 @Mixin(LivingEntity.class)
@@ -104,4 +105,12 @@ public interface PrtsLivingEntityTickStateMixin {
 
     @Accessor("fallFlyTicks")
     int prts$fallFlyTicks();
+
+    // Read-only views of the remaining self-row fields the sub-computation read wave freezes.
+    // They expose vanilla values only; no writer or new public type is introduced.
+    @Invoker("isImmobile")
+    boolean prts$isImmobile();
+
+    @Accessor("swingTime")
+    int prts$swingTime();
 }
