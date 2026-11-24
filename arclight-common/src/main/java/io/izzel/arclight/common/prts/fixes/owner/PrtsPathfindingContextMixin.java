@@ -11,10 +11,11 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 
 /**
- * Behaviour: a path search started from an opt-in parallel owner body reads its block path types
- * from a cache it owns instead of the level's shared one. Why here: the context chooses its cache in
- * its constructor, before the search. Point: that one choice. Invariant: the cache instance lives
- * only for the search, so no other body sees an entry; the host search keeps the shared cache.
+ * Behaviour: a path search started from an opt-in parallel owner body borrows a cache owned by its
+ * worker instead of the level's shared one. Why here: the context chooses its cache in its
+ * constructor, before the search. Point: that one choice. Invariant: the worker is the only user of
+ * its cache for the whole search, and clears it at the next body; the host search keeps the shared
+ * cache.
  */
 @Mixin(PathfindingContext.class)
 public abstract class PrtsPathfindingContextMixin {
@@ -23,7 +24,7 @@ public abstract class PrtsPathfindingContextMixin {
         at = @At(value = "INVOKE",
             target = "Lnet/minecraft/server/level/ServerLevel;getPathTypeCache()"
                 + "Lnet/minecraft/world/level/pathfinder/PathTypeCache;"))
-    private PathTypeCache prts$perSearchCache(ServerLevel level, Operation<PathTypeCache> original) {
-        return OwnerBodyMarker.active() ? new PathTypeCache() : original.call(level);
+    private PathTypeCache prts$perWorkerCache(ServerLevel level, Operation<PathTypeCache> original) {
+        return OwnerBodyMarker.active() ? OwnerWorkerPathCache.borrow() : original.call(level);
     }
 }
