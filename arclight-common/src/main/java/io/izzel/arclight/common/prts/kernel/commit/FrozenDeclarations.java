@@ -565,16 +565,20 @@ public final class FrozenDeclarations {
             trim();
         }
 
-        /** Applies the bound from the oldest table on: what nothing owes is given up, and a table an
-         * obligation still names is left and counted instead. The bound runs when the next freeze
-         * replaces one, so the freeze of a terminal line is still there to be exported after it. */
+        /** Applies the bound from the oldest table on. A freeze an obligation still names stays only
+         * while it is inside the retained window; older ones are given up even when owed, otherwise a
+         * single unsettled obligation of a full-scale tick would keep every older freeze alive. */
         private void trim() {
             Iterator<FrozenDeclarations> walk = retained.iterator();
-            while (retained.size() > cap && walk.hasNext()) {
+            int seen = 0;
+            while (walk.hasNext()) {
                 FrozenDeclarations candidate = walk.next();
-                if (owed.containsKey(candidate)) {
-                    withheld++;
+                seen++;
+                if (seen <= cap) {
                     continue;
+                }
+                if (owed.remove(candidate) != null) {
+                    withheld++;
                 }
                 walk.remove();
                 evicted++;
