@@ -73,6 +73,12 @@ public interface PrtsLivingEntityTickStateMixin {
     @Accessor("noJumpDelay")
     int prts$noJumpDelay();
 
+    @Accessor("xxa")
+    float prts$xxa();
+
+    @Accessor("zza")
+    float prts$zza();
+
     @Accessor("jumping")
     boolean prts$jumping();
 

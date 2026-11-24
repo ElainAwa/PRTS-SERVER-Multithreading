@@ -75,6 +75,18 @@ public final class TargetEntityDiagnostic {
             + "|pos=" + x + "," + y + "," + z + "|onGround=" + onGround
             + "|activity=" + activity + "|goals=" + goals);
     }
+    /** The movement input that produced one real move argument, printed immediately before the
+     * collide call. Unavailable fields are printed as NA rather than guessed. */
+    public static void noteInput(long tick, java.util.UUID uuid, float xxa, float zza,
+                                 boolean jumping, boolean onGround, String fluid,
+                                 boolean stagedPath, String admission, Vec3 finalMove) {
+        if (!enabled(uuid)) return;
+        emit("kind=input|tick=" + tick + "|uuid=" + uuid
+            + "|xxa=" + xxa + "|zza=" + zza + "|jumping=" + jumping
+            + "|onGround=" + onGround + "|fluid=" + fluid
+            + "|stagedPath=" + stagedPath + "|admission=" + admission
+            + "|final=" + (finalMove == null ? "null" : finalMove.x + "," + finalMove.y + "," + finalMove.z));
+    }
     /** The answer source of one collide call on the named entity. */
     public static void noteAnswer(String source, long tick, UUID uuid, Vec3 live) {
         if (!enabled(uuid)) return;

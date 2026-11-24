@@ -120,6 +120,18 @@ public abstract class EntityMixin implements InternalEntityBridge, EntityBridge,
     // same seat; a request that no longer matches is refused without consuming and runs vanilla.
     @Redirect(method = "move", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/Entity;collide(Lnet/minecraft/world/phys/Vec3;)Lnet/minecraft/world/phys/Vec3;"))
     private Vec3 prts$takeStagedMoveCollision(Entity entity, Vec3 requested) {
+        io.izzel.arclight.common.prts.kernel.domain.entity.owner.TargetEntityDiagnostic.noteInput(
+            entity.tickCount, entity.getUUID(),
+            entity instanceof io.izzel.arclight.common.prts.fixes.ownership.PrtsLivingEntityTickStateMixin living
+                ? living.prts$xxa() : Float.NaN,
+            entity instanceof io.izzel.arclight.common.prts.fixes.ownership.PrtsLivingEntityTickStateMixin living2
+                ? living2.prts$zza() : Float.NaN,
+            entity instanceof io.izzel.arclight.common.prts.fixes.ownership.PrtsLivingEntityTickStateMixin living3
+                && living3.prts$jumping(),
+            entity.onGround(), entity.level().getFluidState(entity.blockPosition()).toString(),
+            io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathStage.bound(),
+            io.izzel.arclight.common.prts.kernel.domain.entity.owner.OwnerBodyMarker.active()
+                ? "owner" : "host", requested);
         Vec3 staged = NativeMoveStage.take(entity, requested);
         return staged != null ? staged : this.collide(requested);
     }
