@@ -22,6 +22,9 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeWrite
 import io.izzel.arclight.common.prts.kernel.domain.entity.program.LiveRowSnapshot;
 import io.izzel.arclight.common.prts.kernel.domain.entity.program.ReadPermit;
 import io.izzel.arclight.common.prts.kernel.generic.GenericCancel;
+import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.AltPhaseSubComputation;
+import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.AltPhaseStage;
+import io.izzel.arclight.common.prts.fixes.ownership.PrtsLivingEntityTickStateMixin;
 import net.minecraft.world.level.pathfinder.Path;
 
 import java.util.ArrayList;
@@ -213,6 +216,16 @@ final class NativeEntityPump {
             WAVE_IDS.incrementAndGet(), tick, READ_GROUPS,
             mode == NativeEntityPhase.Mode.PARALLEL ? dispatch(runtime) : null,
             WAVE_DEADLINE_NANOS);
+        // The admitted self-row sub-computations use the same wave shape, but only when the
+        // experiment property is on; the shipped path creates no second wave and no stage row.
+        NativeReadWave<Object> altWave = AltPhaseProgram.enabled()
+            ? NativeReadWave.open(mode, WAVE_IDS.incrementAndGet(), tick, READ_GROUPS,
+                mode == NativeEntityPhase.Mode.PARALLEL ? dispatch(runtime) : null,
+                WAVE_DEADLINE_NANOS)
+            : null;
+        java.util.Map<String, AltPhaseSubComputation.AiHead> alt3 = new java.util.LinkedHashMap<>();
+        java.util.Map<String, AltPhaseSubComputation.Controls> alt7 = new java.util.LinkedHashMap<>();
+        java.util.Map<String, AltPhaseSubComputation.TickTail> alt9 = new java.util.LinkedHashMap<>();
         java.util.Map<String, NativeMoveRead> frozen = new java.util.LinkedHashMap<>();
         for (ServerThreadOwnerPhase.DeferredRow row : rows) {
             String key = rowKey(row, admissions.get(row));
@@ -238,6 +251,30 @@ final class NativeEntityPump {
             wave.issue(key, admissions.get(row).entry().seat().position(),
                 identity(row), generation(row), snapshot(row, identity(row), generation(row)),
                 () -> NativeMoveCompute.compute(villager, read));
+            if (altWave != null) {
+                int seat = admissions.get(row).entry().seat().position();
+                EntityRowIdentity id = identity(row);
+                long gen = generation(row);
+                LiveRowSnapshot snap = snapshot(row, id, gen);
+                AltPhaseSubComputation.AiHead s3 =
+                    new AltPhaseSubComputation.AiHead(
+                        villager.isEffectiveAi(), false, 0, requested.x, requested.y, requested.z);
+                AltPhaseSubComputation.Controls s7 =
+                    new AltPhaseSubComputation.Controls(
+                        villager.getYRot(),
+                        ((PrtsLivingEntityTickStateMixin) villager).prts$xxa(),
+                        ((PrtsLivingEntityTickStateMixin) villager).prts$zza(),
+                        ((PrtsLivingEntityTickStateMixin) villager).prts$jumping());
+                AltPhaseSubComputation.TickTail s9 =
+                    new AltPhaseSubComputation.TickTail(
+                        villager.yBodyRot,
+                        ((PrtsLivingEntityTickStateMixin) villager).prts$run(),
+                        0.0F, 0.0F);
+                alt3.put(key, s3); alt7.put(key, s7); alt9.put(key, s9);
+                altWave.issue(key + "|aiHead", seat, id, gen, snap, s3::compute);
+                altWave.issue(key + "|controls", seat, id, gen, snap, s7::compute);
+                altWave.issue(key + "|tickTail", seat, id, gen, snap, s9::compute);
+            }
         }
         wave.run();
         NativeReadWave.Witness witness = wave.close();
@@ -252,6 +289,22 @@ final class NativeEntityPump {
             NativeRowProgram<MoveCollisionResult> program = wave.program(entry.getKey());
             if (program != null && program.state() == NativeRowProgram.State.READY) {
                 NativeMoveStage.stage(entry.getKey(), program.result());
+            }
+        }
+        if (altWave != null) {
+            altWave.run();
+            altWave.close();
+            for (String key : alt3.keySet()) {
+                String[][] kinds = new String[][]{
+                    {"aiHead", "|aiHead"}, {"controls", "|controls"}, {"tickTail", "|tickTail"}
+                };
+                for (String[] kind : kinds) {
+                    NativeRowProgram<Object> p = altWave.program(key + kind[1]);
+                    if (p != null && p.state() == NativeRowProgram.State.READY) {
+                        AltPhaseStage.stage(
+                            key, kind[0], p.result());
+                    }
+                }
             }
         }
     }
