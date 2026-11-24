@@ -119,7 +119,7 @@ public final class OwnerControlledWrite {
             controllerNamespace.resetEpoch(), CommitNamespaces.NO_THREAD);
         CommitTicket.ReserveRequest request = EffectRequestFactory.request(entry, version, version,
             (long) domain.hashCode(), CommitLog.Batch.Kind.APPLY, producer, controllerNamespace,
-            published, partial, failed);
+            published, partial, failed).asPrepared();
         return new Admission(controller, entry, request, published, partial, failed, version);
     }
 

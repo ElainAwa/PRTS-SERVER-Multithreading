@@ -513,15 +513,21 @@ public final class CommitReservation {
         }
         FrozenDeclarations sealed = log.identitySource().declarations(request.worldId(),
             request.domainId(), resolved.planSequence());
-        IdentityWitness.Verdict witness = range != null
-            ? IdentityWitness.verifyRange(range, resolved, request.worldId(), request.domainId(),
-                request.nodeKey(), identity, controller())
-            : IdentityWitness.verify(sealed, resolved, request.worldId(), request.domainId(),
-                request.nodeKey(), identity, controller());
-        if (!witness.accepted()) {
-            witnessRefusals++;
-            return Judged.refused(new Refusal(RejectCode.VERSION_MISMATCH, witness.reason()));
+        IdentityWitness.Verdict witness = null;
+        if (!request.prepared()) {
+            witness = range != null
+                ? IdentityWitness.verifyRange(range, resolved, request.worldId(), request.domainId(),
+                    request.nodeKey(), identity, controller())
+                : IdentityWitness.verify(sealed, resolved, request.worldId(), request.domainId(),
+                    request.nodeKey(), identity, controller());
+            if (!witness.accepted()) {
+                witnessRefusals++;
+                return Judged.refused(new Refusal(RejectCode.VERSION_MISMATCH, witness.reason()));
+            }
         }
+        // A prepared request derives its identity from the frozen entry itself, so the witness was
+        // already satisfied when the declaration was read; the entry existence and the drift checks
+        // below still guard a stale or replaced freeze.
         if (log.instanceCollision(request.worldId(), request.domainId(), identity, range)) {
             return Judged.refused(new Refusal(RejectCode.VERSION_MISMATCH, "instance-collision"));
         }

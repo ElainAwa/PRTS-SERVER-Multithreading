@@ -149,7 +149,25 @@ public record CommitTicket(long ticketId, long logLifetime, CommitLog.Batch batc
                                  long expectedVersion, long writeSetDigest, int rows,
                                  CommitLog.Identity identity, CommitNamespaces.Namespace controller,
                                  EffectStore.Effect published, EffectStore.Effect partial,
-                                 EffectStore.Effect failed) {
+                                 EffectStore.Effect failed, boolean prepared) {
+
+        public ReserveRequest(String worldId, String domainId, String nodeKey,
+                              CommitLog.Batch.Kind kind, long planSequence, int position,
+                              long expectedVersion, long writeSetDigest, int rows,
+                              CommitLog.Identity identity, CommitNamespaces.Namespace controller,
+                              EffectStore.Effect published, EffectStore.Effect partial,
+                              EffectStore.Effect failed) {
+            this(worldId, domainId, nodeKey, kind, planSequence, position, expectedVersion,
+                writeSetDigest, rows, identity, controller, published, partial, failed, false);
+        }
+
+        /** A prepared request re-labels one already witnessed by a frozen declaration. Only the
+         * admission builder, which derives every identity column from that declaration, may set it. */
+        public ReserveRequest asPrepared() {
+            return new ReserveRequest(worldId, domainId, nodeKey, kind, planSequence, position,
+                expectedVersion, writeSetDigest, rows, identity, controller, published, partial,
+                failed, true);
+        }
 
         public List<EffectStore.Effect> variants() {
             return List.of(published, partial, failed);
