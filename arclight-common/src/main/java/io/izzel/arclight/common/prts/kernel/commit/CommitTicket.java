@@ -9,11 +9,11 @@ import java.util.List;
  * carries no thread: the lifecycle handle is the owner, the lifetime and the reset generation.
  *
  * <p>Its room covers every terminal the line may report with every note its outcome column may
- * carry ({@link #NOTES}), and a record that grows past that bound faults. */
+ * carry ({@link #NOTES}), and a record that grows past that bound faults. A batch ticket holds one window's rows; the single-ticket shape is this same record with none. */
 public record CommitTicket(long ticketId, long logLifetime, CommitLog.Batch batch,
                            CommitLog.Identity identity, long planSequence, int position,
                            CommitLog.RingSlot ringSlot, EffectStore.CapacitySlot effectSlot,
-                           CommitNamespaces.Namespace controller) {
+                           CommitNamespaces.Namespace controller, List<Row> lines) {
 
     /** The notes the outcome column may carry beside the state of the terminal. */
     public static final List<String> NOTES = List.of("", "reset-during-publish", "plan-rebuilt",
@@ -26,10 +26,45 @@ public record CommitTicket(long ticketId, long logLifetime, CommitLog.Batch batc
                 + "lifecycle handle");
         }
         controller = withoutThread(controller);
+        lines = lines == null ? List.of() : List.copyOf(lines);
         identity = new CommitLog.Identity(identity.schemaVersion(), identity.instanceId(),
             identity.worldEpoch(), identity.chunkPos(), identity.targetStatus(),
             identity.authorizationGeneration(), identity.effectRef(), withoutThread(identity.producer()),
             withoutThread(identity.controller()));
+    }
+
+    /** The single-line shape: a ticket whose only row is the one its own columns describe. */
+    public CommitTicket(long ticketId, long logLifetime, CommitLog.Batch batch,
+                        CommitLog.Identity identity, long planSequence, int position,
+                        CommitLog.RingSlot ringSlot, EffectStore.CapacitySlot effectSlot,
+                        CommitNamespaces.Namespace controller) {
+        this(ticketId, logLifetime, batch, identity, planSequence, position, ringSlot, effectSlot,
+            controller, List.of());
+    }
+
+    /** One window ticket over consecutive seats of one pair and plan. The head columns describe the
+     * first row, so a reader of the single-line accessors still sees a real seat. */
+    public static CommitTicket batch(long ticketId, long logLifetime, List<Row> rows,
+                                     CommitNamespaces.Namespace controller) {
+        if (rows == null || rows.isEmpty()) {
+            throw new IllegalArgumentException("a batch ticket needs at least one row");
+        }
+        Row first = rows.get(0);
+        for (int index = 1; index < rows.size(); index++) {
+            Row row = rows.get(index);
+            if (row.position() != rows.get(index - 1).position() + 1
+                || row.planSequence() != first.planSequence()
+                || !row.batch().worldId().equals(first.batch().worldId())
+                || !row.batch().domainId().equals(first.batch().domainId())) {
+                // One pair and one plan over consecutive seats lets the log open the held floor in order.
+                throw new IllegalArgumentException("batch rows must hold consecutive seats of one pair");
+            }
+        }
+        CommitLog.Batch head = new CommitLog.Batch(first.batch().worldId(), first.batch().domainId(),
+            first.batch().nodeKey(), first.batch().kind(), first.batch().expectedVersion(),
+            first.batch().writeSetDigest(), rows.size());
+        return new CommitTicket(ticketId, logLifetime, head, first.identity(), first.planSequence(),
+            first.position(), first.ringSlot(), first.effectSlot(), controller, rows);
     }
 
     private static CommitNamespaces.Namespace withoutThread(CommitNamespaces.Namespace namespace) {
@@ -67,6 +102,30 @@ public record CommitTicket(long ticketId, long logLifetime, CommitLog.Batch batc
 
     public EffectStore.Effect effectOf(Outcome outcome) {
         return outcome.asEffect(effectRef());
+    }
+
+    /** One window row: its frozen seat, two slots, identity and three terminal payloads, each with
+     * the room it was reserved under so recording one never borrows another row's slot. */
+    public record Row(CommitLog.Batch batch, CommitLog.Identity identity, long planSequence,
+                      int position, CommitLog.RingSlot ringSlot,
+                      EffectStore.CapacitySlot effectSlot, EffectStore.Effect published,
+                      EffectStore.Effect partial, EffectStore.Effect failed) {
+
+        /** The terminal payload this row will record when the effect ends in that terminal. */
+        public EffectStore.Effect variantOf(Terminal terminal) {
+            return switch (terminal) {
+                case PUBLISHED -> published;
+                case PARTIAL -> partial;
+                case FAILED -> failed;
+            };
+        }
+
+        /** The single-line ticket this row becomes when the log records it. */
+        public CommitTicket asTicket(long ticketId, long logLifetime,
+                                     CommitNamespaces.Namespace controller) {
+            return new CommitTicket(ticketId, logLifetime, batch, identity, planSequence, position,
+                ringSlot, effectSlot, controller);
+        }
     }
 
     /** The three terminal records a reservation may end in. */

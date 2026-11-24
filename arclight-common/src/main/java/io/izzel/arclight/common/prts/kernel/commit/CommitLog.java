@@ -852,6 +852,31 @@ public final class CommitLog {
         return new Verdict(true, disposition, null, sequence, ticket.position());
     }
 
+    /** Records one window ticket in seat order, one line per row, each with its own seat, identity,
+     * slots and terminal; a failed row ends as its own dropped line and leaves its neighbours. */
+    public List<Verdict> recordBatch(CommitTicket ticket, List<CommitTicket.Outcome> outcomes) {
+        if (ticket == null || outcomes == null || outcomes.isEmpty()) {
+            return List.of(ticketRefusal(RejectCode.COUNTER_MISSING,
+                ticket == null ? -1 : ticket.position()));
+        }
+        if (outcomes.size() != (ticket.lines().isEmpty() ? 1 : ticket.lines().size())) {
+            return List.of(ticketRefusal(RejectCode.VERSION_MISMATCH, ticket.position()));
+        }
+        if (ticket.lines().isEmpty()) {
+            return List.of(recordTicket(ticket, outcomes.get(0)));
+        }
+        List<Verdict> verdicts = new ArrayList<>();
+        for (int index = 0; index < ticket.lines().size(); index++) {
+            // Batch rows use a disjoint id range: these transient handles only key the log's
+            // per-ticket ledgers while a batch is recorded, and must never collide with a real
+            // ticket id minted by the reservation holder.
+            verdicts.add(recordTicket(ticket.lines().get(index).asTicket(
+                -(ticket.ticketId() * 256L + index + 1L), ticket.logLifetime(), ticket.controller()),
+                outcomes.get(index)));
+        }
+        return List.copyOf(verdicts);
+    }
+
     /** Records the fault line of a ticket whose terminal record is not written: the frozen place, the
      * identity and the effect reference are kept, and the fault code is written with them. The room
      * the ticket holds is not released here; the holder gives it back after this line is stored. A
