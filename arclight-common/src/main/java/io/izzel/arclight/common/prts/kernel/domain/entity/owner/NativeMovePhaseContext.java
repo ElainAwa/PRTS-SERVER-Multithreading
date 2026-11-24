@@ -52,6 +52,11 @@ public final class NativeMovePhaseContext {
         return control;
     }
 
+    /** Whether this seat still carries the phase-A freeze; diagnostic peek, does not consume. */
+    public static boolean hasFrozenControl() {
+        return FROZEN.get() != null;
+    }
+
     /** Whether this thread is inside a split batch at all. */
     public static boolean bound() {
         return PHASE_A.get() != null;
