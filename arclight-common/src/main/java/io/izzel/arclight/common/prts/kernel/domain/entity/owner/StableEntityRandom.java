@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.domain.entity.owner;
 
+import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.ExperimentGate;
 import net.minecraft.util.RandomSource;
 
 import java.util.concurrent.atomic.AtomicLong;
@@ -13,7 +14,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class StableEntityRandom {
 
     private static final String PROPERTY = "arclight.prts.diag.stableEntityRandom";
-    private static final boolean ENABLED = Boolean.parseBoolean(System.getProperty(PROPERTY, ""));
+    private static final boolean ENABLED = ExperimentGate.parse(System.getProperty(PROPERTY, ""));
     private static final AtomicLong ORDINAL = new AtomicLong();
 
     private StableEntityRandom() {

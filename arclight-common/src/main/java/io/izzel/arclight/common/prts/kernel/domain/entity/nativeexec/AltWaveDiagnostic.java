@@ -9,7 +9,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class AltWaveDiagnostic {
 
     private static final boolean ENABLED =
-        Boolean.parseBoolean(System.getProperty("arclight.prts.diag.altWave", ""));
+        ExperimentGate.parse(System.getProperty("arclight.prts.diag.altWave", ""));
     private static final AtomicInteger LINES = new AtomicInteger();
     private static volatile Boolean testEnabled = null;
 

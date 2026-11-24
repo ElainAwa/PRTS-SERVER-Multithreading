@@ -3,6 +3,7 @@ package io.izzel.arclight.common.prts.kernel.domain.entity.owner;
 
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.AltPhaseStage;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.AltPhaseSubComputation;
+import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.ExperimentGate;
 import net.minecraft.world.entity.LivingEntity;
 
 /** Default-off host freeze for the three admitted self-row sub-computations. With the property
@@ -10,7 +11,7 @@ import net.minecraft.world.entity.LivingEntity;
 public final class AltPhaseProgram {
 
     private static final String PROPERTY = "arclight.prts.altPhase";
-    private static final boolean ENABLED = Boolean.parseBoolean(System.getProperty(PROPERTY, ""));
+    private static final boolean ENABLED = ExperimentGate.parse(System.getProperty(PROPERTY, ""));
 
     private AltPhaseProgram() {
     }
