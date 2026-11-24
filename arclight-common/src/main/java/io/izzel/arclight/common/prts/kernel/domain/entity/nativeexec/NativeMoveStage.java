@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec;
 
+import io.izzel.arclight.common.prts.kernel.domain.entity.owner.TargetEntityDiagnostic;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.Vec3;
 
@@ -78,6 +79,10 @@ public final class NativeMoveStage {
                 CURRENT.remove();
                 CURRENT_READ.remove();
                 CONSUMED.incrementAndGet();
+                if (entity != null) {
+                    TargetEntityDiagnostic.noteAnswer("staged", entity.tickCount,
+                        entity.getUUID(), live);
+                }
                 return staged.clipped();
             }
         }
@@ -86,11 +91,19 @@ public final class NativeMoveStage {
             CURRENT.remove();
             CURRENT_READ.remove();
             FROZEN_ANSWERED.incrementAndGet();
+            if (entity != null) {
+                TargetEntityDiagnostic.noteAnswer("frozenRecompute", entity.tickCount,
+                    entity.getUUID(), live);
+            }
             dumpIfEnabled();
             return NativeMoveCompute.computeWith(entity, read, live).clipped();
         }
         if (read != null) {
             COVERAGE_REFUSED.incrementAndGet();
+            if (entity != null) {
+                TargetEntityDiagnostic.noteAnswer("coverageC", entity.tickCount,
+                    entity.getUUID(), live);
+            }
             dumpIfEnabled();
         }
         return null;

@@ -234,6 +234,7 @@ final class NativeEntityPump {
                 region, collisions, villager.maxUpStep(), villager.onGround());
             frozen.put(key, read);
             NativeMoveStage.stageRead(key, read);
+            TargetEntityDiagnostic.noteRead(tick, villager.getUUID(), key, read);
             wave.issue(key, admissions.get(row).entry().seat().position(),
                 identity(row), generation(row), snapshot(row, identity(row), generation(row)),
                 () -> NativeMoveCompute.compute(villager, read));
