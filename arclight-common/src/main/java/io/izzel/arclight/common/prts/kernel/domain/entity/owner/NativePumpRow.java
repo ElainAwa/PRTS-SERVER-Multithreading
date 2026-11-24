@@ -141,7 +141,7 @@ final class NativePumpRow implements NativeWritePump.Row {
             }
             return executed;
         } finally {
-            NativeMovePhaseContext.end();
+            NativeMovePhaseContext.endPhaseA();
             EntityUpdateProgramContext.end();
             OwnerRandomContext.exit();
             EntityTickOwnership.endOwnerBodyScope(scope);

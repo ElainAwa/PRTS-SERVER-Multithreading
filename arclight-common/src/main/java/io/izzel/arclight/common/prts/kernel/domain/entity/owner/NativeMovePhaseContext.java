@@ -28,7 +28,14 @@ public final class NativeMovePhaseContext {
         PHASE_A.set(Boolean.FALSE);
     }
 
-    /** Removes the phase binding; a missing binding is a harmless no-op. */
+    /** Ends only the phase-A marker at the end of the prefix pass. The frozen control inputs must
+     * survive until the phase-B entry restores them into the live entity; clearing them here would
+     * make the whole checkpoint a no-op. */
+    public static void endPhaseA() {
+        PHASE_A.remove();
+    }
+
+    /** Removes both bindings after the phase-B seat has consumed the freeze. */
     public static void end() {
         PHASE_A.remove();
         FROZEN.remove();

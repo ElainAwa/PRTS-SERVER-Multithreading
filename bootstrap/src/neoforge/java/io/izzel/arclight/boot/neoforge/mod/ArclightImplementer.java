@@ -64,6 +64,9 @@ public class ArclightImplementer implements ILaunchPluginService {
             new io.izzel.arclight.boot.asm.PrtsZzaWriteRecorder());
         // Diagnostic-only phase-B segment trace; silent unless the target UUID property is set.
         this.implementers.put("prtsPhaseBTrace", new io.izzel.arclight.boot.asm.PrtsPhaseBTrace());
+        // Experiment-only stable entity seed; the vanilla factory stays when the property is unset.
+        this.implementers.put("prtsStableEntityRandom",
+            new io.izzel.arclight.boot.asm.PrtsStableEntityRandom());
         this.implementers.put("prtsMobTickTail", new io.izzel.arclight.boot.asm.PrtsMobTickTail());
         this.implementers.put("prtsMobAiStepPrefix",
             new io.izzel.arclight.boot.asm.PrtsMobServerAiStepPrefix());
