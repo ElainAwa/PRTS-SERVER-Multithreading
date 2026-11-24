@@ -13,6 +13,8 @@ import io.izzel.arclight.common.prts.kernel.observe.UnloadedReadReadings;
 import io.izzel.arclight.common.prts.support.PrtsChunkDemand;
 import net.minecraft.world.level.ChunkPos;
 import io.izzel.arclight.common.prts.support.PrtsPipelineBatches;
+import net.minecraft.server.level.ChunkHolder;
+import net.minecraft.server.level.ChunkMap;
 import net.minecraft.server.level.ChunkResult;
 import net.minecraft.server.level.ServerChunkCache;
 import net.minecraft.server.level.ServerLevel;
@@ -43,6 +45,10 @@ public abstract class PrtsChunkDemandMixin {
     @Final
     private Thread mainThread;
 
+    @Shadow
+    @Final
+    private ChunkMap chunkMap;
+
     @org.spongepowered.asm.mixin.Unique
     private boolean prts$absentAtCall;
 
@@ -65,12 +71,14 @@ public abstract class PrtsChunkDemandMixin {
         if (Thread.currentThread() != mainThread
             && io.izzel.arclight.common.prts.kernel.auth.OwnerUnitPermit.chunkDemand()) {
             ServerChunkCache cache = (ServerChunkCache) (Object) this;
-            ChunkAccess loaded = cache.getChunkNow(x, z);
+            long chunkPos = ChunkPos.asLong(x, z);
+            ChunkHolder holder = ((PrtsChunkMapAccessor) (Object) chunkMap)
+                .prts$visibleChunk(chunkPos);
+            ChunkAccess loaded = holder == null ? null : holder.getChunkIfPresent(ChunkStatus.FULL);
             if (loaded != null) {
-                // The chunk is already materialised: a worker can read it directly instead of
-                // parking the host for a demand whose answer is already here. The persisted status
-                // check used to reject the same chunk the cache would have handed back, which kept
-                // the whole read path on the host for no reason.
+                // getChunkNow refuses every non-main thread, so the direct path has to read the
+                // visible holder itself. The chunk is already materialised at FULL: hand it to the
+                // worker instead of parking the host for a demand whose answer is already here.
                 cir.setReturnValue(loaded);
                 return;
             }

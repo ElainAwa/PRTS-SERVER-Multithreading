@@ -82,6 +82,7 @@
     "observation.PrtsPacketEncodeCostMixin",
     "observation.PrtsPacketDecodeCostMixin",
     "pipeline.PrtsChunkDemandMixin",
+    "pipeline.PrtsChunkMapAccessor",
     "pipeline.PrtsChunkMaterializationMixin",
     "pipeline.PrtsChunkPipelineProgressMixin",
     "pipeline.PrtsChunkSendReadyMixin",
