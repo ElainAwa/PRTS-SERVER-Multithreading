@@ -92,7 +92,6 @@ final class NativePumpRow implements NativeWritePump.Row {
             || ticket.identity().effectRef() != admission.published().effectRef()) {
             throw new IllegalStateException("a pumped ticket does not match its declaration");
         }
-        OwnerBodyMarker.enter();
         long scope = EntityTickOwnership.beginOwnerBodyScope(row.entity());
         OwnerRandomContext.enter(row.level(), row.villager(), "entity");
         EntityUpdateProgramContext.begin(
@@ -145,7 +144,6 @@ final class NativePumpRow implements NativeWritePump.Row {
             EntityUpdateProgramContext.end();
             OwnerRandomContext.exit();
             EntityTickOwnership.endOwnerBodyScope(scope);
-            OwnerBodyMarker.exit();
         }
         return executed;
     }

@@ -155,12 +155,7 @@ final class NativeEntityPump {
         }
         long comparedBefore = shadow ? NativePathStage.comparedOrdinary() : 0L;
         long mismatchedBefore = shadow ? NativePathStage.mismatchedOrdinary() : 0L;
-        NativeWritePump.Result result;
-        if (mode == NativeEntityPhase.Mode.PARALLEL) {
-            result = NativeWritePump.runWindowed(pumpRows, dispatch(runtime), 64);
-        } else {
-            result = NativeWritePump.run(pumpRows);
-        }
+        NativeWritePump.Result result = NativeWritePump.run(pumpRows);
         int comparedOrdinary = shadow
             ? (int) (NativePathStage.comparedOrdinary() - comparedBefore) : 0;
         int mismatchOrdinary = shadow
