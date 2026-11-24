@@ -20,8 +20,19 @@ public final class NativeMoveStage {
     private static final ThreadLocal<NativeMoveRead> CURRENT_READ = new ThreadLocal<>();
     private static final AtomicLong STAGED = new AtomicLong();
     private static final AtomicLong CONSUMED = new AtomicLong();
+    private static final AtomicLong FROZEN_ANSWERED = new AtomicLong();
+    private static final AtomicLong COVERAGE_REFUSED = new AtomicLong();
+    private static final int DUMP_LIMIT = dumpLimit();
 
     private NativeMoveStage() {
+    }
+
+    private static int dumpLimit() {
+        try {
+            return Math.max(0, Integer.parseInt(System.getProperty("arclight.prts.diag.moveDump", "").trim()));
+        } catch (RuntimeException invalid) {
+            return 0;
+        }
     }
 
     /** Publishes one worker result under its row key. */
@@ -74,9 +85,34 @@ public final class NativeMoveStage {
         if (read != null && read.covers(live)) {
             CURRENT.remove();
             CURRENT_READ.remove();
+            FROZEN_ANSWERED.incrementAndGet();
+            dumpIfEnabled();
             return NativeMoveCompute.computeWith(entity, read, live).clipped();
         }
+        if (read != null) {
+            COVERAGE_REFUSED.incrementAndGet();
+            dumpIfEnabled();
+        }
         return null;
+    }
+
+    /** Diagnostic-only trace of the two previously unmeasured paths; silent unless the JVM
+     * property is set, and not published to status or the native evidence line. */
+    public static void dumpIfEnabled() {
+        if (DUMP_LIMIT > 0) {
+            System.out.println("[PRTS] move.dump|frozenAnswered=" + FROZEN_ANSWERED.get()
+                + "|coverageRefused=" + COVERAGE_REFUSED.get());
+        }
+    }
+
+    /** Test-only observation of frozen answers. */
+    public static long frozenAnsweredForTest() {
+        return FROZEN_ANSWERED.get();
+    }
+
+    /** Test-only observation of coverage refusals. */
+    public static long coverageRefusedForTest() {
+        return COVERAGE_REFUSED.get();
     }
 
     /** Whether this seat has a bound staged answer or frozen read. */
@@ -106,5 +142,7 @@ public final class NativeMoveStage {
     public static void resetCounts() {
         STAGED.set(0);
         CONSUMED.set(0);
+        FROZEN_ANSWERED.set(0);
+        COVERAGE_REFUSED.set(0);
     }
 }
