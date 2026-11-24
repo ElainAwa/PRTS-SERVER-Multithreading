@@ -818,8 +818,14 @@ public final class ServerThreadOwnerPhase {
         } finally {
             EntityUpdateProgramContext.end();
             record.stage = OwnerControlledExecution.Stage.BODY_RETURNED;
-            OwnerHostEventDispatch.postOnHost(
-                () -> ServerThreadOwnerPhase.completeLateControlled(record));
+            if (!record.ownerWaiting) {
+                // The batch already left this body: only then does the terminal/fault have to be
+                // transferred through the host. While the owner still waits, its own completion
+                // writes the terminal in seat order, so a per-body host callback would only make
+                // every worker park on the host for nothing.
+                OwnerHostEventDispatch.postOnHost(
+                    () -> ServerThreadOwnerPhase.completeLateControlled(record));
+            }
         }
     }
 
