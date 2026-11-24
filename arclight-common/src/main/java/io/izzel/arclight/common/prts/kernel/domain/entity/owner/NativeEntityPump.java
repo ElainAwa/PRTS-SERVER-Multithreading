@@ -306,7 +306,7 @@ final class NativeEntityPump {
                     NativeRowProgram<Object> p = altWave.program(key + kind[1]);
                     if (p != null && p.state() == NativeRowProgram.State.READY) {
                         AltPhaseStage.stage(
-                            key, kind[0], p.result());
+                            key, kind[0], p.result(), tick);
                     }
                 }
             }

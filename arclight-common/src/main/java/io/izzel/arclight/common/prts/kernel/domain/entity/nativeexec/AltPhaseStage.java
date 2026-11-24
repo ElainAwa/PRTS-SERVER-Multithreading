@@ -2,22 +2,67 @@
 package io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec;
 
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** Staged intermediate results of E3/E7/E9 for one owner row. A result is consumed exactly once by
+/** Staged intermediate results of the admitted self-row calculations for one owner row.
+ * A result is consumed exactly once by
  * its original write-back point; a second take returns null so no value can be applied twice. */
 public final class AltPhaseStage {
 
     private static final Map<String, Object> READY = new ConcurrentHashMap<>();
     private static final ThreadLocal<Map<String, Object>> CURRENT = new ThreadLocal<>();
+    private static final String TARGET = System.getProperty("arclight.prts.diag.altOutRow", "").trim();
+    private static final int LIMIT = limit(System.getProperty("arclight.prts.diag.altOutLimit", ""));
+    private static final AtomicInteger LINES = new AtomicInteger();
+    private static volatile String testTarget = null;
+    private static volatile int testLimit = -1;
 
     private AltPhaseStage() {
     }
 
-    /** Publishes one worker result under rowKey and kind. */
-    public static void stage(String rowKey, String kind, Object result) {
-        if (result != null) READY.put(rowKey + "|" + kind, result);
+    private static int limit(String raw) {
+        try { return Math.max(0, Integer.parseInt(raw.trim())); }
+        catch (RuntimeException invalid) { return 0; }
     }
+
+    /** Publishes one worker result under rowKey and kind. The optional tick is diagnostic only. */
+    public static void stage(String rowKey, String kind, Object result) {
+        stage(rowKey, kind, result, -1L);
+    }
+
+    /** Publishes one worker result and, when the experiment property selects this row, prints the
+     * actual staged value. The text is derived from the result already published, never recomputed. */
+    public static void stage(String rowKey, String kind, Object result, long tick) {
+        if (result == null) return;
+        READY.put(rowKey + "|" + kind, result);
+        String target = testTarget != null ? testTarget : TARGET;
+        int limit = testLimit >= 0 ? testLimit : LIMIT;
+        if (target.isEmpty() || !rowKey.contains(target) || limit <= 0 || LINES.get() >= limit) return;
+        LINES.incrementAndGet();
+        System.out.println("[PRTS] altout|tick=" + tick + "|rowKey=" + rowKey
+            + "|kind=" + kind + "|value=" + format(result));
+    }
+
+    private static String format(Object result) {
+        if (result instanceof double[] values) {
+            StringBuilder out = new StringBuilder();
+            for (double value : values) out.append(out.length() == 0 ? "" : ",").append(value);
+            return out.toString();
+        }
+        if (result instanceof float[] values) {
+            StringBuilder out = new StringBuilder();
+            for (float value : values) out.append(out.length() == 0 ? "" : ",").append(value);
+            return out.toString();
+        }
+        return String.valueOf(result);
+    }
+
+    /** Test-only overrides and reset. */
+    public static void setTargetForTest(String value) { testTarget = value; }
+    public static void setLimitForTest(int value) { testLimit = value; }
+    public static int linesForTest() { return LINES.get(); }
+    public static void resetForTest() { testTarget = null; testLimit = -1; LINES.set(0); }
 
     /** Moves one row's staged results onto the Server-thread seat. */
     public static void bind(String rowKey) {
