@@ -16,7 +16,7 @@ public final class OwnerScale {
     public static final int ROW_MAX = 8192;
 
     /** Bound of the worker pool on this path. */
-    public static final int WORKER_MAX = 32;
+    public static final int WORKER_MAX = 16;
 
     /** Bound of one body window: more bodies than workers would only wait in the pool queue. */
     public static final int WINDOW_MAX = 128;
