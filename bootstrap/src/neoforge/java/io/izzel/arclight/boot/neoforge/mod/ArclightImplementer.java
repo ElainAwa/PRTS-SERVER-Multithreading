@@ -62,6 +62,8 @@ public class ArclightImplementer implements ILaunchPluginService {
         // Diagnostic-only zza PUTFIELD writer trace; silent unless the target UUID property is set.
         this.implementers.put("prtsZzaWriteRecorder",
             new io.izzel.arclight.boot.asm.PrtsZzaWriteRecorder());
+        // Diagnostic-only phase-B segment trace; silent unless the target UUID property is set.
+        this.implementers.put("prtsPhaseBTrace", new io.izzel.arclight.boot.asm.PrtsPhaseBTrace());
         this.implementers.put("prtsMobTickTail", new io.izzel.arclight.boot.asm.PrtsMobTickTail());
         this.implementers.put("prtsMobAiStepPrefix",
             new io.izzel.arclight.boot.asm.PrtsMobServerAiStepPrefix());
