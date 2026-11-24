@@ -19,6 +19,10 @@ public final class PrtsZzaWriteRecorder implements Implementer {
     private static final String HELPER =
         "io/izzel/arclight/common/prts/kernel/domain/entity/owner/ZzaWriteDiagnostic";
 
+    /** The descriptor actually emitted for the helper call; exposed for the build-time check. */
+    public static final String NOTE_DESC =
+        "(Lnet/minecraft/world/entity/Entity;FLjava/lang/String;)V";
+
     @Override
     public boolean processClass(ClassNode node) {
         if (!OWNER.equals(node.name)) return false;
@@ -34,7 +38,7 @@ public final class PrtsZzaWriteRecorder implements Implementer {
                 probe.add(new InsnNode(Opcodes.DUP2));
                 probe.add(new LdcInsnNode(method.name));
                 probe.add(new MethodInsnNode(Opcodes.INVOKESTATIC, HELPER, "note",
-                    "(L" + OWNER + ";FLjava/lang/String;)V", false));
+                    NOTE_DESC, false));
                 method.instructions.insertBefore(insn, probe);
                 // DUP2 needs two extra stack slots while the helper is called.
                 method.maxStack = Math.max(method.maxStack, 6);
