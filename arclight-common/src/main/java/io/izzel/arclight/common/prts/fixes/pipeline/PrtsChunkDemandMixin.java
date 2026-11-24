@@ -66,9 +66,11 @@ public abstract class PrtsChunkDemandMixin {
             && io.izzel.arclight.common.prts.kernel.auth.OwnerUnitPermit.chunkDemand()) {
             ServerChunkCache cache = (ServerChunkCache) (Object) this;
             ChunkAccess loaded = cache.getChunkNow(x, z);
-            if (loaded != null && loaded.getPersistedStatus().isOrAfter(status)) {
-                // The chunk is already materialised and old enough for this read: a worker can read
-                // it directly instead of parking the host for a demand whose answer is already here.
+            if (loaded != null) {
+                // The chunk is already materialised: a worker can read it directly instead of
+                // parking the host for a demand whose answer is already here. The persisted status
+                // check used to reject the same chunk the cache would have handed back, which kept
+                // the whole read path on the host for no reason.
                 cir.setReturnValue(loaded);
                 return;
             }
