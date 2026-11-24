@@ -72,7 +72,11 @@ final class NativeEntityPump {
                 attempt = null;
             }
             boolean ordinary = false;
-            if (attempt == null && shadow) {
+            if (attempt == null && (shadow || mode == NativeEntityPhase.Mode.PARALLEL)) {
+                // A normal start prediction is a real read demand: delayed recomputation alone is
+                // almost never flagged in a live world, which left the wave with planned=0. In the
+                // parallel mode the staged answer is consumed by the reuse mixin, so predicting it
+                // here both drives the wave and removes the inline search; shadow still compares.
                 try {
                     attempt = NativePathNode.planStartSearch(row.level(), row.villager());
                 } catch (RuntimeException absent) {
