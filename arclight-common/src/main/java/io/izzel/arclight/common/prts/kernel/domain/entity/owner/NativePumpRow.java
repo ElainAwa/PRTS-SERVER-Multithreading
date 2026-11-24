@@ -52,6 +52,11 @@ final class NativePumpRow implements NativeWritePump.Row {
             && state.prts$hasDelayedRecomputation();
     }
 
+    private String rowKey() {
+        return row.level().dimension().location() + "|" + admission.entry().nodeKey() + "|"
+            + admission.entry().seat().position();
+    }
+
     @Override
     public int seat() {
         return admission.entry().seat().position();
@@ -103,9 +108,20 @@ final class NativePumpRow implements NativeWritePump.Row {
             if (bindStage) {
                 NativePathStage.bind(request, stagedPath, ordinary);
             }
+            boolean bindNeighbours = false;
+            if (io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeNeighborStage
+                .staged(rowKey()) != null) {
+                io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeNeighborStage
+                    .bind(rowKey());
+                bindNeighbours = true;
+            }
             try {
                 executed = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
             } finally {
+                if (bindNeighbours) {
+                    io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeNeighborStage
+                        .clear(rowKey());
+                }
                 if (bindStage) {
                     NativePathStage.unbind();
                 }

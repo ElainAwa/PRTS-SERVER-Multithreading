@@ -78,6 +78,7 @@
     "nativepath.PrtsNativePathFinderStateMixin",
     "nativepath.PrtsNativePathRegionStateMixin",
     "nativepath.PrtsNativePathReuseMixin",
+    "nativepath.PrtsNearestLivingReuseMixin",
     "observation.PrtsGoalSelectorDecisionMixin",
     "observation.PrtsPacketEncodeCostMixin",
     "observation.PrtsPacketDecodeCostMixin",

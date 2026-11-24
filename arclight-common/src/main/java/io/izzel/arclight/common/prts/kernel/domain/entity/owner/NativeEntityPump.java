@@ -5,6 +5,7 @@ import io.izzel.arclight.common.prts.kernel.SharedRuntime;
 import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityRowIdentity;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeEntityPhase;
+import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeNeighborStage;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathNode;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathStage;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeReadWave;
@@ -35,7 +36,8 @@ final class NativeEntityPump {
     private static final Set<ReadPermit.FieldGroup> READ_GROUPS = Set.of(
         ReadPermit.FieldGroup.IDENTITY, ReadPermit.FieldGroup.POSITION,
         ReadPermit.FieldGroup.ROTATION, ReadPermit.FieldGroup.MOTION,
-        ReadPermit.FieldGroup.NAVIGATION);
+        ReadPermit.FieldGroup.NAVIGATION, ReadPermit.FieldGroup.SENSOR,
+        ReadPermit.FieldGroup.MOB, ReadPermit.FieldGroup.BRAIN);
     private static final long WAVE_DEADLINE_NANOS = TimeUnit.SECONDS.toNanos(5L);
     /** Wave identity: only the server thread runs a batch, so the counter has one writer. */
     private static final AtomicLong WAVE_IDS = new AtomicLong();
@@ -68,15 +70,10 @@ final class NativeEntityPump {
             try {
                 attempt = NativePathNode.plan(row.level(), row.villager());
             } catch (RuntimeException absent) {
-                // A row whose plan cannot be frozen keeps its whole body and counts as plan-refused.
                 attempt = null;
             }
             boolean ordinary = false;
             if (attempt == null && (shadow || mode == NativeEntityPhase.Mode.PARALLEL)) {
-                // A normal start prediction is a real read demand: delayed recomputation alone is
-                // almost never flagged in a live world, which left the wave with planned=0. In the
-                // parallel mode the staged answer is consumed by the reuse mixin, so predicting it
-                // here both drives the wave and removes the inline search; shadow still compares.
                 try {
                     attempt = NativePathNode.planStartSearch(row.level(), row.villager());
                 } catch (RuntimeException absent) {
@@ -85,19 +82,41 @@ final class NativeEntityPump {
                 ordinary = attempt != null;
             }
             NativePathNode.Plan plan = attempt;
-            if (plan == null) {
+            OwnerControlledWrite.Admission admission = admissions.get(row);
+            String key = rowKey(row, admission);
+            // The host reads the neighbour set before the wave: a worker may not touch the live
+            // entity directory. Only rows with a real read demand are staged; an empty set leaves
+            // the sensor's vanilla body untouched.
+            List<net.minecraft.world.entity.LivingEntity> rawNeighbours = null;
+            if (mode == NativeEntityPhase.Mode.PARALLEL) {
+                net.minecraft.world.phys.AABB bounds = row.villager().getBoundingBox()
+                    .inflate(16.0D, 16.0D, 16.0D);
+                rawNeighbours = row.level().getEntitiesOfClass(
+                    net.minecraft.world.entity.LivingEntity.class, bounds,
+                    candidate -> candidate != row.villager() && candidate.isAlive());
+            }
+            boolean hasNeighbours = rawNeighbours != null && !rawNeighbours.isEmpty();
+            if (plan == null && !hasNeighbours) {
                 continue;
             }
-            OwnerControlledWrite.Admission admission = admissions.get(row);
+            final NativePathNode.Plan frozenPlan = plan;
+            final List<net.minecraft.world.entity.LivingEntity> frozenNeighbours = rawNeighbours;
             plans.put(row, plan);
             if (ordinary) {
                 ordinaryRows.add(row);
                 plannedOrdinary++;
             }
             planned++;
-            wave.issue(rowKey(row, admission), admission.entry().seat().position(),
+            wave.issue(key, admission.entry().seat().position(),
                 identity(row), generation(row), snapshot(row, identity(row), generation(row)),
-                () -> NativePathNode.search(plan));
+                () -> {
+                    Path path = frozenPlan == null ? null : NativePathNode.search(frozenPlan);
+                    if (frozenNeighbours != null) {
+                        NativeNeighborStage.stage(key,
+                            NativeNeighborStage.order(frozenNeighbours, row.villager()));
+                    }
+                    return path;
+                });
         }
         long planNanos = System.nanoTime() - readStarted;
         wave.run();
