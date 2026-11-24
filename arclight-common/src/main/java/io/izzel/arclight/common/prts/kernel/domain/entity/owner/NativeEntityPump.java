@@ -94,20 +94,12 @@ final class NativeEntityPump {
             String key = rowKey(row, admission);
             // Only stage a neighbour scan when the sensor will actually tick this turn: an idle
             // sensor would pay the scan with no consumer. The host freezes the set; a worker sorts it.
-            List<net.minecraft.world.entity.LivingEntity> rawNeighbours = null;
-            if (mode == NativeEntityPhase.Mode.PARALLEL && neighbourSensorDue(row)) {
-                net.minecraft.world.phys.AABB bounds = row.villager().getBoundingBox()
-                    .inflate(16.0D, 16.0D, 16.0D);
-                rawNeighbours = row.level().getEntitiesOfClass(
-                    net.minecraft.world.entity.LivingEntity.class, bounds,
-                    candidate -> candidate != row.villager() && candidate.isAlive());
-            }
-            boolean hasNeighbours = rawNeighbours != null && !rawNeighbours.isEmpty();
+            boolean neighbourDue = mode == NativeEntityPhase.Mode.PARALLEL && neighbourSensorDue(row);
+            boolean hasNeighbours = neighbourDue;
             if (plan == null && !hasNeighbours) {
                 continue;
             }
             final NativePathNode.Plan frozenPlan = plan;
-            final List<net.minecraft.world.entity.LivingEntity> frozenNeighbours = rawNeighbours;
             plans.put(row, plan);
             if (ordinary) {
                 ordinaryRows.add(row);
@@ -118,9 +110,15 @@ final class NativeEntityPump {
                 identity(row), generation(row), snapshot(row, identity(row), generation(row)),
                 () -> {
                     Path path = frozenPlan == null ? null : NativePathNode.search(frozenPlan);
-                    if (frozenNeighbours != null) {
+                    if (neighbourDue) {
+                        net.minecraft.world.phys.AABB bounds = row.villager().getBoundingBox()
+                            .inflate(16.0D, 16.0D, 16.0D);
+                        java.util.List<net.minecraft.world.entity.LivingEntity> found =
+                            new java.util.ArrayList<>(row.level().getEntitiesOfClass(
+                                net.minecraft.world.entity.LivingEntity.class, bounds,
+                                candidate -> candidate != row.villager() && candidate.isAlive()));
                         java.util.List<net.minecraft.world.entity.LivingEntity> sorted =
-                            NativeNeighborStage.order(frozenNeighbours, row.villager());
+                            NativeNeighborStage.order(found, row.villager());
                         NativeNeighborStage.stage(key, sorted);
                         // The villager's look-and-interact goal only targets nearby players within
                         // four blocks; prefilter that predicate here so the seat pump runs the
