@@ -8,6 +8,12 @@ package io.izzel.arclight.common.prts.kernel.domain.entity.owner;
 public final class NativeMovePhaseContext {
 
     private static final ThreadLocal<Boolean> PHASE_A = new ThreadLocal<>();
+    private static final ThreadLocal<Control> FROZEN = new ThreadLocal<>();
+
+    /** The control inputs frozen at the end of phase A for one owner row. The record is held only
+     * by the Server thread that runs the seat pump; the read-wave worker never observes it. */
+    public record Control(float xxa, float zza, boolean jumping) {
+    }
 
     private NativeMovePhaseContext() {
     }
@@ -25,11 +31,25 @@ public final class NativeMovePhaseContext {
     /** Removes the phase binding; a missing binding is a harmless no-op. */
     public static void end() {
         PHASE_A.remove();
+        FROZEN.remove();
     }
 
     /** Whether the current thread is running a phase-A pass; unbound means no split batch. */
     public static boolean inPhaseA() {
         return Boolean.TRUE.equals(PHASE_A.get());
+    }
+
+    /** Freezes one row's phase-A-end control inputs on this Server thread only. */
+    public static void freezeControl(float xxa, float zza, boolean jumping) {
+        FROZEN.set(new Control(xxa, zza, jumping));
+    }
+
+    /** Returns and clears the frozen control inputs at the phase-B entry; null means this row was
+     * not part of a frozen batch and must keep the host path unchanged. */
+    public static Control restoreControl() {
+        Control control = FROZEN.get();
+        FROZEN.remove();
+        return control;
     }
 
     /** Whether this thread is inside a split batch at all. */

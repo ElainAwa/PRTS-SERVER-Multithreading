@@ -82,6 +82,17 @@ public interface PrtsLivingEntityTickStateMixin {
     @Accessor("jumping")
     boolean prts$jumping();
 
+    // Write-back for the approved stable-read checkpoint on control inputs. The phase context
+    // restores these only on the Server thread, before a frozen owner row enters phase B.
+    @Accessor("xxa")
+    void prts$setXxa(float value);
+
+    @Accessor("zza")
+    void prts$setZza(float value);
+
+    @Accessor("jumping")
+    void prts$setJumping(boolean value);
+
     @Accessor("lerpSteps")
     int prts$lerpSteps();
 

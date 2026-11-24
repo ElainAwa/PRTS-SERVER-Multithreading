@@ -127,6 +127,13 @@ final class NativePumpRow implements NativeWritePump.Row {
             }
             try {
                 executed = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
+            // Approved stable-read checkpoint: capture the live control inputs at phase-A end on
+            // this Server thread only; host rows have no phase context and take no action here.
+            if (NativeMovePhaseContext.bound()
+                && row.villager() instanceof PrtsLivingEntityTickStateMixin state) {
+                NativeMovePhaseContext.freezeControl(
+                    state.prts$xxa(), state.prts$zza(), state.prts$jumping());
+            }
             } finally {
                 if (boundGoals) NativeGoalStage.take();
                 if (boundNeighbours) NativeNeighborStage.take();
@@ -175,6 +182,15 @@ final class NativePumpRow implements NativeWritePump.Row {
                 NativeMoveStage.bind(key);
             }
             try {
+                NativeMovePhaseContext.Control control = NativeMovePhaseContext.restoreControl();
+                if (control != null
+                    && stages instanceof PrtsLivingEntityTickStateMixin state) {
+                    // Restore the frozen inputs into the live entity before entering phase B, so both
+                    // serial and parallel arms enter travel with the same control checkpoint.
+                    state.prts$setXxa(control.xxa());
+                    state.prts$setZza(control.zza());
+                    state.prts$setJumping(control.jumping());
+                }
                 if (stages instanceof LivingEntityAiStepStages split) {
                     split.prts$aiStepPhaseB();
                     split.prts$tickTail();
