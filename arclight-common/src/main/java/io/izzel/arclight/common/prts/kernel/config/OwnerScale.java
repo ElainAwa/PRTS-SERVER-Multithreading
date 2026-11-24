@@ -19,7 +19,7 @@ public final class OwnerScale {
     public static final int WORKER_MAX = 16;
 
     /** Bound of one body window: more bodies than workers would only wait in the pool queue. */
-    public static final int WINDOW_MAX = WORKER_MAX;
+    public static final int WINDOW_MAX = 128;
 
     private static volatile long armedSeats;
     private static volatile long countersTick = Long.MIN_VALUE;
@@ -78,8 +78,11 @@ public final class OwnerScale {
 
     /** How many rows one body window may keep in flight: the pool's own width and room. */
     public static int window(int pooled, int queueCap) {
-        return Math.max(1, Math.min(Math.min(Math.max(1, pooled), Math.max(1, queueCap)),
-            WINDOW_MAX));
+        // The in-flight window may exceed the worker count: a body that waits on a host-served read
+        // must not occupy the only slot that could start the next body, so the window keeps enough
+        // bodies in flight to cover that latency while the pool stays at its real size.
+        int base = Math.max(1, Math.max(pooled, 64));
+        return Math.max(1, Math.min(Math.min(base, Math.max(1, queueCap)), WINDOW_MAX));
     }
 
     /** Starts the per-tick evidence of one owner tick; a different tick drops the previous counts. */
