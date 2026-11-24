@@ -2,6 +2,7 @@
 package io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec;
 
 import java.util.ArrayList;
+import java.util.concurrent.CompletableFuture;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
@@ -60,6 +61,47 @@ public final class NativeWritePump {
         return new Result(faulted, pumped, refused, System.nanoTime() - started);
     }
 
+    /** A windowed pump: terminals follow seat order while the bodies run on the shared pool. The
+     * begin of one row may overlap an earlier body and a later terminal still waits for every
+     * earlier one, which is the same contract the entity owner window already proves. */
+    public static Result runWindowed(List<? extends Row> rows, NativeReadWave.Dispatch dispatch, int window) {
+        List<Row> ordered = seatOrder(rows);
+        long started = System.nanoTime();
+        int pumped = 0;
+        int refused = 0;
+        boolean faulted = false;
+        int begun = 0;
+        int finished = 0;
+        java.util.ArrayDeque<WindowSlot> inFlight = new java.util.ArrayDeque<>();
+        while (finished < ordered.size()) {
+            while (begun < ordered.size() && inFlight.size() < window) {
+                Row row = ordered.get(begun++);
+                if (!row.begin()) {
+                    refused++;
+                    faulted = true;
+                    continue;
+                }
+                CompletableFuture<Void> future = dispatch == null ? null
+                    : dispatch.submit(row::apply);
+                inFlight.addLast(new WindowSlot(row, future));
+            }
+            WindowSlot head = inFlight.peekFirst();
+            if (head == null) continue;
+            if (head.future() != null) {
+                try { head.future().join(); } catch (Exception e) { faulted = true; }
+            } else {
+                head.row().apply();
+            }
+            inFlight.removeFirst();
+            head.row().complete();
+            pumped++;
+            finished++;
+        }
+        return new Result(faulted, pumped, refused, System.nanoTime() - started);
+    }
+
+    private record WindowSlot(Row row, CompletableFuture<Void> future) {
+    }
     /** The pump order: ascending seat, one row per seat; two rows on one seat is no order at all. */
     public static List<Row> seatOrder(List<? extends Row> rows) {
         if (rows == null || rows.isEmpty()) {
