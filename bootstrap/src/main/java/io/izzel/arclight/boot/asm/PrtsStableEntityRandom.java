@@ -27,6 +27,10 @@ public final class PrtsStableEntityRandom implements Implementer {
                     && "net/minecraft/util/RandomSource".equals(call.owner)
                     && "create".equals(call.name) && FACTORY_DESC.equals(call.desc)) {
                     call.owner = HELPER;
+                    // The vanilla factory is an interface static call (InterfaceMethodref). Once the
+                    // owner is a class, the constant-pool tag must become Methodref: clear itf or the
+                    // JVM rejects the call site with IncompatibleClassChangeError at construction.
+                    call.itf = false;
                     changed = true;
                 }
             }
