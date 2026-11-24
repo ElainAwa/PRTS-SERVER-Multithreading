@@ -68,12 +68,14 @@ public final class TargetEntityDiagnostic {
     /** The phase-boundary state: own motion and position, ground state, brain activity and goal
      * count. The caller supplies the summary through existing public accessors. */
     public static void notePhase(String phase, long tick, UUID uuid, Vec3 motion, double x,
-                                 double y, double z, boolean onGround, String activity, int goals) {
+                                 double y, double z, boolean onGround, String activity, int goals,
+                                 float xxa, float zza, String rng) {
         if (!enabled(uuid)) return;
         emit("kind=phase|tick=" + tick + "|uuid=" + uuid + "|phase=" + phase
             + "|motion=" + motion.x + "," + motion.y + "," + motion.z
             + "|pos=" + x + "," + y + "," + z + "|onGround=" + onGround
-            + "|activity=" + activity + "|goals=" + goals);
+            + "|activity=" + activity + "|goals=" + goals
+            + "|xxa=" + xxa + "|zza=" + zza + "|rng=" + rng);
     }
     /** The movement input that produced one real move argument, printed immediately before the
      * collide call. Unavailable fields are printed as NA rather than guessed. */

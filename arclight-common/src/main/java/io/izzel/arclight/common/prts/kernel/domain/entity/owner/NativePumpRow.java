@@ -12,6 +12,7 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeNeigh
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathStage;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathState;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership;
+import io.izzel.arclight.common.prts.fixes.ownership.PrtsLivingEntityTickStateMixin;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.level.pathfinder.Path;
 
@@ -105,7 +106,12 @@ final class NativePumpRow implements NativeWritePump.Row {
                 row.villager().getDeltaMovement(), row.villager().getX(), row.villager().getY(),
                 row.villager().getZ(), row.villager().onGround(),
                 row.villager().getBrain().getActiveNonCoreActivity().map(a -> a.getName()).orElse("none"),
-                row.villager().goalSelector.getAvailableGoals().size());
+                row.villager().goalSelector.getAvailableGoals().size(),
+                row.villager() instanceof PrtsLivingEntityTickStateMixin state
+                    ? state.prts$xxa() : Float.NaN,
+                row.villager() instanceof PrtsLivingEntityTickStateMixin state2
+                    ? state2.prts$zza() : Float.NaN,
+                "NA");
             boundPath = stages(staged, ordinary, staged && ordinary && delayedRecomputation());
             if (boundPath) {
                 NativePathStage.bind(request, stagedPath, ordinary);
@@ -157,7 +163,12 @@ final class NativePumpRow implements NativeWritePump.Row {
                 row.villager().getDeltaMovement(), row.villager().getX(), row.villager().getY(),
                 row.villager().getZ(), row.villager().onGround(),
                 row.villager().getBrain().getActiveNonCoreActivity().map(a -> a.getName()).orElse("none"),
-                row.villager().goalSelector.getAvailableGoals().size());
+                row.villager().goalSelector.getAvailableGoals().size(),
+                row.villager() instanceof PrtsLivingEntityTickStateMixin state
+                    ? state.prts$xxa() : Float.NaN,
+                row.villager() instanceof PrtsLivingEntityTickStateMixin state2
+                    ? state2.prts$zza() : Float.NaN,
+                "NA");
             String key = rowKey();
             boolean bindMove = NativeMoveStage.has(key);
             if (bindMove) {
