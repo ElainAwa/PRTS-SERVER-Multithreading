@@ -79,6 +79,7 @@
     "nativepath.PrtsNativePathRegionStateMixin",
     "nativepath.PrtsNativePathReuseMixin",
     "nativepath.PrtsNearestLivingReuseMixin",
+    "nativepath.PrtsGoalCandidateMixin",
     "nativepath.PrtsBrainSensorsAccessor",
     "nativepath.PrtsSensorTickAccessor",
     "observation.PrtsGoalSelectorDecisionMixin",

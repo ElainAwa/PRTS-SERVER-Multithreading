@@ -6,6 +6,7 @@ import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityRowIdentity;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeEntityPhase;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeNeighborStage;
+import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeGoalStage;
 import io.izzel.arclight.common.prts.fixes.nativepath.PrtsBrainSensorsAccessor;
 import io.izzel.arclight.common.prts.fixes.nativepath.PrtsSensorTickAccessor;
 import net.minecraft.world.entity.ai.sensing.SensorType;
@@ -118,8 +119,21 @@ final class NativeEntityPump {
                 () -> {
                     Path path = frozenPlan == null ? null : NativePathNode.search(frozenPlan);
                     if (frozenNeighbours != null) {
-                        NativeNeighborStage.stage(key,
-                            NativeNeighborStage.order(frozenNeighbours, row.villager()));
+                        java.util.List<net.minecraft.world.entity.LivingEntity> sorted =
+                            NativeNeighborStage.order(frozenNeighbours, row.villager());
+                        NativeNeighborStage.stage(key, sorted);
+                        // The villager's look-and-interact goal only targets nearby players within
+                        // four blocks; prefilter that predicate here so the seat pump runs the
+                        // remaining line-of-sight test on a tiny set instead of every neighbour.
+                        java.util.List<net.minecraft.world.entity.LivingEntity> players =
+                            new java.util.ArrayList<>();
+                        for (net.minecraft.world.entity.LivingEntity candidate : sorted) {
+                            if (candidate.getType() == net.minecraft.world.entity.EntityType.PLAYER
+                                && candidate.distanceToSqr(row.villager()) <= 16.0D) {
+                                players.add(candidate);
+                            }
+                        }
+                        NativeGoalStage.stage(key, players);
                     }
                     return path;
                 });
@@ -153,6 +167,10 @@ final class NativeEntityPump {
             + io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeNeighborStage.staged()
             + " consumed="
             + io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeNeighborStage.consumed());
+        System.out.println("[PRTS] native-goal staged="
+            + io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeGoalStage.staged()
+            + " consumed="
+            + io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeGoalStage.consumed());
         return result.faulted();
     }
 

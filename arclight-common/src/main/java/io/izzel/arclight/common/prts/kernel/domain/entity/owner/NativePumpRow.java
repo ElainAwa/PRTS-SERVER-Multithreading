@@ -5,6 +5,7 @@ import io.izzel.arclight.common.prts.kernel.commit.CommitController;
 import io.izzel.arclight.common.prts.kernel.commit.CommitTicket;
 import io.izzel.arclight.common.prts.kernel.commit.FrozenDeclarations;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathRequest;
+import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeGoalStage;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeNeighborStage;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathStage;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathState;
@@ -110,9 +111,16 @@ final class NativePumpRow implements NativeWritePump.Row {
             if (bindNeighbours) {
                 NativeNeighborStage.bind(key);
             }
+            boolean bindGoals = NativeGoalStage.has(key);
+            if (bindGoals) {
+                NativeGoalStage.bind(key);
+            }
             try {
                 executed = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
             } finally {
+                if (bindGoals) {
+                    NativeGoalStage.take();
+                }
                 if (bindStage) {
                     NativePathStage.unbind();
                 }
