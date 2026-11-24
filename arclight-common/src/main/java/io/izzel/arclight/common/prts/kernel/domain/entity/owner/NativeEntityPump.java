@@ -235,7 +235,14 @@ final class NativeEntityPump {
                 () -> NativeMoveCompute.compute(villager, read));
         }
         wave.run();
-        wave.close();
+        NativeReadWave.Witness witness = wave.close();
+        System.out.println("[PRTS] native-move staged=" + NativeMoveStage.staged()
+            + " consumed=" + NativeMoveStage.consumed()
+            + " planned=" + witness.issued()
+            + " ready=" + witness.ready()
+            + " refused=" + witness.refused()
+            + " foreignWrites=" + witness.foreignWrites()
+            + " denied=" + witness.denied());
         for (java.util.Map.Entry<String, NativeMoveRead> entry : frozen.entrySet()) {
             NativeRowProgram<MoveCollisionResult> program = wave.program(entry.getKey());
             if (program != null && program.state() == NativeRowProgram.State.READY) {
