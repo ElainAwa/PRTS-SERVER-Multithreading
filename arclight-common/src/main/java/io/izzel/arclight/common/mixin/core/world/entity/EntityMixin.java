@@ -131,7 +131,16 @@ public abstract class EntityMixin implements InternalEntityBridge, EntityBridge,
             entity.onGround(), entity.level().getFluidState(entity.blockPosition()).toString(),
             io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathStage.bound(),
             io.izzel.arclight.common.prts.kernel.domain.entity.owner.OwnerBodyMarker.active()
-                ? "owner" : "host", requested);
+                ? "owner" : "host", requested,
+            "NA",
+            entity instanceof net.minecraft.world.entity.Mob mob
+                ? mob.goalSelector.getAvailableGoals().stream()
+                    .filter(net.minecraft.world.entity.ai.goal.WrappedGoal::isRunning)
+                    .map(g -> g.getGoal().getClass().getSimpleName()).findFirst().orElse("none")
+                : "NA",
+            io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeGoalStage.bound()
+                || io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeNeighborStage.bound()
+                ? "stagedCheckpoint" : "NA");
         Vec3 staged = NativeMoveStage.take(entity, requested);
         return staged != null ? staged : this.collide(requested);
     }

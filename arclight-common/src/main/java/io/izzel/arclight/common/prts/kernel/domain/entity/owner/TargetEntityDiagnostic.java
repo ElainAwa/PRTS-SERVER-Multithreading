@@ -79,12 +79,14 @@ public final class TargetEntityDiagnostic {
      * collide call. Unavailable fields are printed as NA rather than guessed. */
     public static void noteInput(long tick, java.util.UUID uuid, float xxa, float zza,
                                  boolean jumping, boolean onGround, String fluid,
-                                 boolean stagedPath, String admission, Vec3 finalMove) {
+                                 boolean stagedPath, String admission, Vec3 finalMove,
+                                 String writer, String runningGoal, String sourceRead) {
         if (!enabled(uuid)) return;
         emit("kind=input|tick=" + tick + "|uuid=" + uuid
             + "|xxa=" + xxa + "|zza=" + zza + "|jumping=" + jumping
             + "|onGround=" + onGround + "|fluid=" + fluid
             + "|stagedPath=" + stagedPath + "|admission=" + admission
+            + "|writer=" + writer + "|runningGoal=" + runningGoal + "|sourceRead=" + sourceRead
             + "|final=" + (finalMove == null ? "null" : finalMove.x + "," + finalMove.y + "," + finalMove.z));
     }
     /** The answer source of one collide call on the named entity. */
