@@ -197,7 +197,9 @@ final class NativeEntityPump {
             net.minecraft.world.entity.ai.sensing.Sensor<?>> entry : access.prts$sensors().entrySet()) {
             if (entry.getKey() == SensorType.NEAREST_LIVING_ENTITIES
                 && entry.getValue() instanceof PrtsSensorTickAccessor sensor
-                && sensor.prts$timeToTick() <= 0L) {
+                // Sensor.tick decrements first, then fires and resets to scanRate; a stable sensor
+                // therefore reads in [1, scanRate]. Due next tick means <= 1, not <= 0.
+                && sensor.prts$timeToTick() <= 1L) {
                 return true;
             }
         }
