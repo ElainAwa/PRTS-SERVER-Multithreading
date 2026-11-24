@@ -520,6 +520,11 @@ public final class ServerThreadOwnerPhase {
         MinecraftServer server = rows.get(0).level().getServer();
         java.util.ArrayDeque<WindowSlot> inFlight = new java.util.ArrayDeque<>(window);
         long pumpNanos = 0L;
+        long readPumpNanos = 0L;
+        long eventPumpNanos = 0L;
+        long drainPumpNanos = 0L;
+        long readCalls = 0L;
+        long readServed = 0L;
         long beginNanos = 0L;
         long controlNanos = 0L;
         long dispatchNanos = 0L;
@@ -566,10 +571,18 @@ public final class ServerThreadOwnerPhase {
             long waitStartedAt = System.nanoTime();
             while (!record.handle.future().isDone()) {
                 long pumpStartedAt = System.nanoTime();
-                OwnerReadDemand.service();
+                long readStartedAt = System.nanoTime();
+                readServed += OwnerReadDemand.service() ? 1L : 0L;
+                readCalls++;
+                long readEndedAt = System.nanoTime();
                 OwnerHostEventDispatch.service();
+                long eventEndedAt = System.nanoTime();
                 drainHostQueue(server);
-                pumpNanos += System.nanoTime() - pumpStartedAt;
+                long drainEndedAt = System.nanoTime();
+                readPumpNanos += readEndedAt - readStartedAt;
+                eventPumpNanos += eventEndedAt - readEndedAt;
+                drainPumpNanos += drainEndedAt - eventEndedAt;
+                pumpNanos += drainEndedAt - pumpStartedAt;
                 parallelWaits++;
                 if (System.nanoTime() > head.deadlineNanos()) {
                     record.witness.cancel();
@@ -592,6 +605,9 @@ public final class ServerThreadOwnerPhase {
             phase.executed - executedBefore, phase.compat, window, begun, parallelBodies,
             parallelWaits, pumpNanos, beginNanos, controlNanos, dispatchNanos, waitNanos,
             finishNanos, System.nanoTime() - startedAt));
+        System.out.println("[PRTS] owner-pump readNanos=" + readPumpNanos + " eventNanos="
+            + eventPumpNanos + " drainNanos=" + drainPumpNanos + " readCalls=" + readCalls
+            + " readServed=" + readServed);
         return faulted;
     }
 
