@@ -6,9 +6,11 @@ import io.izzel.arclight.common.prts.kernel.codes.RejectCode;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 
 /** The one holder that mints a ticket: the place the frozen plan gave a line, a ring slot and the
  * room of its terminal record are taken before the first side effect, and only this holder ends one.
@@ -95,6 +97,9 @@ public final class CommitReservation {
     private final CommitNamespaces.ResetEpochs epochs;
     private final VersionSource versionSource;
     private final Map<Long, CommitTicket> tickets = new LinkedHashMap<>();
+    /** One prefix cursor per plan: the earlier seats each begin already accounts for, read once
+     * instead of walking the whole declaration table for every row. */
+    private final Map<String, SeatPrefix> seatPrefixes = new HashMap<>();
 
     /** The real state revision of one pair, read where a request is judged. A source that answers
      * {@link io.izzel.arclight.common.prts.kernel.auth.WriteVersionSlots#NOT_CARRIED} or another
@@ -253,6 +258,7 @@ public final class CommitReservation {
         seatDispositions.put(slot, new SeatDisposition(worldId, domainId, planSequence, position,
             entry.nodeKey(), entry.instanceId(), entry.worldEpoch(),
             declarations.freeze().lifecycleKey(), declarations.freeze().generation(), cause));
+        accountSeat(declarations, worldId, domainId, planSequence, position);
         seatsDisposed++;
         return new DispositionResult(true, false, "disposed");
     }
@@ -430,6 +436,8 @@ public final class CommitReservation {
             request.identity(), request.planSequence(), request.position(), ringSlot, room.slot(),
             controller());
         tickets.put(ticket.ticketId(), ticket);
+        accountSeat(judged.declarations(), request.worldId(), request.domainId(),
+            request.planSequence(), request.position());
         phases.put(ticket.ticketId(), Phase.RESERVED);
         IdentityWitness.Obligation obligation = log.identitySource().oblige(judged.declarations());
         if (judged.range() != null) {
@@ -642,22 +650,92 @@ public final class CommitReservation {
         if (declarations == null) {
             return false;
         }
-        for (FrozenDeclarations.Entry entry : declarations.entries()) {
-            FrozenDeclarations.Seat seat = entry.seat();
-            if (seat == null || seat.planSequence() != ticket.planSequence()
-                || seat.position() >= ticket.position()
-                || !seat.worldId().equals(worldId) || !seat.domainId().equals(domainId)) {
-                continue;
+        return seatPrefix(declarations, worldId, domainId, ticket.planSequence())
+            .hasPendingBefore(ticket.position());
+    }
+
+    private SeatPrefix seatPrefix(FrozenDeclarations declarations, String worldId, String domainId,
+                                  long planSequence) {
+        String key = worldId + "\u0000" + domainId + "\u0000" + planSequence;
+        SeatPrefix prefix = seatPrefixes.get(key);
+        if (prefix == null || prefix.declarations != declarations) {
+            prefix = new SeatPrefix(declarations, worldId, domainId, planSequence);
+            seatPrefixes.put(key, prefix);
+        }
+        return prefix;
+    }
+
+    private void accountSeat(FrozenDeclarations declarations, String worldId, String domainId,
+                             long planSequence, int position) {
+        if (declarations == null) {
+            return;
+        }
+        seatPrefix(declarations, worldId, domainId, planSequence).account(position);
+    }
+
+    /** The seats of one plan in position order with the prefix each begin has already accounted
+     * for; a begin only has to advance from the first seat it has not accounted for. */
+    private final class SeatPrefix {
+
+        private final FrozenDeclarations declarations;
+        private final int[] positions;
+        private final FrozenDeclarations.Entry[] entries;
+        private final boolean[] accounted;
+        private int cursor;
+
+        private SeatPrefix(FrozenDeclarations declarations, String worldId, String domainId,
+                           long planSequence) {
+            this.declarations = declarations;
+            TreeMap<Integer, FrozenDeclarations.Entry> ordered = new TreeMap<>();
+            for (FrozenDeclarations.Entry entry : declarations.entries()) {
+                FrozenDeclarations.Seat seat = entry.seat();
+                if (seat == null || seat.planSequence() != planSequence
+                    || !seat.worldId().equals(worldId) || !seat.domainId().equals(domainId)) {
+                    continue;
+                }
+                ordered.putIfAbsent(seat.position(), entry);
             }
-            if (!log.seatStored(seat.worldId(), seat.domainId(), seat.planSequence(),
-                    seat.position())
-                && !log.placeHeld(seat.worldId(), seat.domainId(), seat.planSequence(),
-                    seat.position())
-                && !seatDisposed(declarations, entry)) {
-                return true;
+            this.positions = new int[ordered.size()];
+            this.entries = new FrozenDeclarations.Entry[ordered.size()];
+            this.accounted = new boolean[ordered.size()];
+            int index = 0;
+            for (Map.Entry<Integer, FrozenDeclarations.Entry> entry : ordered.entrySet()) {
+                this.positions[index] = entry.getKey();
+                this.entries[index] = entry.getValue();
+                this.accounted[index] = accountsNow(index);
+                index++;
             }
         }
-        return false;
+
+        private boolean accountsNow(int index) {
+            FrozenDeclarations.Seat seat = entries[index].seat();
+            return log.seatStored(seat.worldId(), seat.domainId(), seat.planSequence(),
+                seat.position())
+                || log.placeHeld(seat.worldId(), seat.domainId(), seat.planSequence(),
+                    seat.position())
+                || seatDisposed(declarations, entries[index]);
+        }
+
+        private void account(int position) {
+            int index = java.util.Arrays.binarySearch(positions, position);
+            if (index >= 0) {
+                accounted[index] = true;
+            }
+        }
+
+        private boolean hasPendingBefore(int position) {
+            while (cursor < positions.length && positions[cursor] < position) {
+                if (!accounted[cursor]) {
+                    if (accountsNow(cursor)) {
+                        accounted[cursor] = true;
+                    } else {
+                        return true;
+                    }
+                }
+                cursor++;
+            }
+            return false;
+        }
     }
 
     /** Whether the world generation or the grant the line was frozen under has moved since. A plain
@@ -1055,6 +1133,7 @@ public final class CommitReservation {
             return new ResetResult(0, publishing());
         }
         int voided = giveBackUnpublished("VOIDED", "reset");
+        seatPrefixes.clear();
         finished.clear();
         int publishing = publishing();
         resetDuringPublish += publishing;
@@ -1072,6 +1151,7 @@ public final class CommitReservation {
         }
         closed = true;
         int givenBack = giveBackUnpublished("CLOSED", "close");
+        seatPrefixes.clear();
         finished.clear();
         return new CloseResult(givenBack, pendings.size(), publishing());
     }
