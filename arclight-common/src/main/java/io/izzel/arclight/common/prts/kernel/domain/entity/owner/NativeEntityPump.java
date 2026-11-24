@@ -5,6 +5,10 @@ import io.izzel.arclight.common.prts.kernel.SharedRuntime;
 import io.izzel.arclight.common.prts.kernel.dispatch.WorkerPool;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityRowIdentity;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeEntityPhase;
+import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeNeighborStage;
+import io.izzel.arclight.common.prts.fixes.nativepath.PrtsBrainSensorsAccessor;
+import io.izzel.arclight.common.prts.fixes.nativepath.PrtsSensorTickAccessor;
+import net.minecraft.world.entity.ai.sensing.SensorType;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathNode;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativePathStage;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeReadWave;
@@ -85,19 +89,40 @@ final class NativeEntityPump {
                 ordinary = attempt != null;
             }
             NativePathNode.Plan plan = attempt;
-            if (plan == null) {
+            OwnerControlledWrite.Admission admission = admissions.get(row);
+            String key = rowKey(row, admission);
+            // Only stage a neighbour scan when the sensor will actually tick this turn: an idle
+            // sensor would pay the scan with no consumer. The host freezes the set; a worker sorts it.
+            List<net.minecraft.world.entity.LivingEntity> rawNeighbours = null;
+            if (mode == NativeEntityPhase.Mode.PARALLEL && neighbourSensorDue(row)) {
+                net.minecraft.world.phys.AABB bounds = row.villager().getBoundingBox()
+                    .inflate(16.0D, 16.0D, 16.0D);
+                rawNeighbours = row.level().getEntitiesOfClass(
+                    net.minecraft.world.entity.LivingEntity.class, bounds,
+                    candidate -> candidate != row.villager() && candidate.isAlive());
+            }
+            boolean hasNeighbours = rawNeighbours != null && !rawNeighbours.isEmpty();
+            if (plan == null && !hasNeighbours) {
                 continue;
             }
-            OwnerControlledWrite.Admission admission = admissions.get(row);
+            final NativePathNode.Plan frozenPlan = plan;
+            final List<net.minecraft.world.entity.LivingEntity> frozenNeighbours = rawNeighbours;
             plans.put(row, plan);
             if (ordinary) {
                 ordinaryRows.add(row);
                 plannedOrdinary++;
             }
             planned++;
-            wave.issue(rowKey(row, admission), admission.entry().seat().position(),
+            wave.issue(key, admission.entry().seat().position(),
                 identity(row), generation(row), snapshot(row, identity(row), generation(row)),
-                () -> NativePathNode.search(plan));
+                () -> {
+                    Path path = frozenPlan == null ? null : NativePathNode.search(frozenPlan);
+                    if (frozenNeighbours != null) {
+                        NativeNeighborStage.stage(key,
+                            NativeNeighborStage.order(frozenNeighbours, row.villager()));
+                    }
+                    return path;
+                });
         }
         long planNanos = System.nanoTime() - readStarted;
         wave.run();
@@ -124,6 +149,10 @@ final class NativeEntityPump {
         int unusedOrdinary = unusedOrdinary(plannedOrdinary, comparedOrdinary);
         record(TOTALS, witness, result, rows.size(), planned, plannedOrdinary, comparedOrdinary,
             mismatchOrdinary, unusedOrdinary, readNanos, planNanos, tick);
+        System.out.println("[PRTS] native-neighbor staged="
+            + io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeNeighborStage.staged()
+            + " consumed="
+            + io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.NativeNeighborStage.consumed());
         return result.faulted();
     }
 
@@ -137,6 +166,24 @@ final class NativeEntityPump {
                 new NativeReadToken());
             return handle == null ? null : handle.future();
         };
+    }
+
+    /** Whether the villager's nearest-living sensor will actually tick this turn; staging an idle
+     * sensor pays the scan with no consumer. Reads the frozen brain's sensor table on this thread. */
+    private static boolean neighbourSensorDue(ServerThreadOwnerPhase.DeferredRow row) {
+        net.minecraft.world.entity.ai.Brain<?> brain = row.villager().getBrain();
+        if (!(brain instanceof PrtsBrainSensorsAccessor access)) {
+            return false;
+        }
+        for (java.util.Map.Entry<SensorType<? extends net.minecraft.world.entity.ai.sensing.Sensor<?>>,
+            net.minecraft.world.entity.ai.sensing.Sensor<?>> entry : access.prts$sensors().entrySet()) {
+            if (entry.getKey() == SensorType.NEAREST_LIVING_ENTITIES
+                && entry.getValue() instanceof PrtsSensorTickAccessor sensor
+                && sensor.prts$timeToTick() <= 0L) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String rowKey(ServerThreadOwnerPhase.DeferredRow row,
