@@ -64,8 +64,16 @@ public abstract class PrtsChunkDemandMixin {
                                       CallbackInfoReturnable<ChunkAccess> cir) {
         if (Thread.currentThread() != mainThread
             && io.izzel.arclight.common.prts.kernel.auth.OwnerUnitPermit.chunkDemand()) {
+            ServerChunkCache cache = (ServerChunkCache) (Object) this;
+            ChunkAccess loaded = cache.getChunkNow(x, z);
+            if (loaded != null && loaded.getPersistedStatus().isOrAfter(status)) {
+                // The chunk is already materialised and old enough for this read: a worker can read
+                // it directly instead of parking the host for a demand whose answer is already here.
+                cir.setReturnValue(loaded);
+                return;
+            }
             cir.setReturnValue(io.izzel.arclight.common.prts.kernel.domain.entity.owner.OwnerReadDemand
-                .await((ServerChunkCache) (Object) this, x, z, status, blocking));
+                .await(cache, x, z, status, blocking));
         }
     }
 
