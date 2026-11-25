@@ -13,9 +13,11 @@ import java.util.Objects;
 /**
  * The admission placeholder of the point-of-interest data operations: a take or a release is
  * admitted as one whole operation before it may run, the default admission keeps the host path,
- * and an owner-synced admission refuses before any effect. This build does not pick a single winner
- * between competing claims and does not touch a live point of interest; the winner rule belongs to
- * the later cross-entity work.
+ * and an owner-synced admission refuses before any effect. This build does not decide a real
+ * point-of-interest record: the manager's take call selects the record from a search centre and
+ * can succeed or fail beyond this admission's view, and the take result is not fed back to the
+ * caller here. It is therefore not a single-winner authority and stays off in every shipped build;
+ * the real operation belongs to the owner-side interaction node.
  */
 public final class PoiAdmission {
 

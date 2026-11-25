@@ -6,8 +6,12 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOw
 import io.izzel.arclight.common.prts.kernel.domain.entity.program.PoiAdmission;
 import net.minecraft.core.BlockPos;
 
-/** The POI single-winner wiring: the server tick thread binds the current typed update and the
- * PoiManager entry decides one winner per record; without a bound context every entry falls back. */
+/** The point-of-interest single-winner bridge. Known limitation: a claim is recorded under the
+ * search-centre coordinate handed to PoiManager.take, while the manager selects the actual record
+ * inside that call; the release path then names the selected record, so the held key and the
+ * released key differ and the bridge can refuse or admit a record the world never uses. It is off
+ * in every shipped build; do not enable it until the owner side runs the real operation on the
+ * authoritative thread and returns the manager's own result to the caller. */
 public final class PoiSingleWinnerWiring {
 
     private static PoiClaimStore store = new PoiClaimStore();

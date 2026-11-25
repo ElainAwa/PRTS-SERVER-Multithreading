@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/* The POI take/release single winner: the tick thread hands the current typed update to the
- * PoiManager entry and a losing claim is refused before the host take/release runs. */
+/* The point-of-interest take/release bridge. Known limitation: the claim key comes from the search
+ * centre passed to take, while the manager selects the actual record inside the call, so this hook
+ * cannot make the real record authoritative; a refusal may also leave the caller's own state
+ * untouched while the manager call is skipped. It is off in every shipped build; do not enable it
+ * until the owner side runs the real operation on the authoritative thread and consumes the
+ * manager's result. */
 package io.izzel.arclight.common.prts.fixes.waitpoints;
 
 import net.minecraft.core.BlockPos;
