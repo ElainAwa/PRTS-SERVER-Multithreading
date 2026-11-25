@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** One read wave of the native entity program: it opens a read scope, issues one permit per row,
  * runs each row's single read node on the calling thread or on the pool, and closes into a witness.
@@ -58,6 +59,9 @@ public final class NativeReadWave<R> {
     private boolean ran;
     /** Set once the deadline is missed: a late node must refuse, never stage into a later tick. */
     private volatile boolean timedOut;
+    /** Tasks that started but have not returned; the scope closes only after the last one exits. */
+    private final AtomicInteger inFlight = new AtomicInteger();
+    private volatile boolean closePending;
     private Witness witness;
 
     private NativeReadWave(NativeEntityPhase.Mode mode, long waveId, long tick,
@@ -158,7 +162,12 @@ public final class NativeReadWave<R> {
                 }
                 NativeNeighborStage.clearWave(waveId);
                 NativeGoalStage.clearWave(waveId);
-                close();
+                // Do not retire the read scope under a task that is still running: a task that
+                // only notices the timeout after its read returns must lose its read right first.
+                closePending = true;
+                if (inFlight.get() == 0) {
+                    close();
+                }
                 throw new IllegalStateException(
                     "the read wave did not close before its deadline");
             }
@@ -181,6 +190,12 @@ public final class NativeReadWave<R> {
     public Witness close() {
         if (witness != null) {
             return witness;
+        }
+        if (inFlight.get() > 0) {
+            // The last in-flight task closes the wave when it exits; the deadline already refused
+            // every slot, so a caller must read the witness after the tasks have physically left.
+            closePending = true;
+            return null;
         }
         for (NativeRowProgram<R> program : programs.values()) {
             if (program.state() == NativeRowProgram.State.OPEN) {
@@ -206,11 +221,27 @@ public final class NativeReadWave<R> {
         return witness;
     }
 
+    /** The witness, or null while a timed-out wave still has tasks in flight. */
+    public Witness witness() {
+        return witness;
+    }
+
     public NativeRowProgram<R> program(String rowKey) {
         return programs.get(rowKey);
     }
 
     private void execute(NativeRowProgram<R> program) {
+        inFlight.incrementAndGet();
+        try {
+            executeStarted(program);
+        } finally {
+            if (inFlight.decrementAndGet() == 0 && closePending) {
+                close();
+            }
+        }
+    }
+
+    private void executeStarted(NativeRowProgram<R> program) {
         if (timedOut) {
             program.refuse(NativeRowProgram.Refusal.NOT_RUN);
             program.clearAction();
