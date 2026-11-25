@@ -1,13 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 package io.izzel.arclight.common.prts.kernel.qualification;
 
-/** The bindable real owner execution entry of the two native comparison sides. An authorised
- * window harness installs the implementation that drives the real owner phase over one fixed due
- * window in serial or parallel mode and gathers the witness from live level state. Without a
- * binding both modes refuse by name; no arithmetic fixture or synthetic witness is installed. */
+/** Bindable real owner execution for both comparison sides; without a binding both modes refuse by name. */
 public final class NativeExecutionExecutor {
 
-    /** The real owner execution of one fixed input in one named mode. */
+    /** Real owner execution of one fixed input in one mode, driving the owner phase over a fixed due window. */
     @FunctionalInterface
     public interface OwnerRun {
         DualReferenceParityHarness.Result run(ReferenceInput input, ReferenceRunner.Mode mode);
@@ -18,7 +15,7 @@ public final class NativeExecutionExecutor {
     private NativeExecutionExecutor() {
     }
 
-    /** Binds the real owner execution; a null binding is refused rather than treated as a stub. */
+    /** Binds the execution installed by the window harness; a null binding is refused rather than stubbed. */
     public static synchronized void bind(OwnerRun executor) {
         if (executor == null) {
             throw new IllegalArgumentException("the owner execution is null");
