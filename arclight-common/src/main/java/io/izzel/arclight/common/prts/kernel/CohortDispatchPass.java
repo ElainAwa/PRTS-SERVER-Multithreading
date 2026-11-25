@@ -111,6 +111,40 @@ public final class CohortDispatchPass {
             side.readings().noteQueueDepth(side.pool().queueDepth());
             return DispatchPass.adopt(plan, entries, side.readings(), side.ledger());
         }
+        Map<Unit, String> blocked = missingPredecessors(units, byBaseKey, planned);
+        if (!blocked.isEmpty()) {
+            Map<Long, Unit> byHandle = new LinkedHashMap<>();
+            for (Unit unit : units) {
+                byHandle.put(unit.handle().batchId(), unit);
+            }
+            List<DispatchPass.Entry> closed = new ArrayList<>(entries.size());
+            for (DispatchPass.Entry entry : entries) {
+                Unit blockedUnit = byHandle.get(entry.batch().batchId());
+                String reason = blockedUnit == null ? null : blocked.get(blockedUnit);
+                if (reason == null) {
+                    closed.add(entry);
+                    continue;
+                }
+                if (entry.lease() != null) {
+                    side.arena().release(entry.lease(), true);
+                }
+                closed.add(new DispatchPass.Entry(entry.batch(), entry.view(), null, entry.token(),
+                    null, null, TaskOutcome.fellback(entry.batch().batchId(), 0,
+                        Thread.currentThread(), RejectCode.COMMIT_ORDER_VIOLATION.text() + ":"
+                            + reason)));
+            }
+            units.removeIf(blocked::containsKey);
+            if (units.isEmpty()) {
+                return DispatchPass.adopt(plan, closed, side.readings(), side.ledger());
+            }
+            byKey.clear();
+            byBaseKey.clear();
+            for (Unit unit : units) {
+                byKey.put(unit.key(), unit);
+                byBaseKey.put(unit.baseKey(), unit);
+            }
+            entries = closed;
+        }
         JobGraph graph = graph(plan, units, byBaseKey, planned);
         Map<String, Runnable> bodies = new LinkedHashMap<>();
         for (Unit unit : units) {
@@ -171,6 +205,40 @@ public final class CohortDispatchPass {
      * so the same node of two ticks is two units of the work account. */
     public static String unitIdOf(WorkPlan plan, WorkTask task) {
         return WorkAccount.unitId(DispatchWriteBack.nodeKey(task), plan.tickIndex());
+    }
+
+    /** One unit whose planned predecessor is not part of this batch, or depends on such a unit,
+     * cannot prove the edge: it is carried as a fallback and never runs. The value names the reason. */
+    private static Map<Unit, String> missingPredecessors(List<Unit> units, Map<String, Unit> byBaseKey,
+                                                         JobGraph planned) {
+        Map<Unit, String> blocked = new LinkedHashMap<>();
+        if (planned == null) {
+            return blocked;
+        }
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (Unit unit : units) {
+                if (blocked.containsKey(unit)) continue;
+                JobGraph.Node node = planned.nodeByKey(unit.baseKey());
+                if (node == null) continue;
+                for (String predecessor : node.predecessors()) {
+                    if (predecessor.equals(unit.baseKey())) continue;
+                    Unit predecessorUnit = byBaseKey.get(predecessor);
+                    if (predecessorUnit == null) {
+                        blocked.put(unit, "predecessor-missing:" + predecessor);
+                        changed = true;
+                        break;
+                    }
+                    if (blocked.containsKey(predecessorUnit)) {
+                        blocked.put(unit, "predecessor-blocked:" + predecessor);
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        }
+        return blocked;
     }
 
     private static String keyOf(WorkTask task, Map<String, Unit> taken) {
@@ -349,11 +417,16 @@ public final class CohortDispatchPass {
             } catch (WorkBody.RetryableFault retryable) {
                 fault = Fault.RETRYABLE;
                 code = RejectCode.VERSION_MISMATCH.text();
+                // A retryable fault is a business failure, not a success: the cohort must see the
+                // failed node so its successors stay held for the retry, never released as DONE.
+                throw new IllegalStateException(code, retryable);
             } catch (WorkBody.NonRetryableFault fellBack) {
                 fault = Fault.FELLBACK;
                 code = RejectCode.WRITE_DENIED_NOT_OWNER.text();
+                throw new IllegalStateException(code, fellBack);
             } catch (RuntimeException | Error hard) {
                 fault = Fault.HARD;
+                throw hard;
             } finally {
                 side.readings().noteExecution(worker.getName(), System.nanoTime() - started);
                 if (!published) {
