@@ -56,6 +56,8 @@ public final class NativeReadWave<R> {
     private final long deadlineNanos;
     private final Map<String, NativeRowProgram<R>> programs = new LinkedHashMap<>();
     private boolean ran;
+    /** Set once the deadline is missed: a late node must refuse, never stage into a later tick. */
+    private volatile boolean timedOut;
     private Witness witness;
 
     private NativeReadWave(NativeEntityPhase.Mode mode, long waveId, long tick,
@@ -141,6 +143,20 @@ public final class NativeReadWave<R> {
                 Thread.yield();
             }
             if (!future.isDone()) {
+                // A wave that misses its deadline still has to retire its lifecycle: cancel the
+                // pending futures, refuse every open slot and close the read scope before the
+                // exception leaves. A late node that still runs sees timedOut and refuses instead
+                // of staging a value a later tick could bind.
+                timedOut = true;
+                for (CompletableFuture<Void> pending : futures) {
+                    pending.cancel(false);
+                }
+                // The deadline invalidates every slot of this wave, including one that answered
+                // while the wave was already waiting: the write pump must not apply this wave.
+                for (NativeRowProgram<R> program : submitted) {
+                    program.refuse(NativeRowProgram.Refusal.NOT_RUN);
+                }
+                close();
                 throw new IllegalStateException(
                     "the read wave did not close before its deadline");
             }
@@ -188,6 +204,11 @@ public final class NativeReadWave<R> {
     }
 
     private void execute(NativeRowProgram<R> program) {
+        if (timedOut) {
+            program.refuse(NativeRowProgram.Refusal.NOT_RUN);
+            program.clearAction();
+            return;
+        }
         ReadScope.Read read = scope.read(program.permit(), program.snapshot(), tick);
         if (!read.allowed()) {
             program.refuse(permitRefusal(read.verdict()));
@@ -200,7 +221,12 @@ public final class NativeReadWave<R> {
                 program.refuse(NativeRowProgram.Refusal.NOT_RUN);
                 return;
             }
-            program.stage(action.read());
+            R value = action.read();
+            if (timedOut) {
+                program.refuse(NativeRowProgram.Refusal.NOT_RUN);
+                return;
+            }
+            program.stage(value);
         } catch (Throwable failure) {
             NativeReadGuard.Refusal guard = NativeReadGuard.refusal();
             program.refuse(guard == null
