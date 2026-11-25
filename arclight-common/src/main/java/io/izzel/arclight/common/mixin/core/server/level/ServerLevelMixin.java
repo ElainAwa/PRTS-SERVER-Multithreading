@@ -375,6 +375,13 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
     @Inject(method = "tick", at = @At(value = "INVOKE", shift = At.Shift.BEFORE,
         target = "Lnet/minecraft/world/level/entity/EntityTickList;forEach(Ljava/util/function/Consumer;)V"))
     private void prts$freezeEntityDueWindow(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
+        // The independent entity-tick counter (armed only when the process asks for it) spans
+        // the host loop and the owner bodies of one level tick, so the calls it counts can be
+        // compared with the owner and host decisions of that same tick. A process without the
+        // observation property never opens the window and the counter stays inert.
+        if (io.izzel.arclight.common.prts.support.PrtsHostTickCalls.ARMED) {
+            io.izzel.arclight.common.prts.support.PrtsHostTickCalls.beginTick();
+        }
         if (!EntityDueCapture.armed()) {
             return;
         }
@@ -410,6 +417,11 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
             .finishDeferred();
         io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
             .endTick((ServerLevel) (Object) this);
+        // Closes the window opened before the host iteration: owner bodies run inside
+        // finishDeferred, so both the host calls and the owner calls of this level tick are in it.
+        if (io.izzel.arclight.common.prts.support.PrtsHostTickCalls.ARMED) {
+            io.izzel.arclight.common.prts.support.PrtsHostTickCalls.endTick();
+        }
     }
 
     @Decorate(method = "tickChunk", at = @At(value = "INVOKE", ordinal = 0, target = "Lnet/minecraft/util/RandomSource;nextInt(I)I"))
