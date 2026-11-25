@@ -4,6 +4,7 @@ package io.izzel.arclight.common.prts.kernel.qualification;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityDueCapture;
 import io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase;
 import io.izzel.arclight.common.prts.kernel.random.SharedStreamTable;
+import io.izzel.arclight.common.prts.kernel.random.StreamKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.npc.Villager;
@@ -267,6 +268,13 @@ public final class ReplayWorldHarness {
         EntityDueCapture.Window window = EntityDueCapture.current(tick);
         if (window == null) {
             return refused(tick, null, "due-window-absent", null);
+        }
+        // The reference business stream must exist in the real table before capture: the record
+        // names one stream by world seed and world id, and a missing stream refuses by name.
+        String worldId = window.worlds().isEmpty() ? "" : window.worlds().get(0).worldId();
+        if (!worldId.isEmpty()) {
+            sources.streams().stream(StreamKey.of(sources.level().getSeed(), worldId, worldId,
+                "reference", 0L));
         }
         ReferenceCapture.Result captured = ReferenceCapture.fromDueWindow(window, tick,
             ReferenceCapture.fromLevel(sources.level(), sources.streams()));
