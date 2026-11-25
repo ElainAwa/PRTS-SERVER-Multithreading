@@ -345,8 +345,11 @@ public final class EntityDomain implements KernelDomain {
                 EVIDENCE.info(PrtsEntityRescope.reasonLine());
             }
             // The ownership fixture reports itself; every one of its counters is written at the
-            // host entry or at the plan point, never derived from what a commit landed.
-            if (EntityTickOwnership.live()) {
+            // host entry or at the plan point, never derived from what a commit landed. The
+            // independent tick-call counter is also exported when only that observation property
+            // is armed, so an owner window can compare the calls with its own decisions.
+            if (EntityTickOwnership.live()
+                || io.izzel.arclight.common.prts.support.PrtsHostTickCalls.ARMED) {
                 EVIDENCE.info(EntityTickOwnership.evidenceLine());
                 EVIDENCE.info(EntityTickOwnership.replicaLine());
                 EVIDENCE.info(EntityTickOwnership.segmentLine());
