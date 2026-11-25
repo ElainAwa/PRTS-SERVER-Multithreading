@@ -9,7 +9,7 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.EntityObjectGeneration
 import io.izzel.arclight.common.prts.kernel.jobs.JobDeclaration;
 import io.izzel.arclight.common.prts.kernel.shares.ShareClass;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.entity.npc.Villager;
+import net.minecraft.world.entity.Mob;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -20,7 +20,7 @@ import java.util.List;
  * window. Nothing is taken from a previous tick and nothing is declared after the window froze. */
 public final class EntityDeclarationIntake {
 
-    private record Armed(String levelId, List<Villager> selected) {
+    private record Armed(String levelId, List<Mob> selected) {
     }
 
     private static Armed armed;
@@ -31,7 +31,7 @@ public final class EntityDeclarationIntake {
     /** Arms the next freeze with this level's selected rows; called after the due window froze and
      * before any owner body of the tick ran. */
     public static synchronized void arm(ServerLevel level, EntityDueCapture.Window window,
-                                        List<Villager> selected) {
+                                        List<Mob> selected) {
         if (level == null || window == null || selected == null) {
             armed = null;
             return;
@@ -53,7 +53,7 @@ public final class EntityDeclarationIntake {
         long worldEpoch = module.guard().worldEpochs().epochOf(worldId);
         List<JobDeclaration> declarations = new ArrayList<>(current.selected().size());
         List<FrozenDeclarations.Candidate> candidates = new ArrayList<>(current.selected().size());
-        for (Villager villager : current.selected()) {
+        for (Mob villager : current.selected()) {
             long uuidHigh = villager.getUUID().getMostSignificantBits();
             long uuidLow = villager.getUUID().getLeastSignificantBits();
             long generation = EntityObjectGenerations.shared()

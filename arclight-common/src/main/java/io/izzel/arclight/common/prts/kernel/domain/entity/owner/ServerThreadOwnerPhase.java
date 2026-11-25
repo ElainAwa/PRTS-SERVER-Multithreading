@@ -7,6 +7,7 @@ import io.izzel.arclight.common.prts.support.EntityEligibility;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Pose;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.animal.Cow;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.entity.schedule.Activity;
 
@@ -67,6 +68,14 @@ public final class ServerThreadOwnerPhase {
         Villager villagerView() {
             return (Villager) mob;
         }
+
+        boolean villagerRow() {
+            return mob instanceof Villager;
+        }
+
+        boolean cowRow() {
+            return mob instanceof Cow;
+        }
     }
     private static final List<DeferredRow> DEFERRED = new ArrayList<>();
     private static final Set<Integer> DEFERRED_IDS = new HashSet<>();
@@ -96,7 +105,7 @@ public final class ServerThreadOwnerPhase {
     static final class LevelPhase {
 
         ServerLevel level;
-        final Map<Integer, Villager> rows = new LinkedHashMap<>();
+        final Map<Integer, Mob> rows = new LinkedHashMap<>();
         final Map<Integer, Long> hostSteps = new LinkedHashMap<>();
         final Map<Integer, Slice> slice = new LinkedHashMap<>();
         int walkSelected;
@@ -138,11 +147,11 @@ public final class ServerThreadOwnerPhase {
         phase.level = level;
         phase.tick = level.getServer().getTickCount();
         phase.skipsAtStart = RestOwnerWiring.skips();
-        List<Villager> selected = select(level, window, dimension, phase);
+        List<Mob> selected = select(level, window, dimension, phase);
         // Only rows that will be deferred into the controlled batch are declared: a declared seat
         // that never starts would hold the pair's order and block every later controlled row.
-        java.util.List<Villager> declared = new java.util.ArrayList<>(selected.size());
-        for (Villager candidate : selected) {
+        java.util.List<Mob> declared = new java.util.ArrayList<>(selected.size());
+        for (Mob candidate : selected) {
             if (batchEnabled() && phase.slice.get(candidate.getId()) == Slice.WALK) {
                 declared.add(candidate);
             }
@@ -165,15 +174,15 @@ public final class ServerThreadOwnerPhase {
         io.izzel.arclight.common.prts.kernel.KernelModule module =
             io.izzel.arclight.common.prts.kernel.KernelModule.instance();
         long worldEpoch = module.guard().worldEpochs().epochOf(dimension);
-        for (Villager villager : selected) {
-            phase.rows.put(villager.getId(), villager);
-            phase.identities.put(villager.getId(), new RowIdentity(dimension, worldEpoch,
-                villager.getUUID().getMostSignificantBits(),
-                villager.getUUID().getLeastSignificantBits(),
+        for (Mob mob : selected) {
+            phase.rows.put(mob.getId(), mob);
+            phase.identities.put(mob.getId(), new RowIdentity(dimension, worldEpoch,
+                mob.getUUID().getMostSignificantBits(),
+                mob.getUUID().getLeastSignificantBits(),
                 io.izzel.arclight.common.prts.kernel.domain.entity.EntityObjectGenerations.shared()
-                    .generationOf(dimension, villager.getUUID().getMostSignificantBits(),
-                        villager.getUUID().getLeastSignificantBits()),
-                villager.tickCount));
+                    .generationOf(dimension, mob.getUUID().getMostSignificantBits(),
+                        mob.getUUID().getLeastSignificantBits()),
+                mob.tickCount));
         }
         for (EntityDueWindow.World world : window.worlds()) {
             for (EntityDueWindow.Row row : world.rows()) {
@@ -205,7 +214,7 @@ public final class ServerThreadOwnerPhase {
             return false;
         }
         Object row = phase.rows.get(entity.getId());
-        if (!(row instanceof Villager selected) || !(entity.level() instanceof ServerLevel level)) {
+        if (!(row instanceof Mob selected) || !(entity.level() instanceof ServerLevel level)) {
             return false;
         }
         return sameLogicalRow(level, selected, entity);
@@ -228,11 +237,11 @@ public final class ServerThreadOwnerPhase {
 
     private static boolean runPendingAtBody0(net.minecraft.world.entity.Entity entity) {
         LevelPhase phase = PENDING.get(entity.level().dimension().location().toString());
-        if (phase == null || !(phase.rows.get(entity.getId()) instanceof Villager selected)
+        if (phase == null || !(phase.rows.get(entity.getId()) instanceof Mob selected)
             || !sameLogicalRow((ServerLevel) entity.level(), selected, entity)) {
             return false;
         }
-        Villager villager = phase.rows.remove(entity.getId());
+        Mob mob = phase.rows.remove(entity.getId());
         Slice slice = phase.slice.remove(entity.getId());
         if (slice == null) {
             phase.fallback++;
@@ -248,8 +257,10 @@ public final class ServerThreadOwnerPhase {
             phase.compat++;
             return false;
         }
+        boolean villagerRow = mob instanceof Villager;
+        boolean cowRow = mob instanceof Cow;
         if (slice != Slice.WALK || !EntityUpdateSegmentPolicy.admitsWorker(DECLARED_SEGMENTS)
-            || !ServerAiStepPrefixProgram.admits(villager)) {
+            || !(villagerRow || cowRow) || !ServerAiStepPrefixProgram.admits(mob)) {
             // Every segment this row will declare (mob tick tail and server-ai-step prefix) must be
             // allowed, and the villager selectors must be empty; other rows keep the host tick in the
             // existing compat bucket.
@@ -265,7 +276,7 @@ public final class ServerThreadOwnerPhase {
                 phase.compat++;
                 return false;
             }
-            DeferredRow row = new DeferredRow(phase, (ServerLevel) entity.level(), villager, entity,
+            DeferredRow row = new DeferredRow(phase, (ServerLevel) entity.level(), mob, entity,
                 phase.hostSteps.getOrDefault(entity.getId(), 0L));
             DEFERRED.add(row);
             DEFERRED_IDS.add(entity.getId());
@@ -285,9 +296,19 @@ public final class ServerThreadOwnerPhase {
         boolean fallbackHost = false;
         EntityUpdateProgramContext.begin(programIdentity(phase, entity));
         try {
-            boolean executed = slice == Slice.WALK
-                ? RealEntityOwnerBody.runWalkOnServer((ServerLevel) entity.level(), villager)
-                : RealEntityOwnerBody.runRestedOnServer((ServerLevel) entity.level(), villager);
+            boolean executed;
+            if (slice == Slice.WALK) {
+                executed = villagerRow
+                    ? RealEntityOwnerBody.runWalkOnServer((ServerLevel) entity.level(), (Villager) mob)
+                    : RealEntityOwnerBody.runMobOnServer((ServerLevel) entity.level(), mob);
+            } else {
+                if (!villagerRow) {
+                    phase.compat++;
+                    return false;
+                }
+                executed = RealEntityOwnerBody.runRestedOnServer((ServerLevel) entity.level(),
+                    (Villager) mob);
+            }
             if (executed) {
                 phase.executed++;
                 if (slice == Slice.WALK) {
@@ -320,6 +341,20 @@ public final class ServerThreadOwnerPhase {
                     .beginLegacyPoiFallback(entity);
             }
         }
+    }
+
+    /** The one walk body of a deferred row, dispatched on the explicit type branch. */
+    static boolean runWalkBody(DeferredRow row) {
+        return row.villagerRow()
+            ? RealEntityOwnerBody.runWalkOnServer(row.level(), row.villagerView())
+            : RealEntityOwnerBody.runMobOnServer(row.level(), row.mob());
+    }
+
+    /** The pre/post effect snapshot of a deferred row; a non-villager row only reports shared fields. */
+    static EntityEffectPayload.Snapshot captureRow(DeferredRow row) {
+        return row.villagerRow()
+            ? EntityEffectPayload.capture(row.villagerView())
+            : EntityEffectPayload.captureShared(row.mob());
     }
 
     private static void dumpOwnerStacks() {
@@ -365,7 +400,7 @@ public final class ServerThreadOwnerPhase {
         long scope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
             .EntityTickOwnership.beginOwnerBodyScope(row.entity());
         try {
-            executed[slot] = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villagerView());
+            executed[slot] = runWalkBody(row);
         } finally {
             if (lease != null) {
                 lease.release();
@@ -799,16 +834,16 @@ public final class ServerThreadOwnerPhase {
                 record.stage = OwnerControlledExecution.Stage.EFFECT_ENTERED;
                 record.witness.markEffectPossible();
                 OwnerRandomContext.enter(row.level(), row.mob(), "entity");
-                EntityEffectPayload.Snapshot before = EntityEffectPayload.capture(row.villagerView());
+                EntityEffectPayload.Snapshot before = captureRow(row);
                 boolean executed;
                 try {
-                    executed = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villagerView());
+                    executed = runWalkBody(row);
                 } finally {
                     OwnerRandomContext.exit();
                 }
                 String result = executed ? "PUBLISHED" : "FAILED";
                 String changed = EntityEffectPayload.changedValues(before,
-                    EntityEffectPayload.capture(row.villagerView()));
+                    captureRow(row));
                 record.effectRow = EntityEffectPayload.row(row.entity().getUUID(), result, changed);
                 record.outcome = executed
                     ? new io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Outcome(
@@ -1163,7 +1198,7 @@ public final class ServerThreadOwnerPhase {
     /** Records an activation-range inactive skip of a pending row. */
     public static void noteInactive(net.minecraft.world.entity.Entity entity) {
         LevelPhase phase = phaseOf(entity);
-        if (phase != null && phase.rows.get(entity.getId()) instanceof Villager selected
+        if (phase != null && phase.rows.get(entity.getId()) instanceof Mob selected
             && sameLogicalRow(phase, selected, entity)) {
             phase.inactiveRows.add(entity.getId());
         }
@@ -1200,7 +1235,7 @@ public final class ServerThreadOwnerPhase {
     /** Whether the passed entity is the same logical update this phase selected: world incarnation,
      * UUID, object generation and the tick count read when the due window froze. A reused short id
      * never inherits the row. */
-    static boolean sameLogicalRow(LevelPhase phase, Villager selected,
+    static boolean sameLogicalRow(LevelPhase phase, Mob selected,
                                   net.minecraft.world.entity.Entity entity) {
         if (phase == null || selected == null || entity == null
             || !OwnerTypeAdmission.admits(entity)) {
@@ -1237,7 +1272,7 @@ public final class ServerThreadOwnerPhase {
             || entity.tickCount == identity.updateTick() + 1;
     }
 
-    static boolean sameLogicalRow(ServerLevel level, Villager selected,
+    static boolean sameLogicalRow(ServerLevel level, Mob selected,
                                   net.minecraft.world.entity.Entity entity) {
         LevelPhase phase = level == null ? null
             : PENDING.get(level.dimension().location().toString());
@@ -1256,7 +1291,7 @@ public final class ServerThreadOwnerPhase {
         if (phase == null) {
             return;
         }
-        Villager selected = phase.rows.get(entity.getId());
+        Mob selected = phase.rows.get(entity.getId());
         if (!sameLogicalRow(level, selected, entity)) {
             return;
         }
@@ -1317,11 +1352,11 @@ public final class ServerThreadOwnerPhase {
             if (level == null) {
                 continue;
             }
-            for (java.util.Map.Entry<Integer, Villager> entry : phase.rows.entrySet()) {
+            for (java.util.Map.Entry<Integer, Mob> entry : phase.rows.entrySet()) {
                 if (started.contains(entry.getKey())) {
                     continue;
                 }
-                Villager villager = entry.getValue();
+                Mob villager = entry.getValue();
                 if (villager == null) {
                     continue;
                 }
@@ -1374,8 +1409,8 @@ public final class ServerThreadOwnerPhase {
         int leftPreCanceled = 0;
         int leftNoPre = 0;
         int leftBodySkipped = 0;
-        for (java.util.Map.Entry<Integer, Villager> entry : phase.rows.entrySet()) {
-            Villager villager = entry.getValue();
+        for (java.util.Map.Entry<Integer, Mob> entry : phase.rows.entrySet()) {
+            Mob villager = entry.getValue();
             int id = entry.getKey();
             // Actual reached boundaries take precedence over removal/activation guesses.
             if (phase.preCanceledRows.contains(id)) {
@@ -1481,6 +1516,22 @@ public final class ServerThreadOwnerPhase {
 
     /** The host/body guard shared by the walking slice and the wider due-row selection. The pure
      * form is package-visible so the selection rules stay testable without a live level. */
+    private static Mob admitWalkCandidate(net.minecraft.world.entity.Entity entity) {
+        if (entity instanceof Villager villager) {
+            return admitsFullBody(villager) ? villager : null;
+        }
+        if (entity instanceof Cow cow) {
+            return admitsCow(cow) ? cow : null;
+        }
+        return null;
+    }
+
+    private static boolean admitsCow(Cow cow) {
+        return cow.isAlive() && !cow.isRemoved() && !cow.isNoAi() && !cow.isPassenger()
+            && cow.getPose() != Pose.SLEEPING
+            && (cow.getBrain() == null || !cow.getBrain().isActive(Activity.REST));
+    }
+
     static boolean admitsFullBody(boolean alive, boolean removed, boolean noAi, boolean passenger,
                                   boolean hostWouldRun, boolean sleeping, boolean rest,
                                   boolean panic, boolean hurt) {
@@ -1507,12 +1558,12 @@ public final class ServerThreadOwnerPhase {
         return org.spigotmc.ActivationRange.checkIfActive(entity);
     }
 
-    private static List<Villager> select(ServerLevel level, EntityDueCapture.Window window,
-                                         String levelId, LevelPhase phase) {
+    private static List<Mob> select(ServerLevel level, EntityDueCapture.Window window,
+                                    String levelId, LevelPhase phase) {
         // The historical constant guards the selection list; the scale path follows the real due rows
         // up to its own seat bound so a larger level is not silently cut at the old guard.
         int rowCap = OwnerScale.rowCap(MAX_ROWS, levelIdRows(window, levelId));
-        List<Villager> selected = new ArrayList<>();
+        List<Mob> selected = new ArrayList<>();
         for (EntityDueWindow.Row row : selectRows(window, levelId)) {
             net.minecraft.world.entity.Entity entity = level.getEntity(row.entityId());
             if (!OwnerTypeAdmission.admits(entity)
@@ -1536,13 +1587,13 @@ public final class ServerThreadOwnerPhase {
         if (OwnerZoneAdmission.walkSlice()) {
             for (EntityDueWindow.Row row : selectRowsWalk(window, levelId)) {
                 net.minecraft.world.entity.Entity entity = level.getEntity(row.entityId());
-                if (!OwnerTypeAdmission.admits(entity)
-                    || !(entity instanceof Villager villager) || !admitsFullBody(villager)) {
+                Mob candidate = admitWalkCandidate(entity);
+                if (candidate == null) {
                     continue;
                 }
                 if (selected.size() < rowCap) {
-                    selected.add(villager);
-                    phase.slice.put(villager.getId(), Slice.WALK);
+                    selected.add(candidate);
+                    phase.slice.put(candidate.getId(), Slice.WALK);
                     phase.walkSelected++;
                 } else {
                     phase.truncated++;
@@ -1562,13 +1613,13 @@ public final class ServerThreadOwnerPhase {
                     continue;
                 }
                 net.minecraft.world.entity.Entity entity = level.getEntity(row.entityId());
-                if (!OwnerTypeAdmission.admits(entity)
-                    || !(entity instanceof Villager villager) || !admitsFullBody(villager)) {
+                Mob candidate = admitWalkCandidate(entity);
+                if (candidate == null) {
                     continue;
                 }
                 if (selected.size() < rowCap) {
-                    selected.add(villager);
-                    phase.slice.put(villager.getId(), Slice.WALK);
+                    selected.add(candidate);
+                    phase.slice.put(candidate.getId(), Slice.WALK);
                     phase.walkSelected++;
                 } else {
                     phase.truncated++;
@@ -1603,6 +1654,11 @@ public final class ServerThreadOwnerPhase {
         return rows;
     }
 
+    /** The walking slice names villagers and the one explicitly validated plain cow type. */
+    private static boolean isWalkTypeTag(String tag) {
+        return tag != null && (tag.endsWith("Villager") || Cow.class.getName().equals(tag));
+    }
+
     /** Pure walking-row selector; live pose/passenger checks happen in select. */
     static List<EntityDueWindow.Row> selectRowsWalk(EntityDueCapture.Window window,
                                                     String levelId) {
@@ -1615,8 +1671,7 @@ public final class ServerThreadOwnerPhase {
                 continue;
             }
             for (EntityDueWindow.Row row : world.rows()) {
-                if (OwnerZoneAdmission.admitsWalk(row) && row.classTag() != null
-                    && row.classTag().endsWith("Villager")) {
+                if (OwnerZoneAdmission.admitsWalk(row) && isWalkTypeTag(row.classTag())) {
                     rows.add(row);
                 }
             }
