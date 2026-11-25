@@ -465,6 +465,18 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
             || due.worlds().stream().allMatch(w -> w.rows().isEmpty())) {
             return;
         }
+        // Wait until the real villagers have landed and are actually due: an early tick carries
+        // other rows, so measuring it would verify an empty world instead of the pressure scene.
+        String minRaw = System.getProperty("arclight.prts.diag.replayWorld.minVillagers", "");
+        int minVillagers = 0;
+        try { minVillagers = Integer.parseInt(minRaw.trim()); } catch (NumberFormatException ignored) { }
+        if (minVillagers > 0) {
+            long villagers = due.worlds().stream().flatMap(w -> w.rows().stream())
+                .filter(r -> r.classTag() != null && r.classTag().contains("Villager")).count();
+            if (villagers < minVillagers) {
+                return;
+            }
+        }
         String report = System.getProperty(ReplayWorldHarness.REPORT_PROPERTY);
         if (report == null || report.trim().isEmpty()) {
             ArclightServer.LOGGER.warn("Replay world trigger refused: report path is not configured");
