@@ -457,13 +457,20 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
             || this.prts$replayWorldTriggered) {
             return;
         }
+        ServerLevel level = (ServerLevel) (Object) this;
+        // Do not consume the one-shot before the scene is landed: an empty due window at an early
+        // tick would refuse with no arrival rows and leave no later tick to drive the replay.
+        EntityDueCapture.Window due = EntityDueCapture.current(level.getServer().getTickCount());
+        if (due == null || due.worlds().isEmpty()
+            || due.worlds().stream().allMatch(w -> w.rows().isEmpty())) {
+            return;
+        }
         String report = System.getProperty(ReplayWorldHarness.REPORT_PROPERTY);
         if (report == null || report.trim().isEmpty()) {
             ArclightServer.LOGGER.warn("Replay world trigger refused: report path is not configured");
             return;
         }
         this.prts$replayWorldTriggered = true;
-        ServerLevel level = (ServerLevel) (Object) this;
         SharedStreamTable streams;
         String streamSource;
         if (level.getRandom() instanceof OwnerSharedRandomSource shared) {
