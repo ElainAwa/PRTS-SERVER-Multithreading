@@ -26,6 +26,8 @@ public final class SharedRuntime {
     private final WorkAccount account = new WorkAccount();
     private volatile WorkerPool pool;
     private volatile GenericJobExecutor executor;
+    /** The pool whose shutdown was requested but whose bodies have not all exited yet. */
+    private volatile WorkerPool draining;
     private volatile int opens;
     private volatile int closes;
 
@@ -40,6 +42,11 @@ public final class SharedRuntime {
     /** Starts the one pool if it is not running, using the shape the existing dispatch policy
      * resolves; opening twice keeps the first pool. Answers whether a pool is available. */
     public synchronized boolean open() {
+        if (draining != null) {
+            // The old generation is still draining: a new pool would let new work run while the
+            // previous generation's bodies and resources are still on the books.
+            return false;
+        }
         if (pool != null) {
             return true;
         }
@@ -61,22 +68,28 @@ public final class SharedRuntime {
     /** Stops the pool, cancels queued work, waits a bounded time for running bodies and releases the
      * arena; answers whether the stop was confirmed. A second close is a no-op. */
     public synchronized boolean close() {
-        WorkerPool current = pool;
-        pool = null;
-        executor = null;
+        if (pool != null) {
+            draining = pool;
+            pool = null;
+            executor = null;
+        }
+        WorkerPool current = draining;
         if (current == null) {
             return true;
         }
         WorkerPool.ShutdownReport report = current.shutdown(true, true, CLOSE_WAIT_MS);
-        readings.noteShutdown(report.remainingInFlight(), report.terminated());
         boolean confirmed = report.terminated() && report.remainingInFlight() == 0;
-        if (confirmed) {
-            arena.releaseAll();
-        } else {
+        readings.noteShutdown(report.remainingInFlight(), report.terminated());
+        if (!confirmed) {
+            // The old generation keeps its workers, arena and account open; a later close retries
+            // the same pool until the last body has really exited.
             arena.quarantineAll();
+            return false;
         }
+        draining = null;
+        arena.releaseAll();
         closes++;
-        return confirmed;
+        return true;
     }
 
     /** The pool, or null while the runtime is closed. */
