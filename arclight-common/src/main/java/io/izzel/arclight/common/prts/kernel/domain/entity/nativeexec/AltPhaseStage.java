@@ -32,8 +32,9 @@ public final class AltPhaseStage {
     }
 
     /** Publishes one worker result and, when the experiment property selects this row, prints the
-     * actual staged value. The text is derived from the result already published, never recomputed. */
-    public static void stage(String rowKey, String kind, Object result, long tick) {
+     * actual staged value together with the inputs frozen at issue time. Both texts are derived from
+     * the published result and the frozen record; neither is recomputed from the live entity. */
+    public static void stage(String rowKey, String kind, Object result, long tick, Object frozen) {
         if (result == null) return;
         READY.put(rowKey + "|" + kind, result);
         String target = testTarget != null ? testTarget : TARGET;
@@ -41,7 +42,30 @@ public final class AltPhaseStage {
         if (target.isEmpty() || !rowKey.contains(target) || limit <= 0 || LINES.get() >= limit) return;
         LINES.incrementAndGet();
         System.out.println("[PRTS] altout|tick=" + tick + "|rowKey=" + rowKey
-            + "|kind=" + kind + "|value=" + format(result));
+            + "|kind=" + kind + "|inputs=" + formatInputs(frozen)
+            + "|value=" + format(result));
+    }
+
+    /** Kept for callers that have no frozen record available. */
+    public static void stage(String rowKey, String kind, Object result, long tick) {
+        stage(rowKey, kind, result, tick, null);
+    }
+
+    private static String formatInputs(Object frozen) {
+        if (frozen instanceof AltPhaseSubComputation.AiHead head) {
+            return "effectiveAi=" + head.effectiveAi() + ",immobile=" + head.immobile()
+                + ",lerpSteps=" + head.lerpSteps() + ",request=" + head.vx() + "," + head.vy()
+                + "," + head.vz();
+        }
+        if (frozen instanceof AltPhaseSubComputation.Controls controls) {
+            return "rotation=" + controls.rotation() + ",xxa=" + controls.xxa()
+                + ",zza=" + controls.zza() + ",jumping=" + controls.jumping();
+        }
+        if (frozen instanceof AltPhaseSubComputation.TickTail tail) {
+            return "yBodyRot=" + tail.yBodyRot() + ",run=" + tail.run()
+                + ",attackAnim=" + tail.attackAnim() + ",swingTime=" + tail.swing();
+        }
+        return "NA";
     }
 
     private static String format(Object result) {

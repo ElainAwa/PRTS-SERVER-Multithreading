@@ -311,8 +311,13 @@ final class NativeEntityPump {
                     boolean ready = p != null && p.state() == NativeRowProgram.State.READY;
                     AltWaveDiagnostic.stage(kind[0], ready);
                     if (ready) {
+                        Object frozenInput = switch (kind[0]) {
+                            case "aiHead" -> alt3.get(key);
+                            case "controls" -> alt7.get(key);
+                            default -> alt9.get(key);
+                        };
                         AltPhaseStage.stage(
-                            key, kind[0], p.result(), tick);
+                            key, kind[0], p.result(), tick, frozenInput);
                     }
                 }
             }
