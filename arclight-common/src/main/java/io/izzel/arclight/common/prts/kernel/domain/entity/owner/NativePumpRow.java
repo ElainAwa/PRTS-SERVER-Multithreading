@@ -102,16 +102,6 @@ final class NativePumpRow implements NativeWritePump.Row {
         try {
             held.witness.markEffectPossible();
             before = EntityEffectPayload.capture(row.villager());
-            TargetEntityDiagnostic.notePhase("A_end", row.phase().tick, row.villager().getUUID(),
-                row.villager().getDeltaMovement(), row.villager().getX(), row.villager().getY(),
-                row.villager().getZ(), row.villager().onGround(),
-                row.villager().getBrain().getActiveNonCoreActivity().map(a -> a.getName()).orElse("none"),
-                row.villager().goalSelector.getAvailableGoals().size(),
-                row.villager() instanceof PrtsLivingEntityTickStateMixin state
-                    ? state.prts$xxa() : Float.NaN,
-                row.villager() instanceof PrtsLivingEntityTickStateMixin state2
-                    ? state2.prts$zza() : Float.NaN,
-                "NA");
             boundPath = stages(staged, ordinary, staged && ordinary && delayedRecomputation());
             if (boundPath) {
                 NativePathStage.bind(request, stagedPath, ordinary);
@@ -166,16 +156,6 @@ final class NativePumpRow implements NativeWritePump.Row {
         NativeMovePhaseContext.beginPhaseB();
         try {
             LivingEntity stages = row.villager();
-            TargetEntityDiagnostic.notePhase("B_start", row.phase().tick, row.villager().getUUID(),
-                row.villager().getDeltaMovement(), row.villager().getX(), row.villager().getY(),
-                row.villager().getZ(), row.villager().onGround(),
-                row.villager().getBrain().getActiveNonCoreActivity().map(a -> a.getName()).orElse("none"),
-                row.villager().goalSelector.getAvailableGoals().size(),
-                row.villager() instanceof PrtsLivingEntityTickStateMixin state
-                    ? state.prts$xxa() : Float.NaN,
-                row.villager() instanceof PrtsLivingEntityTickStateMixin state2
-                    ? state2.prts$zza() : Float.NaN,
-                "NA");
             String key = rowKey();
             boolean bindMove = NativeMoveStage.has(key);
             if (bindMove) {

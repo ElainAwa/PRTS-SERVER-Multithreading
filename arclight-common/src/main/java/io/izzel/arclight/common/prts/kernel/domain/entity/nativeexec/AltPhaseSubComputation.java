@@ -22,7 +22,7 @@ public final class AltPhaseSubComputation {
         }
     }
 
-    /** Frozen inputs and pure result of the server-AI-step controls (E7). */
+    /** Frozen inputs and pure result of the server AI-step controls. */
     public record Controls(float rotation, float xxa, float zza, boolean jumping) {
         /** Pure: the clamped lateral/forward control pair, no world read. */
         public float[] compute() {
@@ -32,7 +32,7 @@ public final class AltPhaseSubComputation {
         }
     }
 
-    /** Frozen inputs and pure result of the LivingEntity tick tail (E9). */
+    /** Frozen inputs and pure result of the living entity tick tail. */
     public record TickTail(float yBodyRot, float run, float attackAnim, float swing) {
         /** Pure: the animation phase summary, no world read or event. */
         public float[] compute() {

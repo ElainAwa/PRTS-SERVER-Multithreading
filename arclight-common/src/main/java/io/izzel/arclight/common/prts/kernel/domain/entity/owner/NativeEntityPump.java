@@ -24,8 +24,6 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.program.ReadPermit;
 import io.izzel.arclight.common.prts.kernel.generic.GenericCancel;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.AltPhaseSubComputation;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.AltPhaseStage;
-import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.AltWaveDiagnostic;
-import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.AltFreezeDiagnostic;
 import io.izzel.arclight.common.prts.fixes.ownership.PrtsLivingEntityTickStateMixin;
 import net.minecraft.world.level.pathfinder.Path;
 
@@ -249,7 +247,6 @@ final class NativeEntityPump {
                 region, collisions, villager.maxUpStep(), villager.onGround());
             frozen.put(key, read);
             NativeMoveStage.stageRead(key, read);
-            TargetEntityDiagnostic.noteRead(tick, villager.getUUID(), key, read);
             wave.issue(key, admissions.get(row).entry().seat().position(),
                 identity(row), generation(row), snapshot(row, identity(row), generation(row)),
                 () -> NativeMoveCompute.compute(villager, read));
@@ -277,14 +274,9 @@ final class NativeEntityPump {
                         ((PrtsLivingEntityTickStateMixin) villager).prts$attackAnim(),
                         (float) ((PrtsLivingEntityTickStateMixin) villager).prts$swingTime());
                 alt3.put(key, s3); alt7.put(key, s7); alt9.put(key, s9);
-                AltFreezeDiagnostic.note(key, tick, row.level().getGameTime(),
-                    villager.tickCount, s3, s7, s9);
                 altWave.issue(key + "|aiHead", seat, id, gen, snap, s3::compute);
-                AltWaveDiagnostic.issued(1);
                 altWave.issue(key + "|controls", seat, id, gen, snap, s7::compute);
-                AltWaveDiagnostic.issued(2);
                 altWave.issue(key + "|tickTail", seat, id, gen, snap, s9::compute);
-                AltWaveDiagnostic.issued(3);
             }
         }
         wave.run();
@@ -304,7 +296,7 @@ final class NativeEntityPump {
         }
         if (altWave != null) {
             altWave.run();
-            AltWaveDiagnostic.witness(altWave.close());
+            altWave.close();
             for (String key : alt3.keySet()) {
                 String[][] kinds = new String[][]{
                     {"aiHead", "|aiHead"}, {"controls", "|controls"}, {"tickTail", "|tickTail"}
@@ -312,7 +304,6 @@ final class NativeEntityPump {
                 for (String[] kind : kinds) {
                     NativeRowProgram<Object> p = altWave.program(key + kind[1]);
                     boolean ready = p != null && p.state() == NativeRowProgram.State.READY;
-                    AltWaveDiagnostic.stage(kind[0], ready);
                     if (ready) {
                         Object frozenInput = switch (kind[0]) {
                             case "aiHead" -> alt3.get(key);
