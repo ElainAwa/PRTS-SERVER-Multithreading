@@ -59,6 +59,7 @@
     "waitpoints.PrtsMapItemWaitSiteMixin",
     "waitpoints.PrtsPoiManagerWaitSiteMixin",
     "waitpoints.PrtsPoiManagerSingleWinnerMixin",
+    "waitpoints.PrtsPoiAcquireTakeMixin",
     "waitpoints.PrtsStructureManagerWaitSitesMixin",
     "waitpoints.PrtsPlayerRespawnLogicWaitSiteMixin",
     "waitpoints.PrtsServerLevelWaitSiteMixin",
