@@ -2,6 +2,7 @@
 package io.izzel.arclight.common.prts.kernel.domain.entity.owner;
 
 import net.minecraft.core.GlobalPos;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.Pose;
 import net.minecraft.world.entity.ai.memory.MemoryModuleType;
 import net.minecraft.world.entity.npc.Villager;
@@ -79,7 +80,23 @@ final class EntityEffectPayload {
             + "|content=" + (content == null ? "" : content));
     }
 
+    /** The state fields every admitted mob type shares; a type slice extends this instead of
+     * copying the entity/pose/activity reads into its own capture. */
+    record MobState(double x, double y, double z, double motionX, double motionY, double motionZ,
+                    double health, String pose, String activity) {
+    }
+
+    static MobState captureMob(Mob mob) {
+        var brain = mob.getBrain();
+        return new MobState(mob.getX(), mob.getY(), mob.getZ(),
+            mob.getDeltaMovement().x, mob.getDeltaMovement().y, mob.getDeltaMovement().z,
+            mob.getHealth(), mob.getPose().name(),
+            brain == null ? "none"
+                : brain.getActiveNonCoreActivity().map(activity -> activity.getName()).orElse("none"));
+    }
+
     static Snapshot capture(Villager villager) {
+        MobState common = captureMob(villager);
         var inventory = villager.getInventory();
         StringBuilder items = new StringBuilder();
         int itemCount = 0;
@@ -92,12 +109,9 @@ final class EntityEffectPayload {
         }
         GlobalPos job = villager.getBrain().getMemory(MemoryModuleType.JOB_SITE).orElse(null);
         GlobalPos home = villager.getBrain().getMemory(MemoryModuleType.HOME).orElse(null);
-        return new Snapshot(villager.getX(), villager.getY(), villager.getZ(),
-            villager.getDeltaMovement().x, villager.getDeltaMovement().y,
-            villager.getDeltaMovement().z, villager.getHealth(), itemCount,
-            items.toString(), villager.getPose().name(),
-            villager.getBrain().getActiveNonCoreActivity().map(activity -> activity.getName()).orElse("none"),
-            villager.getVillagerData().getProfession().toString(),
+        return new Snapshot(common.x(), common.y(), common.z(), common.motionX(), common.motionY(),
+            common.motionZ(), common.health(), itemCount, items.toString(), common.pose(),
+            common.activity(), villager.getVillagerData().getProfession().toString(),
             villager.getVillagerXp(), globalPos(job), globalPos(home));
     }
 

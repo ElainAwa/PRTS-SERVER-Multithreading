@@ -2,6 +2,7 @@
 package io.izzel.arclight.common.prts.kernel.domain.entity.owner;
 
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.entity.schedule.Activity;
 
@@ -67,16 +68,7 @@ public final class RealEntityOwnerBody {
             || !villager.getBrain().isActive(Activity.REST)) {
             return false;
         }
-        try {
-            villager.tick();
-        } catch (Throwable terminal) {
-            TERMINALS.increment();
-            RestOwnerWiring.record(villager, Result.TERMINAL);
-            throw terminal;
-        }
-        RUNS.increment();
-        RestOwnerWiring.record(villager, Result.EXECUTED);
-        return true;
+        return runMobTickOnServer(level, villager);
     }
 
     /** B3-S3: runs the original non-sleeping, non-PANIC/hurt walking AI tick on the server thread;
@@ -96,15 +88,32 @@ public final class RealEntityOwnerBody {
             || villager.getBrain().isActive(Activity.REST)) {
             return false;
         }
+        return runMobTickOnServer(level, villager);
+    }
+
+    /** The common owner-body execution shared by every admitted mob type: the original tick runs on
+     * the owner thread and the outcome is recorded once. Type-specific preconditions stay in the
+     * Villager entry points until a later slice validates them. */
+    public static boolean runMobOnServer(ServerLevel level, Mob mob) {
+        if (level == null || mob == null || mob.level() != level
+            || mob.isRemoved() || !mob.isAlive() || mob.isNoAi() || mob.isPassenger()
+            || mob.getPose() == net.minecraft.world.entity.Pose.SLEEPING
+            || (mob.getBrain() != null && mob.getBrain().isActive(Activity.REST))) {
+            return false;
+        }
+        return runMobTickOnServer(level, mob);
+    }
+
+    private static boolean runMobTickOnServer(ServerLevel level, Mob mob) {
         try {
-            villager.tick();
+            mob.tick();
         } catch (Throwable terminal) {
             TERMINALS.increment();
-            RestOwnerWiring.record(villager, Result.TERMINAL);
+            RestOwnerWiring.record(mob, Result.TERMINAL);
             throw terminal;
         }
         RUNS.increment();
-        RestOwnerWiring.record(villager, Result.EXECUTED);
+        RestOwnerWiring.record(mob, Result.EXECUTED);
         return true;
     }
 
