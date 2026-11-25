@@ -11,6 +11,10 @@ import io.izzel.arclight.common.mod.mixins.annotation.TransformAccess;
 import io.izzel.arclight.common.mod.server.world.ArclightWorldConfig;
 import io.izzel.arclight.common.mod.util.ArclightCaptures;
 import io.izzel.arclight.common.mod.util.DistValidate;
+import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.ExperimentGate;
+import io.izzel.arclight.common.prts.kernel.domain.entity.owner.OwnerSharedRandomSource;
+import io.izzel.arclight.common.prts.kernel.random.SharedStream;
+import io.izzel.arclight.common.prts.kernel.random.StreamKey;
 import it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
@@ -103,6 +107,8 @@ public abstract class LevelMixin implements WorldBridge, LevelAccessor, LevelWri
 
     @Unique private boolean arclight$isActual;
 
+    @Unique private static final ThreadLocal<StreamKey> arclight$levelBaseKey = new ThreadLocal<>();
+
     @ShadowConstructor
     public void arclight$constructor(WritableLevelData worldInfo, ResourceKey<Level> dimension, RegistryAccess registryAccess, final Holder<DimensionType> dimensionType, Supplier<ProfilerFiller> profiler, boolean isRemote, boolean isDebug, long seed, int maxNeighborUpdate) {
         throw new RuntimeException();
@@ -121,6 +127,24 @@ public abstract class LevelMixin implements WorldBridge, LevelAccessor, LevelWri
     @Inject(method = "<init>", at = @At(value = "CTOR_HEAD", unsafe = true))
     private void arclight$preInit(WritableLevelData writableLevelData, ResourceKey resourceKey, RegistryAccess registryAccess, Holder holder, Supplier supplier, boolean bl, boolean bl2, long l, int i, CallbackInfo ci) {
         this.arclight$isActual = DistValidate.isValid((LevelAccessor) (Object) this);
+        if (ExperimentGate.parse(System.getProperty("arclight.prts.diag.levelBaseSeed"))) {
+            StreamKey levelKey = arclight$levelBaseKey(resourceKey, l);
+            if (levelKey != null) {
+                // A level is constructed on one thread: this slot carries the seed and dimension to
+                // the one field initializer that installs the base source, and must not leak to a
+                // later level. The dimension names the world identity because no persistent server id
+                // exists yet; object hashes, thread ids and the clock are never used.
+                arclight$levelBaseKey.set(levelKey);
+            }
+        }
+    }
+
+    private static StreamKey arclight$levelBaseKey(ResourceKey<?> resourceKey, long seed) {
+        if (resourceKey == null) {
+            return null;
+        }
+        String dimension = resourceKey.location().toString();
+        return StreamKey.of(seed, dimension, dimension, "level-base-random", 0L);
     }
 
     // InitAuther97: inject later than ironsspellbooks, see their LevelMixin
@@ -370,9 +394,10 @@ public abstract class LevelMixin implements WorldBridge, LevelAccessor, LevelWri
     }
 
     /** Behaviour: an owner-body level random comes from a per-row stream instead of the level's one
-     * legacy source. Why here: the field is final and every later holder captures this instance, so
-     * the wrapper must be installed when the level is built. Invariant: only the declared diagnostic
-     * switch changes the source; failure keeps the original instance. */
+     * legacy source, and an opt-in diagnostic can key the level's base source from the world seed and
+     * dimension instead of the clock. Why here: the field is final and every later holder captures
+     * this instance, so the source must be installed while the level is built. Invariant: both changes
+     * are off by default, and each keeps the original instance when its switch is absent. */
     @com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation(method = "<init>",
         at = @At(value = "INVOKE",
             target = "Lnet/minecraft/util/RandomSource;create()Lnet/minecraft/util/RandomSource;",
@@ -380,9 +405,14 @@ public abstract class LevelMixin implements WorldBridge, LevelAccessor, LevelWri
     private static RandomSource prts$ownerThreadRandom(
         com.llamalad7.mixinextras.injector.wrapoperation.Operation<RandomSource> original) {
         RandomSource base = original.call();
+        StreamKey carried = arclight$levelBaseKey.get();
+        arclight$levelBaseKey.remove();
+        if (carried != null && ExperimentGate.parse(System.getProperty("arclight.prts.diag.levelBaseSeed"))) {
+            base = new SharedStream(StreamKey.of(carried.worldSeed(), carried.worldIdentity(),
+                carried.dimension(), "level-base-random", 0L));
+        }
         if (Boolean.getBoolean("arclight.prts.ownerSharedRandom")) {
-            return new io.izzel.arclight.common.prts.kernel.domain.entity.owner
-                .OwnerSharedRandomSource(base);
+            return new OwnerSharedRandomSource(base);
         }
         return base;
     }
