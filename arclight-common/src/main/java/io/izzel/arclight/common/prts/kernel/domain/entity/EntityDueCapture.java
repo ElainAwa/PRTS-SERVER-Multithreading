@@ -6,6 +6,7 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOw
 import io.izzel.arclight.common.prts.support.EntityEligibility;
 import io.izzel.arclight.common.prts.support.PrtsEntityCapability;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.Vec3;
 
@@ -81,12 +82,17 @@ public final class EntityDueCapture {
             }
             EntityEligibility.Reason reason = PrtsEntityCapability.census(entity);
             Vec3 motion = entity.getDeltaMovement();
+            // Only a living entity carries a body rotation; the visual-rotation accessor on other
+            // entities reports yaw, so those rows keep the unfrozen sentinel instead of a borrowed
+            // value.
+            double yBodyRot = entity instanceof LivingEntity
+                ? entity.getVisualRotationYInDegrees() : Double.NaN;
             rows.add(new EntityDueWindow.Row(entity.getId(),
                 entity.getUUID().getMostSignificantBits(),
                 entity.getUUID().getLeastSignificantBits(), entity.tickCount,
                 entity.isPassenger(), entity.isRemoved(), entity.getX(), entity.getY(),
                 entity.getZ(), entity.getYRot(), entity.getXRot(), motion.x, motion.y, motion.z,
-                DispatchSnapshot.hostStep(entity), reason, entity.getClass().getName()));
+                DispatchSnapshot.hostStep(entity), reason, entity.getClass().getName(), yBodyRot));
         } catch (Throwable failure) {
             fail(failure);
         }

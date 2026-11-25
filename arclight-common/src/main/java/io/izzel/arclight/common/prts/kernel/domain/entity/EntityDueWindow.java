@@ -19,20 +19,33 @@ public final class EntityDueWindow {
     /** Memory guard of one tick's due window; rows beyond it keep their identity as a refusal. */
     public static final int ROW_BOUND = 1 << 20;
 
-    /** One due row, read on the tick thread before the host iteration. */
+    /**
+     * One due row, read on the tick thread before the host iteration. {@code yBodyRot} is the body
+     * rotation frozen with the other pose fields; {@link Double#NaN} marks a row frozen without one,
+     * so the reader must fall back to the live entity or refuse by name.
+     */
     public record Row(int entityId, long uuidHigh, long uuidLow, int tickCount, boolean passenger,
                       boolean removed, double x, double y, double z, double yaw, double pitch,
                       double vx, double vy, double vz, long hostStep,
-                      EntityEligibility.Reason reason, String classTag) {
+                      EntityEligibility.Reason reason, String classTag, double yBodyRot) {
 
         public Row {
             Objects.requireNonNull(reason, "reason");
         }
 
+        /** A row frozen before body rotation joined the checkpoint; the value stays unknown. */
+        public Row(int entityId, long uuidHigh, long uuidLow, int tickCount, boolean passenger,
+                   boolean removed, double x, double y, double z, double yaw, double pitch,
+                   double vx, double vy, double vz, long hostStep,
+                   EntityEligibility.Reason reason, String classTag) {
+            this(entityId, uuidHigh, uuidLow, tickCount, passenger, removed, x, y, z, yaw, pitch,
+                vx, vy, vz, hostStep, reason, classTag, Double.NaN);
+        }
+
         /** The same row with its internal class tag, written by the tick thread that froze it. */
         public Row withClassTag(String className) {
             return new Row(entityId, uuidHigh, uuidLow, tickCount, passenger, removed, x, y, z,
-                yaw, pitch, vx, vy, vz, hostStep, reason, className);
+                yaw, pitch, vx, vy, vz, hostStep, reason, className, yBodyRot);
         }
     }
 

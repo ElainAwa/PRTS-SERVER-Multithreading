@@ -20,8 +20,9 @@ import java.util.function.LongSupplier;
 
 /**
  * Captures one due window as the fixed input of a reference run from live sources only. Reversible
- * state comes from the values the tick thread froze in each row plus the body rotation read from
- * that live entity; a source that cannot be supplied refuses the capture by name. */
+ * state comes from the values the tick thread froze in each row, including its body rotation; a
+ * row frozen without one falls back to the live entity, and a source that still cannot be supplied
+ * refuses the capture by name. */
 public final class ReferenceCapture {
 
     /** The stable business name of the stream a reference input carries. */
@@ -37,8 +38,8 @@ public final class ReferenceCapture {
 
     /**
      * The live sources one capture reads: seed, registration, owners, wait bound, a shared stream
-     * table, and a body rotation reader by the id a row froze. A missing source is named when the
-     * capture refuses instead of being replaced. */
+     * table, and a body rotation reader that prefers a row's frozen value. A missing source is
+     * named when the capture refuses instead of being replaced. */
     public record RealSources(LongSupplier worldSeed, RegistrationEpoch registration,
                               OwnerRegistry owners, SharedStreamTable streams,
                               LongSupplier waitBoundNanos,
@@ -56,15 +57,22 @@ public final class ReferenceCapture {
     public static RealSources fromLevel(net.minecraft.server.level.ServerLevel level,
                                         SharedStreamTable streams) {
         LongSupplier seed = null;
-        Function<EntityDueWindow.Row, Double> bodyRotation = null;
+        // Prefer the body rotation the tick thread froze in the row. A row frozen without one falls
+        // back to the live entity of that id; a missing entity refuses the capture by name below
+        // instead of borrowing the row yaw.
+        Function<EntityDueWindow.Row, Double> bodyRotation = row -> {
+            double frozen = row.yBodyRot();
+            if (Double.isFinite(frozen)) {
+                return frozen;
+            }
+            if (level == null) {
+                return null;
+            }
+            net.minecraft.world.entity.Entity entity = level.getEntity(row.entityId());
+            return entity == null ? null : (double) entity.getVisualRotationYInDegrees();
+        };
         if (level != null) {
             seed = level::getSeed;
-            // A due row omits body rotation; read it from the live entity of that id. A missing
-            // entity refuses the capture below instead of borrowing the row yaw.
-            bodyRotation = row -> {
-                net.minecraft.world.entity.Entity entity = level.getEntity(row.entityId());
-                return entity == null ? null : (double) entity.getVisualRotationYInDegrees();
-            };
         }
         KernelModule kernel = KernelModule.instance();
         return new RealSources(seed, kernel.registrationEpoch(), kernel.owners(), streams,
