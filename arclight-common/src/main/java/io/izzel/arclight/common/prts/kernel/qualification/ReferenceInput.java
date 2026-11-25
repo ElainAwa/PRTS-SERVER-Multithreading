@@ -6,19 +6,20 @@ import io.izzel.arclight.common.prts.kernel.random.StreamKey;
 import io.izzel.arclight.common.prts.kernel.random.StreamState;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.TreeMap;
 
-/** The fixed input of one reference run: the world and registration version, the plan tick, the
- * arrival rows in their order, the random stream start and position, and the before state. Capture
- * and restore are bit-exact; a restore that does not match the captured input is refused with the
- * offending field named instead of quietly starting from a new state. */
+/** The fixed input of one reference run: world and registration version, ordered arrival rows,
+ * random stream, a one-way validation digest and each frozen entity's reversible state. The digest
+ * never drives a restore; a mismatch is refused by name. */
 public record ReferenceInput(long worldSeed, String worldId, long registrationVersion,
                              long planTick, int owners, List<Arrival> arrivals,
                              StreamState streamState, long streamPosition,
-                             Map<Long, Long> initialState) {
+                             Map<Long, Long> initialState,
+                             Map<Long, EntityState> reversibleState) {
 
     /** One fixed arrival row. */
     public record Arrival(long key, int entityId, double x, double y, double z, long order,
@@ -31,6 +32,13 @@ public record ReferenceInput(long worldSeed, String worldId, long registrationVe
         }
     }
 
+    /** One entity's state when its due row was frozen: the tick counter it held, not the next host
+     * tick. Its own random source, brain, goals, inventory and world clock stay not measured; no
+     * synthetic value is written in their place. */
+    public record EntityState(double x, double y, double z, double yRot, double xRot,
+                              double yBodyRot, double vx, double vy, double vz, int tickCount) {
+    }
+
     /** The result of a capture/restore attempt; a failure names the field and refuses the run. */
     public record RestoreResult(ReferenceInput restored, String failure) {
 
@@ -39,27 +47,47 @@ public record ReferenceInput(long worldSeed, String worldId, long registrationVe
         }
     }
 
+    /** Creates an input without reversible state; callers that capture live rows supply it. */
+    public ReferenceInput(long worldSeed, String worldId, long registrationVersion,
+                          long planTick, int owners, List<Arrival> arrivals,
+                          StreamState streamState, long streamPosition,
+                          Map<Long, Long> initialState) {
+        this(worldSeed, worldId, registrationVersion, planTick, owners, arrivals, streamState,
+            streamPosition, initialState, Map.of());
+    }
+
     public ReferenceInput {
         Objects.requireNonNull(worldId, "worldId");
         Objects.requireNonNull(arrivals, "arrivals");
         Objects.requireNonNull(streamState, "streamState");
         Objects.requireNonNull(initialState, "initialState");
+        Objects.requireNonNull(reversibleState, "reversibleState");
         if (worldId.isEmpty()) {
             throw new IllegalArgumentException("a reference input names its world");
         }
         List<Arrival> ordered = new ArrayList<>(arrivals);
-        ordered.sort(java.util.Comparator.comparingLong(Arrival::order));
+        ordered.sort(Comparator.comparingLong(Arrival::order));
         arrivals = List.copyOf(ordered);
         initialState = Map.copyOf(initialState);
+        reversibleState = Map.copyOf(new TreeMap<>(reversibleState));
     }
 
-    /** Captures the fixed input of one reference run. */
+    /** Captures the fixed input of one reference run without reversible state. */
     public static ReferenceInput capture(long worldSeed, String worldId, long registrationVersion,
                                          long planTick, int owners, List<Arrival> arrivals,
                                          SharedStream stream, Map<Long, Long> initialState) {
+        return capture(worldSeed, worldId, registrationVersion, planTick, owners, arrivals, stream,
+            initialState, Map.of());
+    }
+
+    /** Captures the fixed input of one reference run with the reversible state of its frozen rows. */
+    public static ReferenceInput capture(long worldSeed, String worldId, long registrationVersion,
+                                         long planTick, int owners, List<Arrival> arrivals,
+                                         SharedStream stream, Map<Long, Long> initialState,
+                                         Map<Long, EntityState> reversibleState) {
         Objects.requireNonNull(stream, "stream");
         return new ReferenceInput(worldSeed, worldId, registrationVersion, planTick, owners,
-            arrivals, stream.snapshot(), stream.draws(), initialState);
+            arrivals, stream.snapshot(), stream.draws(), initialState, reversibleState);
     }
 
     /** Restores to the captured state only when every field still matches; a mismatch is named. */
@@ -94,6 +122,9 @@ public record ReferenceInput(long worldSeed, String worldId, long registrationVe
         if (!initialState.equals(snapshot.initialState())) {
             return new RestoreResult(null, "restore-failed:initialState");
         }
+        if (!reversibleState.equals(snapshot.reversibleState())) {
+            return new RestoreResult(null, "restore-failed:reversibleState");
+        }
         return new RestoreResult(snapshot, "");
     }
 
@@ -116,7 +147,12 @@ public record ReferenceInput(long worldSeed, String worldId, long registrationVe
         List<Arrival> changed = new ArrayList<>(arrivals);
         changed.remove(index);
         return new ReferenceInput(worldSeed, worldId, registrationVersion, planTick, owners,
-            changed, streamState, streamPosition, initialState);
+            changed, streamState, streamPosition, initialState, reversibleState);
+    }
+
+    /** The reversible state of one frozen entity, or null when this input does not carry it. */
+    public EntityState entityState(int entityId) {
+        return reversibleState.get((long) entityId);
     }
 
     /** The stream position the capture recorded. */

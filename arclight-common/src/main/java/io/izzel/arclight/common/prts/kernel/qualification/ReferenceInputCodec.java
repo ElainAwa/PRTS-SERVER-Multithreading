@@ -13,12 +13,15 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 
 /**
  * The archival encoding of one fixed reference input. Canonical bytes use the length-prefixed UTF-8
  * and little-endian integer form of a stream key, and a trailing SHA-256 digest covers the whole
- * body. A decode that cannot verify the digest or read one named field refuses with the field named
- * instead of returning a partial input.
+ * body, including the reversible entity state. The reversible section is appended after the older
+ * fields: an older archive is refused at that named field instead of being silently read without
+ * the state a replay needs. A decode that cannot verify the digest or read one named field refuses
+ * with the field named instead of returning a partial input.
  */
 public final class ReferenceInputCodec {
 
@@ -33,6 +36,9 @@ public final class ReferenceInputCodec {
 
     /** A bound on repeated entries and on one text component, so a damaged length cannot allocate freely. */
     private static final int MAX_ENTRIES = 1 << 20;
+
+    /** The encoded size of one reversible entry: an entity id, nine double words and a tick count. */
+    private static final int REVERSIBLE_ENTRY_BYTES = Long.BYTES + 9 * Long.BYTES + Integer.BYTES;
 
     /** One decode attempt: an input or a named refusal. */
     public record DecodeResult(ReferenceInput input, String failure) {
@@ -84,6 +90,22 @@ public final class ReferenceInputCodec {
         for (Map.Entry<Long, Long> entry : initialState.entrySet()) {
             writeLong(body, entry.getKey());
             writeLong(body, entry.getValue());
+        }
+        Map<Long, ReferenceInput.EntityState> reversibleState = new TreeMap<>(input.reversibleState());
+        writeInt(body, reversibleState.size());
+        for (Map.Entry<Long, ReferenceInput.EntityState> entry : reversibleState.entrySet()) {
+            ReferenceInput.EntityState entity = entry.getValue();
+            writeLong(body, entry.getKey());
+            writeLong(body, Double.doubleToRawLongBits(entity.x()));
+            writeLong(body, Double.doubleToRawLongBits(entity.y()));
+            writeLong(body, Double.doubleToRawLongBits(entity.z()));
+            writeLong(body, Double.doubleToRawLongBits(entity.yRot()));
+            writeLong(body, Double.doubleToRawLongBits(entity.xRot()));
+            writeLong(body, Double.doubleToRawLongBits(entity.yBodyRot()));
+            writeLong(body, Double.doubleToRawLongBits(entity.vx()));
+            writeLong(body, Double.doubleToRawLongBits(entity.vy()));
+            writeLong(body, Double.doubleToRawLongBits(entity.vz()));
+            writeInt(body, entity.tickCount());
         }
         byte[] canonical = body.toByteArray();
         byte[] digest = sha256(canonical);
@@ -152,13 +174,34 @@ public final class ReferenceInputCodec {
                 initialState.put(reader.longValue("initialState.key"),
                     reader.longValue("initialState.value"));
             }
+            int reversibleCount = reader.intValue("reversibleState");
+            if (reversibleCount < 0 || reversibleCount > MAX_ENTRIES
+                || reversibleCount > reader.remaining() / REVERSIBLE_ENTRY_BYTES) {
+                return refusal("reversibleState");
+            }
+            Map<Long, ReferenceInput.EntityState> reversibleState = new LinkedHashMap<>();
+            for (int index = 0; index < reversibleCount; index++) {
+                long entityId = reader.longValue("reversibleState.key");
+                double x = Double.longBitsToDouble(reader.longValue("reversibleState.x"));
+                double y = Double.longBitsToDouble(reader.longValue("reversibleState.y"));
+                double z = Double.longBitsToDouble(reader.longValue("reversibleState.z"));
+                double yRot = Double.longBitsToDouble(reader.longValue("reversibleState.yRot"));
+                double xRot = Double.longBitsToDouble(reader.longValue("reversibleState.xRot"));
+                double yBodyRot = Double.longBitsToDouble(reader.longValue("reversibleState.yBodyRot"));
+                double vx = Double.longBitsToDouble(reader.longValue("reversibleState.vx"));
+                double vy = Double.longBitsToDouble(reader.longValue("reversibleState.vy"));
+                double vz = Double.longBitsToDouble(reader.longValue("reversibleState.vz"));
+                int tickCount = reader.intValue("reversibleState.tickCount");
+                reversibleState.put(entityId, new ReferenceInput.EntityState(x, y, z, yRot, xRot,
+                    yBodyRot, vx, vy, vz, tickCount));
+            }
             if (reader.remaining() != 0) {
                 return refusal("trailing-bytes");
             }
             StreamState state = new StreamState(dataVersion, streamKey, seedLo, seedHi, draws,
                 hasGaussian, gaussian, forks);
             ReferenceInput input = new ReferenceInput(worldSeed, worldId, registrationVersion,
-                planTick, owners, arrivals, state, streamPosition, initialState);
+                planTick, owners, arrivals, state, streamPosition, initialState, reversibleState);
             return new DecodeResult(input, "");
         } catch (Refusal refused) {
             return refusal(refused.field);

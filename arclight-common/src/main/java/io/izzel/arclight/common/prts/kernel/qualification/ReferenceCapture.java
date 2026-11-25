@@ -15,13 +15,13 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.function.LongSupplier;
 
 /**
- * Captures one due window as the fixed input of a reference run from live sources only. Every field
- * comes from a production object or is named as not measured; a tick counter, a world incarnation, a
- * constant owner count and an empty state are never used in place of a real value.
- */
+ * Captures one due window as the fixed input of a reference run from live sources only. Reversible
+ * state comes from the values the tick thread froze in each row plus the body rotation read from
+ * that live entity; a source that cannot be supplied refuses the capture by name. */
 public final class ReferenceCapture {
 
     /** The stable business name of the stream a reference input carries. */
@@ -36,25 +36,39 @@ public final class ReferenceCapture {
     }
 
     /**
-     * The live sources one capture reads. The seed, registration, owner registry and wait bound are
-     * bound to production objects; the stream table is one a level random already created. A source
-     * that cannot be supplied is named when the capture refuses instead of being replaced.
-     */
+     * The live sources one capture reads: seed, registration, owners, wait bound, a shared stream
+     * table, and a body rotation reader by the id a row froze. A missing source is named when the
+     * capture refuses instead of being replaced. */
     public record RealSources(LongSupplier worldSeed, RegistrationEpoch registration,
                               OwnerRegistry owners, SharedStreamTable streams,
-                              LongSupplier waitBoundNanos) {
+                              LongSupplier waitBoundNanos,
+                              Function<EntityDueWindow.Row, Double> bodyRotation) {
+
+        /** Sources without a body rotation reader cannot bind a reversible state. */
+        public RealSources(LongSupplier worldSeed, RegistrationEpoch registration,
+                           OwnerRegistry owners, SharedStreamTable streams,
+                           LongSupplier waitBoundNanos) {
+            this(worldSeed, registration, owners, streams, waitBoundNanos, null);
+        }
     }
 
     /** Binds the sources of one real level and the shared stream table its random already owns. */
     public static RealSources fromLevel(net.minecraft.server.level.ServerLevel level,
                                         SharedStreamTable streams) {
         LongSupplier seed = null;
+        Function<EntityDueWindow.Row, Double> bodyRotation = null;
         if (level != null) {
             seed = level::getSeed;
+            // A due row omits body rotation; read it from the live entity of that id. A missing
+            // entity refuses the capture below instead of borrowing the row yaw.
+            bodyRotation = row -> {
+                net.minecraft.world.entity.Entity entity = level.getEntity(row.entityId());
+                return entity == null ? null : (double) entity.getVisualRotationYInDegrees();
+            };
         }
         KernelModule kernel = KernelModule.instance();
         return new RealSources(seed, kernel.registrationEpoch(), kernel.owners(), streams,
-            () -> Math.max(0L, KernelSettings.waitBoundMs()) * 1_000_000L);
+            () -> Math.max(0L, KernelSettings.waitBoundMs()) * 1_000_000L, bodyRotation);
     }
 
     /** Captures one due window; an empty window or an unavailable source is refused by name. */
@@ -114,8 +128,13 @@ public final class ReferenceCapture {
         if (stream == null) {
             return new Result(null, "NOT_MEASURED:streamState");
         }
+        Function<EntityDueWindow.Row, Double> bodyRotation = sources.bodyRotation();
+        if (bodyRotation == null) {
+            return new Result(null, "NOT_MEASURED:yBodyRot");
+        }
         List<ReferenceInput.Arrival> arrivals = new ArrayList<>(world.rows().size());
         Map<Long, Long> initialState = new LinkedHashMap<>();
+        Map<Long, ReferenceInput.EntityState> reversibleState = new LinkedHashMap<>();
         long order = 1L;
         for (EntityDueWindow.Row row : world.rows()) {
             long identity = identityOf(row);
@@ -125,10 +144,27 @@ public final class ReferenceCapture {
             arrivals.add(new ReferenceInput.Arrival(identity, row.entityId(), row.x(), row.y(),
                 row.z(), order++, waitBoundNanos));
             initialState.put((long) row.entityId(), stateDigestOf(row));
+            double body;
+            try {
+                Double supplied = bodyRotation.apply(row);
+                if (supplied == null || !Double.isFinite(supplied)) {
+                    return new Result(null, "NOT_MEASURED:yBodyRot");
+                }
+                body = supplied;
+            } catch (Throwable unavailable) {
+                return new Result(null, "NOT_MEASURED:yBodyRot");
+            }
+            // The row holds the tick counter the entity had on the tick thread. A predicted next
+            // tick is a different state and must not be used as the start of a replay.
+            reversibleState.put((long) row.entityId(), new ReferenceInput.EntityState(row.x(),
+                row.y(), row.z(), row.yaw(), row.pitch(), body, row.vx(), row.vy(), row.vz(),
+                row.tickCount()));
         }
+        // The entity's own random source, brain, goals, inventory and world clock are not exposed
+        // as reversible values; they stay not measured, with no synthetic value substituted.
         ReferenceInput input = ReferenceInput.capture(worldSeed, world.worldId(),
             sources.registration().current(), planTick, sources.owners().activeTokens(),
-            arrivals, stream, initialState);
+            arrivals, stream, initialState, reversibleState);
         return new Result(input, "");
     }
 
@@ -149,7 +185,7 @@ public final class ReferenceCapture {
         return value & Long.MAX_VALUE;
     }
 
-    /** A stable summary of the frozen initial pose and motion, keyed by the row's entity id. */
+    /** A one-way summary of the frozen initial pose and motion, used only to check a live row. */
     private static long stateDigestOf(EntityDueWindow.Row row) {
         long digest = 0x9E3779B97F4A7C15L;
         digest = mix(digest, Double.doubleToRawLongBits(row.x()));
