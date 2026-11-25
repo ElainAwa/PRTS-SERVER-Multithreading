@@ -28,6 +28,7 @@ import io.izzel.arclight.common.mod.util.ArclightCaptures;
 import io.izzel.arclight.common.mod.util.DelegateWorldInfo;
 import io.izzel.arclight.common.mod.util.DistValidate;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityDueCapture;
+import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.ExperimentGate;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership;
 import io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase;
 import io.izzel.arclight.i18n.ArclightConfig;
@@ -392,6 +393,32 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
         ServerLevel ownerLevel = (ServerLevel) (Object) this;
         io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase
             .enter(ownerLevel, EntityDueCapture.current(ownerLevel.getServer().getTickCount()));
+    }
+
+    /** Freezes the same due window for an opt-in diagnostic replay without entering the owner
+     * phase. With the kernel switched off the host path produces no published kernel window, so the
+     * rows the host is about to tick must be captured by a separate, read-only handler. This targets
+     * the same tick-list forEach call as the kernel freeze with a BEFORE shift, the only point where
+     * the exact iteration set is known before any row ticks; a separate handler leaves the kernel
+     * freeze body unchanged. The property is absent by default and only an explicit affirmative
+     * value enables it, so an ordinary server captures nothing and keeps the host loop untouched.
+     * A failed freeze is recorded on the existing failure marker and never defers a row; the frozen
+     * rows are read from the current-window accessor, which never publishes them as a kernel source. */
+    @Inject(method = "tick", at = @At(value = "INVOKE", shift = At.Shift.BEFORE,
+        target = "Lnet/minecraft/world/level/entity/EntityTickList;forEach(Ljava/util/function/Consumer;)V"))
+    private void prts$diagReplayFreezeDueWindow(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
+        if (!ExperimentGate.parse(System.getProperty("arclight.prts.diag.replayFreeze"))) {
+            return;
+        }
+        try {
+            ServerLevel level = (ServerLevel) (Object) this;
+            EntityDueCapture.begin(level.getServer().getTickCount(),
+                level.dimension().location().toString(), this.entityManager.count());
+            this.entityTickList.forEach(EntityDueCapture::row);
+            EntityDueCapture.end();
+        } catch (Throwable failure) {
+            EntityDueCapture.fail(failure);
+        }
     }
 
     /** Observes the level's own discard decision for a pending owner row: the row will not reach
