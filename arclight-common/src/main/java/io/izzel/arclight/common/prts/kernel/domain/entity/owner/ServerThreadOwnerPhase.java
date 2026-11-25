@@ -1198,7 +1198,7 @@ public final class ServerThreadOwnerPhase {
     static boolean sameLogicalRow(LevelPhase phase, Villager selected,
                                   net.minecraft.world.entity.Entity entity) {
         if (phase == null || selected == null || entity == null
-            || !(entity instanceof Villager)) {
+            || !OwnerTypeAdmission.admits(entity)) {
             return false;
         }
         RowIdentity identity = phase.identities.get(entity.getId());
@@ -1510,7 +1510,8 @@ public final class ServerThreadOwnerPhase {
         List<Villager> selected = new ArrayList<>();
         for (EntityDueWindow.Row row : selectRows(window, levelId)) {
             net.minecraft.world.entity.Entity entity = level.getEntity(row.entityId());
-            if (!(entity instanceof Villager villager) || !villager.isAlive()
+            if (!OwnerTypeAdmission.admits(entity)
+                || !(entity instanceof Villager villager) || !villager.isAlive()
                 || villager.isRemoved() || villager.isNoAi()
                 || !hostWouldRunFullBody(entity)
                 || villager.getPose() != Pose.SLEEPING
@@ -1530,7 +1531,8 @@ public final class ServerThreadOwnerPhase {
         if (OwnerZoneAdmission.walkSlice()) {
             for (EntityDueWindow.Row row : selectRowsWalk(window, levelId)) {
                 net.minecraft.world.entity.Entity entity = level.getEntity(row.entityId());
-                if (!(entity instanceof Villager villager) || !admitsFullBody(villager)) {
+                if (!OwnerTypeAdmission.admits(entity)
+                    || !(entity instanceof Villager villager) || !admitsFullBody(villager)) {
                     continue;
                 }
                 if (selected.size() < rowCap) {
@@ -1555,7 +1557,8 @@ public final class ServerThreadOwnerPhase {
                     continue;
                 }
                 net.minecraft.world.entity.Entity entity = level.getEntity(row.entityId());
-                if (!(entity instanceof Villager villager) || !admitsFullBody(villager)) {
+                if (!OwnerTypeAdmission.admits(entity)
+                    || !(entity instanceof Villager villager) || !admitsFullBody(villager)) {
                     continue;
                 }
                 if (selected.size() < rowCap) {
