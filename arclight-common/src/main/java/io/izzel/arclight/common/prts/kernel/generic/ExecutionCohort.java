@@ -359,7 +359,10 @@ public final class ExecutionCohort {
         String code;
         Throwable terminalFailure = null;
         if (failure != null) {
-            next = State.FAILED;
+            // A body that failed after it could have produced an effect must not be filed as a
+            // no-effect failure: replaying it would run the effect twice. The witness is the
+            // record that decides, exactly as it does for a charge failure or a cancellation.
+            next = witness.effectPossible ? State.FAILED_AFTER_EFFECT : State.FAILED;
             code = FAILED_CODE;
             terminalFailure = failure;
             failed.incrementAndGet();
