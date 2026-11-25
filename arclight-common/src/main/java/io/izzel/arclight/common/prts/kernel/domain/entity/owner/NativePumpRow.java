@@ -104,7 +104,7 @@ final class NativePumpRow implements NativeWritePump.Row {
         NativeMovePhaseContext.beginPhaseA();
         try {
             held.witness.markEffectPossible();
-            before = ServerThreadOwnerPhase.captureRow(row);
+            before = EntityEffectPayload.capture(row.villagerView());
             boundPath = stages(staged, ordinary, staged && ordinary && delayedRecomputation());
             if (boundPath) {
                 NativePathStage.bind(request, stagedPath, ordinary);
@@ -119,7 +119,7 @@ final class NativePumpRow implements NativeWritePump.Row {
                 NativeGoalStage.bind(key);
             }
             try {
-                executed = ServerThreadOwnerPhase.runWalkBody(row);
+                executed = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villagerView());
             // Approved stable-read checkpoint: capture the live control inputs at phase-A end on
             // this Server thread only; host rows have no phase context and take no action here.
             if (NativeMovePhaseContext.bound()
@@ -186,7 +186,7 @@ final class NativePumpRow implements NativeWritePump.Row {
             }
             executed = executed && stages.isAlive();
             String changed = EntityEffectPayload.changedValues(before,
-                ServerThreadOwnerPhase.captureRow(row));
+                EntityEffectPayload.capture(row.villagerView()));
             held.effectRow = EntityEffectPayload.row(row.entity().getUUID(),
                 executed ? "PUBLISHED" : "FAILED", changed);
             held.outcome = executed

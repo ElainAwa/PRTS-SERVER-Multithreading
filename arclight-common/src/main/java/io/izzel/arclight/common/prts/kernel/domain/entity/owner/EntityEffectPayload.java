@@ -95,15 +95,6 @@ final class EntityEffectPayload {
                 : brain.getActiveNonCoreActivity().map(activity -> activity.getName()).orElse("none"));
     }
 
-    /** The effect line of one admitted non-villager mob: only the fields every mob shares; the
-     * villager-only columns stay at their neutral values so no false change is reported. */
-    static Snapshot captureShared(Mob mob) {
-        MobState common = captureMob(mob);
-        return new Snapshot(common.x(), common.y(), common.z(), common.motionX(), common.motionY(),
-            common.motionZ(), common.health(), 0, "", common.pose(), common.activity(),
-            "none", 0, "none", "none");
-    }
-
     static Snapshot capture(Villager villager) {
         MobState common = captureMob(villager);
         var inventory = villager.getInventory();

@@ -3,6 +3,7 @@ package io.izzel.arclight.common.prts.kernel.domain.entity.owner;
 
 import net.minecraft.util.profiling.ProfilerFiller;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.npc.Villager;
 
 import java.util.Set;
 
@@ -43,13 +44,13 @@ public final class ServerAiStepPrefixProgram {
         }
     }
 
-    /** Whether one row can declare this prefix: an admitted mob with neither selector holding a goal. */
-    static boolean admits(Mob mob) {
-        if (mob == null || mob.isNoAi()) {
+    /** Whether one row can declare this prefix: a villager with neither selector holding a goal. */
+    static boolean admits(Villager villager) {
+        if (villager == null || villager.isNoAi()) {
             return false;
         }
-        if (!mob.goalSelector.getAvailableGoals().isEmpty()
-            || !mob.targetSelector.getAvailableGoals().isEmpty()) {
+        if (!villager.goalSelector.getAvailableGoals().isEmpty()
+            || !villager.targetSelector.getAvailableGoals().isEmpty()) {
             return false;
         }
         return EntityUpdateSegmentPolicy.admitsWorker(DECLARED);
