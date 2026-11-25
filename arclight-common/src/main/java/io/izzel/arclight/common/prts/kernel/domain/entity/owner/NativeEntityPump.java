@@ -78,7 +78,7 @@ final class NativeEntityPump {
         for (ServerThreadOwnerPhase.DeferredRow row : rows) {
             NativePathNode.Plan attempt;
             try {
-                attempt = NativePathNode.plan(row.level(), row.villager());
+                attempt = NativePathNode.plan(row.level(), row.mob());
             } catch (RuntimeException absent) {
                 // A row whose plan cannot be frozen keeps its whole body and counts as plan-refused.
                 attempt = null;
@@ -90,7 +90,7 @@ final class NativeEntityPump {
                 // parallel mode the staged answer is consumed by the reuse mixin, so predicting it
                 // here both drives the wave and removes the inline search; shadow still compares.
                 try {
-                    attempt = NativePathNode.planStartSearch(row.level(), row.villager());
+                    attempt = NativePathNode.planStartSearch(row.level(), row.mob());
                 } catch (RuntimeException absent) {
                     attempt = null;
                 }
@@ -106,11 +106,11 @@ final class NativeEntityPump {
             // sensor would pay the scan with no consumer. The host freezes the set; a worker sorts it.
             List<net.minecraft.world.entity.LivingEntity> rawNeighbours = null;
             if (mode == NativeEntityPhase.Mode.PARALLEL && neighbourSensorDue(row)) {
-                net.minecraft.world.phys.AABB bounds = row.villager().getBoundingBox()
+                net.minecraft.world.phys.AABB bounds = row.mob().getBoundingBox()
                     .inflate(16.0D, 16.0D, 16.0D);
                 rawNeighbours = row.level().getEntitiesOfClass(
                     net.minecraft.world.entity.LivingEntity.class, bounds,
-                    candidate -> candidate != row.villager() && candidate.isAlive());
+                    candidate -> candidate != row.mob() && candidate.isAlive());
             }
             boolean hasNeighbours = rawNeighbours != null && !rawNeighbours.isEmpty();
             if (plan == null && !hasNeighbours) {
@@ -130,7 +130,7 @@ final class NativeEntityPump {
                     Path path = frozenPlan == null ? null : NativePathNode.search(frozenPlan);
                     if (frozenNeighbours != null) {
                         java.util.List<net.minecraft.world.entity.LivingEntity> sorted =
-                            NativeNeighborStage.order(frozenNeighbours, row.villager());
+                            NativeNeighborStage.order(frozenNeighbours, row.mob());
                         NativeNeighborStage.stage(stageKey, sorted);
                         // The villager's look-and-interact goal only targets nearby players within
                         // four blocks; prefilter that predicate here so the seat pump runs the
@@ -139,7 +139,7 @@ final class NativeEntityPump {
                             new java.util.ArrayList<>();
                         for (net.minecraft.world.entity.LivingEntity candidate : sorted) {
                             if (candidate.getType() == net.minecraft.world.entity.EntityType.PLAYER
-                                && candidate.distanceToSqr(row.villager()) <= 16.0D) {
+                                && candidate.distanceToSqr(row.mob()) <= 16.0D) {
                                 players.add(candidate);
                             }
                         }
@@ -206,7 +206,7 @@ final class NativeEntityPump {
     /** Whether the villager's nearest-living sensor will actually tick this turn; staging an idle
      * sensor pays the scan with no consumer. Reads the frozen brain's sensor table on this thread. */
     private static boolean neighbourSensorDue(ServerThreadOwnerPhase.DeferredRow row) {
-        net.minecraft.world.entity.ai.Brain<?> brain = row.villager().getBrain();
+        net.minecraft.world.entity.ai.Brain<?> brain = row.mob().getBrain();
         if (!(brain instanceof PrtsBrainSensorsAccessor access)) {
             return false;
         }
@@ -234,7 +234,7 @@ final class NativeEntityPump {
         String worldId = row.level().dimension().location().toString();
         if (known == null) {
             return new EntityRowIdentity(worldId, 0L, 0L, 0L, row.entity().getId(),
-                row.villager().tickCount);
+                row.mob().tickCount);
         }
         return new EntityRowIdentity(known.worldId(), known.worldEpoch(), known.uuidHigh(),
             known.uuidLow(), row.entity().getId(), known.updateTick());
@@ -247,7 +247,7 @@ final class NativeEntityPump {
 
     private static LiveRowSnapshot snapshot(ServerThreadOwnerPhase.DeferredRow row,
                                             EntityRowIdentity identity, long generation) {
-        var mob = row.villager();
+        var mob = row.mob();
         var motion = mob.getDeltaMovement();
         return new LiveRowSnapshot(identity, generation, 0L, mob.getX(), mob.getY(), mob.getZ(),
             mob.getYRot(), mob.getXRot(), motion.x, motion.y, motion.z, READ_GROUPS);

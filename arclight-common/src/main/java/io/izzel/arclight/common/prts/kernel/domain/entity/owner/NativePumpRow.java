@@ -56,7 +56,7 @@ final class NativePumpRow implements NativeWritePump.Row {
     }
 
     private boolean delayedRecomputation() {
-        return row.villager().getNavigation() instanceof NativePathState state
+        return row.mob().getNavigation() instanceof NativePathState state
             && state.prts$hasDelayedRecomputation();
     }
 
@@ -98,13 +98,13 @@ final class NativePumpRow implements NativeWritePump.Row {
             throw new IllegalStateException("a pumped ticket does not match its declaration");
         }
         long scope = EntityTickOwnership.beginOwnerBodyScope(row.entity());
-        OwnerRandomContext.enter(row.level(), row.villager(), "entity");
+        OwnerRandomContext.enter(row.level(), row.mob(), "entity");
         EntityUpdateProgramContext.begin(
             ServerThreadOwnerPhase.programIdentity(row.phase(), row.entity()));
         NativeMovePhaseContext.beginPhaseA();
         try {
             held.witness.markEffectPossible();
-            before = EntityEffectPayload.capture(row.villager());
+            before = EntityEffectPayload.capture(row.villagerView());
             boundPath = stages(staged, ordinary, staged && ordinary && delayedRecomputation());
             if (boundPath) {
                 NativePathStage.bind(request, stagedPath, ordinary);
@@ -119,11 +119,11 @@ final class NativePumpRow implements NativeWritePump.Row {
                 NativeGoalStage.bind(key);
             }
             try {
-                executed = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
+                executed = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villagerView());
             // Approved stable-read checkpoint: capture the live control inputs at phase-A end on
             // this Server thread only; host rows have no phase context and take no action here.
             if (NativeMovePhaseContext.bound()
-                && row.villager() instanceof PrtsLivingEntityTickStateMixin state) {
+                && row.mob() instanceof PrtsLivingEntityTickStateMixin state) {
                 NativeMovePhaseContext.freezeControl(
                     state.prts$xxa(), state.prts$zza(), state.prts$jumping());
             }
@@ -153,12 +153,12 @@ final class NativePumpRow implements NativeWritePump.Row {
             throw new IllegalStateException("a pumped row has no phase-A result");
         }
         long scope = EntityTickOwnership.beginOwnerBodyScope(row.entity());
-        OwnerRandomContext.enter(row.level(), row.villager(), "entity");
+        OwnerRandomContext.enter(row.level(), row.mob(), "entity");
         EntityUpdateProgramContext.begin(
             ServerThreadOwnerPhase.programIdentity(row.phase(), row.entity()));
         NativeMovePhaseContext.beginPhaseB();
         try {
-            LivingEntity stages = row.villager();
+            LivingEntity stages = row.mob();
             String key = rowKey();
             boolean bindMove = NativeMoveStage.has(key);
             if (bindMove) {
@@ -186,7 +186,7 @@ final class NativePumpRow implements NativeWritePump.Row {
             }
             executed = executed && stages.isAlive();
             String changed = EntityEffectPayload.changedValues(before,
-                EntityEffectPayload.capture(row.villager()));
+                EntityEffectPayload.capture(row.villagerView()));
             held.effectRow = EntityEffectPayload.row(row.entity().getUUID(),
                 executed ? "PUBLISHED" : "FAILED", changed);
             held.outcome = executed

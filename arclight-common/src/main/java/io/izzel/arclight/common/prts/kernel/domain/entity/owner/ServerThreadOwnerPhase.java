@@ -6,6 +6,7 @@ import io.izzel.arclight.common.prts.kernel.domain.entity.EntityDueWindow;
 import io.izzel.arclight.common.prts.support.EntityEligibility;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Pose;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.entity.schedule.Activity;
 
@@ -60,8 +61,12 @@ public final class ServerThreadOwnerPhase {
     private static final java.util.Set<EntityUpdateSegmentPolicy.Segment> DECLARED_SEGMENTS =
         java.util.Set.of(EntityUpdateSegmentPolicy.Segment.MOB_TICK_TAIL,
             EntityUpdateSegmentPolicy.Segment.SERVER_AI_STEP_PREFIX);
-    record DeferredRow(LevelPhase phase, ServerLevel level, Villager villager,
+    record DeferredRow(LevelPhase phase, ServerLevel level, Mob mob,
                                net.minecraft.world.entity.Entity entity, long hostStep) {
+        /** Temporary view for the Villager-only behaviour still wired to the common row. */
+        Villager villagerView() {
+            return (Villager) mob;
+        }
     }
     private static final List<DeferredRow> DEFERRED = new ArrayList<>();
     private static final Set<Integer> DEFERRED_IDS = new HashSet<>();
@@ -360,7 +365,7 @@ public final class ServerThreadOwnerPhase {
         long scope = io.izzel.arclight.common.prts.kernel.domain.entity.ownership
             .EntityTickOwnership.beginOwnerBodyScope(row.entity());
         try {
-            executed[slot] = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
+            executed[slot] = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villagerView());
         } finally {
             if (lease != null) {
                 lease.release();
@@ -512,7 +517,7 @@ public final class ServerThreadOwnerPhase {
         // thread first so the workers only read the table while they run.
         for (DeferredRow row : rows) {
             if (row.level().getRandom() instanceof OwnerSharedRandomSource shared) {
-                shared.prepareOwnerRow(row.level(), row.villager(), "entity");
+                shared.prepareOwnerRow(row.level(), row.mob(), "entity");
             }
         }
         LevelPhase phase = rows.get(0).phase();
@@ -793,17 +798,17 @@ public final class ServerThreadOwnerPhase {
                 scopeStarted = true;
                 record.stage = OwnerControlledExecution.Stage.EFFECT_ENTERED;
                 record.witness.markEffectPossible();
-                OwnerRandomContext.enter(row.level(), row.villager(), "entity");
-                EntityEffectPayload.Snapshot before = EntityEffectPayload.capture(row.villager());
+                OwnerRandomContext.enter(row.level(), row.mob(), "entity");
+                EntityEffectPayload.Snapshot before = EntityEffectPayload.capture(row.villagerView());
                 boolean executed;
                 try {
-                    executed = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villager());
+                    executed = RealEntityOwnerBody.runWalkOnServer(row.level(), row.villagerView());
                 } finally {
                     OwnerRandomContext.exit();
                 }
                 String result = executed ? "PUBLISHED" : "FAILED";
                 String changed = EntityEffectPayload.changedValues(before,
-                    EntityEffectPayload.capture(row.villager()));
+                    EntityEffectPayload.capture(row.villagerView()));
                 record.effectRow = EntityEffectPayload.row(row.entity().getUUID(), result, changed);
                 record.outcome = executed
                     ? new io.izzel.arclight.common.prts.kernel.commit.CommitTicket.Outcome(
