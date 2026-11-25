@@ -30,7 +30,10 @@ import io.izzel.arclight.common.mod.util.DistValidate;
 import io.izzel.arclight.common.prts.kernel.domain.entity.EntityDueCapture;
 import io.izzel.arclight.common.prts.kernel.domain.entity.nativeexec.ExperimentGate;
 import io.izzel.arclight.common.prts.kernel.domain.entity.ownership.EntityTickOwnership;
+import io.izzel.arclight.common.prts.kernel.domain.entity.owner.OwnerSharedRandomSource;
 import io.izzel.arclight.common.prts.kernel.domain.entity.owner.ServerThreadOwnerPhase;
+import io.izzel.arclight.common.prts.kernel.qualification.ReplayWorldHarness;
+import io.izzel.arclight.common.prts.kernel.random.SharedStreamTable;
 import io.izzel.arclight.i18n.ArclightConfig;
 import io.izzel.arclight.mixin.Decorate;
 import io.izzel.arclight.mixin.DecorationOps;
@@ -101,6 +104,7 @@ import org.spigotmc.SpigotWorldConfig;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
@@ -109,6 +113,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import javax.annotation.Nonnull;
+import java.nio.file.Path;
 import java.util.ConcurrentModificationException;
 import java.util.Iterator;
 import java.util.List;
@@ -144,6 +149,10 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
     public LevelStorageSource.LevelStorageAccess convertable;
     public UUID uuid;
     public ResourceKey<LevelStem> typeKey;
+
+    // Owned by the level tick thread; a process drives at most one replay even if the tick keeps running.
+    @Unique
+    private boolean prts$replayWorldTriggered;
 
     @Override
     public ResourceKey<LevelStem> getTypeKey() {
@@ -427,6 +436,49 @@ public abstract class ServerLevelMixin extends LevelMixin implements ServerLevel
     private void prts$ownerDiscardDecision(Entity entity, CallbackInfoReturnable<Boolean> cir) {
         if (cir.getReturnValueZ()) {
             ServerThreadOwnerPhase.noteNativeSkip((ServerLevel) (Object) this, entity, "discarded");
+        }
+    }
+
+    /**
+     * Drives the opt-in replay once from inside the entity tick loop. Driving it from outside that
+     * loop would leave the owner phase's rows pending, so their bodies would never run and the
+     * report would describe no real work. Injecting after the host's forEach keeps the tick context
+     * alive and lets the diagnostic capture installed before the loop supply the due window. A
+     * separate handler leaves the existing owner-phase close untouched and keeps the replay's own
+     * phase work in the same tick context. The trigger is absent by default, only an explicit
+     * affirmative value enables it, and a missing report path is refused by name. The
+     * level-bound stream table is used when available; a fresh table is recorded as such. Any
+     * failure is logged and swallowed, so the host loop and its scheduling are never changed.
+     */
+    @Inject(method = "tick", at = @At(value = "INVOKE", shift = At.Shift.AFTER,
+        target = "Lnet/minecraft/world/level/entity/EntityTickList;forEach(Ljava/util/function/Consumer;)V"))
+    private void prts$diagReplayWorldTrigger(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
+        if (!ExperimentGate.parse(System.getProperty("arclight.prts.diag.replayWorld.trigger"))
+            || this.prts$replayWorldTriggered) {
+            return;
+        }
+        String report = System.getProperty(ReplayWorldHarness.REPORT_PROPERTY);
+        if (report == null || report.trim().isEmpty()) {
+            ArclightServer.LOGGER.warn("Replay world trigger refused: report path is not configured");
+            return;
+        }
+        this.prts$replayWorldTriggered = true;
+        ServerLevel level = (ServerLevel) (Object) this;
+        SharedStreamTable streams;
+        String streamSource;
+        if (level.getRandom() instanceof OwnerSharedRandomSource shared) {
+            streams = shared.table();
+            streamSource = "level-shared-stream-table";
+        } else {
+            streams = new SharedStreamTable();
+            streamSource = "fresh-shared-stream-table";
+        }
+        ArclightServer.LOGGER.info("Replay world trigger stream source: {}", streamSource);
+        try {
+            ReplayWorldHarness.runAll(level.getServer().getTickCount(),
+                new ReplayWorldHarness.Sources(level, streams), Path.of(report));
+        } catch (Throwable failure) {
+            ArclightServer.LOGGER.error("Replay world trigger failed with " + streamSource, failure);
         }
     }
 
