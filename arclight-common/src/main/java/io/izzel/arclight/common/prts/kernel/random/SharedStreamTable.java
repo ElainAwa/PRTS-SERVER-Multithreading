@@ -13,11 +13,14 @@ import java.util.Objects;
  * of the same key returns the same instance, never a re-derived or reseeded copy, so a tick cannot
  * silently reset a stream. The table keeps first-use order, which is the declaration order a
  * snapshot is written in. The table is not thread-safe: draws are taken in the program's declared
- * operation order, and the owner that drains that order is the only writer.
+ * operation order, and the owner that drains that order is the only writer. A bounded restore also
+ * records the publication revision of the snapshot it installed; ordinary lookups and draws never
+ * consult it, and that single writer owns it together with the streams.
  */
 public final class SharedStreamTable {
 
     private final Map<StreamKey, SharedStream> streams = new LinkedHashMap<>();
+    private long boundRevision = StreamStateBinding.UNBOUND_REVISION;
 
     /**
      * Returns the stream of the given key, creating it on first use and never re-deriving it on
@@ -78,6 +81,46 @@ public final class SharedStreamTable {
             Objects.requireNonNull(state, "state");
             streams.put(state.key(), SharedStream.restore(state));
         }
+    }
+
+    /**
+     * The publication revision of the bounded snapshot this table holds, or the absent revision
+     * when no bounded snapshot has been installed. The table's single writer owns this value with
+     * its streams; draws do not consult it.
+     *
+     * @return the bound revision, or {@link StreamStateBinding#UNBOUND_REVISION}
+     */
+    public long boundRevision() {
+        return boundRevision;
+    }
+
+    /**
+     * Restores a revision-bound snapshot, but only when its revision is present and is the one
+     * this table already serves. A binding from another revision is refused before any stream is
+     * replaced, so an older state can never move a newer revision backwards. On success the states
+     * and their revision become this table's current state, and later bindings from a different
+     * revision are refused as well.
+     *
+     * @param binding the archivable binding to restore
+     * @throws IllegalStateException if the revision is absent, an entry disagrees with the
+     *     binding's revision, or the binding belongs to another revision
+     */
+    public void restoreBounded(StreamStateBinding binding) {
+        Objects.requireNonNull(binding, "binding");
+        if (!binding.hasRevision()) {
+            throw new IllegalStateException("stream-state-binding-revision-missing");
+        }
+        for (StreamStateBinding.Entry entry : binding.entries()) {
+            if (entry.revision() != binding.publicationRevision()) {
+                throw new IllegalStateException("stream-state-binding-entry-revision-mismatch");
+            }
+        }
+        if (boundRevision != StreamStateBinding.UNBOUND_REVISION && boundRevision != binding.publicationRevision()) {
+            throw new IllegalStateException("stream-state-binding-revision-mismatch: current=" + boundRevision
+                + " incoming=" + binding.publicationRevision());
+        }
+        restoreState(binding.states());
+        boundRevision = binding.publicationRevision();
     }
 
     /**
