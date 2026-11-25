@@ -156,6 +156,8 @@ public final class NativeReadWave<R> {
                 for (NativeRowProgram<R> program : submitted) {
                     program.refuse(NativeRowProgram.Refusal.NOT_RUN);
                 }
+                NativeNeighborStage.clearWave(waveId);
+                NativeGoalStage.clearWave(waveId);
                 close();
                 throw new IllegalStateException(
                     "the read wave did not close before its deadline");
@@ -168,6 +170,11 @@ public final class NativeReadWave<R> {
                 program.failure(failure.getCause());
             }
         }
+    }
+
+    /** The identity of this wave; staging keys use it so a late node cannot reach a later tick. */
+    public long waveId() {
+        return waveId;
     }
 
     /** Closes the wave: unsettled slots are refused, the permits retire and the witness is fixed. */

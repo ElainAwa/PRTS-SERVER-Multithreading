@@ -32,6 +32,17 @@ public final class NativeNeighborStage {
         STAGED.incrementAndGet();
     }
 
+    /** Drops the staged answer of one row key; a bound answer is already taken. */
+    public static void discard(String rowKey) {
+        READY.remove(rowKey);
+    }
+
+    /** Drops every staged answer of one wave, matched by the wave token in the key. */
+    public static void clearWave(long waveId) {
+        String suffix = "|wave=" + waveId;
+        READY.keySet().removeIf(key -> key.endsWith(suffix));
+    }
+
     public static boolean has(String rowKey) {
         return READY.containsKey(rowKey);
     }

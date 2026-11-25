@@ -27,6 +27,7 @@ final class NativePumpRow implements NativeWritePump.Row {
 
     private final ServerThreadOwnerPhase.DeferredRow row;
     private final OwnerControlledWrite.Admission admission;
+    private final String stageKey;
     private final NativePathRequest request;
     private final Path stagedPath;
     private final boolean staged;
@@ -39,9 +40,11 @@ final class NativePumpRow implements NativeWritePump.Row {
     private boolean executed;
 
     NativePumpRow(ServerThreadOwnerPhase.DeferredRow row, OwnerControlledWrite.Admission admission,
-                  NativePathRequest request, Path stagedPath, boolean staged, boolean ordinary) {
+                  String stageKey, NativePathRequest request, Path stagedPath, boolean staged,
+                  boolean ordinary) {
         this.row = row;
         this.admission = admission;
+        this.stageKey = stageKey;
         this.request = request;
         this.stagedPath = stagedPath;
         this.staged = staged && request != null;
@@ -208,8 +211,12 @@ final class NativePumpRow implements NativeWritePump.Row {
     }
 
     private String rowKey() {
-        return row.level().dimension().location() + "|" + admission.entry().nodeKey()
-            + "|" + admission.entry().seat().position();
+        return stageKey;
+    }
+
+    /** The wave-scoped staging key of this row; the pump discards any leftover after the write. */
+    String stageKey() {
+        return stageKey;
     }
 
     @Override

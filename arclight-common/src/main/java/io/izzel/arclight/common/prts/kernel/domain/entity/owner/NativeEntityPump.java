@@ -99,6 +99,9 @@ final class NativeEntityPump {
             NativePathNode.Plan plan = attempt;
             OwnerControlledWrite.Admission admission = admissions.get(row);
             String key = rowKey(row, admission);
+            // A staging key carries the wave identity: a late node of an old wave can never be bound
+            // by a later tick that happens to reuse the same row/seat key.
+            String stageKey = key + "|wave=" + wave.waveId();
             // Only stage a neighbour scan when the sensor will actually tick this turn: an idle
             // sensor would pay the scan with no consumer. The host freezes the set; a worker sorts it.
             List<net.minecraft.world.entity.LivingEntity> rawNeighbours = null;
@@ -128,7 +131,7 @@ final class NativeEntityPump {
                     if (frozenNeighbours != null) {
                         java.util.List<net.minecraft.world.entity.LivingEntity> sorted =
                             NativeNeighborStage.order(frozenNeighbours, row.villager());
-                        NativeNeighborStage.stage(key, sorted);
+                        NativeNeighborStage.stage(stageKey, sorted);
                         // The villager's look-and-interact goal only targets nearby players within
                         // four blocks; prefilter that predicate here so the seat pump runs the
                         // remaining line-of-sight test on a tiny set instead of every neighbour.
@@ -140,7 +143,7 @@ final class NativeEntityPump {
                                 players.add(candidate);
                             }
                         }
-                        NativeGoalStage.stage(key, players);
+                        NativeGoalStage.stage(stageKey, players);
                     }
                     return path;
                 });
@@ -156,13 +159,20 @@ final class NativeEntityPump {
             boolean ready = program != null && program.state() == NativeRowProgram.State.READY;
             NativePathNode.Plan plan = ready ? plans.get(row) : null;
             boolean ordinary = plan != null && ordinaryRows.contains(row);
-            pumpRows.add(new NativePumpRow(row, admission,
+            String stageKey = rowKey(row, admission) + "|wave=" + wave.waveId();
+            pumpRows.add(new NativePumpRow(row, admission, stageKey,
                 plan == null ? null : plan.request(), ready ? program.result() : null, ready,
                 ordinary));
         }
         long comparedBefore = shadow ? NativePathStage.comparedOrdinary() : 0L;
         long mismatchedBefore = shadow ? NativePathStage.mismatchedOrdinary() : 0L;
         NativeWritePump.Result result = NativeWritePump.run(pumpRows);
+        for (NativePumpRow pumpRow : pumpRows) {
+            // A refused or timed-out row leaves its staged answer behind; the wave key makes it
+            // unreachable for later ticks, and this discard keeps the maps bounded.
+            NativeNeighborStage.discard(pumpRow.stageKey());
+            NativeGoalStage.discard(pumpRow.stageKey());
+        }
         int comparedOrdinary = shadow
             ? (int) (NativePathStage.comparedOrdinary() - comparedBefore) : 0;
         int mismatchOrdinary = shadow
