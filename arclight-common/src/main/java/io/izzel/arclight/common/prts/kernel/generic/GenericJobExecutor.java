@@ -213,7 +213,6 @@ public final class GenericJobExecutor {
                             String updateKey, Consumer<ExecutionCohort> installer) {
         Map<String, Runnable> bodyView = Map.copyOf(bodies);
         ExecutionCohort cohort = new ExecutionCohort(graph);
-        installSettlement(cohort);
         if (updateKey != null) {
             cohort.onComplete(() -> updateFlights.remove(updateKey));
         }
@@ -225,18 +224,23 @@ public final class GenericJobExecutor {
         for (JobGraph.Node node : graph.nodes()) {
             remaining.put(node.key(), new AtomicInteger(node.predecessors().size()));
         }
+        java.util.Set<String> released = ConcurrentHashMap.newKeySet();
+        java.util.Set<String> waitingWorkers = ConcurrentHashMap.newKeySet();
+        installSettlement(cohort, remaining, bodyView, deadlineNanos, released, waitingWorkers);
         for (JobGraph.Node node : graph.nodes()) {
             String key = node.key();
             cohort.handle(key).future().whenComplete((ignored, error) -> {
                 if (error != null) {
-                    completed(cohort, remaining, key, bodyView, deadlineNanos);
+                    completed(cohort, remaining, key, bodyView, deadlineNanos, released,
+                        waitingWorkers);
                 }
             });
         }
         for (long nodeId : graph.ready()) {
             JobGraph.Node node = graph.node(nodeId);
             if (node != null) {
-                submit(cohort, remaining, node.key(), bodyView, deadlineNanos);
+                submit(cohort, remaining, node.key(), bodyView, deadlineNanos, released,
+                    waitingWorkers);
             }
         }
         if (graph.nodes().isEmpty() && account != null) {
@@ -268,12 +272,57 @@ public final class GenericJobExecutor {
         });
     }
 
+    /** Registers the settlement observer of one execution: the business closure and, for a node that
+     * reaches DONE through a resume, the one successor release. A node completed by its worker also
+     * passes through {@link #completed}; the released set keeps the successors released exactly once. */
+    private void installSettlement(ExecutionCohort cohort, Map<String, AtomicInteger> remaining,
+                                   Map<String, Runnable> bodies, long deadlineNanos,
+                                   java.util.Set<String> released,
+                                   java.util.Set<String> waitingWorkers) {
+        cohort.onSettled(settlement -> {
+            if (account != null) {
+                WorkAccount.Outcome outcome = outcomeOf(settlement.state());
+                if (outcome != null && account.close(accountUnitId(cohort, settlement.key()),
+                    outcome, settlement.terminalCode())) {
+                    account.settle();
+                }
+            }
+            if (settlement.state() == ExecutionCohort.State.DONE && remaining != null
+                && waitingWorkers.contains(settlement.key())) {
+                // Only a resumed node releases here: a body that finished normally releases its
+                // successors from the pool completion callback, after the worker slot is free.
+                releaseSuccessors(cohort, remaining, bodies, deadlineNanos, released,
+                    waitingWorkers, cohort.graph().nodeByKey(settlement.key()));
+            }
+        });
+    }
+
     private void completed(ExecutionCohort cohort, Map<String, AtomicInteger> remaining, String key,
-                           Map<String, Runnable> bodies, long deadlineNanos) {
+                           Map<String, Runnable> bodies, long deadlineNanos,
+                           java.util.Set<String> released,
+                           java.util.Set<String> waitingWorkers) {
         JobGraph.Node node = cohort.graph().nodeByKey(key);
         if (node == null) return;
-        if (cohort.state(key) != ExecutionCohort.State.DONE) {
+        ExecutionCohort.State state = cohort.state(key);
+        if (state == ExecutionCohort.State.WAITING) {
+            // The capability provider owns the terminal state; the resume settlement releases the
+            // successors and this completion is not a business completion of the node.
+            waitingWorkers.add(key);
+            return;
+        }
+        if (state != ExecutionCohort.State.DONE) {
             cascade(cohort, node, key);
+            return;
+        }
+        releaseSuccessors(cohort, remaining, bodies, deadlineNanos, released, waitingWorkers,
+            node);
+    }
+
+    private void releaseSuccessors(ExecutionCohort cohort, Map<String, AtomicInteger> remaining,
+                                   Map<String, Runnable> bodies, long deadlineNanos,
+                                   java.util.Set<String> released,
+                                   java.util.Set<String> waitingWorkers, JobGraph.Node node) {
+        if (node == null || released == null || !released.add(node.key())) {
             return;
         }
         for (Long successor : node.successors()) {
@@ -281,7 +330,8 @@ public final class GenericJobExecutor {
             if (next == null) continue;
             AtomicInteger count = remaining.get(next.key());
             if (count != null && count.decrementAndGet() == 0) {
-                submit(cohort, remaining, next.key(), bodies, deadlineNanos);
+                submit(cohort, remaining, next.key(), bodies, deadlineNanos, released,
+                    waitingWorkers);
             }
         }
     }
@@ -300,7 +350,9 @@ public final class GenericJobExecutor {
     }
 
     private void submit(ExecutionCohort cohort, Map<String, AtomicInteger> remaining, String key,
-                        Map<String, Runnable> bodies, long deadlineNanos) {
+                        Map<String, Runnable> bodies, long deadlineNanos,
+                        java.util.Set<String> released,
+                        java.util.Set<String> waitingWorkers) {
         JobGraph.Node node = cohort.graph().nodeByKey(key);
         if (node == null) return;
         ExecutionCohort.State state = cohort.state(key);
@@ -310,14 +362,16 @@ public final class GenericJobExecutor {
             return;
         }
         cohort.markReady(key);
-        if (account != null) account.markReady(key);
+        if (account != null) account.markReady(accountUnitId(cohort, key));
         Runnable body = bodies.get(key);
         if (body == null) {
             cohort.markRejected(key);
             return;
         }
         WorkerPool.GenericHandle handle = pool.submitGeneric(token -> run(cohort, node, body),
-            cohort.token(key), () -> completed(cohort, remaining, key, bodies, deadlineNanos));
+            cohort.token(key),
+            () -> completed(cohort, remaining, key, bodies, deadlineNanos, released,
+                waitingWorkers));
         if (handle == null) {
             cohort.markRejected(key);
             return;
@@ -328,7 +382,7 @@ public final class GenericJobExecutor {
 
     private void run(ExecutionCohort cohort, JobGraph.Node node, Runnable body) {
         if (!cohort.markStarted(node.key())) return;
-        if (account != null) account.markRunning(node.key());
+        if (account != null) account.markRunning(accountUnitId(cohort, node.key()));
         boolean meterCpu = metering != null || account != null;
         long wallStarted = System.nanoTime();
         long cpuStarted = meterCpu ? PrtsCpuClock.now() : -1L;
@@ -340,7 +394,7 @@ public final class GenericJobExecutor {
         }
         double wallMs = (System.nanoTime() - wallStarted) / 1_000_000.0;
         double cpuMs = meterCpu ? cpuMillis(cpuStarted) : 0.0;
-        if (account != null) account.meter(node.key(), wallMs, cpuMs);
+        if (account != null) account.meter(accountUnitId(cohort, node.key()), wallMs, cpuMs);
         boolean chargeFailed = false;
         try {
             if (context != null) chargeFailed = !context.charge(wallMs);
@@ -350,7 +404,8 @@ public final class GenericJobExecutor {
             if (failure == null) failure = t;
         }
         if (failure == null && account != null
-            && account.bucket(node.key()) == WorkAccount.Bucket.WAIT_RESULT) {
+            && account.bucket(accountUnitId(cohort, node.key()))
+                == WorkAccount.Bucket.WAIT_RESULT) {
             // The body handed the unit to a capability provider: the asynchronous completion owns
             // the terminal state, so returning from body.run is not DONE.
             cohort.markWaiting(node.key());
