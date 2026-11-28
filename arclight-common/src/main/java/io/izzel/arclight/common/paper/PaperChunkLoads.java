@@ -21,10 +21,7 @@ public final class PaperChunkLoads {
         return generate;
     }
 
-    /**
-     * Turns one chunk future into a Bukkit chunk.
-     * The completion stays on the chunk future's thread and is not moved to the server thread.
-     */
+    /** Completes on the chunk future's thread and is not moved to the server thread. */
     public static CompletableFuture<Chunk> bukkitChunk(CompletableFuture<ChunkResult<ChunkAccess>> existing) {
         if (existing == null) {
             return CompletableFuture.completedFuture(null);

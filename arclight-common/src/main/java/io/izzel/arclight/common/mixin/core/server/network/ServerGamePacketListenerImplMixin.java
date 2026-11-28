@@ -1024,7 +1024,8 @@ public abstract class ServerGamePacketListenerImplMixin extends ServerCommonPack
             AsyncPlayerChatEvent event = new AsyncPlayerChatEvent(async, thisPlayer, s, new LazyPlayerSet(this.server));
             String originalFormat = event.getFormat(), originalMessage = event.getMessage();
             this.cserver.getPluginManager().callEvent(event);
-            // Fires the paper async chat event from this legacy event before the later string broadcast.
+            // Fires the paper chat event after the legacy event and before the string broadcast.
+            // A paper cancellation cancels the legacy event. A renderer exception leaves this call.
             PaperAsyncChat.fire(this.cserver.getPluginManager(), event, async);
             if (PlayerChatEvent.getHandlerList().getRegisteredListeners().length != 0) {
                 PlayerChatEvent queueEvent = new PlayerChatEvent(thisPlayer, event.getMessage(), event.getFormat(), event.getRecipients());

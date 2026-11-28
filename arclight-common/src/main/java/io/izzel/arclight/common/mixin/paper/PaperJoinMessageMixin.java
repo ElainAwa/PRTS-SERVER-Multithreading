@@ -9,9 +9,7 @@ import org.spongepowered.asm.mixin.Shadow;
 
 @Mixin(value = PlayerJoinEvent.class, remap = false)
 public abstract class PaperJoinMessageMixin {
-    // Adds joinMessage() beside the string accessors, because the broadcast path still stores a string.
-    // Injected on PlayerJoinEvent, the type plugins call.
-    // A null component writes an empty string. An empty string reads back as null.
+    // Adds joinMessage() on PlayerJoinEvent. A null component writes empty; an empty string reads as null.
 
     @Shadow
     public abstract String getJoinMessage();

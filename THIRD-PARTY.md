@@ -54,7 +54,7 @@
 ## 四、随制品分发的 MIT 声明
 
 下列全文分别取自 Adventure `v4.17.0` 与 Examination `v1.3.0` 发布标签中的 `license.txt`。
-构建把本文档放进 NeoForge 模组 jar 的 `META-INF/THIRD-PARTY.md`。
+构建把本文档放进内嵌 `common.jar` 的 `META-INF/THIRD-PARTY.md`。
 
 更换 `third-party/paper/` 里的 jar 时，从 Maven Central 取 `net.kyori` 的同名构件：
 `adventure-api`、`adventure-key`、`adventure-text-serializer-legacy` 为 4.17.0，

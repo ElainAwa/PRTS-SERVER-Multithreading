@@ -5,9 +5,7 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 
 /**
- * Converts a section-signed legacy string and an Adventure component.
- * A null or empty string reads as null. A null component writes as an empty string.
- * Reading that empty string returns null.
+ * Converts a section-signed string and a component. Empty or null reads as null; a null component writes as empty.
  */
 public final class PaperJoinMessages {
 

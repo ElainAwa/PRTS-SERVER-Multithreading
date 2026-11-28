@@ -17,9 +17,8 @@ import java.util.Set;
 
 /**
  * Fires the paper async chat event from the legacy string event.
- * A cancelled legacy event is left alone. The renderer runs once for the speaking player,
- * and the legacy broadcast still sends that one string. signedMessage is null.
- * Adding or removing a viewer has not been shown to change who receives that broadcast.
+ * The renderer runs once for the speaking player. signedMessage is null.
+ * viewers().add throws UnsupportedOperationException. Only removal is supported.
  * A plugin that also sends to viewers receives a second copy.
  */
 public final class PaperAsyncChat {

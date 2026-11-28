@@ -58,7 +58,7 @@ constitutes the prominent notice required by GPL-3.0.
 ## 4. MIT notices shipped with the artifact
 
 The texts below are the `license.txt` files from the Adventure `v4.17.0` and Examination `v1.3.0`
-release tags. The build copies this document to `META-INF/THIRD-PARTY.md` inside the NeoForge mod jar.
+release tags. The build copies this document to `META-INF/THIRD-PARTY.md` inside the nested `common.jar`.
 
 To replace a jar under `third-party/paper/`, take the same `net.kyori` artifact from Maven Central:
 `adventure-api`, `adventure-key` and `adventure-text-serializer-legacy` at 4.17.0, and
